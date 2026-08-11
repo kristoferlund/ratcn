@@ -25,6 +25,7 @@ are worth reading as source, not just running.
 |---|---|
 | `ledger93` | A nineties double-entry bookkeeping terminal. The largest example: several screens, per-screen state and messages, dialogs, and a keyboard-first workflow. |
 | `landing` | A responsive grid of live components, and how one app splits state and messages across independent tiles. This is the demo embedded on the [home page](/). |
+| `wizard` | A four-step wizard that walks through starting a ratcn app. Buttons that move between steps, a select and a list that record choices, and one screen module per step. This is the demo embedded on [Getting started](./getting-started). |
 
 ## Patterns
 

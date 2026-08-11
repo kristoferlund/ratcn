@@ -25,6 +25,7 @@ members = [
     "demos/tooltip",
     "demos/ledger93",
     "demos/panels",
+    "demos/wizard",
 ]
 
 [workspace.package]
