@@ -175,9 +175,39 @@ mod tests {
         terminal.draw(|frame| app.draw(frame)).expect("draw");
     }
 
+    fn rendered_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer.cell((column, row)).expect("cell").symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
     fn press(app: &mut App, terminal: &mut Terminal<TestBackend>, code: KeyCode) {
         draw(app, terminal);
         app.handle_event(Event::Key(KeyEvent::new(code)));
+    }
+
+    /// Project creation and dependency installation are separate steps, but the
+    /// latter must still run inside the crate that `cargo new` creates.
+    #[test]
+    fn project_step_creates_and_enters_the_new_crate() {
+        let (mut app, mut terminal) = app();
+
+        draw(&mut app, &mut terminal);
+
+        let rows = rendered_rows(&terminal);
+        let command_rows = ["cargo new my-app", "cd my-app"].map(|command| {
+            rows.iter()
+                .position(|row| row.contains(command))
+                .expect("rendered project command")
+        });
+
+        assert_eq!(command_rows, [command_rows[0], command_rows[0] + 1]);
+        assert!(rows.iter().all(|row| !row.contains("cargo add")));
     }
 
     /// From a fresh app, with no focus set up first: Enter alone walks the whole
@@ -248,10 +278,33 @@ mod tests {
 
         assert_eq!(app.state.choices.backend, Backend::Browser);
         assert!(!app.state.backend.open);
-        assert_eq!(
-            app.state.choices.cargo_add(),
-            "cargo add ratcn --features ratzilla"
-        );
+
+        app.state.nav.step = Step::Done;
+        draw(&mut app, &mut terminal);
+        let rendered = rendered_rows(&terminal)
+            .concat()
+            .chars()
+            .filter(|character| character.is_ascii_graphic())
+            .collect::<String>();
+
+        for expected in [
+            "Happy development!",
+            "cargo new my-app",
+            "cd my-app",
+            "cargo add ratcn --features ratzilla",
+            "cargo add ratatui --no-default-features --features layout-cache",
+            "cargo add ratzilla",
+            "let theme = Theme::default_dark();",
+        ] {
+            let expected = expected
+                .chars()
+                .filter(|character| character.is_ascii_graphic())
+                .collect::<String>();
+            assert!(
+                rendered.contains(&expected),
+                "missing {expected} in {rendered}"
+            );
+        }
     }
 
     /// Selecting a theme repaints the whole app, not just the step that owns the

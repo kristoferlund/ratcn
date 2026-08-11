@@ -4,7 +4,7 @@
 //! The steps:
 //!
 //! - **Create a project** — a plain binary crate, no scaffold.
-//! - **Pick a backend** — a Select whose choice rewrites the install command.
+//! - **Pick a backend** — a Select whose choice rewrites the dependency commands.
 //! - **Pick a theme** — a List whose choice re-colors the wizard as it is made.
 //! - **Done** — what the choices added up to.
 //!

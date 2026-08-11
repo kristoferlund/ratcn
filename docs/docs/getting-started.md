@@ -4,6 +4,8 @@ description: "Install ratcn, pick the feature for your backend, and get a focusa
 
 # Getting started
 
+The wizard below is itself a ratcn app — buttons, a select, and a list. Press `Enter` to move through it, or `Tab` into a step to make its choice. Its source is [`demos/wizard`](https://github.com/kristoferlund/ratcn/tree/main/demos/wizard.
+
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 460px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
     <span class="ratcn-dot"></span>
@@ -15,11 +17,6 @@ description: "Install ratcn, pick the feature for your backend, and get a focusa
     <iframe class="ratcn-component-preview-frame" src="../../../demos/wizard-demo/index.html" title="ratcn getting started demo"></iframe>
   </div>
 </div>
-
-The wizard above is itself a ratcn app — buttons, a select, and a list — and it
-walks the same four steps this page does. Press `Enter` to move through it, or
-`Tab` into a step to make its choice. Its source is
-[`demos/wizard`](https://github.com/kristoferlund/ratcn/tree/main/demos/wizard).
 
 ## Install
 

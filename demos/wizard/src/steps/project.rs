@@ -29,7 +29,7 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     ctx.render_widget(
         Paragraph::new(vec![
             steps::command(theme, "cargo new my-app"),
-            steps::command(theme, "cargo add ratatui"),
+            steps::command(theme, "cd my-app"),
         ]),
         commands,
     );

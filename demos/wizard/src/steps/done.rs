@@ -1,11 +1,6 @@
 //! Step 4: the end. Nothing to choose — just what the choices added up to.
 
-use ratatui::{
-    layout::{Constraint, Flex, Layout},
-    style::{Modifier, Style},
-    text::Line,
-    widgets::Paragraph,
-};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratcn::runtime::RenderCtx;
 
 use crate::app::{AppState, Msg as AppMsg};
@@ -18,29 +13,19 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     let state = ctx.state();
     let theme = ctx.theme;
 
-    let headline = Line::from("Happy development!").centered().style(
-        Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD),
-    );
-    let recap = vec![
-        steps::command(theme, state.choices.cargo_add()),
-        steps::code(theme, state.choices.theme_line()),
+    let mut commands = vec![
+        steps::command(theme, "cargo new my-app"),
+        steps::command(theme, "cd my-app"),
     ];
-    // The two lines are different lengths, so centering each one separately
-    // would stagger them. Center the block, left-align inside it.
-    let recap_width = recap.iter().map(Line::width).max().unwrap_or(0) as u16;
+    commands.extend(
+        state
+            .choices
+            .dependency_commands()
+            .iter()
+            .map(|command| steps::command(theme, *command)),
+    );
+    commands.push(steps::code(theme, state.choices.theme_line()));
 
-    let inner = steps::render_panel(ctx, area, theme, None);
-    let [block] = Layout::vertical([Constraint::Length(4)])
-        .flex(Flex::Center)
-        .areas(inner);
-    let [headline_area, recap_area] =
-        block.layout(&Layout::vertical([Constraint::Length(1), Constraint::Length(2)]).spacing(1));
-    let [recap_area] = Layout::horizontal([Constraint::Length(recap_width)])
-        .flex(Flex::Center)
-        .areas(recap_area);
-
-    ctx.render_widget(Paragraph::new(headline), headline_area);
-    ctx.render_widget(Paragraph::new(recap), recap_area);
+    let inner = steps::render_panel(ctx, area, theme, Some("Happy development!"));
+    ctx.render_widget(Paragraph::new(commands).wrap(Wrap { trim: false }), inner);
 }

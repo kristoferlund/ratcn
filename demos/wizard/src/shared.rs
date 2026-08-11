@@ -6,7 +6,7 @@
 
 use ratcn::Theme;
 
-/// Which host the reader is building for. Picks the ratcn feature they need.
+/// Which host the reader is building for. Picks the dependencies they need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Backend {
     #[default]
@@ -24,10 +24,14 @@ impl Backend {
         }
     }
 
-    pub const fn feature(self) -> &'static str {
+    pub const fn dependency_commands(self) -> &'static [&'static str] {
         match self {
-            Backend::Terminal => "crossterm",
-            Backend::Browser => "ratzilla",
+            Backend::Terminal => &["cargo add ratcn --features crossterm", "cargo add ratatui"],
+            Backend::Browser => &[
+                "cargo add ratcn --features ratzilla",
+                "cargo add ratatui --no-default-features --features layout-cache",
+                "cargo add ratzilla",
+            ],
         }
     }
 }
@@ -83,9 +87,9 @@ impl Choices {
             .unwrap_or_default()
     }
 
-    /// The install command for the chosen backend.
-    pub fn cargo_add(&self) -> String {
-        format!("cargo add ratcn --features {}", self.backend.feature())
+    /// The dependency commands for the chosen backend.
+    pub const fn dependency_commands(&self) -> &'static [&'static str] {
+        self.backend.dependency_commands()
     }
 
     /// The line that produces the chosen palette.
@@ -121,17 +125,26 @@ mod tests {
         }
     }
 
-    /// The backend choice is only worth collecting because it changes the
-    /// command the reader copies.
+    /// Each backend needs a complete dependency set, not just a ratcn feature.
     #[test]
-    fn the_backend_choice_picks_the_feature_in_the_install_command() {
+    fn the_backend_choice_picks_the_complete_dependency_commands() {
         let mut choices = Choices::default();
 
-        assert_eq!(choices.cargo_add(), "cargo add ratcn --features crossterm");
+        assert_eq!(
+            choices.dependency_commands(),
+            ["cargo add ratcn --features crossterm", "cargo add ratatui",]
+        );
 
         choices.update(ChoiceMsg::SetBackend(Backend::Browser));
 
-        assert_eq!(choices.cargo_add(), "cargo add ratcn --features ratzilla");
+        assert_eq!(
+            choices.dependency_commands(),
+            [
+                "cargo add ratcn --features ratzilla",
+                "cargo add ratatui --no-default-features --features layout-cache",
+                "cargo add ratzilla",
+            ]
+        );
     }
 
     #[test]

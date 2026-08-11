@@ -72,10 +72,15 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
             |backend| AppMsg::Choose(ChoiceMsg::SetBackend(backend)),
         );
 
-    let command = steps::command(theme, state.choices.cargo_add());
+    let commands = state
+        .choices
+        .dependency_commands()
+        .iter()
+        .map(|command| steps::command(theme, *command))
+        .collect::<Vec<_>>();
     let inner = steps::render_panel(ctx, area, theme, Some("Pick a backend"));
 
-    let [intro, select_area, command_area] = inner.layout(
+    let [intro, select_area, commands_area] = inner.layout(
         &Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
@@ -91,7 +96,10 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
         intro,
     );
     ctx.render_component(SELECT_ID, backend, select_area);
-    ctx.render_widget(Paragraph::new(command), command_area);
+    ctx.render_widget(
+        Paragraph::new(commands).wrap(Wrap { trim: false }),
+        commands_area,
+    );
 }
 
 #[cfg(test)]
