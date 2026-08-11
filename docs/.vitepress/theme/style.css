@@ -1,0 +1,358 @@
+:root {
+  color-scheme: dark;
+
+  /* Must match `Theme::default_dark().background`, which every demo paints.
+     Any mismatch shows as a seam between the preview chrome and the canvas. */
+  --ratcn-demo-bg: #0a0a0a;
+}
+
+.demo-frame {
+  width: 100%;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  background: #05070b;
+}
+
+.ratcn-preview-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 18px;
+  border-bottom: 1px solid rgba(251, 191, 36, 0.28);
+  background: linear-gradient(90deg, rgba(120, 53, 15, 0.98), rgba(146, 64, 14, 0.92));
+  color: #fff7ed;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.ratcn-preview-notice-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #fbbf24;
+  box-shadow: 0 0 14px rgba(251, 191, 36, 0.9);
+}
+
+.ratcn-preview-notice a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: #ffffff;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.ratcn-preview-notice a:hover {
+  text-decoration: underline;
+}
+
+/* ----- Landing page (shadcn-inspired, dark) ----- */
+
+.ratcn-home {
+  --ratcn-bg: #05070b;
+  --ratcn-fg: #f4f5f7;
+  --ratcn-muted: #9296a1;
+  --ratcn-border: rgba(255, 255, 255, 0.1);
+  --ratcn-panel: rgba(255, 255, 255, 0.03);
+  min-height: 100vh;
+  color: var(--ratcn-fg);
+  background:
+    radial-gradient(80rem 40rem at 50% -8rem, rgba(99, 102, 241, 0.14), transparent 70%),
+    var(--ratcn-bg);
+  font-family: var(--vp-font-family-base);
+}
+
+.ratcn-home a {
+  text-decoration: none;
+}
+
+.ratcn-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Header */
+
+.ratcn-site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-bottom: 1px solid var(--ratcn-border, rgba(255, 255, 255, 0.08));
+  background: rgba(5, 7, 11, 0.72);
+  backdrop-filter: saturate(180%) blur(16px);
+}
+
+.ratcn-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1240px;
+  height: 60px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.ratcn-header-left {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.ratcn-header-logo {
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.ratcn-header-nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.ratcn-header-nav a {
+  color: #b6bac4;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.ratcn-header-nav a:hover {
+  color: #ffffff;
+}
+
+.ratcn-header-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ratcn-header-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #b6bac4;
+  font-size: 13px;
+  font-weight: 600;
+  transition: color 0.15s ease;
+}
+
+.ratcn-header-github:hover {
+  color: #ffffff;
+}
+
+.ratcn-header-cta {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #09090b;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s ease;
+}
+
+.ratcn-header-cta:hover {
+  background: #d8dade;
+}
+
+/* Hero */
+
+.ratcn-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 104px 24px 56px;
+}
+
+.ratcn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 30px;
+  padding: 0 14px;
+  margin-bottom: 30px;
+  border: 1px solid var(--ratcn-border, rgba(255, 255, 255, 0.1));
+  border-radius: 999px;
+  background: var(--ratcn-panel);
+  color: #c5c8d1;
+  font-size: 13px;
+  font-weight: 500;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.ratcn-badge:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
+.ratcn-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #6366f1;
+  box-shadow: 0 0 12px 1px rgba(99, 102, 241, 0.8);
+}
+
+.ratcn-badge-arrow {
+  color: #8b8f9a;
+}
+
+.ratcn-hero h1 {
+  margin: 0;
+  color: #ffffff;
+  font-size: clamp(44px, 7vw, 78px);
+  font-weight: 800;
+  line-height: 1.02;
+  letter-spacing: -0.045em;
+}
+
+.ratcn-lede {
+  max-width: 620px;
+  margin: 26px 0 0;
+  color: var(--ratcn-muted);
+  font-size: clamp(17px, 2.2vw, 20px);
+  line-height: 1.6;
+}
+
+.ratcn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 36px;
+}
+
+.ratcn-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 22px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.ratcn-button:active {
+  transform: translateY(1px);
+}
+
+.ratcn-button-primary {
+  background: #ffffff;
+  color: #09090b;
+  border: 1px solid #ffffff;
+}
+
+.ratcn-button-primary:hover {
+  background: #d8dade;
+  border-color: #d8dade;
+}
+
+.ratcn-button-secondary {
+  background: transparent;
+  color: #f4f5f7;
+  border: 1px solid var(--ratcn-border, rgba(255, 255, 255, 0.1));
+}
+
+.ratcn-button-secondary:hover {
+  border-color: rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Preview window */
+
+.ratcn-preview {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 8px 24px 120px;
+}
+
+.ratcn-preview-window {
+  --ratcn-preview-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--ratcn-border, rgba(255, 255, 255, 0.1));
+  border-radius: 16px;
+  background: var(--ratcn-demo-bg);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 40px 120px -20px rgba(0, 0, 0, 0.7);
+}
+
+.ratcn-preview-body {
+  padding: 20px;
+  background: var(--ratcn-demo-bg);
+}
+
+.ratcn-preview-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--ratcn-border, rgba(255, 255, 255, 0.1));
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ratcn-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.ratcn-preview-url {
+  margin-left: 12px;
+  color: #6f737e;
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+
+.ratcn-landing-preview-frame,
+.ratcn-component-preview-frame {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--ratcn-preview-height);
+  border: 0;
+  background: var(--ratcn-demo-bg);
+}
+
+.ratcn-preview-caption {
+  max-width: 620px;
+  margin: 28px auto 0;
+  color: var(--ratcn-muted);
+  font-size: 15px;
+  line-height: 1.65;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .ratcn-header-nav {
+    display: none;
+  }
+
+  .ratcn-hero {
+    padding-top: 72px;
+  }
+}

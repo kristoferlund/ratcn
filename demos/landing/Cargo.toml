@@ -1,0 +1,18 @@
+[package]
+name = "landing"
+publish = false
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+demo-shared.workspace = true
+ratatui.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ratcn = { workspace = true, features = ["ratzilla"] }
+ratzilla.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ratcn = { workspace = true, features = ["crossterm"] }
+ratatui = { workspace = true, features = ["crossterm"] }

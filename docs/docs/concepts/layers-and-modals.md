@@ -1,0 +1,108 @@
+---
+description: "Paint ordering and the three layer kinds in ratcn: hint, popup, and modal, plus deferred paint and the app-owned modal stack that drives them."
+---
+
+# Layers and modals
+
+Ratcn paints in declaration order: what you declare later paints on top of what
+you declared earlier. Two mechanisms go beyond that order — deferred paint for
+passive overlays, and **layers** for content that must float above everything.
+Pick the smallest one that does the job:
+
+| Mechanism | Paint time and purpose | Interaction |
+| --- | --- | --- |
+| Direct paint (`render_widget`) | Immediate; ordinary Ratatui decoration or paint-only widgets | None |
+| `render_component` | Immediate component paint in declaration order | Identity, geometry, focus, hover, events |
+| `defer_paint` | After the ordinary declarations in the current layer | Passive paint only |
+| `hint` | A layer that explains: tooltips | Paints only; not a pointer or focus target |
+| `popup` | A layer that offers a choice: dropdowns, menus | Own events; no dim, no capture, no focus stealing |
+| `modal` | A layer that takes over: dialogs | Dims, captures, holds focus, traps keys |
+
+Use `defer_paint` for passive overlays that must land on top of the current
+layer — a floating dragged card, say. The closure receives a `Painter` over the
+frame plus the app state; it has no identity and no hit target, so it cannot
+receive events, and it is not a way to defer an interactive component. Direct
+paint in the right declaration position is simpler when ordering already works
+out.
+
+## The three layer kinds
+
+All three are one mechanism — a subtree that paints into its own canvas and
+composites above everything declared outside it. They differ only in policy,
+and the policy is a table in the runtime rather than a set of special cases.
+Every one is callable from anywhere in the tree and anchors its subtree at the
+declaring node, so `if open { ctx.popup(...) }` inside a component is the whole
+ceremony.
+
+A **hint** takes nothing. It is not a pointer target, so a press over it goes
+to whatever it covers, and nothing inside it can hold focus even if the
+component claims to be focusable. Because it takes no input it has no dismissal
+of its own: whatever state opened it is what closes it. See
+[Tooltip](../components/tooltip).
+
+A **popup** occludes exactly its own footprint. A press inside it that nothing
+handles is consumed at the popup root rather than reaching the control beneath;
+a press outside routes to whatever is visibly there and additionally emits the
+popup's `on_dismiss` message. Focus is never stolen — move it in with your own
+message, in the same update that opens the popup. Keys bubble *through* the
+popup root to the component that declared it. See [Select](../components/select).
+
+A **modal** is the strongest: it becomes the **active layer**. While it is open
+the area behind is dimmed, keyboard and mouse routing are confined to it, focus
+resolves into it, and input that nothing inside handles is absorbed rather than
+reaching the UI underneath. Declare stacked modals bottom to top.
+
+## Modal state in your app
+
+Whether a modal is open is app state, like everything else. `ModalState` stores
+the stack of open modal IDs plus, for each, the focus to restore when it
+closes. Open and close it in `update`, and declare the modal whenever your
+state says it is open:
+
+```rust
+state.modals.open("confirm", &mut state.focus)?;
+
+ratcn.render(frame, &state, &state.theme, |ctx| {
+    // Base paint and declarations first.
+    if state.modals.is_open("confirm") {
+        let area = ctx.area();
+        ctx.modal("confirm", dialog, area);
+    }
+});
+
+state.modals.close(&mut state.focus);
+```
+
+`open` saves the current focus and moves focus intent to the new modal.
+`close` pops the top modal and restores its exact saved focus. Ratcn provides
+the stack and the focus bookkeeping; *when* and *which* modal opens stays your
+decision.
+
+The modal root does not have to be a component. `RenderCtx::modal_scope` opens
+the same layer around a plain scope closure — paint your own chrome and declare
+children with `render_component`, exactly like a base-layer panel. Reach for it
+to hand-roll a dialog-like layer that stays entirely app-owned; `Dialog` is the
+packaged alternative with chrome, dragging, and dismiss keys built in.
+
+## Binding the stack
+
+Tell the runtime where your modal stack lives:
+
+```rust
+let ratcn = Ratcn::new()
+    .modals(|state: &AppState| &state.modals);
+```
+
+With the binding in place, every render must declare exactly the modal IDs the
+state says are open — a mismatch is a declaration bug and fails the render.
+The binding also covers the brief gap between opening or closing a modal in
+`update` and the redraw that reflects it: events arriving in that gap are
+consumed instead of landing on a layer your state considers closed. Focus
+needs no help from it — any open modal resolves focus into itself, bound or
+not.
+
+Only modals have semantic state to validate this way. Popups and hints are
+opened by whatever app state your own component reads, and the runtime holds
+nothing about them between frames.
+
+See [Dialog](../components/dialog) for the packaged modal component.

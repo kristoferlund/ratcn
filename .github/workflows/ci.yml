@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# One run per branch or PR. Superseded PR runs are cancelled; pushes to main
+# are left to finish so the history keeps a complete result for every commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  TRUNK_VERSION: 0.21.14
+
+# rust-toolchain.toml is the single source of truth for the everyday toolchain.
+# It outranks anything `rustup default` sets, so jobs read the channel from it
+# rather than naming a version that the file would silently override. The msrv
+# job is the deliberate exception and overrides it through RUSTUP_TOOLCHAIN.
+
+jobs:
+  rust:
+    name: Test and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read toolchain from rust-toolchain.toml
+        id: toolchain
+        run: echo "channel=$(grep '^channel' rust-toolchain.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: License copy is in sync
+        run: cmp LICENSE crates/ratcn/LICENSE
+
+      - name: Tests
+        run: cargo test -p ratcn --locked
+      - name: Tests, all features
+        run: cargo test -p ratcn --all-features --locked
+
+      # The copy-out promise: every component module must still compile against
+      # ratcn's public API after `crate::` is rewritten to `ratcn::`. The diff
+      # check fails if a contributor edited a component without re-running the
+      # script.
+      - name: Copyable components are in sync
+        run: ./crates/copy-fixture/sync.sh
+      - name: Copyable components are committed
+        run: git diff --exit-code -- crates/copy-fixture/src
+      - name: Copyable components compile
+        run: cargo check -p copy-fixture --locked
+
+      # --all-targets matters: without it clippy lints only the lib target and
+      # skips every test module, which is over half this crate's source.
+      - name: Clippy (library)
+        run: cargo clippy -p ratcn --all-features --all-targets --locked -- -D warnings
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Clippy (workspace, wasm)
+        run: cargo clippy --workspace --all-targets --target wasm32-unknown-unknown --locked -- -D warnings
+
+      - name: Rustdoc
+        run: cargo doc -p ratcn --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Package
+        run: cargo package -p ratcn --locked
+      # `cargo package` unpacks the crate into target/package/ to verify it.
+      # That directory has its own Cargo.toml, so the cache action's post-step
+      # walks it as if it were a workspace member and logs ENOENT for test
+      # directories it does not contain. Nothing depends on it after this step.
+      - name: Remove packaging artifacts
+        if: always()
+        run: rm -rf target/package
+
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-latest
+    # rust-toolchain.toml pins the everyday toolchain and outranks the default
+    # that dtolnay/rust-toolchain sets, so without this the job would quietly
+    # test on that pinned version instead of the MSRV.
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
+    steps:
+      - uses: actions/checkout@v7
+      # Must match `rust-version` in the workspace Cargo.toml. The `ratzilla`
+      # feature needs 1.90 (its beamterm dependencies), so this covers the
+      # default and crossterm builds — the ones a published consumer gets.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - name: MSRV declared in Cargo.toml matches this job
+        run: |
+          declared=$(grep -m1 '^rust-version' Cargo.toml | tr -d ' "' | cut -d= -f2)
+          if [ "$declared" != "1.88" ]; then
+            echo "Cargo.toml declares rust-version = $declared but this job pins 1.88."
+            echo "Update both together."
+            exit 1
+          fi
+      - name: Tests on the minimum toolchain
+        run: |
+          cargo --version
+          cargo test -p ratcn --features crossterm --locked
+
+  docs:
+    name: Docs site
+    needs: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Read toolchain from rust-toolchain.toml
+        id: toolchain
+        run: echo "channel=$(grep '^channel' rust-toolchain.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # Use the published binary rather than `cargo install`, which compiles
+      # Trunk from source and takes about five minutes. This takes about one
+      # second, so there is nothing worth caching.
+      - name: Install Trunk
+        run: |
+          set -euo pipefail
+          base="https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}"
+          asset="trunk-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$base/$asset" -o trunk.tar.gz
+          echo "$(curl -fsSL "$base/$asset.sha256")  trunk.tar.gz" | sha256sum -c -
+          tar -xzf trunk.tar.gz -C "$HOME/.cargo/bin" trunk
+          rm trunk.tar.gz
+          trunk --version
+
+      - run: npm ci
+      - name: Build demos and site
+        run: npm run docs:build

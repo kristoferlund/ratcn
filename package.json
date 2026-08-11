@@ -1,0 +1,35 @@
+{
+  "name": "ratcn-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "npm run demo:build && vitepress dev docs",
+    "docs:build": "npm run demo:build && vitepress build docs",
+    "demo:dev": "trunk serve --config demos/button-large/Trunk.toml",
+    "barchart:dev": "trunk serve --config demos/barchart/Trunk.toml",
+    "barchart-horizontal:dev": "trunk serve --config demos/barchart-horizontal/Trunk.toml",
+    "button-large:dev": "trunk serve --config demos/button-large/Trunk.toml",
+    "button-small:dev": "trunk serve --config demos/button-small/Trunk.toml",
+    "dialog:dev": "trunk serve --config demos/dialog/Trunk.toml",
+    "landing:dev": "trunk serve --config demos/landing/Trunk.toml",
+    "list:dev": "trunk serve --config demos/list/Trunk.toml",
+    "list-multi:dev": "trunk serve --config demos/list-multi/Trunk.toml",
+    "list-people:dev": "trunk serve --config demos/list-people/Trunk.toml",
+    "select:dev": "trunk serve --config demos/select/Trunk.toml",
+    "toast:dev": "trunk serve --config demos/toast/Trunk.toml",
+    "tooltip:dev": "trunk serve --config demos/tooltip/Trunk.toml",
+    "panels:dev": "trunk serve --config demos/panels/Trunk.toml",
+    "tabs-basic:dev": "trunk serve --config demos/tabs-basic/Trunk.toml",
+    "tabs-large:dev": "trunk serve --config demos/tabs-large/Trunk.toml",
+    "tabs-disabled:dev": "trunk serve --config demos/tabs-disabled/Trunk.toml",
+    "tabs-automatic:dev": "trunk serve --config demos/tabs-automatic/Trunk.toml",
+    "ledger93:dev": "trunk serve --config demos/ledger93/Trunk.toml",
+    "drag:dev": "trunk serve --config demos/drag/Trunk.toml",
+    "effects:dev": "trunk serve --config demos/effects/Trunk.toml",
+    "kanban:dev": "trunk serve --config demos/kanban/Trunk.toml",
+    "demo:build": "trunk build --config demos/landing/Trunk.toml --release && trunk build --config demos/barchart/Trunk.toml --release && trunk build --config demos/barchart-horizontal/Trunk.toml --release && trunk build --config demos/button-large/Trunk.toml --release && trunk build --config demos/button-small/Trunk.toml --release && trunk build --config demos/dialog/Trunk.toml --release && trunk build --config demos/list/Trunk.toml --release && trunk build --config demos/list-multi/Trunk.toml --release && trunk build --config demos/list-people/Trunk.toml --release && trunk build --config demos/select/Trunk.toml --release && trunk build --config demos/tabs-basic/Trunk.toml --release && trunk build --config demos/tabs-large/Trunk.toml --release && trunk build --config demos/tabs-disabled/Trunk.toml --release && trunk build --config demos/tabs-automatic/Trunk.toml --release && trunk build --config demos/toast/Trunk.toml --release && trunk build --config demos/tooltip/Trunk.toml --release && trunk build --config demos/panels/Trunk.toml --release && trunk build --config demos/ledger93/Trunk.toml --release && trunk build --config demos/drag/Trunk.toml --release && trunk build --config demos/effects/Trunk.toml --release && trunk build --config demos/kanban/Trunk.toml --release"
+  },
+  "devDependencies": {
+    "vitepress": "2.0.0-alpha.17"
+  }
+}

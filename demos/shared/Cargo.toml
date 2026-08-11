@@ -1,0 +1,12 @@
+[package]
+name = "shared"
+publish = false
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ratzilla.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ratatui = { workspace = true, features = ["crossterm"] }

@@ -1,0 +1,8 @@
+# Canonicalize VitePress clean URLs on Cloudflare Pages.
+#
+# Scoped to the generated documentation pages on purpose. The demo bundles
+# under /demos/ are real .html files served inside iframes, so a catch-all
+# `/*.html /:splat 301` rule would redirect every demo to a path that does not
+# exist and blank the previews.
+/index.html / 301
+/docs/*.html /docs/:splat 301

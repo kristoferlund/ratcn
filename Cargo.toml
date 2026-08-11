@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ratcn",
+    "crates/copy-fixture",
+    "demos/shared",
+    "demos/barchart",
+    "demos/barchart-horizontal",
+    "demos/button-large",
+    "demos/button-small",
+    "demos/dialog",
+    "demos/drag",
+    "demos/effects",
+    "demos/kanban",
+    "demos/landing",
+    "demos/list",
+    "demos/list-multi",
+    "demos/list-people",
+    "demos/select",
+    "demos/tabs-basic",
+    "demos/tabs-large",
+    "demos/tabs-disabled",
+    "demos/tabs-automatic",
+    "demos/toast",
+    "demos/tooltip",
+    "demos/ledger93",
+    "demos/panels",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+version = "0.0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[workspace.dependencies]
+ratatui = { version = "0.30.2", default-features = false, features = ["layout-cache", "std"] }
+ratzilla = "0.3.1"
+ratcn = { path = "crates/ratcn" }
+demo-shared = { package = "shared", path = "demos/shared" }
+email_address = "0.2.9"
+futures-util = "0.3.32"
+gloo-timers = { version = "0.3.0", features = ["futures"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+ureq = "3.3.0"
+wasm-bindgen = "0.2.122"
+wasm-bindgen-futures = "0.4.72"
+web-sys = { version = "0.3.99", features = ["AbortController", "AbortSignal", "Headers", "Request", "RequestInit", "Response", "Window"] }

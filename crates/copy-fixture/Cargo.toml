@@ -1,0 +1,13 @@
+[package]
+name = "copy-fixture"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+ratatui.workspace = true
+ratcn.workspace = true
+
+[lints.rust]
+dead_code = "allow"

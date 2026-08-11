@@ -1,0 +1,10 @@
+/target/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/
+/docs/public/demos/
+/node_modules/
+.DS_Store
+.firecrawl/
+# Local agent configuration and scratch worktrees. Ignored in-repo rather than
+# only in .git/info/exclude, which does not survive a move to another remote.
+.claude/
