@@ -23,7 +23,7 @@ use ratatui::{
 
 use ratcn::Theme;
 use ratcn::runtime::{
-    BodySlot, Component, Event, EventCtx, EventResult, KeyCode, MouseKind, RenderCtx, ScopeOptions,
+    Component, Event, EventCtx, EventResult, KeyCode, MouseKind, RenderCtx, ScopeOptions,
     wrapped_height,
 };
 use ratcn::text_width::{display_width_u16, wrap_to_width};
@@ -229,6 +229,8 @@ type ReadOpenFn<S> = Rc<dyn Fn(&S) -> bool>;
 type OnOpenChangeFn<M> = Rc<dyn Fn(bool) -> M>;
 type OpenBinding<S, M> = (ReadOpenFn<S>, Option<OnOpenChangeFn<M>>);
 type StyleFn = Rc<dyn Fn(&Theme) -> TooltipStyle>;
+/// The trigger closure, boxed for storage until the declaration runs it.
+type TriggerFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>;
 
 /// A wrapper that floats an explanation beside the content it describes.
 ///
@@ -296,7 +298,9 @@ pub struct Tooltip<S, M> {
     side: TooltipSide,
     max_width: u16,
     open: Option<OpenBinding<S, M>>,
-    trigger: BodySlot<S, M>,
+    /// Taken by the declaration that runs it; the Tooltip needs nothing of it
+    /// afterwards.
+    trigger: Option<TriggerFn<S, M>>,
     style: Option<StyleFn>,
     /// Declaration prop resolved from app state before rendering.
     resolved_open: bool,
@@ -309,7 +313,7 @@ impl<S, M> std::fmt::Debug for Tooltip<S, M> {
             .field("side", &self.side)
             .field("max_width", &self.max_width)
             .field("open", &self.open.is_some())
-            .field("trigger", &self.trigger.is_configured())
+            .field("trigger", &self.trigger.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -330,7 +334,7 @@ impl<S, M> Tooltip<S, M> {
             side: TooltipSide::default(),
             max_width: Self::DEFAULT_MAX_WIDTH,
             open: None,
-            trigger: BodySlot::None,
+            trigger: None,
             style: None,
             resolved_open: false,
         }
@@ -419,7 +423,7 @@ impl<S, M> Tooltip<S, M> {
         S: 'static,
         M: 'static,
     {
-        self.trigger.set(f);
+        self.trigger = Some(Box::new(f));
         self
     }
 
@@ -475,7 +479,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
     }
 
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
-        if let Some(trigger) = self.trigger.consume() {
+        if let Some(trigger) = self.trigger.take() {
             trigger(ctx);
         }
         if !self.resolved_open {
