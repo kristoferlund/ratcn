@@ -47,7 +47,7 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     ctx.render_component(TIP, tooltip, button_area);
 }
 
-/// Built twice per pass — once to measure, once to declare — so the width the
+/// Built twice per frame — once to measure, once to declare — so the width the
 /// layout reserves and the width that paints cannot disagree.
 ///
 /// The press handler is what makes the button focusable: `Button::is_focusable`

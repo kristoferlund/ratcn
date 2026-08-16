@@ -12,7 +12,7 @@ use ratatui::widgets::{StatefulWidget, Widget};
 use crate::Theme;
 
 use super::engine::{DeclarationEnv, LayerKind, RenderPass};
-use super::{ChildId, Event, HoverState, KeyChord, MouseButton, TabWrap};
+use super::{ChildId, Event, KeyChord, MouseButton, TabWrap};
 
 /// What a component did with an event, and what should happen next.
 ///
@@ -50,18 +50,15 @@ pub enum EventResult<Msg> {
 /// [`Component::paint`] and to the closures [`paint`](Self::paint) queues,
 /// which the runtime replays in declaration order once the whole tree is
 /// known. The interaction flags a paint call styles from live on
-/// [`PaintCtx`] for the same reason — during the walk they are still
-/// provisional.
+/// [`PaintCtx`] for the same reason — focus resolves against the tree this
+/// context is still building, so while it exists there are no flags to
+/// report.
 pub struct RenderCtx<'a, 'frame, State, Msg> {
     pub(crate) frame: &'a mut Frame<'frame>,
     pub(crate) area: Rect,
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
     pub theme: &'a Theme,
-    /// The interaction flags of the identified declaration this context sits
-    /// in, stamped onto whatever [`paint`](Self::paint) queues here.
-    pub(crate) flags: InteractionFlags,
     pub(crate) hover_position: Option<Position>,
-    pub(crate) hover: &'a HoverState,
     pub(crate) transients: Option<&'a mut TransientMap>,
     pub(crate) depth: usize,
     pub(crate) pass: Option<&'a mut RenderPass<State, Msg>>,
@@ -71,10 +68,9 @@ pub struct RenderCtx<'a, 'frame, State, Msg> {
 /// Where one identified declaration sits in this frame's focus and hover, as
 /// the four flags paint styles from.
 ///
-/// They travel as a unit because they are computed as one — from the same
-/// identity path against the same resolved focus and effective hover — and
-/// because the paint queue has to carry them from the declaration that
-/// queued an op to the replay that runs it.
+/// They travel as a unit because they are answered as one, from the same node
+/// against the same resolved focus and effective hover, at the one moment
+/// they can be answered at all: after declaring has ended.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -92,7 +88,6 @@ impl<State, Msg> fmt::Debug for RenderCtx<'_, '_, State, Msg> {
         f.debug_struct("RenderCtx")
             .field("area", &self.area)
             .field("theme", self.theme)
-            .field("flags", &self.flags)
             .field("hover_position", &self.hover_position)
             .field("depth", &self.depth)
             .field("declaration_active", &self.pass.is_some())
@@ -125,19 +120,15 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// false. Enter a named [`scope`](Self::scope) when container chrome needs
     /// to know whether focus or the pointer is somewhere inside it.
     ///
-    /// Nothing is queued during the structure pass (see
-    /// [`Ratcn::render`](super::Ratcn::render)), so the closure runs exactly
-    /// once per frame.
-    ///
     /// # Panics
     ///
     /// Panics when called outside a [`Ratcn`](super::Ratcn) declaration pass.
     pub fn paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static) {
-        let (area, flags) = (self.area, self.flags);
+        let area = self.area;
         self.pass
             .as_deref_mut()
             .expect("paint called outside a Ratcn declaration pass")
-            .queue_thunk(area, flags, paint);
+            .queue_thunk(area, paint);
     }
 
     /// The area supplied for the current declaration.
@@ -161,7 +152,8 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// inside the terminal.
     ///
     /// This is paint-only runtime information. It does not change the app-owned
-    /// [`HoverState`], which continues to describe the hovered declaration path.
+    /// [`HoverState`](super::HoverState), which continues to describe the
+    /// hovered declaration path.
     #[must_use]
     pub const fn hover_position(&self) -> Option<Position> {
         self.hover_position
@@ -205,13 +197,12 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// [`List`](crate::List) settles it in its `render`, alongside the
     /// arithmetic that produces the offset it stores.
     ///
-    /// **The update must be idempotent.** The declaration closure runs twice
-    /// per frame (see [`Ratcn::render`](super::Ratcn::render)), so whatever
-    /// this writes is written twice and must reach the same value the second
-    /// time — and the value the second pass reads must be the one the first
-    /// pass would have read. Settling a flag (`if moved { held = false }`) or
-    /// storing a computed offset qualifies; counting, appending, or toggling
-    /// does not. Declared structure must never depend on it.
+    /// The write lands once per frame, where the declaration makes it, and is
+    /// read back by the next frame's declaration — and by any event handler
+    /// that writes it in between. Settling a flag
+    /// (`if moved { held = false }`) or storing a computed offset is what
+    /// this is for; anything the app should read, persist, or act on belongs
+    /// in app state.
     ///
     /// Prefer writing from [`EventCtx::transient`] whenever an event can carry
     /// the change instead.
@@ -263,9 +254,7 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
             frame: &mut *self.frame,
             area,
             theme: self.theme,
-            flags: self.flags,
             hover_position: self.hover_position,
-            hover: self.hover,
             transients: self.transients.as_deref_mut(),
             depth: self.depth,
             pass: self.pass.as_deref_mut(),
@@ -297,7 +286,6 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
             area,
             state,
             theme: self.theme,
-            hover: self.hover,
             transients: self.transients.as_deref_mut(),
             depth: self.depth,
         };
@@ -708,9 +696,10 @@ impl Painter<'_, '_> {
 /// [`Component::paint`] gets one, and so does every closure queued with
 /// [`RenderCtx::paint`]. Both run during the replay that follows the
 /// declaration walk, which is why this context can declare nothing: by the
-/// time it exists the tree is closed and focus is resolved. That is also what
-/// makes the four interaction flags trustworthy here — during the walk they
-/// are still provisional.
+/// time it exists the tree is closed and focus is resolved. That is also the
+/// only reason it can carry the four interaction flags at all — they are
+/// derived from that resolution, and there is nothing to derive them from
+/// while the tree is still being built.
 ///
 /// Painting goes through [`render_widget`](Self::render_widget),
 /// [`render_stateful_widget`](Self::render_stateful_widget), and
@@ -812,8 +801,8 @@ impl<'a, State> PaintCtx<'a, '_, State> {
     /// inside the terminal.
     ///
     /// This is paint-only runtime information. It does not change the
-    /// app-owned [`HoverState`], which continues to describe the hovered
-    /// declaration path.
+    /// app-owned [`HoverState`](super::HoverState), which continues to
+    /// describe the hovered declaration path.
     #[must_use]
     pub const fn hover_position(&self) -> Option<Position> {
         self.hover_position
@@ -1264,13 +1253,11 @@ pub trait Component<State, Msg> {
     /// record whatever [`handle_event`](Self::handle_event) will need to read
     /// back.
     ///
-    /// This runs twice per frame, in both passes (see
-    /// [`Ratcn::render`](super::Ratcn::render)), and paints nothing. What
-    /// belongs here is everything the answer to "what exists, and where" is
-    /// made of: layout arithmetic, child declarations, and the retained
-    /// geometry event routing hit-tests against. All of it must be
-    /// independent of the interaction flags, which are provisional during the
-    /// first pass and are not offered here at all.
+    /// This paints nothing. What belongs here is everything the answer to
+    /// "what exists, and where" is made of: layout arithmetic, child
+    /// declarations, and the retained geometry event routing hit-tests
+    /// against. None of it can depend on the interaction flags, which do not
+    /// exist yet — focus resolves against the tree this is still building.
     ///
     /// Anything that draws belongs in [`paint`](Self::paint).
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, State, Msg>);

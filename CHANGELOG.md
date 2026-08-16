@@ -23,15 +23,19 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking:** the two-pass declaration and its idempotency contract. The
+  declaration closure runs **once** per frame. It may have side effects, and
+  the divergence panics that policed the contract (`declaration closure is not
+  idempotent: ...`) are gone with it.
 - **Breaking:** `RenderCtx::render_widget`, `RenderCtx::render_stateful_widget`,
   and `RenderCtx::with_buffer`. Declaring no longer paints: use
   `RenderCtx::paint` from an app declaration and `Component::paint` from a
-  component. The scratch buffer `with_buffer` ran against during the structure
-  pass is gone with them — a paint closure runs once, against the real
-  surface.
+  component. The scratch buffer `with_buffer` used to run against is gone with
+  them — a paint closure runs once, against the real surface.
 - **Breaking:** the `RenderCtx::focused`, `contains_focus`, `hovered`, and
-  `contains_hover` fields. They are provisional while declaring and are now
-  reported by `PaintCtx` alone.
+  `contains_hover` fields. Focus resolves against the tree a declaration is
+  still building, so no flag exists while declaring; `PaintCtx` reports all
+  four.
 - **Breaking:** `runtime::compose`, with `BodyFn`, `BodySlot`, and `ChildSlots`.
   A composite now holds a caller-supplied body as
   `Option<Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>>` and a measured child
@@ -43,10 +47,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `Ratcn::render`'s declaration closure is `FnOnce` rather than
+  `FnMut`. Values may be moved into the components it declares instead of
+  cloned per run.
 - **Breaking:** `Component::render` is declaration only. It lays the component
   out, declares its descendants, and records what `handle_event` reads back;
   it writes no cells and is not offered the interaction flags. Everything that
   draws moves to `Component::paint`.
+- **Breaking:** `Dialog` and `Tooltip` hold their bodies, footer, and actions in
+  private types. Their builders are unchanged.
 - A component's own paint now always precedes its descendants' — a component is
   queued at the point it opens, so container chrome needs no care about
   ordering. The converse is no longer expressible from `paint`: decoration that
@@ -54,25 +63,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kanban demo's drag ghost was already written that way; nothing in-tree had to
   move.
 - A rejected pass paints nothing. Declaration, validation, and the modal-stack
-  check all complete before the first cell is written, so a divergent,
-  count-short, poisoned, or modal-mismatched pass leaves the previous frame on
-  screen as well as the previous surface. This concerns paint-pass failures; a
-  declaration that panics deterministically never painted under the old
-  ordering either.
-- Widget construction happens once per frame. Argument expressions used to be
-  evaluated in both passes and discarded in the first, so any side effect in
-  building a widget — a counter, a log, a `Cell` write — now runs half as
-  often.
-- **Breaking:** `Dialog` and `Tooltip` hold their bodies, footer, and actions in
-  private types. Their builders are unchanged.
+  check all complete before the first cell is written, so a poisoned or
+  modal-mismatched pass leaves the previous frame on screen as well as the
+  previous surface.
+- The declaration closure and every `Component::render` now run once per
+  frame rather than twice. Anything a declaration does beyond declaring — a
+  counter, a log, an `Rc<RefCell>` write — happens half as often, and
+  `RenderCtx::transient_mut` writes once rather than twice.
 - `RenderCtx::in_area` is documented rather than hidden: it is how a composite
   hands a caller-supplied body the area it laid out for it.
 - A `Dialog` action is prepared where it is declared rather than in the dialog's
   own `prepare`. Preparation reads only the declaring state, which cannot change
-  within a pass.
+  within a frame.
 - Rendering one retained composite instance twice by hand no longer panics; the
-  second render declares nothing. Each pass builds a fresh instance, so this was
-  never reachable through `Ratcn::render`.
+  second render declares nothing. Every frame builds a fresh instance, so this
+  was never reachable through `Ratcn::render`.
 
 ## [0.0.1]
 

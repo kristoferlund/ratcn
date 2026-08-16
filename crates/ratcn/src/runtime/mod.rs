@@ -32,14 +32,14 @@
 //! hit-tested leaf and bubble upward if unhandled, and anything the app must
 //! act on comes back as a returned message, never as a mutation.
 //!
-//! # The declaration closure runs twice per frame
+//! # Declaring and drawing are two walks
 //!
-//! [`Ratcn::render`] runs the closure once with all painting suppressed, to
-//! learn the whole tree before focus is resolved against it, and once again to
-//! paint. The closure must therefore be **idempotent**: it may branch on app
-//! state, but the structure it declares has to come out identical both times.
-//! A divergence panics naming the first path that differed. See
-//! [`Ratcn::render`] for the full contract.
+//! [`Ratcn::render`] runs the closure once, and that run draws nothing: it
+//! builds the tree and queues the paint each declaration owes. Focus resolves
+//! against the finished tree, and only then does the queue run — which is why
+//! [`PaintCtx`] carries the interaction flags and [`RenderCtx`] does not.
+//! Declaring once means the closure may have side effects and may move what it
+//! captures into the components it declares.
 //!
 //! # Who owns what
 //!

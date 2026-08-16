@@ -76,15 +76,15 @@ to the scope's first focusable leaf.
 ## Telling Ratcn what can be focused
 
 Nothing, usually: focusable components make themselves known, and the runtime
-discovers them — every frame declares in a structure pass before focus
-resolves, so whether focus can descend into a scope is observed, never
-promised. One option changes a scope's own role:
+discovers them — every frame is declared in full before focus resolves against
+it, so whether focus can descend into a scope is observed, never promised. One
+option changes a scope's own role:
 
 - `focusable()` makes the scope itself the Tab stop — for a pane with nothing
   focusable inside, such as a read-only chart. Focus still prefers a focusable
   descendant when one exists.
 
-The two-pass mechanics behind this live in
+The declare-then-draw mechanics behind this live in
 [Design decisions](./design-decisions).
 
 ## Hover

@@ -44,21 +44,21 @@ pub const SCROLL_STEP: usize = 3;
 ///
 /// - [`park`](Self::park) records a wheel scroll: the view moves to `offset`
 ///   and holds there while the cursor stays where the wheel left it.
-/// - [`settle`](Self::settle) runs at the start of paint. It releases the hold
-///   for good once anything has moved the cursor, and then records the offset
-///   paint resolved. Releasing is permanent: without it, moving the cursor
-///   away and back would revive a stale park and throw the cursor off-screen
-///   again.
-/// - [`cursor_to_show`](Self::cursor_to_show) tells paint whether to keep the
-///   cursor visible. While the park holds, it does not — that is the whole
+/// - [`settle`](Self::settle) runs once per frame, where the list declares.
+///   It releases the hold for good once anything has moved the cursor, and
+///   then records the offset that declaration resolved. Releasing is
+///   permanent: without it, moving the cursor away and back would revive a
+///   stale park and throw the cursor off-screen again.
+/// - [`cursor_to_show`](Self::cursor_to_show) tells the layout whether to keep
+///   the cursor visible. While the park holds, it does not — that is the whole
 ///   point of the wheel.
 ///
-/// Paint settles it rather than event handling because only paint sees every
-/// cursor change: a select's options are scrolled by the panel but moved by
-/// the keys its trigger handles. Both steps are idempotent, so running them
-/// in each of the two declaration passes reaches the same value — the
-/// condition [`RenderCtx::transient_mut`](crate::runtime::RenderCtx::transient_mut)
-/// imposes.
+/// The declaration settles it rather than event handling because only the
+/// declaration sees every cursor change: a select's options are scrolled by
+/// the panel but moved by the keys its trigger handles. The park is stored
+/// through [`RenderCtx::transient_mut`](crate::runtime::RenderCtx::transient_mut),
+/// so it survives between frames and the wheel's own event handler writes it
+/// from the other side.
 ///
 /// This is render-derived presentation state. The cursor, the selection, and
 /// any app-bound scroll offset stay app-owned.
