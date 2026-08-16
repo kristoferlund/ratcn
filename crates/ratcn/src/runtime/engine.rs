@@ -137,8 +137,12 @@ impl LayerKind {
 }
 
 pub(crate) struct Node<State, Msg> {
+    /// This node's own segment of its identity path. The full path is the ids
+    /// of the parent chain and this one, and is derived on demand through
+    /// [`Surface::path_of`] rather than stored: building the tree is the
+    /// hottest thing a frame does, and a stored path costs an allocation per
+    /// node per pass.
     id: ChildId,
-    path: Vec<ChildId>,
     parent: Option<usize>,
     children: Vec<usize>,
     area: Rect,
@@ -159,7 +163,6 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
             .field("id", &self.id)
-            .field("path", &self.path)
             .field("parent", &self.parent)
             .field("children", &self.children)
             .field("area", &self.area)
@@ -209,6 +212,80 @@ impl<State, Msg> fmt::Debug for Surface<State, Msg> {
 }
 
 impl<State, Msg> Surface<State, Msg> {
+    /// The identity path of `index`, outermost first.
+    ///
+    /// Building it allocates, so it belongs to the consumers that need a path
+    /// as a value — panic messages, the paths handed to components and to
+    /// app-held focus and hover state. Structural questions have
+    /// non-allocating answers instead: [`Self::is_ancestor_or_self`] for
+    /// containment, [`Self::path_is_prefix_of`] for testing a node against a
+    /// stored path.
+    fn path_of(&self, index: usize) -> Vec<ChildId> {
+        let mut path = Vec::with_capacity(self.depth(index));
+        let mut current = Some(index);
+        while let Some(node) = current {
+            path.push(self.nodes[node].id.clone());
+            current = self.nodes[node].parent;
+        }
+        path.reverse();
+        path
+    }
+
+    /// How many ids `index`'s identity path has.
+    fn depth(&self, index: usize) -> usize {
+        let mut depth = 0;
+        let mut current = Some(index);
+        while let Some(node) = current {
+            depth += 1;
+            current = self.nodes[node].parent;
+        }
+        depth
+    }
+
+    /// Whether `index`'s identity path is exactly `path`.
+    ///
+    /// The comparison half of [`Self::path_is_prefix_of`], which is what
+    /// callers want and its only caller: it walks the parent chain against
+    /// `path` back to front, so neither side is materialized, and it needs
+    /// the prefix already trimmed to the node's own depth.
+    fn path_is(&self, index: usize, path: &[ChildId]) -> bool {
+        let mut current = Some(index);
+        let mut rest = path;
+        while let Some(node) = current {
+            let Some((last, head)) = rest.split_last() else {
+                return false;
+            };
+            if self.nodes[node].id != *last {
+                return false;
+            }
+            current = self.nodes[node].parent;
+            rest = head;
+        }
+        rest.is_empty()
+    }
+
+    /// Whether `index`'s identity path is `path` or a prefix of it — the
+    /// question `path.starts_with(node_path)` asks, without building either.
+    fn path_is_prefix_of(&self, index: usize, path: &[ChildId]) -> bool {
+        let depth = self.depth(index);
+        depth <= path.len() && self.path_is(index, &path[..depth])
+    }
+
+    /// Whether `node` is `ancestor` or one of its descendants.
+    ///
+    /// Identity paths are unique, so walking parent indices answers this
+    /// exactly as comparing paths would, and without touching an id.
+    fn is_ancestor_or_self(&self, ancestor: usize, node: usize) -> bool {
+        let mut current = Some(node);
+        while let Some(index) = current {
+            if index == ancestor {
+                return true;
+            }
+            current = self.nodes[index].parent;
+        }
+        false
+    }
+
     fn has_hit_geometry(&self, index: usize) -> bool {
         let area = self.nodes[index].area;
         area.width > 0 && area.height > 0
@@ -229,9 +306,10 @@ impl<State, Msg> Surface<State, Msg> {
     /// Whether this node is inside the exclusive layer, and so can still be
     /// interacted with. With no exclusive layer open, everything can.
     ///
-    /// Membership is by path, not by layer number: a layer declared after the
-    /// exclusive one takes a higher layer number but is not thereby inside it.
-    /// Layer numbers order paint; this orders interaction. Checked on
+    /// Membership is containment in the tree, not layer number: a layer
+    /// declared after the exclusive one takes a higher layer number but is not
+    /// thereby inside it. Layer numbers order paint; this orders interaction,
+    /// and only the ancestor chain can answer it. Checked on
     /// interaction targets (hit, focus leaves), not on ancestors: a nested
     /// layer root's ancestors provide identity and structure, not interaction.
     fn interactive(&self, index: usize) -> bool {
@@ -288,13 +366,13 @@ impl<State, Msg> Surface<State, Msg> {
             .filter(|&root| self.nodes[root].layer_kind == Some(LayerKind::Modal))
     }
 
-    /// Whether `index` is `root` or one of its descendants, by path.
+    /// Whether `index` is `root` or one of its descendants.
     ///
     /// The one containment test. Layer numbers order paint and must never be
     /// used to answer this: a layer declared after another takes a higher
     /// number without being inside it.
     fn inside(&self, index: usize, root: usize) -> bool {
-        self.nodes[index].path.starts_with(&self.nodes[root].path)
+        self.is_ancestor_or_self(root, index)
     }
 
     /// The roots focus traversal works across: the topmost focus-holding layer
@@ -305,8 +383,10 @@ impl<State, Msg> Surface<State, Msg> {
             .map_or_else(|| self.roots.clone(), |root| vec![root])
     }
 
+    /// Whether some node's identity path is exactly `path`. The empty path
+    /// names no node: every declaration has at least its own id.
     fn contains_declared_path(&self, path: &[ChildId]) -> bool {
-        self.nodes.iter().any(|node| node.path == path)
+        !path.is_empty() && self.nodes_along_path(path).len() == path.len()
     }
 
     /// The node indices along `path`, outermost first, stopping at the first
@@ -369,8 +449,7 @@ impl<State, Msg> Surface<State, Msg> {
     }
 
     fn hit_path(&self, point: Position) -> Option<Vec<ChildId>> {
-        self.hit_index(point)
-            .map(|index| self.nodes[index].path.clone())
+        self.hit_index(point).map(|index| self.path_of(index))
     }
 
     fn is_layer_root(&self, index: usize) -> bool {
@@ -463,8 +542,9 @@ impl<State, Msg> Surface<State, Msg> {
     /// focusable leaf, seeded with the node's own ancestor prefix — correct
     /// whether the node is a tree root or a nested layer root.
     fn descend_focus(&self, index: usize, direction: Step) -> Option<FocusState> {
-        let node_path = &self.nodes[index].path;
-        let mut path = node_path[..node_path.len() - 1].to_vec();
+        let mut path = self.nodes[index]
+            .parent
+            .map_or_else(Vec::new, |parent| self.path_of(parent));
         self.extend_to_edge(index, direction, &mut path)
             .then(|| FocusState::intent(path))
     }
@@ -489,30 +569,29 @@ impl<State, Msg> Surface<State, Msg> {
     ///   into that layer; an absent path stays parked even then, so render and
     ///   routing agree on it.
     fn resolve_focus(&self, stored: &FocusState) -> FocusState {
-        if let Some(root) = self.focus_root() {
-            let root_path = self.nodes[root].path.as_slice();
-            if !stored.path().starts_with(root_path) {
-                // `ModalState::open` records its focus intent as the modal's
-                // bare id; that intent resolves into the modal wherever the
-                // modal was declared.
-                let open_intent = stored.path() == [self.nodes[root].id.clone()];
-                // Beyond that, the layer steals focus from an empty path and
-                // from paths it occludes — but an absent path stays parked,
-                // so render and routing keep agreeing on it.
-                if !open_intent
-                    && !stored.path().is_empty()
-                    && !self.contains_declared_path(stored.path())
-                {
-                    return stored.clone();
-                }
-                return self.descend_focus(root, Step::Forward).unwrap_or_else(|| {
-                    if stored.path().is_empty() {
-                        FocusState::default()
-                    } else {
-                        stored.clone()
-                    }
-                });
+        if let Some(root) = self.focus_root()
+            && !self.path_is_prefix_of(root, stored.path())
+        {
+            // `ModalState::open` records its focus intent as the modal's
+            // bare id; that intent resolves into the modal wherever the
+            // modal was declared.
+            let open_intent = stored.path() == [self.nodes[root].id.clone()];
+            // Beyond that, the layer steals focus from an empty path and
+            // from paths it occludes — but an absent path stays parked,
+            // so render and routing keep agreeing on it.
+            if !open_intent
+                && !stored.path().is_empty()
+                && !self.contains_declared_path(stored.path())
+            {
+                return stored.clone();
             }
+            return self.descend_focus(root, Step::Forward).unwrap_or_else(|| {
+                if stored.path().is_empty() {
+                    FocusState::default()
+                } else {
+                    stored.clone()
+                }
+            });
         }
         if stored.path().is_empty() {
             return self.edge_focus(None, Step::Forward).unwrap_or_default();
@@ -561,20 +640,22 @@ impl<State, Msg> Surface<State, Msg> {
             return None;
         }
 
-        let mut boundaries = std::iter::once((root_options, matched.first().copied())).chain(
-            matched
-                .iter()
-                .copied()
-                .zip(matched.iter().copied().skip(1))
-                .map(|(parent, child)| (&self.nodes[parent].options, Some(child))),
-        );
-        boundaries.find_map(|(options, child)| {
-            let child = child?;
-            let child_path = &self.nodes[child].path;
-            (options.hover_focus && !focus.path().starts_with(child_path) && self.focusable(child))
+        // `matched` resolved `path` whole, so the node at position `n` is the
+        // node named by `path[..=n]` — the child's own identity path, already
+        // materialized by the caller.
+        let boundaries = std::iter::once(root_options)
+            .chain(matched.iter().map(|&parent| &self.nodes[parent].options));
+        boundaries
+            .zip(matched.iter().copied())
+            .enumerate()
+            .find_map(|(position, (options, child))| {
+                let child_path = &path[..=position];
+                (options.hover_focus
+                    && !focus.path().starts_with(child_path)
+                    && self.focusable(child))
                 .then(|| self.explicit_focus(child_path))
                 .flatten()
-        })
+            })
     }
 
     fn next_focus(
@@ -587,13 +668,12 @@ impl<State, Msg> Surface<State, Msg> {
         // traversal may use: the scope holding it is covered, so consulting
         // its `tab_wrap` would let a wrapping pane swallow Tab forever with
         // the layer unreachable. Start from that layer's own edge instead.
-        if let Some(root) = self.focus_root() {
-            let root_path = self.nodes[root].path.as_slice();
-            if !focus.path().starts_with(root_path) {
-                return self
-                    .edge_focus(None, direction)
-                    .map_or(FocusAdvance::Consumed, FocusAdvance::Move);
-            }
+        if let Some(root) = self.focus_root()
+            && !self.path_is_prefix_of(root, focus.path())
+        {
+            return self
+                .edge_focus(None, direction)
+                .map_or(FocusAdvance::Consumed, FocusAdvance::Move);
         }
         let matched = self.nodes_along_path(focus.path());
         if matched.len() != focus.path().len() {
@@ -639,7 +719,7 @@ impl<State, Msg> Surface<State, Msg> {
             };
             let next = self.find_focusable(remaining, direction);
             if let Some(next) = next {
-                let mut path = parent.map_or_else(Vec::new, |index| self.nodes[index].path.clone());
+                let mut path = parent.map_or_else(Vec::new, |index| self.path_of(index));
                 self.extend_to_edge(next, direction, &mut path);
                 return FocusAdvance::Move(FocusState::intent(path));
             }
@@ -657,7 +737,7 @@ impl<State, Msg> Surface<State, Msg> {
                 let Some(next) = self.edge_child(parent, direction) else {
                     return FocusAdvance::Consumed;
                 };
-                let mut path = parent.map_or_else(Vec::new, |index| self.nodes[index].path.clone());
+                let mut path = parent.map_or_else(Vec::new, |index| self.path_of(index));
                 self.extend_to_edge(next, direction, &mut path);
                 let next = FocusState::intent(path);
                 return if next == *focus {
@@ -865,6 +945,12 @@ pub(crate) struct RenderPass<State, Msg> {
     kind: PassKind<State, Msg>,
     surface: Surface<State, Msg>,
     parent_stack: Vec<usize>,
+    /// The identity path of the open declaration chain, maintained in step
+    /// with `parent_stack` by [`Self::enter_node`] and [`Self::leave_node`].
+    /// One cursor for the whole pass: the alternative is rebuilding a path
+    /// from parent links every time a declaration asks for one, which is the
+    /// hot case this pass has to keep cheap.
+    path_cursor: Vec<ChildId>,
     /// Deferred paint thunks, each tagged with the layer it was registered
     /// in: a layer's thunks flush into its canvas when the layer ends, the
     /// base layer's flush onto the frame after every canvas has composited,
@@ -921,6 +1007,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             kind,
             surface: Surface::default(),
             parent_stack: Vec::new(),
+            path_cursor: Vec::new(),
             deferred: Vec::new(),
             focus,
             hover_position: None,
@@ -941,8 +1028,26 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// The identity path of the declaration currently being declared into —
     /// the key [`RenderCtx::transient`] reads the transient store with.
     pub(crate) fn current_path(&self) -> Option<&[ChildId]> {
-        let &index = self.parent_stack.last()?;
-        Some(&self.surface.nodes[index].path)
+        (!self.path_cursor.is_empty()).then_some(self.path_cursor.as_slice())
+    }
+
+    /// Open `index` as the parent of everything declared until the matching
+    /// [`Self::leave_node`], extending the path cursor by its id.
+    ///
+    /// The two stacks move together and only here, so
+    /// `path_cursor[i] == nodes[parent_stack[i]].id` holds unconditionally and
+    /// the cursor is the open chain's path by construction. That survives a
+    /// nested declaration panic a component catches: neither stack pops while
+    /// unwinding, so both stay equally deep.
+    fn enter_node(&mut self, index: usize) {
+        self.path_cursor.push(self.surface.nodes[index].id.clone());
+        self.parent_stack.push(index);
+    }
+
+    /// Close the innermost open declaration.
+    fn leave_node(&mut self) {
+        self.parent_stack.pop();
+        self.path_cursor.pop();
     }
 
     /// The canvas paint currently routes to, or `None` for the frame.
@@ -1082,14 +1187,11 @@ impl<State, Msg> RenderPass<State, Msg> {
                 .any(|&index| self.surface.nodes[index].id == id),
             "duplicate child id `{id}` in one declaration scope"
         );
-        let mut path = parent.map_or_else(Vec::new, |index| self.surface.nodes[index].path.clone());
-        path.push(id.clone());
         let index = self.surface.nodes.len();
         let layer = self.current_layer();
-        self.validate_against_structure(index, &path, area, &options, role, layer);
+        self.validate_against_structure(&id, parent, area, &options, role, layer);
         self.surface.nodes.push(Node {
             id,
-            path,
             parent,
             children: Vec::new(),
             area,
@@ -1110,14 +1212,29 @@ impl<State, Msg> RenderPass<State, Msg> {
         index
     }
 
+    /// The path of the declaration being opened: the open chain's cursor plus
+    /// the id that is not on it yet. Only for panic messages — the node it
+    /// names is not in the tree.
+    fn declaring_path(&self, id: &ChildId) -> Vec<ChildId> {
+        let mut path = self.path_cursor.clone();
+        path.push(id.clone());
+        path
+    }
+
     /// The paint pass's half of the idempotency contract: every declaration
     /// must match what the structure pass declared at the same position.
     /// Structure may depend on app state — including app-held focus — but not
     /// on the pass-computed focus flags, which differ between the passes.
+    ///
+    /// Identity is compared as id plus parent index rather than as a path.
+    /// Nodes validate in declaration order and a node's parent was declared
+    /// before it, so by induction equal ids under equal parents are equal
+    /// paths — and the paths themselves only have to be built to name the
+    /// declaration that failed.
     fn validate_against_structure(
         &self,
-        index: usize,
-        path: &[ChildId],
+        id: &ChildId,
+        parent: Option<usize>,
         area: Rect,
         options: &ScopeOptions,
         role: NodeRole,
@@ -1126,16 +1243,19 @@ impl<State, Msg> RenderPass<State, Msg> {
         let PassKind::Paint { expected } = &self.kind else {
             return;
         };
+        // The position this declaration is about to take, which is the
+        // position the structure pass declared the same thing at.
+        let index = self.surface.nodes.len();
         let Some(prior) = expected.nodes.get(index) else {
             panic!(
                 "declaration closure is not idempotent: the paint pass declared `{}`, which the \
                  structure pass never declared; declared structure may depend on app state but \
                  not on the pass-computed focus flags",
-                DisplayPath(path)
+                DisplayPath(&self.declaring_path(id))
             );
         };
-        let mismatch = if prior.path != path {
-            Some(format!("path `{}`", DisplayPath(&prior.path)))
+        let mismatch = if prior.id != *id || prior.parent != parent {
+            Some(format!("path `{}`", DisplayPath(&expected.path_of(index))))
         } else if prior.area != area {
             Some(format!("area {:?}", prior.area))
         } else if prior.options != *options {
@@ -1155,7 +1275,7 @@ impl<State, Msg> RenderPass<State, Msg> {
                 "declaration closure is not idempotent: `{}` was declared with {differs} in the \
                  structure pass but differs in the paint pass; declared structure may depend on \
                  app state but not on the pass-computed focus flags",
-                DisplayPath(path)
+                DisplayPath(&self.declaring_path(id))
             );
         }
     }
@@ -1203,9 +1323,9 @@ impl<State, Msg> RenderPass<State, Msg> {
             // are declared over the full paint `area`: a component may narrow
             // what it responds to without narrowing where it draws.
             let index = pass.begin_node(id, interaction_area, options, role);
-            pass.parent_stack.push(index);
+            pass.enter_node(index);
             pass.declare(env.nested(area), |ctx| component.render(ctx));
-            pass.parent_stack.pop();
+            pass.leave_node();
             pass.surface.nodes[index].component = Some(component);
         });
     }
@@ -1295,9 +1415,9 @@ impl<State, Msg> RenderPass<State, Msg> {
             let role = NodeRole::scope(options.focusable);
             let area = env.area;
             let index = pass.begin_node(id, area, options, role);
-            pass.parent_stack.push(index);
+            pass.enter_node(index);
             pass.declare(env.nested(area), declare);
-            pass.parent_stack.pop();
+            pass.leave_node();
         });
     }
 
@@ -1324,13 +1444,11 @@ impl<State, Msg> RenderPass<State, Msg> {
             depth,
         } = env;
         let hover_position = self.hover_position;
-        let (focused, contains_focus, hovered, contains_hover) =
-            self.parent_stack
-                .last()
-                .map_or((false, false, false, false), |&index| {
-                    let path = self.surface.nodes[index].path.as_slice();
-                    interaction_flags(path, &self.focus, hover)
-                });
+        let (focused, contains_focus, hovered, contains_hover) = self
+            .current_path()
+            .map_or((false, false, false, false), |path| {
+                interaction_flags(path, &self.focus, hover)
+            });
         self.guarded(|pass| {
             let mut ctx = RenderCtx {
                 frame,
@@ -1411,6 +1529,10 @@ impl<State, Msg> RenderPass<State, Msg> {
             "cannot commit a declaration pass with unclosed components or layers"
         );
         assert!(
+            self.path_cursor.is_empty(),
+            "cannot commit a declaration pass with an unclosed path cursor"
+        );
+        assert!(
             self.surface
                 .nodes
                 .iter()
@@ -1426,6 +1548,10 @@ impl<State, Msg> RenderPass<State, Msg> {
                 expected.nodes.len(),
                 self.surface.nodes.len(),
             );
+            // Defensive: unreachable while every layer declares a root node
+            // and every node's layer number is checked at its own declaration,
+            // which together make `layer_roots` a function of facts already
+            // validated. It stands guard over those two invariants.
             assert!(
                 self.surface.layer_roots == expected.layer_roots,
                 "declaration closure is not idempotent: the two passes declared different \
@@ -2166,8 +2292,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                 if !binding.chord.matches(key) {
                     continue;
                 }
-                let mut path =
-                    scope.map_or_else(Vec::new, |index| self.surface.nodes[index].path.clone());
+                let mut path = scope.map_or_else(Vec::new, |index| self.surface.path_of(index));
                 path.extend(binding.path.iter().cloned());
                 let Some(next) = self.surface.explicit_focus(&path) else {
                     continue;
@@ -2447,7 +2572,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             if !self.surface.participates(index) {
                 continue;
             }
-            let path = self.surface.nodes[index].path.clone();
+            let path = self.surface.path_of(index);
             let area = self.surface.nodes[index].area;
             let Some(component) = self.surface.nodes[index].component.as_mut() else {
                 continue;
@@ -2595,7 +2720,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let current = self.surface.resolve_focus(&stored);
         // Focus lands on a leaf, so a focusable container hands off to its
         // first focusable descendant.
-        let mut path = self.surface.nodes[target].path.clone();
+        let mut path = self.surface.path_of(target);
         if let Some(child) = self.surface.edge_child(Some(target), Step::Forward) {
             self.surface.extend_to_edge(child, Step::Forward, &mut path);
         }
@@ -2690,10 +2815,8 @@ impl<State, Msg> Ratcn<State, Msg> {
 
     #[cfg(test)]
     fn declared_paths(&self) -> Vec<Vec<ChildId>> {
-        self.surface
-            .nodes
-            .iter()
-            .map(|node| node.path.clone())
+        (0..self.surface.nodes.len())
+            .map(|index| self.surface.path_of(index))
             .collect()
     }
 }
@@ -3043,6 +3166,54 @@ mod tests {
 
         fn focuses_on_click(&self, _state: &FocusTestState) -> bool {
             true
+        }
+    }
+
+    type PathLog = Arc<Mutex<Vec<Vec<ChildId>>>>;
+
+    /// Record the identity path the declaration pass currently has open.
+    ///
+    /// Only the paint pass, whose tree is the one that commits: the closure
+    /// runs twice and the structure pass would double every entry.
+    fn record_declared_path(
+        ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>,
+        log: &PathLog,
+    ) {
+        let pass = ctx.pass.as_deref().expect("declaration pass");
+        if let Some(path) = pass.current_path().filter(|_| pass.paints()) {
+            log.lock().expect("path log").push(path.to_vec());
+        }
+    }
+
+    /// A focusable leaf that records where it was declared. The counterpart to
+    /// [`record_declared_path`] for nodes that are components rather than
+    /// scopes.
+    struct PathProbe(PathLog);
+
+    impl Component<FocusTestState, FocusTestMsg> for PathProbe {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+            record_declared_path(ctx, &self.0);
+        }
+
+        fn is_focusable(&self, _state: &FocusTestState) -> bool {
+            true
+        }
+    }
+
+    /// The two leaves at the bottom of a depth-four branch, plus the record
+    /// for the scope they were declared into.
+    fn declare_probe_cells(
+        ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>,
+        top: u16,
+        log: &PathLog,
+    ) {
+        record_declared_path(ctx, log);
+        for (row, id) in [(top, "cell-1"), (top + 1, "cell-2")] {
+            ctx.render_component(
+                ChildId::from(id.to_owned()),
+                PathProbe(Arc::clone(log)),
+                Rect::new(0, row, 20, 1),
+            );
         }
     }
 
@@ -3404,6 +3575,100 @@ mod tests {
     }
 
     #[test]
+    fn declared_paths_match_the_declaration_for_a_depth_four_tree_with_layers_and_dynamic_ids() {
+        // Two derivations of one identity have to agree: the cursor the
+        // declaration pass carries down the tree, and the parent walk the
+        // committed surface answers with afterwards. A layer boundary and two
+        // branches reusing the same descendant ids are where they could
+        // plausibly drift apart.
+        let state = FocusTestState::default();
+        let declared: PathLog = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn =
+            Ratcn::new().focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus);
+        let mut terminal = Terminal::new(TestBackend::new(20, 6)).expect("terminal");
+        let theme = Theme::default_dark();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.scope(
+                        ChildId::Static("outer"),
+                        area,
+                        ScopeOptions::default(),
+                        |ctx| {
+                            record_declared_path(ctx, &declared);
+                            ctx.scope(
+                                ChildId::from("row-1".to_owned()),
+                                Rect::new(0, 0, 20, 3),
+                                ScopeOptions::default(),
+                                |ctx| {
+                                    record_declared_path(ctx, &declared);
+                                    let area = ctx.area();
+                                    ctx.modal_scope(
+                                        ChildId::Static("sheet"),
+                                        area,
+                                        ScopeOptions::default(),
+                                        |ctx| declare_probe_cells(ctx, 0, &declared),
+                                    );
+                                },
+                            );
+                            // The same descendant ids again, under a different
+                            // row and outside the layer.
+                            ctx.scope(
+                                ChildId::from("row-2".to_owned()),
+                                Rect::new(0, 3, 20, 3),
+                                ScopeOptions::default(),
+                                |ctx| {
+                                    record_declared_path(ctx, &declared);
+                                    let area = ctx.area();
+                                    ctx.scope(
+                                        ChildId::Static("sheet"),
+                                        area,
+                                        ScopeOptions::default(),
+                                        |ctx| declare_probe_cells(ctx, 3, &declared),
+                                    );
+                                },
+                            );
+                        },
+                    );
+                });
+            })
+            .expect("draw");
+
+        let path = |segments: &[&str]| {
+            segments
+                .iter()
+                .map(|id| ChildId::from((*id).to_owned()))
+                .collect::<Vec<_>>()
+        };
+        let expected = vec![
+            path(&["outer"]),
+            path(&["outer", "row-1"]),
+            path(&["outer", "row-1", "sheet"]),
+            path(&["outer", "row-1", "sheet", "cell-1"]),
+            path(&["outer", "row-1", "sheet", "cell-2"]),
+            path(&["outer", "row-2"]),
+            path(&["outer", "row-2", "sheet"]),
+            path(&["outer", "row-2", "sheet", "cell-1"]),
+            path(&["outer", "row-2", "sheet", "cell-2"]),
+        ];
+
+        let recorded = declared.lock().expect("path log").clone();
+        assert_eq!(recorded, expected);
+        assert_eq!(ratcn.declared_paths(), expected);
+
+        // Routing agrees with both: a press on the depth-four leaf reports the
+        // same four segments back.
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 5, 1), &state),
+            EventResult::Emit(FocusTestMsg::Focus(FocusState::intent(path(&[
+                "outer", "row-1", "sheet", "cell-2"
+            ]))))
+        );
+    }
+
+    #[test]
     fn declaration_panic_does_not_replace_the_previous_surface() {
         let mut ratcn = Ratcn::<(), ()>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 3)).expect("terminal");
@@ -3492,6 +3757,222 @@ mod tests {
             ratcn.declared_paths(),
             vec![vec![ChildId::Static("stable")]]
         );
+    }
+
+    /// One way a paint pass can diverge from the structure pass, and the
+    /// fragments the resulting panic has to carry: the node it happened at,
+    /// and what about it differed.
+    struct DivergenceCase {
+        name: &'static str,
+        declare: fn(&mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>, u32),
+        fragments: Vec<String>,
+    }
+
+    /// Divergences in *which declaration this is*, at an index the structure
+    /// pass also declared — so the mismatch chain decides them rather than the
+    /// never-declared arm.
+    fn identity_divergences() -> Vec<DivergenceCase> {
+        vec![
+            DivergenceCase {
+                // The case the id-plus-parent rule exists for: the same id at
+                // the same index, under a different parent, with the node
+                // count unchanged.
+                name: "same id under a different parent",
+                declare: |ctx, run| {
+                    let area = ctx.area();
+                    ctx.scope(ChildId::Static("a"), area, ScopeOptions::default(), |ctx| {
+                        ctx.scope(
+                            ChildId::Static("mid"),
+                            area,
+                            ScopeOptions::default(),
+                            |ctx| {
+                                if run == 1 {
+                                    ctx.render_component(
+                                        ChildId::Static("x"),
+                                        FocusLeaf::enabled(),
+                                        area,
+                                    );
+                                }
+                            },
+                        );
+                        if run > 1 {
+                            ctx.render_component(ChildId::Static("x"), FocusLeaf::enabled(), area);
+                        }
+                    });
+                },
+                fragments: vec!["`a/x`".to_owned(), "path `a/mid/x`".to_owned()],
+            },
+            DivergenceCase {
+                name: "a different id at the same position",
+                declare: |ctx, run| {
+                    let area = ctx.area();
+                    let first = if run == 1 { "one" } else { "uno" };
+                    ctx.render_component(ChildId::Static(first), FocusLeaf::enabled(), area);
+                    ctx.render_component(ChildId::Static("two"), FocusLeaf::enabled(), area);
+                },
+                fragments: vec!["`uno`".to_owned(), "path `one`".to_owned()],
+            },
+        ]
+    }
+
+    /// Divergences in what a declaration carries rather than in which
+    /// declaration it is.
+    fn attribute_divergences() -> Vec<DivergenceCase> {
+        vec![
+            DivergenceCase {
+                name: "a different area",
+                declare: |ctx, run| {
+                    let area = if run == 1 {
+                        Rect::new(0, 0, 4, 1)
+                    } else {
+                        Rect::new(0, 1, 4, 1)
+                    };
+                    ctx.render_component(ChildId::Static("box"), FocusLeaf::enabled(), area);
+                },
+                fragments: vec![
+                    "`box`".to_owned(),
+                    format!("area {:?}", Rect::new(0, 0, 4, 1)),
+                ],
+            },
+            DivergenceCase {
+                name: "different scope options",
+                declare: |ctx, run| {
+                    let area = ctx.area();
+                    let options = if run == 1 {
+                        ScopeOptions::default()
+                    } else {
+                        ScopeOptions::default().tab_wrap(TabWrap::Wrap)
+                    };
+                    ctx.scope(ChildId::Static("pane"), area, options, |_ctx| {});
+                },
+                fragments: vec![
+                    "`pane`".to_owned(),
+                    format!("scope options {:?}", ScopeOptions::default()),
+                ],
+            },
+            DivergenceCase {
+                name: "a node inside a layer in one pass and outside it in the other",
+                declare: |ctx, run| {
+                    let area = ctx.area();
+                    let options = ScopeOptions::default();
+                    if run == 1 {
+                        ctx.modal_scope(ChildId::Static("sheet"), area, options, |_ctx| {});
+                    } else {
+                        ctx.scope(ChildId::Static("sheet"), area, options, |_ctx| {});
+                    }
+                },
+                fragments: vec!["`sheet`".to_owned(), "layer 1".to_owned()],
+            },
+            DivergenceCase {
+                name: "focusability toggled",
+                declare: |ctx, run| {
+                    let area = ctx.area();
+                    let leaf = if run == 1 {
+                        FocusLeaf::enabled()
+                    } else {
+                        FocusLeaf::disabled()
+                    };
+                    ctx.render_component(ChildId::Static("leaf"), leaf, area);
+                },
+                fragments: vec!["`leaf`".to_owned(), "focusability".to_owned()],
+            },
+        ]
+    }
+
+    /// Divergences no single declaration can see, left to the checks that run
+    /// once the whole pass has declared.
+    fn whole_pass_divergences() -> Vec<DivergenceCase> {
+        vec![DivergenceCase {
+            name: "the paint pass declaring fewer nodes",
+            declare: |ctx, run| {
+                let area = ctx.area();
+                ctx.render_component(ChildId::Static("one"), FocusLeaf::enabled(), area);
+                if run == 1 {
+                    ctx.render_component(ChildId::Static("two"), FocusLeaf::enabled(), area);
+                }
+            },
+            fragments: vec![
+                "the structure pass declared 2 nodes but the paint pass declared 1".to_owned(),
+            ],
+        }]
+    }
+
+    #[test]
+    fn paint_pass_divergence_names_the_node_and_what_differs() {
+        // A declaration's identity is validated as its id plus its parent's
+        // index rather than as a stored path, so every shape of divergence has
+        // to still name the node it happened at and say what differed — and
+        // none of them may disturb the surface the last good frame committed.
+        let cases = identity_divergences()
+            .into_iter()
+            .chain(attribute_divergences())
+            .chain(whole_pass_divergences());
+
+        for case in cases {
+            let state = FocusTestState::default();
+            let mut ratcn =
+                Ratcn::new().focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus);
+            let mut terminal = Terminal::new(TestBackend::new(10, 3)).expect("terminal");
+            let theme = Theme::default_dark();
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        ctx.render_component(
+                            ChildId::Static("previous"),
+                            FocusLeaf::enabled(),
+                            area,
+                        );
+                    });
+                })
+                .expect("draw");
+
+            let declare = case.declare;
+            let mut runs = 0;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                terminal
+                    .draw(|frame| {
+                        ratcn.render(frame, &state, &theme, |ctx| {
+                            runs += 1;
+                            declare(ctx, runs);
+                        });
+                    })
+                    .expect("draw");
+            }));
+
+            let payload = result.expect_err(case.name);
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .expect("string panic");
+            assert!(
+                message.contains("not idempotent"),
+                "{}: got {message}",
+                case.name
+            );
+            for fragment in &case.fragments {
+                assert!(
+                    message.contains(fragment.as_str()),
+                    "{}: got {message}",
+                    case.name
+                );
+            }
+
+            // The last good frame is still the surface events route against.
+            assert_eq!(
+                ratcn.declared_paths(),
+                vec![vec![ChildId::Static("previous")]],
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+                EventResult::Emit(FocusTestMsg::Activated(vec![ChildId::Static("previous")])),
+                "{}",
+                case.name
+            );
+        }
     }
 
     #[test]
@@ -8443,6 +8924,101 @@ mod tests {
         // delivered to the base layer or the declaring scope.
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('x'))), &state),
+            EventResult::Consumed
+        );
+    }
+
+    #[test]
+    fn layer_guard_rejects_a_stored_path_sharing_the_layer_roots_id_under_another_parent() {
+        // The focus-holding layer is rooted at `right/sheet`. The stored path
+        // runs through `left/sheet`: same depth, same last segment, different
+        // branch. Deciding membership on anything less than the whole ancestor
+        // chain would call it "already inside the layer" and leave focus on the
+        // branch the modal covers.
+        let state = FocusTestState {
+            focus: FocusState::intent([
+                ChildId::Static("left"),
+                ChildId::Static("sheet"),
+                ChildId::Static("item"),
+            ]),
+        };
+        let left = Arc::new(Mutex::new(Vec::new()));
+        let right = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn =
+            Ratcn::new().focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus);
+        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
+        let theme = Theme::default_dark();
+
+        terminal
+            .draw(|frame| {
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    let left = Arc::clone(&left);
+                    ctx.scope(
+                        ChildId::Static("left"),
+                        Rect::new(0, 0, 20, 2),
+                        ScopeOptions::default(),
+                        move |ctx| {
+                            let area = ctx.area();
+                            ctx.scope(
+                                ChildId::Static("sheet"),
+                                area,
+                                ScopeOptions::default(),
+                                move |ctx| {
+                                    ctx.render_component(
+                                        ChildId::Static("item"),
+                                        FocusLeaf::recording(left),
+                                        area,
+                                    );
+                                },
+                            );
+                        },
+                    );
+                    let right = Arc::clone(&right);
+                    ctx.scope(
+                        ChildId::Static("right"),
+                        Rect::new(0, 2, 20, 2),
+                        ScopeOptions::default(),
+                        move |ctx| {
+                            let area = ctx.area();
+                            ctx.modal_scope(
+                                ChildId::Static("sheet"),
+                                area,
+                                ScopeOptions::default(),
+                                move |ctx| {
+                                    ctx.render_component(
+                                        ChildId::Static("item"),
+                                        FocusLeaf::recording(right),
+                                        area,
+                                    );
+                                },
+                            );
+                        },
+                    );
+                });
+            })
+            .expect("draw");
+
+        // The structure pass sees the raw app snapshot, the paint pass the
+        // resolved one: focus moves off the covered branch and into the layer.
+        assert_eq!(
+            *left.lock().expect("left render log"),
+            [(true, true), (false, false)]
+        );
+        assert_eq!(
+            *right.lock().expect("right render log"),
+            [(false, false), (true, true)]
+        );
+        assert_eq!(
+            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+            EventResult::Emit(FocusTestMsg::Activated(vec![
+                ChildId::Static("right"),
+                ChildId::Static("sheet"),
+                ChildId::Static("item"),
+            ]))
+        );
+        // Tab is trapped at the layer root, so it never reaches `left`.
+        assert_eq!(
+            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state),
             EventResult::Consumed
         );
     }
