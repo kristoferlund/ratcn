@@ -55,7 +55,6 @@
 use std::{cmp::Ordering, fmt, hash::Hash, sync::Arc};
 
 mod component;
-pub mod compose;
 pub mod drag;
 mod engine;
 mod event;
@@ -182,10 +181,9 @@ impl fmt::Display for ChildId {
 }
 
 pub use component::{
-    Component, EventCtx, EventResult, MeasuredComponent, Painter, PopupOptions, PreparedComponent,
-    RenderCtx, ScopeOptions, Step,
+    Component, EventCtx, EventResult, MeasuredComponent, Painter, PopupOptions, RenderCtx,
+    ScopeOptions, Step,
 };
-pub use compose::{BodyFn, BodySlot, ChildSlots};
 pub use drag::{CellOffset, DragOptions, DragPhase, clamp_offset, offset_rect};
 pub use engine::Ratcn;
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
