@@ -38,11 +38,12 @@ impl Component<AppState, Msg> for MyComponent {
 ```
 
 Declaring and drawing are two methods because they happen in two walks.
-`render` lays the component out and declares its descendants; it runs in both
-of the frame's passes and paints nothing. `paint` draws, and runs once, after
-the whole tree is declared and focus has resolved — which is why the
-interaction flags (`ctx.focused`, `ctx.contains_focus`, `ctx.hovered`,
-`ctx.contains_hover`) live on `PaintCtx` and not on `RenderCtx`. Anything
+`render` lays the component out and declares its descendants, and paints
+nothing. `paint` draws, after the whole tree is declared and focus has
+resolved — which is why the interaction flags (`ctx.focused`,
+`ctx.contains_focus`, `ctx.hovered`, `ctx.contains_hover`) live on `PaintCtx`
+and not on `RenderCtx`: while `render` runs, focus has nothing complete to
+resolve against yet. Both methods run once per frame, so anything
 `handle_event` reads back must be recorded in `render`, and must therefore not
 depend on those flags.
 
@@ -141,8 +142,7 @@ A component may declare descendants from its own `render` through the same
 `RenderCtx` methods the root uses — `ctx.render_component` for a child with
 behavior, `ctx.scope` for a region that only needs its own Tab boundary and
 path segment. Children nest under the component's identity, and their
-focusability is discovered by the frame's structure pass — there is nothing to
-announce.
+focusability is discovered as they declare — there is nothing to announce.
 
 Container pixels need no care about order. Every component's `paint` is queued
 where `render` declared it and replayed in that order, and a component is

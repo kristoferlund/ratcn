@@ -99,9 +99,9 @@ Dialog::new().content(6, move |ctx| {
     })
 ```
 
-Focusable children just work — the runtime discovers them during the frame's
-structure pass. Children live in the dialog's sibling namespace, so their ids
-must not collide with action ids.
+Focusable children just work — the runtime discovers them as they declare.
+Children live in the dialog's sibling namespace, so their ids must not collide
+with action ids.
 
 `.footer(height, ...)` does the same for the action row when it needs custom
 layout — a checkbox on the left, a status message beside the buttons. It cannot

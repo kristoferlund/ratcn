@@ -421,8 +421,8 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     /// children with [`RenderCtx::render_component`] as usual. Those children
     /// belong to the dialog's scope, sharing one sibling namespace with the
     /// footer's children and any [`action`](Dialog::action) ids. Focusable
-    /// children just work: the runtime discovers them in the structure pass,
-    /// so there is nothing to announce.
+    /// children just work: the runtime discovers them as they declare, so
+    /// there is nothing to announce.
     ///
     /// The dialog cannot measure an arbitrary closure, so `height` states the
     /// content strip's exact height in terminal rows.
@@ -1441,9 +1441,9 @@ mod tests {
             })
             .expect("draw");
 
-        // Once per pass: the structure pass and the paint pass each construct
-        // and resolve a fresh instance.
-        assert_eq!(resolves.load(Ordering::SeqCst), 2);
+        // Once: the frame declares once, so a body closure hands its child
+        // over exactly one time.
+        assert_eq!(resolves.load(Ordering::SeqCst), 1);
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(Msg::Activated)
@@ -1745,12 +1745,10 @@ mod tests {
             .expect("draw");
 
         let rendered = rendered.lock().expect("render record lock");
-        // Both passes record; the paint pass's entries are the last half and
-        // repeat the same order and geometry.
-        assert_eq!(rendered.len(), 4);
-        assert_eq!(rendered[2].0, Msg::First);
-        assert_eq!(rendered[3].0, Msg::Second);
-        assert!(rendered[2].1.x < rendered[3].1.x);
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0].0, Msg::First);
+        assert_eq!(rendered[1].0, Msg::Second);
+        assert!(rendered[0].1.x < rendered[1].1.x);
         drop(rendered);
 
         assert_eq!(
@@ -1796,16 +1794,15 @@ mod tests {
             .expect("draw");
 
         // The 48-cell box spans columns 6..54, so the footer strip runs
-        // 8..52 and the row is flushed against its right edge. Both passes
-        // record; the paint pass's entries are the last half.
+        // 8..52 and the row is flushed against its right edge.
         let rendered = rendered.lock().expect("render record lock");
         assert_eq!(
-            rendered[2],
+            rendered[0],
             (Msg::First, Rect::new(34, 5, 7, 1)),
             "each action is rendered at the width it measured"
         );
         assert_eq!(
-            rendered[3],
+            rendered[1],
             (Msg::Second, Rect::new(43, 5, 9, 1)),
             "ACTION_SPACING cells after the first, ending on the strip's edge"
         );
@@ -1838,10 +1835,9 @@ mod tests {
             .expect("draw");
 
         let rendered = rendered.lock().expect("render record lock");
-        // Both passes record; the paint pass's entries are the last half.
-        assert_eq!(rendered.len(), 6);
-        assert!(rendered[3].1.x < rendered[4].1.x);
-        assert!(rendered[4].1.x < rendered[5].1.x);
+        assert_eq!(rendered.len(), 3);
+        assert!(rendered[0].1.x < rendered[1].1.x);
+        assert!(rendered[1].1.x < rendered[2].1.x);
         drop(rendered);
 
         let EventResult::Emit(Msg::Focus(focus)) =

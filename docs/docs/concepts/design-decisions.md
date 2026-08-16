@@ -1,13 +1,13 @@
 ---
-description: "Why ratcn panics on declaration mistakes and declares every frame twice: what each decision buys, what it costs, and which alternatives were rejected."
+description: "Why ratcn panics on declaration mistakes and defers every paint to a replay after declaring: what each decision buys, what it costs, and which alternatives were rejected."
 ---
 
 # Design decisions
 
 Two things about ratcn surprise people the first time they read the code:
-mistakes while declaring the UI panic rather than return an error, and every
-frame is declared twice. Both are deliberate. This page explains why, and what
-each one costs.
+mistakes while declaring the UI panic rather than return an error, and
+declaring a frame draws none of it. Both are deliberate. This page explains
+why, and what each one costs.
 
 ## Why mistakes panic
 
@@ -72,29 +72,35 @@ back to the modal root. Parked paths inside the modal remain exact. None of
 this depends on the `Ratcn::modals` binding, whose jobs are stack validation
 and covering the open/close gap.
 
-## Why every frame declares twice
+## Declare once, then draw
 
-Every frame, `Ratcn::render` runs the app's declaration closure twice. The
-first run is the *structure pass*: the same declarations queueing no paint, so
-the runtime learns the full tree — identity, geometry, which declarations can
-take focus — before anything is drawn. Focus then resolves once, against that
-complete tree, and the second run — the *paint pass* — builds the paint queue
-that is replayed with the resolved focus feeding every flag. The paint
-pass is validated declaration-by-declaration against the structure pass, so a
-closure that declares different trees on its two runs panics naming the first
-divergent path.
+Every frame, `Ratcn::render` runs the app's declaration closure exactly once.
+That run draws nothing: it builds the tree — identity, geometry, which
+declarations can take focus — and queues the paint each declaration owes, in
+the order it reached them. Focus then resolves once, against that complete
+tree. Only then does the queue run, and every interaction flag a paint reads
+is derived at that moment, from the node it belongs to against the focus that
+just resolved.
 
-The reason is that getting focus right on the very first frame needs the whole
-tree. Startup focus, highlighting a pane that contains focus, and a newly opened
-modal claiming focus all depend on one question: *does this subtree contain
-anything focusable?* A parent has to paint before its children have declared, so
-in a single pass that question has no answer yet.
+The reason for the split is that getting focus right on the very first frame
+needs the whole tree. Startup focus, highlighting a pane that contains focus,
+and a newly opened modal claiming focus all depend on one question: *does this
+subtree contain anything focusable?* A parent is reached before its children
+have declared, so at the moment a container is declared that question has no
+answer yet.
 
 Earlier versions had components promise the answer up front, through a
 `focusable_descendants()` method. It worked, but every composite had to carry
 it, and the promise repeated something the children already said for
-themselves. Declaring twice removes the question entirely — the structure pass
-just looks.
+themselves. Deferring paint removes the question entirely — by the time
+anything needs a flag, the tree is complete and the runtime just looks.
+
+Deferring is also what removed the second declaration. An earlier design ran
+the closure twice, once to learn the tree and once to paint it with the
+resolved focus, and paid for it with an idempotency contract: the two runs had
+to declare the same tree, checked declaration-by-declaration, and any impurity
+in the closure was a panic. Separating *when a paint is decided* from *when it
+happens* buys the same ordering with one run and no contract.
 
 The same mechanism is what makes painting and routing agree. Focus is resolved
 by one function, over one tree, and it is the same function event routing uses
@@ -105,20 +111,14 @@ exactly when it matters: the first frame, and any frame where focusability
 changed. Both leave a window where focus paints in one place and events go to
 another.
 
-### The contract, and its cost
+### What this costs the closure
 
-The closure has to declare the same tree both times. It may branch on anything
-in app state, focus included — what it must not branch on is the interaction
-flags, which are provisional until focus resolves and are therefore not offered
-while declaring at all. They reach `PaintCtx`, where styling uses them freely;
-that is what they are for.
+Almost nothing. The closure runs once, so it may have side effects, consume
+what it captures, and move owned values into the components it declares — it
+is `FnOnce`. What it cannot do is read an interaction flag while declaring,
+because none exists yet: the flags are only offered to `PaintCtx`, where
+styling uses them freely.
 
-The runtime checks this every frame, so a closure that is not repeatable fails
-the first time it runs rather than going quietly out of step.
-
-The cost is that declaring happens twice per frame, though painting still
-happens once. At terminal scale that is cheap: building a frame's components is
-arithmetic and a few small allocations, and the structure pass writes no cells
-at all. Because components are built twice, anything moved into one has to be
-constructible twice — the compiler enforces that for you, since the closure is
-`FnMut`.
+The one thing paint owes in return is that it cannot decide *structure*. A
+paint closure draws; it does not declare. That is what keeps "the tree is
+complete before any flag is read" true rather than merely usual.

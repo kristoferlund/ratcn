@@ -1318,9 +1318,8 @@ mod tests {
         use crate::runtime::Ratcn;
 
         let theme = Theme::default_dark();
-        // Built inside the declaration closure: it runs once per pass, twice
-        // per frame. No `on_press`, so the button is not a focus candidate and
-        // this paints in its base state.
+        // Built inside the declaration closure. No `on_press`, so the button
+        // is not a focus candidate and this paints in its base state.
         let button = || {
             Button::<()>::new("OK").style(|theme| {
                 let mut style = ButtonStyle::from_theme(theme, ButtonVariant::Default);

@@ -421,8 +421,8 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     /// children with [`RenderCtx::render_component`] as usual. Those children
     /// belong to the dialog's scope, sharing one sibling namespace with the
     /// footer's children and any [`action`](Dialog::action) ids. Focusable
-    /// children just work: the runtime discovers them in the structure pass,
-    /// so there is nothing to announce.
+    /// children just work: the runtime discovers them as they declare, so
+    /// there is nothing to announce.
     ///
     /// The dialog cannot measure an arbitrary closure, so `height` states the
     /// content strip's exact height in terminal rows.

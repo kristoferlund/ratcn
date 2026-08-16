@@ -141,7 +141,7 @@ pub(crate) struct Node<State, Msg> {
     /// of the parent chain and this one, and is derived on demand through
     /// [`Surface::path_of`] rather than stored: building the tree is the
     /// hottest thing a frame does, and a stored path costs an allocation per
-    /// node per pass.
+    /// node.
     id: ChildId,
     parent: Option<usize>,
     children: Vec<usize>,
@@ -244,10 +244,9 @@ impl<State, Msg> Surface<State, Msg> {
 
     /// Whether `index`'s identity path is exactly `path`.
     ///
-    /// The comparison half of [`Self::path_is_prefix_of`], which is what
-    /// callers want and its only caller: it walks the parent chain against
-    /// `path` back to front, so neither side is materialized, and it needs
-    /// the prefix already trimmed to the node's own depth.
+    /// It walks the parent chain against `path` back to front, so neither
+    /// side is materialized. [`Self::path_is_prefix_of`] is the same walk
+    /// with the prefix trimmed to the node's own depth first.
     fn path_is(&self, index: usize, path: &[ChildId]) -> bool {
         let mut current = Some(index);
         let mut rest = path;
@@ -269,6 +268,47 @@ impl<State, Msg> Surface<State, Msg> {
     fn path_is_prefix_of(&self, index: usize, path: &[ChildId]) -> bool {
         let depth = self.depth(index);
         depth <= path.len() && self.path_is(index, &path[..depth])
+    }
+
+    /// Where `index` sits in this frame's focus and hover — the four flags
+    /// [`PaintCtx`] reports.
+    ///
+    /// Answered here, against the finished tree, because that is the only
+    /// place it can be: `focus` is the path [`Self::resolve_focus`] chose
+    /// once every declaration was in, so no flag exists until declaring is
+    /// over. Both pairs are the same two questions — is this the named node,
+    /// and does the named path run through it — asked without materializing a
+    /// path on either side.
+    fn interaction_flags(
+        &self,
+        index: usize,
+        focus: &FocusState,
+        hover: &HoverState,
+    ) -> InteractionFlags {
+        let (focused, contains_focus) = self.path_match(index, focus.path());
+        let (hovered, contains_hover) = self.path_match(index, hover.path());
+        InteractionFlags {
+            focused,
+            contains_focus,
+            hovered,
+            contains_hover,
+        }
+    }
+
+    /// Whether `index`'s identity path *is* `path`, and whether it is a
+    /// prefix of it — the leaf question and the within question, as a pair.
+    ///
+    /// Asked together because the second answers the first: a path can only
+    /// equal `path` by being a prefix of it that runs the whole length. One
+    /// depth walk and one comparison serve both, where asking separately
+    /// walks the parent chain three times.
+    fn path_match(&self, index: usize, path: &[ChildId]) -> (bool, bool) {
+        let depth = self.depth(index);
+        if depth > path.len() {
+            return (false, false);
+        }
+        let within = self.path_is(index, &path[..depth]);
+        (within && depth == path.len(), within)
     }
 
     /// Whether `node` is `ancestor` or one of its descendants.
@@ -553,8 +593,8 @@ impl<State, Msg> Surface<State, Msg> {
     /// and geometry: the path that is painted as focused and that events route
     /// to.
     ///
-    /// The one focus-resolution function. Rendering calls it between the
-    /// structure pass and the paint pass; event routing calls it against the
+    /// The one focus-resolution function. Rendering calls it between
+    /// declaring the tree and painting it; event routing calls it against the
     /// retained surface. Both sides resolving through the same function over
     /// the same tree is what guarantees render and routing agree — there is no
     /// second resolution to drift from.
@@ -774,18 +814,38 @@ struct QueuedPaint<State> {
     op: PaintOp<State>,
 }
 
+/// Every op names the node whose position it paints at, because that node is
+/// what its interaction flags are read from once focus has resolved. Only the
+/// area is captured: it is a declaration fact, settled where the op was
+/// queued, while the flags are not facts yet.
 enum PaintOp<State> {
     /// Call [`Component::paint`] on the component installed at this node.
-    Node { index: usize, site: PaintSite },
-    /// Run a closure queued through [`RenderCtx::paint`].
+    Node { index: usize, area: Rect },
+    /// Run a closure queued through [`RenderCtx::paint`]. `node` is the
+    /// declaration it was reached from, or `None` at the root, which has no
+    /// identity and therefore no flags.
     Thunk {
-        site: PaintSite,
+        node: Option<usize>,
+        area: Rect,
         paint: PaintThunk<State>,
     },
     /// Run the deferred thunks registered in `layer`, at the point that
     /// layer's declaration closed — which is what keeps [`RenderCtx::defer_paint`]
     /// above its layer's content.
     FlushDeferred { layer: usize },
+}
+
+impl<State> PaintOp<State> {
+    /// The declaration this op paints at, and so the one its interaction
+    /// flags come from. `None` for the root and for deferred paint, neither
+    /// of which has an identity.
+    const fn node(&self) -> Option<usize> {
+        match self {
+            Self::Node { index, .. } => Some(*index),
+            Self::Thunk { node, .. } => *node,
+            Self::FlushDeferred { .. } => None,
+        }
+    }
 }
 
 /// The two things replay can hand a [`PaintCtx`] to, once the op that named
@@ -796,60 +856,7 @@ enum PaintBody<'a, State, Msg> {
     Thunk(PaintThunk<State>),
 }
 
-/// The declaration facts a queued op paints with, captured where it was
-/// queued rather than recomputed at replay: these are the walk's own values,
-/// and there is nothing for them to be derived from twice.
-#[derive(Debug, Clone, Copy)]
-struct PaintSite {
-    area: Rect,
-    flags: InteractionFlags,
-}
-
-/// Interaction flags for one identified declaration, derived from its path.
-/// The single source for the leaf/within pairs reported through [`PaintCtx`].
-fn interaction_flags(path: &[ChildId], focus: &FocusState, hover: &HoverState) -> InteractionFlags {
-    InteractionFlags {
-        focused: focus.path() == path,
-        contains_focus: focus.path().starts_with(path),
-        hovered: hover.path() == path,
-        contains_hover: hover.path().starts_with(path),
-    }
-}
-
-/// An identity path formatted as `a/b/c`, for panic messages.
-struct DisplayPath<'a>(&'a [ChildId]);
-
-impl fmt::Display for DisplayPath<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (position, id) in self.0.iter().enumerate() {
-            if position > 0 {
-                f.write_str("/")?;
-            }
-            write!(f, "{id}")?;
-        }
-        Ok(())
-    }
-}
-
-/// Which of the frame's two passes is running, and what that pass may do.
-///
-/// Every frame declares twice. The **structure pass** runs the app's
-/// declaration closure with paint suppressed, to learn the full tree —
-/// identity, geometry, focusability — before anything is drawn. Focus then
-/// resolves against that complete tree ([`Surface::resolve_focus`]), and the
-/// **paint pass** runs the same closure again with paint live and the
-/// resolved focus feeding the interaction flags. The paint pass validates
-/// every declaration against the structure pass's tree, so a closure that is
-/// not idempotent fails loudly instead of desynchronizing silently.
-enum PassKind<State, Msg> {
-    /// First run: build the tree, suppress all frame writes.
-    Structure,
-    /// Second run: paint, validating each declaration against the structure
-    /// pass's surface.
-    Paint { expected: Surface<State, Msg> },
-}
-
-/// One layer's private paint surface during the paint pass.
+/// One layer's private paint surface.
 ///
 /// A layer subtree is declared inline, wherever its owner lives in the tree,
 /// but must paint *above* everything declared outside it — including siblings
@@ -901,7 +908,6 @@ pub(crate) struct DeclarationEnv<'a, 'frame, State> {
     pub(crate) area: Rect,
     pub(crate) state: &'a State,
     pub(crate) theme: &'a Theme,
-    pub(crate) hover: &'a HoverState,
     pub(crate) transients: Option<&'a mut TransientMap>,
     pub(crate) depth: usize,
 }
@@ -913,7 +919,6 @@ impl<'a, 'frame, State> DeclarationEnv<'a, 'frame, State> {
         frame: &'a mut Frame<'frame>,
         state: &'a State,
         theme: &'a Theme,
-        hover: &'a HoverState,
         transients: &'a mut TransientMap,
     ) -> Self {
         Self {
@@ -921,7 +926,6 @@ impl<'a, 'frame, State> DeclarationEnv<'a, 'frame, State> {
             frame,
             state,
             theme,
-            hover,
             transients: Some(transients),
             depth: 0,
         }
@@ -939,7 +943,6 @@ impl<'a, 'frame, State> DeclarationEnv<'a, 'frame, State> {
             area,
             state: self.state,
             theme: self.theme,
-            hover: self.hover,
             transients: self.transients.as_deref_mut(),
             depth: self.depth + 1,
         }
@@ -948,11 +951,9 @@ impl<'a, 'frame, State> DeclarationEnv<'a, 'frame, State> {
 
 /// What a declaration adds to the tree, and what it is allowed to do there.
 ///
-/// These three travel together because they are decided together, and because
-/// [`RenderPass::validate_against_structure`] compares them as one unit: a
-/// difference in any of them is the same idempotency failure. Keeping them in
-/// a named pair also stops the two signatures that carry them from drifting
-/// out of step.
+/// These three travel together because they are decided together. Keeping
+/// them in a named pair also stops the two signatures that carry them from
+/// drifting out of step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NodeRole {
     /// A scope rather than a component: it sits *behind* its descendants when
@@ -987,7 +988,6 @@ impl NodeRole {
 }
 
 pub(crate) struct RenderPass<State, Msg> {
-    kind: PassKind<State, Msg>,
     surface: Surface<State, Msg>,
     parent_stack: Vec<usize>,
     /// The identity path of the open declaration chain, maintained in step
@@ -1002,13 +1002,8 @@ pub(crate) struct RenderPass<State, Msg> {
     /// which is what makes root-level `defer_paint` the topmost slot.
     deferred: Vec<(usize, DeferredPaint<State>)>,
     /// Every paint this frame owes, in the order the declaration walk reached
-    /// it, replayed by [`Self::replay_paint`] once the walk is over. Built
-    /// only in the paint pass.
+    /// it, replayed by [`Self::replay_paint`] once the walk is over.
     paint_queue: Vec<QueuedPaint<State>>,
-    /// The focus the pass reports through the interaction flags: the resolved
-    /// path in the paint pass; the raw app snapshot in the structure pass,
-    /// where the flags are provisional and nothing is queued anyway.
-    focus: FocusState,
     /// Pointer position available during declaration without changing app-owned
     /// hover state.
     hover_position: Option<Position>,
@@ -1022,8 +1017,7 @@ pub(crate) struct RenderPass<State, Msg> {
     /// The layer currently being declared into, innermost last. Empty means
     /// the base layer.
     layer_stack: Vec<usize>,
-    /// One canvas per declared layer, in discovery order. Populated only in
-    /// the paint pass; the structure pass tracks layer ids without painting.
+    /// One canvas per declared layer, in discovery order.
     canvases: Vec<LayerCanvas>,
     /// Indices into `canvases` for the layers currently open, innermost last.
     canvas_stack: Vec<usize>,
@@ -1047,15 +1041,13 @@ impl Drop for PoisonOnUnwind {
 }
 
 impl<State, Msg> RenderPass<State, Msg> {
-    fn new(kind: PassKind<State, Msg>, focus: FocusState) -> Self {
+    fn new() -> Self {
         Self {
-            kind,
             surface: Surface::default(),
             parent_stack: Vec::new(),
             path_cursor: Vec::new(),
             deferred: Vec::new(),
             paint_queue: Vec::new(),
-            focus,
             hover_position: None,
             failed: Rc::new(Cell::new(false)),
             layers_declared: 0,
@@ -1101,47 +1093,33 @@ impl<State, Msg> RenderPass<State, Msg> {
         self.canvas_stack.last().copied()
     }
 
-    /// Queue an op for the layer currently being declared into. A no-op in
-    /// the structure pass, which declares the same tree and draws none of it.
+    /// Queue an op for the layer currently being declared into.
     fn queue(&mut self, op: PaintOp<State>) {
-        if self.paints() {
-            let canvas = self.active_canvas();
-            self.paint_queue.push(QueuedPaint { canvas, op });
-        }
+        let canvas = self.active_canvas();
+        self.paint_queue.push(QueuedPaint { canvas, op });
     }
 
-    /// Queue a closure registered through [`RenderCtx::paint`]. The structure
-    /// pass queues nothing, so the closure is dropped here rather than boxed.
+    /// Queue a closure registered through [`RenderCtx::paint`], tagged with
+    /// the declaration it was reached from so replay can read that node's
+    /// flags.
     pub(crate) fn queue_thunk(
         &mut self,
         area: Rect,
-        flags: InteractionFlags,
         paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static,
     ) {
-        if self.paints() {
-            self.queue(PaintOp::Thunk {
-                site: PaintSite { area, flags },
-                paint: Box::new(paint),
-            });
-        }
+        let node = self.parent_stack.last().copied();
+        self.queue(PaintOp::Thunk {
+            node,
+            area,
+            paint: Box::new(paint),
+        });
     }
 
     /// Queue the just-opened node's own paint. `area` is its paint
     /// allocation, which [`Component::interaction_area`] may have narrowed
     /// for the node itself but never for what it draws.
-    fn queue_node(&mut self, index: usize, area: Rect, hover: &HoverState) {
-        if !self.paints() {
-            return;
-        }
-        let flags = self
-            .current_path()
-            .map_or_else(InteractionFlags::default, |path| {
-                interaction_flags(path, &self.focus, hover)
-            });
-        self.queue(PaintOp::Node {
-            index,
-            site: PaintSite { area, flags },
-        });
+    fn queue_node(&mut self, index: usize, area: Rect) {
+        self.queue(PaintOp::Node { index, area });
     }
 
     /// Open a layer, declare its root subtree through `declare_root`, and
@@ -1160,8 +1138,8 @@ impl<State, Msg> RenderPass<State, Msg> {
         self.end_layer();
     }
 
-    /// Open a layer: subsequent declarations carry its tag, and (in the paint
-    /// pass) its paint lands on a fresh canvas composited after the frame.
+    /// Open a layer: subsequent declarations carry its tag, and their paint
+    /// lands on a fresh canvas composited after the frame.
     fn begin_layer(&mut self, kind: LayerKind, area: Rect) {
         self.layers_declared += 1;
         self.layer_stack.push(self.layers_declared);
@@ -1169,10 +1147,8 @@ impl<State, Msg> RenderPass<State, Msg> {
         // not just the root.
         debug_assert_eq!(self.surface.layer_policies.len(), self.layers_declared);
         self.surface.layer_policies.push(kind.policy());
-        if self.paints() {
-            self.canvases.push(LayerCanvas::new(kind, area));
-            self.canvas_stack.push(self.canvases.len() - 1);
-        }
+        self.canvases.push(LayerCanvas::new(kind, area));
+        self.canvas_stack.push(self.canvases.len() - 1);
     }
 
     /// Close the innermost layer, queueing its deferred paint behind
@@ -1182,15 +1158,12 @@ impl<State, Msg> RenderPass<State, Msg> {
             .layer_stack
             .pop()
             .expect("end_layer closes a layer begin_layer opened");
-        if self.paints() {
-            // Queued rather than run here: the layer's own content has only
-            // been queued so far, and deferred paint has to land on top of
-            // it.
-            self.queue(PaintOp::FlushDeferred { layer });
-            self.canvas_stack
-                .pop()
-                .expect("paint pass opened a canvas for this layer");
-        }
+        // Queued rather than run here: the layer's own content has only been
+        // queued so far, and deferred paint has to land on top of it.
+        self.queue(PaintOp::FlushDeferred { layer });
+        self.canvas_stack
+            .pop()
+            .expect("a declared layer opened a canvas");
     }
 
     /// Run the deferred thunks registered in `layer` into its canvas.
@@ -1219,12 +1192,6 @@ impl<State, Msg> RenderPass<State, Msg> {
                 thunk(&mut painter, state);
             }
         });
-    }
-
-    /// Whether this pass writes to the frame. The structure pass declares the
-    /// same tree but paints nothing.
-    pub(crate) const fn paints(&self) -> bool {
-        matches!(self.kind, PassKind::Paint { .. })
     }
 
     /// Run `f` as one declaration region: if it unwinds — a panicking
@@ -1267,7 +1234,6 @@ impl<State, Msg> RenderPass<State, Msg> {
         );
         let index = self.surface.nodes.len();
         let layer = self.current_layer();
-        self.validate_against_structure(&id, parent, area, &options, role, layer);
         self.surface.nodes.push(Node {
             id,
             parent,
@@ -1288,74 +1254,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             self.surface.roots.push(index);
         }
         index
-    }
-
-    /// The path of the declaration being opened: the open chain's cursor plus
-    /// the id that is not on it yet. Only for panic messages — the node it
-    /// names is not in the tree.
-    fn declaring_path(&self, id: &ChildId) -> Vec<ChildId> {
-        let mut path = self.path_cursor.clone();
-        path.push(id.clone());
-        path
-    }
-
-    /// The paint pass's half of the idempotency contract: every declaration
-    /// must match what the structure pass declared at the same position.
-    /// Structure may depend on app state — including app-held focus — but not
-    /// on the pass-computed focus flags, which differ between the passes.
-    ///
-    /// Identity is compared as id plus parent index rather than as a path.
-    /// Nodes validate in declaration order and a node's parent was declared
-    /// before it, so by induction equal ids under equal parents are equal
-    /// paths — and the paths themselves only have to be built to name the
-    /// declaration that failed.
-    fn validate_against_structure(
-        &self,
-        id: &ChildId,
-        parent: Option<usize>,
-        area: Rect,
-        options: &ScopeOptions,
-        role: NodeRole,
-        layer: usize,
-    ) {
-        let PassKind::Paint { expected } = &self.kind else {
-            return;
-        };
-        // The position this declaration is about to take, which is the
-        // position the structure pass declared the same thing at.
-        let index = self.surface.nodes.len();
-        let Some(prior) = expected.nodes.get(index) else {
-            panic!(
-                "declaration closure is not idempotent: the paint pass declared `{}`, which the \
-                 structure pass never declared; declared structure may depend on app state but \
-                 not on the pass-computed focus flags",
-                DisplayPath(&self.declaring_path(id))
-            );
-        };
-        let mismatch = if prior.id != *id || prior.parent != parent {
-            Some(format!("path `{}`", DisplayPath(&expected.path_of(index))))
-        } else if prior.area != area {
-            Some(format!("area {:?}", prior.area))
-        } else if prior.options != *options {
-            Some(format!("scope options {:?}", prior.options))
-        } else if prior.layer != layer {
-            Some(format!("layer {}", prior.layer))
-        } else if prior.is_scope != role.is_scope
-            || prior.self_focusable != role.self_focusable
-            || prior.focuses_on_click != role.focuses_on_click
-        {
-            Some("focusability".to_owned())
-        } else {
-            None
-        };
-        if let Some(differs) = mismatch {
-            panic!(
-                "declaration closure is not idempotent: `{}` was declared with {differs} in the \
-                 structure pass but differs in the paint pass; declared structure may depend on \
-                 app state but not on the pass-computed focus flags",
-                DisplayPath(&self.declaring_path(id))
-            );
-        }
     }
 
     pub(crate) fn render_component(
@@ -1395,7 +1293,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             // paint replays ahead of its descendants' — the paint-before-
             // children contract, kept by position in the queue rather than by
             // each component's care.
-            pass.queue_node(index, area, env.hover);
+            pass.queue_node(index, area);
             pass.declare(env.nested(area), |ctx| component.render(ctx));
             pass.leave_node();
             pass.surface.nodes[index].component = Some(component);
@@ -1496,11 +1394,6 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Run one declaration closure over the current parent node. The single
     /// construction site for declaration [`RenderCtx`]s: root, scope, modal, and
     /// component render all pass through here.
-    ///
-    /// The focus flags compare the node's path against [`Self::focus`]: the
-    /// resolved path in the paint pass, so `focused` is true exactly on the
-    /// resolved leaf — a container whose descendant holds focus reports
-    /// `contains_focus` instead, with no per-declaration policy needed.
     fn declare<'frame>(
         &mut self,
         env: DeclarationEnv<'_, 'frame, State>,
@@ -1511,24 +1404,16 @@ impl<State, Msg> RenderPass<State, Msg> {
             area,
             state,
             theme,
-            hover,
             transients,
             depth,
         } = env;
         let hover_position = self.hover_position;
-        let flags = self
-            .current_path()
-            .map_or_else(InteractionFlags::default, |path| {
-                interaction_flags(path, &self.focus, hover)
-            });
         self.guarded(|pass| {
             let mut ctx = RenderCtx {
                 frame,
                 area,
                 theme,
-                flags,
                 hover_position,
-                hover,
                 transients,
                 depth,
                 pass: Some(pass),
@@ -1542,20 +1427,18 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         paint: impl FnOnce(&mut Painter<'_, '_>, &State) + 'static,
     ) {
-        // The structure pass paints nothing, deferred or otherwise.
-        if self.paints() {
-            self.deferred.push((self.current_layer(), Box::new(paint)));
-        }
+        self.deferred.push((self.current_layer(), Box::new(paint)));
     }
 
     /// Draw the frame: run every queued op in declaration order, each onto
     /// the surface its declaration belonged to.
     ///
-    /// This is the whole of the paint pass's painting apart from
-    /// compositing. Running it here rather than during the walk is what lets
-    /// paint read the resolved focus and the completed tree, and it is why
-    /// [`Component::paint`] runs once per frame while
-    /// [`Component::render`] runs twice.
+    /// This is the whole of the frame's painting apart from compositing.
+    /// Running it after the walk rather than during it is what lets every
+    /// paint read the finished tree and the focus resolved over it — `focus`
+    /// here is that resolved path, not the app's stored one, and the flags
+    /// each op paints with are derived from it now because there was nothing
+    /// to derive them from earlier.
     ///
     /// Only a pass that has already passed every check gets here, so the
     /// queue is either run whole or not at all: an already-poisoned pass draws
@@ -1563,7 +1446,18 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// against. Each op is then guarded exactly as deferred paint is — a
     /// panicking paint poisons the pass, and the cells it wrote before
     /// panicking are the one thing that cannot be taken back.
-    fn replay_paint(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
+    fn replay_paint(
+        &mut self,
+        frame: &mut Frame,
+        state: &State,
+        theme: &Theme,
+        focus: &FocusState,
+        hover: &HoverState,
+    ) {
+        // Dead as things stand — `assert_valid` rejects a poisoned pass before
+        // this is reached — and kept as the second half of the guarantee: it
+        // is what would still hold if replay were ever moved ahead of the
+        // checks.
         if self.failed.get() {
             return;
         }
@@ -1571,23 +1465,28 @@ impl<State, Msg> RenderPass<State, Msg> {
             let QueuedPaint { canvas, op } = queued;
             let frame = &mut *frame;
             self.guarded(|pass| {
-                let (site, paint) = match op {
+                // Read before the component borrow below, which needs the
+                // surface mutably. The root declaration has no node, and so
+                // no flags.
+                let flags = op.node().map_or_else(InteractionFlags::default, |index| {
+                    pass.surface.interaction_flags(index, focus, hover)
+                });
+                let (area, paint) = match op {
                     PaintOp::FlushDeferred { layer } => {
                         let index = canvas.expect("a layer's flush names that layer's canvas");
                         pass.flush_deferred_for(layer, theme, state, index);
                         return;
                     }
-                    PaintOp::Node { index, site } => {
-                        // Unreachable: only a caught declaration panic leaves
-                        // a node without its component, and that pass is
-                        // poisoned before replay is reached at all.
-                        let Some(component) = pass.surface.nodes[index].component.as_deref_mut()
-                        else {
-                            return;
-                        };
-                        (site, PaintBody::Component(component))
+                    PaintOp::Node { index, area } => {
+                        // `assert_valid`'s completeness check ran before
+                        // replay, so every node here has its component.
+                        let component = pass.surface.nodes[index]
+                            .component
+                            .as_deref_mut()
+                            .expect("a checked pass installed every node's component");
+                        (area, PaintBody::Component(component))
                     }
-                    PaintOp::Thunk { site, paint } => (site, PaintBody::Thunk(paint)),
+                    PaintOp::Thunk { area, paint, .. } => (area, PaintBody::Thunk(paint)),
                 };
                 let target = match canvas {
                     Some(index) => PaintTarget::Canvas(&mut pass.canvases[index]),
@@ -1596,11 +1495,11 @@ impl<State, Msg> RenderPass<State, Msg> {
                 let mut ctx = PaintCtx {
                     target,
                     theme,
-                    area: site.area,
-                    focused: site.flags.focused,
-                    contains_focus: site.flags.contains_focus,
-                    hovered: site.flags.hovered,
-                    contains_hover: site.flags.contains_hover,
+                    area,
+                    focused: flags.focused,
+                    contains_focus: flags.contains_focus,
+                    hovered: flags.hovered,
+                    contains_hover: flags.contains_hover,
                     hover_position: pass.hover_position,
                     state,
                 };
@@ -1612,16 +1511,12 @@ impl<State, Msg> RenderPass<State, Msg> {
         }
     }
 
-    /// Finish the paint pass's painting: composite every layer canvas over
+    /// Finish the frame's painting: composite every layer canvas over
     /// the frame in discovery order — a modal dims what is beneath it first —
     /// then flush the base declaration's deferred thunks on top of the
     /// result, making root-level [`RenderCtx::defer_paint`] the topmost
-    /// decoration slot (toast stacks, drag ghosts). A no-op in the structure
-    /// pass.
+    /// decoration slot (toast stacks, drag ghosts).
     fn finish_frame(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
-        if !self.paints() {
-            return;
-        }
         for canvas in &self.canvases {
             if canvas.kind.policy().dims {
                 dim_background(frame.buffer_mut(), canvas.area, theme.background);
@@ -1672,25 +1567,6 @@ impl<State, Msg> RenderPass<State, Msg> {
                 .all(|node| node.is_scope || node.component.is_some()),
             "cannot commit a declaration pass with incomplete components"
         );
-        if let PassKind::Paint { expected } = &self.kind {
-            assert!(
-                self.surface.nodes.len() == expected.nodes.len(),
-                "declaration closure is not idempotent: the structure pass declared {} nodes but \
-                 the paint pass declared {}; declared structure may depend on app state but not \
-                 on the pass-computed focus flags",
-                expected.nodes.len(),
-                self.surface.nodes.len(),
-            );
-            // Defensive: unreachable while every layer declares a root node
-            // and every node's layer number is checked at its own declaration,
-            // which together make `layer_roots` a function of facts already
-            // validated. It stands guard over those two invariants.
-            assert!(
-                self.surface.layer_roots == expected.layer_roots,
-                "declaration closure is not idempotent: the two passes declared different \
-                 layer roots"
-            );
-        }
     }
 
     fn finish(self) -> Surface<State, Msg> {
@@ -2069,12 +1945,18 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// # Declaring, then drawing
     ///
-    /// Nothing draws while the closure runs. Declaration records what exists
-    /// and where; [`Component::paint`] and the closures
+    /// The closure runs once, and nothing draws while it does. Declaration
+    /// records what exists and where; [`Component::paint`] and the closures
     /// [`RenderCtx::paint`] queues are replayed afterwards, in the order the
-    /// declaration reached them. Paint therefore sees a complete tree and a
-    /// resolved focus, which is what makes its interaction flags trustworthy
-    /// — and it runs once per frame, where declaration runs twice.
+    /// declaration reached them. Focus resolves in between, against the
+    /// finished tree, so every interaction flag a paint reads is derived from
+    /// a tree that is already complete — which is the whole reason the two
+    /// walks are separate, and why [`RenderCtx`] has no flags to offer.
+    ///
+    /// One consequence is worth stating plainly: **structure may not depend
+    /// on the interaction flags**, because there are none to depend on while
+    /// declaring. Which components exist, their ids, and their areas may
+    /// depend on anything in `state`, app-held focus included.
     ///
     /// # Ordering within the pass
     ///
@@ -2088,46 +1970,20 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// layer still paints beneath it. Layers may therefore be declared from
     /// anywhere in the tree, whenever their owner declares.
     ///
-    /// # Two passes, one closure
-    ///
-    /// The closure runs twice per frame. The first run is the **structure
-    /// pass**: it declares the full tree and queues nothing, so the runtime
-    /// learns identity, geometry, and focusability before anything is drawn.
-    /// Focus then resolves against that complete tree. The second run is the
-    /// **paint pass**: the same declarations again, this time building the
-    /// paint queue that is replayed when it ends.
-    ///
-    /// This puts one contract on the closure: **it must declare the same tree
-    /// both times.** Declared structure — which components exist, their ids,
-    /// their areas — may depend on anything in `state`, including app-held
-    /// focus. It cannot depend on the interaction flags, which are not
-    /// available while declaring at all: they reach paint only, through
-    /// [`PaintCtx`]. The runtime validates the contract by comparing the two
-    /// passes' trees and panics naming the first divergent declaration, which
-    /// also catches accidental impurity — mutation through an `Rc<RefCell>`
-    /// app handle, a closure that consumes an iterator.
-    ///
-    /// Because the closure is `FnMut` and runs twice, values it moves into
-    /// components must be constructible twice — clone per run rather than
-    /// moving a captured value in. The compiler enforces this. Components
-    /// themselves are reconstructed fresh each run, so their own run-once
-    /// parts (a Dialog body closure) are unaffected; structure-pass instances
-    /// are ephemeral and never handle events.
-    ///
     /// # Panics
     ///
     /// Panics if the closure or a component panics, if runtime validation of
     /// the declaration fails (duplicate sibling ids, an interaction area
-    /// outside its component's paint area, a duplicate modal root id, a
-    /// non-idempotent closure), or if [`modals`](Ratcn::modals) is bound and
-    /// the declared modal ids do not exactly match the app's stack. All of
-    /// these fire before the retained surface is replaced.
+    /// outside its component's paint area, a duplicate modal root id), or if
+    /// [`modals`](Ratcn::modals) is bound and the declared modal ids do not
+    /// exactly match the app's stack. All of these fire before the retained
+    /// surface is replaced.
     pub fn render<'frame>(
         &mut self,
         frame: &mut Frame<'frame>,
         state: &State,
         theme: &Theme,
-        mut declare: impl FnMut(&mut RenderCtx<'_, 'frame, State, Msg>),
+        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
     ) {
         let focus_snapshot = self.stored_focus(state);
         let stored_hover = self
@@ -2135,49 +1991,25 @@ impl<State, Msg> Ratcn<State, Msg> {
             .as_ref()
             .map_or_else(HoverState::default, |binding| (binding.read)(state).clone());
         let hover = self.effective_hover(&stored_hover);
-        let hover_position = self.hover_validity.last_pointer;
 
-        // Structure pass: same declarations, no paint. Its surface is the
-        // complete tree focus resolves against. Both passes share the one
-        // transient store, so `RenderCtx::transient` reads event-written
-        // values and `RenderCtx::transient_mut` can settle the few that only
-        // paint can resolve — required to be idempotent precisely because
-        // both passes run them. Those writes are not rolled back by a failed
-        // pass, the same status frame writes have; the values are
-        // presentation-only, so the worst case is one stale frame.
-        let mut structure = RenderPass::new(PassKind::Structure, focus_snapshot.clone());
-        structure.hover_position = hover_position;
-        structure.declare(
-            DeclarationEnv::root(frame, state, theme, &hover, &mut self.transients),
-            &mut declare,
-        );
-        let mut structure_surface = structure.finish();
-        let resolved_focus = structure_surface.resolve_focus(&focus_snapshot);
-        // The paint pass validates against the structure surface's shape;
-        // its ephemeral component instances have served and drop here.
-        for node in &mut structure_surface.nodes {
-            node.component = None;
-        }
-
-        // Paint pass: the same declarations painted for real, each validated
-        // against the structure pass's tree.
-        let mut pass = RenderPass::new(
-            PassKind::Paint {
-                expected: structure_surface,
-            },
-            resolved_focus,
-        );
-        pass.hover_position = hover_position;
+        // Declare. Nothing is drawn and no interaction flag is read: the walk
+        // builds the tree and queues the paint it owes.
+        let mut pass = RenderPass::new();
+        pass.hover_position = self.hover_validity.last_pointer;
         pass.declare(
-            DeclarationEnv::root(frame, state, theme, &hover, &mut self.transients),
-            &mut declare,
+            DeclarationEnv::root(frame, state, theme, &mut self.transients),
+            declare,
         );
         // Every reason to reject a pass is known once declaration ends, and
         // nothing has painted yet — so the checks run first and a rejected
-        // pass never reaches the screen at all.
+        // pass never reaches the screen at all. They also establish what
+        // `resolve_focus` needs: a complete tree.
         pass.assert_valid();
         self.assert_modal_stack(&pass.surface, state);
-        pass.replay_paint(frame, state, theme);
+        // Focus resolves once, over that tree, and only then does anything
+        // learn where it landed.
+        let resolved_focus = pass.surface.resolve_focus(&focus_snapshot);
+        pass.replay_paint(frame, state, theme, &resolved_focus, &hover);
         pass.finish_frame(frame, state, theme);
         let next = pass.finish();
         self.commit_surface(next, &stored_hover);
@@ -3332,15 +3164,12 @@ mod tests {
     type PathLog = Arc<Mutex<Vec<Vec<ChildId>>>>;
 
     /// Record the identity path the declaration pass currently has open.
-    ///
-    /// Only the paint pass, whose tree is the one that commits: the closure
-    /// runs twice and the structure pass would double every entry.
     fn record_declared_path(
         ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>,
         log: &PathLog,
     ) {
         let pass = ctx.pass.as_deref().expect("declaration pass");
-        if let Some(path) = pass.current_path().filter(|_| pass.paints()) {
+        if let Some(path) = pass.current_path() {
             log.lock().expect("path log").push(path.to_vec());
         }
     }
@@ -3887,263 +3716,7 @@ mod tests {
     }
 
     #[test]
-    fn non_idempotent_declaration_names_the_divergent_path() {
-        let mut ratcn = Ratcn::<(), ()>::new();
-        let mut terminal = Terminal::new(TestBackend::new(10, 3)).expect("terminal");
-        render_leaf(&mut ratcn, &mut terminal, &ChildId::Static("stable"));
-        let theme = Theme::default_dark();
-
-        // A closure that declares an extra node only on its second run — the
-        // shape of any impure declaration (mutation through a RefCell handle,
-        // a consumed iterator, structure branching on pass-computed flags).
-        let mut runs = 0;
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &(), &theme, |ctx| {
-                        runs += 1;
-                        ctx.render_component(ChildId::Static("always"), Leaf, area);
-                        if runs > 1 {
-                            ctx.render_component(ChildId::Static("sometimes"), Leaf, area);
-                        }
-                    });
-                })
-                .expect("draw");
-        }));
-
-        let payload = result.expect_err("a non-idempotent closure must fail the pass");
-        let message = payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .expect("string panic");
-        assert!(message.contains("not idempotent"), "got: {message}");
-        assert!(message.contains("sometimes"), "got: {message}");
-        assert_eq!(
-            ratcn.declared_paths(),
-            vec![vec![ChildId::Static("stable")]]
-        );
-    }
-
-    /// One way a paint pass can diverge from the structure pass, and the
-    /// fragments the resulting panic has to carry: the node it happened at,
-    /// and what about it differed.
-    struct DivergenceCase {
-        name: &'static str,
-        declare: fn(&mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>, u32),
-        fragments: Vec<String>,
-    }
-
-    /// Divergences in *which declaration this is*, at an index the structure
-    /// pass also declared — so the mismatch chain decides them rather than the
-    /// never-declared arm.
-    fn identity_divergences() -> Vec<DivergenceCase> {
-        vec![
-            DivergenceCase {
-                // The case the id-plus-parent rule exists for: the same id at
-                // the same index, under a different parent, with the node
-                // count unchanged.
-                name: "same id under a different parent",
-                declare: |ctx, run| {
-                    let area = ctx.area();
-                    ctx.scope(ChildId::Static("a"), area, ScopeOptions::default(), |ctx| {
-                        ctx.scope(
-                            ChildId::Static("mid"),
-                            area,
-                            ScopeOptions::default(),
-                            |ctx| {
-                                if run == 1 {
-                                    ctx.render_component(
-                                        ChildId::Static("x"),
-                                        FocusLeaf::enabled(),
-                                        area,
-                                    );
-                                }
-                            },
-                        );
-                        if run > 1 {
-                            ctx.render_component(ChildId::Static("x"), FocusLeaf::enabled(), area);
-                        }
-                    });
-                },
-                fragments: vec!["`a/x`".to_owned(), "path `a/mid/x`".to_owned()],
-            },
-            DivergenceCase {
-                name: "a different id at the same position",
-                declare: |ctx, run| {
-                    let area = ctx.area();
-                    let first = if run == 1 { "one" } else { "uno" };
-                    ctx.render_component(ChildId::Static(first), FocusLeaf::enabled(), area);
-                    ctx.render_component(ChildId::Static("two"), FocusLeaf::enabled(), area);
-                },
-                fragments: vec!["`uno`".to_owned(), "path `one`".to_owned()],
-            },
-        ]
-    }
-
-    /// Divergences in what a declaration carries rather than in which
-    /// declaration it is.
-    fn attribute_divergences() -> Vec<DivergenceCase> {
-        vec![
-            DivergenceCase {
-                name: "a different area",
-                declare: |ctx, run| {
-                    let area = if run == 1 {
-                        Rect::new(0, 0, 4, 1)
-                    } else {
-                        Rect::new(0, 1, 4, 1)
-                    };
-                    ctx.render_component(ChildId::Static("box"), FocusLeaf::enabled(), area);
-                },
-                fragments: vec![
-                    "`box`".to_owned(),
-                    format!("area {:?}", Rect::new(0, 0, 4, 1)),
-                ],
-            },
-            DivergenceCase {
-                name: "different scope options",
-                declare: |ctx, run| {
-                    let area = ctx.area();
-                    let options = if run == 1 {
-                        ScopeOptions::default()
-                    } else {
-                        ScopeOptions::default().tab_wrap(TabWrap::Wrap)
-                    };
-                    ctx.scope(ChildId::Static("pane"), area, options, |_ctx| {});
-                },
-                fragments: vec![
-                    "`pane`".to_owned(),
-                    format!("scope options {:?}", ScopeOptions::default()),
-                ],
-            },
-            DivergenceCase {
-                name: "a node inside a layer in one pass and outside it in the other",
-                declare: |ctx, run| {
-                    let area = ctx.area();
-                    let options = ScopeOptions::default();
-                    if run == 1 {
-                        ctx.modal_scope(ChildId::Static("sheet"), area, options, |_ctx| {});
-                    } else {
-                        ctx.scope(ChildId::Static("sheet"), area, options, |_ctx| {});
-                    }
-                },
-                fragments: vec!["`sheet`".to_owned(), "layer 1".to_owned()],
-            },
-            DivergenceCase {
-                name: "focusability toggled",
-                declare: |ctx, run| {
-                    let area = ctx.area();
-                    let leaf = if run == 1 {
-                        FocusLeaf::enabled()
-                    } else {
-                        FocusLeaf::disabled()
-                    };
-                    ctx.render_component(ChildId::Static("leaf"), leaf, area);
-                },
-                fragments: vec!["`leaf`".to_owned(), "focusability".to_owned()],
-            },
-        ]
-    }
-
-    /// Divergences no single declaration can see, left to the checks that run
-    /// once the whole pass has declared.
-    fn whole_pass_divergences() -> Vec<DivergenceCase> {
-        vec![DivergenceCase {
-            name: "the paint pass declaring fewer nodes",
-            declare: |ctx, run| {
-                let area = ctx.area();
-                ctx.render_component(ChildId::Static("one"), FocusLeaf::enabled(), area);
-                if run == 1 {
-                    ctx.render_component(ChildId::Static("two"), FocusLeaf::enabled(), area);
-                }
-            },
-            fragments: vec![
-                "the structure pass declared 2 nodes but the paint pass declared 1".to_owned(),
-            ],
-        }]
-    }
-
-    #[test]
-    fn paint_pass_divergence_names_the_node_and_what_differs() {
-        // A declaration's identity is validated as its id plus its parent's
-        // index rather than as a stored path, so every shape of divergence has
-        // to still name the node it happened at and say what differed — and
-        // none of them may disturb the surface the last good frame committed.
-        let cases = identity_divergences()
-            .into_iter()
-            .chain(attribute_divergences())
-            .chain(whole_pass_divergences());
-
-        for case in cases {
-            let state = FocusTestState::default();
-            let mut ratcn =
-                Ratcn::new().focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus);
-            let mut terminal = Terminal::new(TestBackend::new(10, 3)).expect("terminal");
-            let theme = Theme::default_dark();
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
-                            ChildId::Static("previous"),
-                            FocusLeaf::enabled(),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
-
-            let declare = case.declare;
-            let mut runs = 0;
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                terminal
-                    .draw(|frame| {
-                        ratcn.render(frame, &state, &theme, |ctx| {
-                            runs += 1;
-                            declare(ctx, runs);
-                        });
-                    })
-                    .expect("draw");
-            }));
-
-            let payload = result.expect_err(case.name);
-            let message = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .expect("string panic");
-            assert!(
-                message.contains("not idempotent"),
-                "{}: got {message}",
-                case.name
-            );
-            for fragment in &case.fragments {
-                assert!(
-                    message.contains(fragment.as_str()),
-                    "{}: got {message}",
-                    case.name
-                );
-            }
-
-            // The last good frame is still the surface events route against.
-            assert_eq!(
-                ratcn.declared_paths(),
-                vec![vec![ChildId::Static("previous")]],
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
-                EventResult::Emit(FocusTestMsg::Activated(vec![ChildId::Static("previous")])),
-                "{}",
-                case.name
-            );
-        }
-    }
-
-    #[test]
-    fn the_closure_declares_twice_and_queued_paint_runs_once_on_the_frame() {
+    fn the_closure_declares_once_and_queued_paint_runs_once_on_the_frame() {
         let mut ratcn = Ratcn::<(), ()>::new();
         let mut terminal = Terminal::new(TestBackend::new(6, 1)).expect("terminal");
         let theme = Theme::default_dark();
@@ -4170,9 +3743,9 @@ mod tests {
             })
             .expect("draw");
 
-        // Both passes declared; the queued paint ran once, and it read and
-        // wrote the frame itself rather than any scratch surface.
-        assert_eq!(declared.load(Ordering::SeqCst), 2);
+        // The closure ran once and the paint it queued ran once, against the
+        // frame itself.
+        assert_eq!(declared.load(Ordering::SeqCst), 1);
         assert_eq!(*seen.lock().expect("probe log"), [" "]);
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer.cell((0, 0)).expect("painted cell").symbol(), "X");
@@ -6699,6 +6272,84 @@ mod tests {
         );
     }
 
+    /// A focusable leaf that queues a paint thunk from its own declaration, so
+    /// a test can see which node a thunk's flags are read from.
+    struct ThunkProbe(FocusRenderLog);
+
+    impl Component<FocusTestState, FocusTestMsg> for ThunkProbe {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+            let log = Arc::clone(&self.0);
+            ctx.paint(move |ctx| {
+                log.lock()
+                    .expect("thunk flag log")
+                    .push((ctx.focused, ctx.contains_focus));
+            });
+        }
+
+        fn is_focusable(&self, _state: &FocusTestState) -> bool {
+            true
+        }
+    }
+
+    /// Paint queued from a declaration belongs to *that* declaration — not to
+    /// the root, and not to the outermost scope it happens to sit inside.
+    ///
+    /// The scope's thunk carries the `focus-within` signal a container paints
+    /// its border from, and the leaf's carries `focused`. Recording both is
+    /// what makes the attribution visible: the two disagree only because each
+    /// thunk is read from its own node.
+    #[test]
+    fn a_scope_thunk_reports_focus_within_its_subtree() {
+        let state = FocusTestState {
+            focus: FocusState::intent([ChildId::Static("pane"), ChildId::Static("leaf")]),
+        };
+        let scope_flags = Arc::new(Mutex::new(Vec::new()));
+        let leaf_flags = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn =
+            Ratcn::new().focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus);
+        let mut terminal = Terminal::new(TestBackend::new(6, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    let scope_flags = Arc::clone(&scope_flags);
+                    let leaf_flags = Arc::clone(&leaf_flags);
+                    ctx.scope(
+                        ChildId::Static("pane"),
+                        area,
+                        ScopeOptions::default(),
+                        move |ctx| {
+                            ctx.paint(move |ctx| {
+                                scope_flags
+                                    .lock()
+                                    .expect("scope flag log")
+                                    .push((ctx.focused, ctx.contains_focus));
+                            });
+                            ctx.render_component(
+                                ChildId::Static("leaf"),
+                                ThunkProbe(leaf_flags),
+                                area,
+                            );
+                        },
+                    );
+                });
+            })
+            .expect("draw");
+
+        assert_eq!(
+            *scope_flags.lock().expect("scope flag log"),
+            [(false, true)],
+            "the scope contains focus without being the focused leaf"
+        );
+        assert_eq!(
+            *leaf_flags.lock().expect("thunk flag log"),
+            [(true, true)],
+            "the leaf's own thunk is read from the leaf"
+        );
+    }
+
     #[test]
     fn root_then_nested_hover_focus_attract_on_successive_moves() {
         let mut state = HoverFocusState {
@@ -7989,76 +7640,15 @@ mod tests {
         assert_eq!(buffer.cell((1, 0)).expect("cell").symbol(), "#");
     }
 
-    /// A pass the runtime rejects is rejected before it draws: declaration,
-    /// validation, and the modal-stack check all finish while the frame is
-    /// still only a description of itself. So the cells already on screen
-    /// survive a bad frame, exactly as the retained surface does.
+    /// A pass the runtime rejects is rejected before it draws: declaration
+    /// and both checks finish while the frame is still only a description of
+    /// itself. So the cells already on screen survive a bad frame, exactly as
+    /// the retained surface does.
     ///
-    /// The divergence here is only detectable once declaration has ended — the
-    /// paint pass declares *fewer* nodes than the structure pass, so every
-    /// declaration it does make validates — which is what puts the rejection
-    /// after the whole queue has been built and before any of it runs.
-    #[test]
-    fn a_rejected_pass_never_touches_the_screen() {
-        let mut ratcn = Ratcn::<(), ()>::new();
-        let mut terminal = Terminal::new(TestBackend::new(3, 1)).expect("terminal");
-        let theme = Theme::default_dark();
-
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &(), &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("first"), GlyphLeaf("A"), area);
-                });
-            })
-            .expect("draw");
-        assert_eq!(
-            terminal
-                .backend()
-                .buffer()
-                .cell((0, 0))
-                .expect("cell")
-                .symbol(),
-            "A"
-        );
-
-        let mut runs = 0;
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                // What is already on screen, restated so the rejected pass has
-                // something of the host's to overwrite.
-                frame.render_widget(ratatui::text::Line::from("A"), area);
-                let rejected = catch_unwind(AssertUnwindSafe(|| {
-                    ratcn.render(frame, &(), &theme, |ctx| {
-                        runs += 1;
-                        ctx.render_component(ChildId::Static("leaf"), GlyphLeaf("B"), area);
-                        if runs == 1 {
-                            ctx.render_component(ChildId::Static("extra"), GlyphLeaf("B"), area);
-                        }
-                    });
-                }));
-                assert!(rejected.is_err());
-            })
-            .expect("draw");
-
-        assert_eq!(
-            terminal
-                .backend()
-                .buffer()
-                .cell((0, 0))
-                .expect("cell")
-                .symbol(),
-            "A",
-            "a rejected pass must not have painted"
-        );
-        assert_eq!(ratcn.declared_paths(), vec![vec![ChildId::Static("first")]]);
-    }
-
-    /// The same guarantee for the other rejection the runtime can only answer
-    /// once declaration has ended: declared modal roots that disagree with the
-    /// app's own stack. It is a separate test rather than a case of the one
-    /// above because the binding it needs makes it a differently typed runtime.
+    /// Declared modal roots that disagree with the app's own stack are the
+    /// rejection the runtime can only answer once declaration has ended,
+    /// which is what makes them the case worth pinning: the whole queue is
+    /// built before anything decides it will never run.
     #[test]
     fn a_pass_rejected_by_the_modal_stack_never_touches_the_screen() {
         let state = ModalTestState::default();
@@ -8102,6 +7692,122 @@ mod tests {
             "a pass rejected by the modal stack must not have painted"
         );
         assert_eq!(ratcn.declared_paths(), vec![vec![ChildId::Static("first")]]);
+    }
+
+    /// The rejection above, watched from the base layer rather than from the
+    /// modal that caused it.
+    ///
+    /// A modal paints into a canvas that only composites at the very end, so
+    /// a modal-mismatched pass could paint its *base* content and still leave
+    /// the modal's own invisible. That is the leak the check's position has
+    /// to prevent, and it is only visible from a base-layer declaration
+    /// sharing the cell the last good frame owns.
+    #[test]
+    fn a_rejected_pass_never_paints_its_base_layer_either() {
+        let state = ModalTestState::default();
+        let mut ratcn = Ratcn::<ModalTestState, ModalTestMsg>::new()
+            .modals(|state: &ModalTestState| &state.modals);
+        let mut terminal = Terminal::new(TestBackend::new(3, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.render_component(ChildId::Static("first"), GlyphLeaf("A"), area);
+                });
+            })
+            .expect("draw");
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                frame.render_widget(ratatui::text::Line::from("A"), area);
+                let rejected = catch_unwind(AssertUnwindSafe(|| {
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        // Base-layer content, which paints straight onto the
+                        // frame, declared alongside the modal root the app's
+                        // empty stack refuses.
+                        ctx.render_component(ChildId::Static("base"), GlyphLeaf("B"), area);
+                        ctx.modal(ChildId::Static("sheet"), GlyphLeaf("C"), area);
+                    });
+                }));
+                assert!(rejected.is_err());
+            })
+            .expect("draw");
+
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((0, 0))
+                .expect("cell")
+                .symbol(),
+            "A",
+            "a rejected pass must not have painted its base layer"
+        );
+        assert_eq!(ratcn.declared_paths(), vec![vec![ChildId::Static("first")]]);
+    }
+
+    /// The two hover flags mean different things, and a container relies on
+    /// the difference: `hovered` is "the pointer is on *me*", `contains_hover`
+    /// is "the pointer is somewhere inside me".
+    ///
+    /// They agree everywhere except on an ancestor of the hovered leaf, which
+    /// is why the ancestor has to be watched alongside the leaf — either flag
+    /// collapsing into the other is invisible from the leaf alone.
+    #[test]
+    fn hovered_and_contains_hover_are_distinct_at_the_leaf_and_its_ancestor() {
+        let state = PointerState {
+            hover: HoverState::intent([ChildId::Static("pane"), ChildId::Static("leaf")]),
+        };
+        let scope_flags = Arc::new(Mutex::new(Vec::new()));
+        let leaf_flags = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+        let mut terminal = Terminal::new(TestBackend::new(6, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    let scope_flags = Arc::clone(&scope_flags);
+                    let leaf_flags = Arc::clone(&leaf_flags);
+                    ctx.scope(
+                        ChildId::Static("pane"),
+                        area,
+                        ScopeOptions::default(),
+                        move |ctx| {
+                            ctx.paint(move |ctx| {
+                                scope_flags
+                                    .lock()
+                                    .expect("scope hover log")
+                                    .push((ctx.hovered, ctx.contains_hover));
+                            });
+                            ctx.render_component(
+                                ChildId::Static("leaf"),
+                                HoverLeaf {
+                                    consume_move: false,
+                                    rendered: Some(leaf_flags),
+                                },
+                                area,
+                            );
+                        },
+                    );
+                });
+            })
+            .expect("draw");
+
+        assert_eq!(
+            *leaf_flags.lock().expect("leaf hover log"),
+            [(true, true)],
+            "the pointer is on the leaf, so both halves hold there"
+        );
+        assert_eq!(
+            *scope_flags.lock().expect("scope hover log"),
+            [(false, true)],
+            "the scope contains the pointer without being under it"
+        );
     }
 
     /// A layer's canvas composites whatever was written to it, whichever write
@@ -9097,44 +8803,6 @@ mod tests {
         assert_eq!(buffer.cell((0, 0)).expect("cell").symbol(), "P");
         assert_eq!(buffer.cell((1, 0)).expect("cell").symbol(), "P");
         assert_eq!(buffer.cell((2, 0)).expect("cell").symbol(), "B");
-    }
-
-    #[test]
-    fn a_caught_panic_in_the_paint_pass_alone_fails_the_pass() {
-        let mut ratcn = Ratcn::<(), ()>::new();
-        let mut terminal = Terminal::new(TestBackend::new(10, 3)).expect("terminal");
-        render_leaf(&mut ratcn, &mut terminal, &ChildId::Static("stable"));
-        let theme = Theme::default_dark();
-
-        // The structure pass declares a healthy leaf; the paint pass declares
-        // a panicking one at the same position (same node shape, so tree
-        // validation passes) and catches the panic. The poison guard must
-        // still fail the pass.
-        let mut runs = 0;
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &(), &theme, |ctx| {
-                        runs += 1;
-                        if runs == 1 {
-                            ctx.render_component(ChildId::Static("leaf"), Leaf, area);
-                        } else {
-                            let caught = catch_unwind(AssertUnwindSafe(|| {
-                                ctx.render_component(ChildId::Static("leaf"), PanickingLeaf, area);
-                            }));
-                            assert!(caught.is_err());
-                        }
-                    });
-                })
-                .expect("draw");
-        }));
-
-        assert!(result.is_err());
-        assert_eq!(
-            ratcn.declared_paths(),
-            vec![vec![ChildId::Static("stable")]]
-        );
     }
 
     fn render_bound_nested_modal(

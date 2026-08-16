@@ -92,7 +92,7 @@ struct App {
     ratcn: Ratcn<AppState, Msg>,
 }
 
-/// The button a Tooltip explains. Built twice per pass — once to measure, once
+/// The button a Tooltip explains. Built twice per frame — once to measure, once
 /// to declare — so its width and its area cannot disagree.
 fn button(label: &'static str) -> Button<Msg> {
     Button::new(label).on_press(|| Msg::Pressed)
