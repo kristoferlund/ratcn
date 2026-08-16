@@ -16,8 +16,8 @@ use crate::backdrop::dim_background;
 
 use super::{
     ChildId, Component, Event, EventCtx, EventResult, FocusState, HoverState, KeyCode, KeyEvent,
-    ModalState, MouseButton, MouseEvent, MouseKind, MouseTracker, Painter, PreparedComponent,
-    RenderCtx, ScopeOptions, Step, TabWrap,
+    ModalState, MouseButton, MouseEvent, MouseKind, MouseTracker, Painter, RenderCtx, ScopeOptions,
+    Step, TabWrap,
     component::{PaintTarget, TransientMap},
 };
 
@@ -1284,30 +1284,19 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         id: ChildId,
         component: impl Component<State, Msg> + 'static,
-        env: DeclarationEnv<'_, '_, State>,
-    ) {
-        let state = env.state;
-        let prepared = self.guarded(|_| PreparedComponent::prepare(Box::new(component), state));
-        self.render_prepared_component(id, prepared, env);
-    }
-
-    pub(crate) fn render_prepared_component(
-        &mut self,
-        id: ChildId,
-        prepared: PreparedComponent<State, Msg>,
         mut env: DeclarationEnv<'_, '_, State>,
     ) {
+        let state = env.state;
         self.guarded(|pass| {
-            let PreparedComponent {
-                mut component,
-                options,
-                self_focusable,
-                focuses_on_click,
-            } = prepared;
-            let role = NodeRole::component(
-                options.focusable || self_focusable,
-                focuses_on_click,
-            );
+            let mut component: Box<dyn Component<State, Msg>> = Box::new(component);
+            // Every claim the runtime needs before descendants exist is read
+            // here, in this order: focus for the whole frame is decided in one
+            // pass, so none of it may depend on what painting produces.
+            component.prepare(state);
+            let options = component.scope_options();
+            let self_focusable = component.is_focusable(state);
+            let focuses_on_click = component.focuses_on_click(state);
+            let role = NodeRole::component(options.focusable || self_focusable, focuses_on_click);
             let area = env.area;
             let interaction_area = component.interaction_area(area);
             assert!(
@@ -6812,6 +6801,79 @@ mod tests {
             EventResult::Emit(FocusTestMsg::Focus(FocusState::intent([ChildId::Static(
                 "width-zero"
             )])))
+        );
+    }
+
+    /// Declared closed, prepared open: every pre-render answer reports what
+    /// `prepare` computed, never the value the builder was constructed with.
+    /// `is_focusable` stays at its default so the focus claim is attributable
+    /// to `scope_options` alone — the runtime ORs the two together.
+    struct PreparedClaims {
+        open: bool,
+    }
+
+    impl Component<bool, ()> for PreparedClaims {
+        fn prepare(&mut self, state: &bool) {
+            self.open = *state;
+        }
+
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, bool, ()>) {}
+
+        fn scope_options(&self) -> ScopeOptions {
+            let options = ScopeOptions::default();
+            if self.open {
+                options.focusable()
+            } else {
+                options
+            }
+        }
+
+        fn interaction_area(&self, area: Rect) -> Rect {
+            // Non-empty when closed, so an unprepared area suppresses only the
+            // hit-test assertion below and not the focus claim as well.
+            if self.open {
+                area
+            } else {
+                Rect::new(area.x, area.y, 1, 1)
+            }
+        }
+
+        fn handle_event(
+            &mut self,
+            _event: &Event,
+            _state: &bool,
+            _ctx: &mut EventCtx<'_>,
+        ) -> EventResult<()> {
+            EventResult::Emit(())
+        }
+    }
+
+    #[test]
+    fn prepare_runs_before_every_pre_render_answer_is_read() {
+        let mut ratcn = Ratcn::<bool, ()>::new();
+        let mut terminal = Terminal::new(TestBackend::new(8, 2)).expect("terminal");
+        let theme = Theme::default_dark();
+        let area = Rect::new(0, 0, 8, 2);
+        terminal
+            .draw(|frame| {
+                ratcn.render(frame, &true, &theme, |ctx| {
+                    ctx.render_component(
+                        ChildId::Static("claims"),
+                        PreparedClaims { open: false },
+                        area,
+                    );
+                });
+            })
+            .expect("draw");
+
+        assert!(
+            ratcn.focus_path(&[ChildId::Static("claims")]).is_some(),
+            "scope_options was read after prepare"
+        );
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 7, 1), &true),
+            EventResult::Emit(()),
+            "interaction_area was read after prepare, so the whole area hit-tests"
         );
     }
 

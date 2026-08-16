@@ -44,8 +44,11 @@ focus, hit-testing, pointer capture, and event routing. A non-empty result must
 be fully contained in the supplied paint area; otherwise rendering panics and
 the previous retained surface remains active. Returning an area with zero
 width or height keeps the component's identity and paint but excludes it and its
-descendants from interaction for that surface. `scope_options` and `prepare`
-matter only for composites (below).
+descendants from interaction for that surface. `scope_options` matters only for
+composites (below). `prepare` runs once per declaration, before any of those
+answers are read, so all of them may be computed from what it pins: `Tooltip`
+and `Select` resolve their open flag there, and `List`, `Select`, and `Tabs` use
+it to fail loud when two items carry the same value.
 `MeasuredComponent` adds a `measure` method so containers such as the Dialog
 action row can size a component before rendering it.
 
@@ -122,19 +125,62 @@ rather than becoming unfocusable-but-reactive.
 ## Composites
 
 A component may declare descendants from its own `render` through the same
-`RenderCtx` methods the root uses. Children nest under the component's
-identity, and their focusability is discovered by the frame's structure pass —
-there is nothing to announce.
+`RenderCtx` methods the root uses — `ctx.render_component` for a child with
+behavior, `ctx.scope` for a region that only needs its own Tab boundary and
+path segment. Children nest under the component's identity, and their
+focusability is discovered by the frame's structure pass — there is nothing to
+announce.
 
 Paint container pixels before declaring descendants: retained hit order follows
 declaration order and cannot see direct frame paint performed afterward.
 
-The bookkeeping these contracts force on a composite is packaged in
-`ratcn::runtime`: `BodySlot` holds a user-supplied `FnOnce` body through its
-configured/painted lifecycle, and `ChildSlots` holds measured standard
-children across the gap between early preparation (so the focus claim can be
-answered) and rendering. `Dialog` is built on both; a custom composite can be
-too.
+That is the whole contract. A composite is an ordinary `Component`; there is no
+composite trait to implement and no lifecycle to opt into. What a composite does
+need is somewhere to keep what its builders were handed until `render` uses it,
+and a way to keep answering geometry questions once that is gone.
+
+**Caller-supplied bodies.** A region the caller fills is a closure, and it
+should be `FnOnce` so the caller can move owned values into it. Store it as
+`Option<Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>>` and `take()` it in
+`render`, then hand it the area you chose for it with
+`ctx.in_area(area, body)`. The body's children land in the composite's own
+sibling namespace, so ids must be unique across every body it declares.
+
+**Measured children.** A child the composite places itself has to be sized
+before it is declared. Accept it as `impl MeasuredComponent<S, M> + 'static`,
+call `measure()` in the builder, and keep the `Size` beside a closure that
+declares it:
+
+```rust
+struct ActionSlot<S, M> {
+    declare: Option<Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>, Rect)>>,
+    size: Size,
+}
+```
+
+The closure is what gets boxed, not the child: `Box<dyn Component>` does not
+itself implement `Component`, so box the `ctx.render_component(id, child, area)`
+call with the child and its id captured inside. `render` computes each area from
+the stored sizes and runs the closures in insertion order, which is also Tab
+order.
+
+**Geometry that outlives the closures.** `handle_event` runs on the retained
+instance, after `render` has taken every closure, and it still has to recompute
+the box the pointer landed in. So keep the layout *facts* — heights, measured
+sizes, the fact that a body was configured at all — in fields that taking a
+closure does not empty, and derive the rects from them in one function that
+`render`, `interaction_area`, and `handle_event` all call. Anything derived
+twice from two places will eventually disagree, and hit-testing is where that
+shows up.
+
+`Dialog` is the reference implementation of all three: a body that is either a
+description or a caller's closure, a footer that is either a caller's closure or
+a measured action row, a private `dims` every rect comes from, and border
+dragging that re-derives the box between frames. Copy `components/dialog.rs`
+into your own crate and edit it — the `copy-fixture` crate does exactly that
+with every copyable built-in and compiles them against `ratcn` as an ordinary
+external dependency, so nothing Dialog does is out of reach for a component of
+your own.
 
 ## Checklist
 

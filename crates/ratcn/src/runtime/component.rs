@@ -318,15 +318,16 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
 
     /// Run a declaration callback against an area override.
     ///
-    /// Advanced composite components use this to assign independently chosen
-    /// areas to their immediate children while preserving the current identity
-    /// scope. It is public so copied component modules can retain the same
-    /// runtime contract as their built-in counterpart.
+    /// This is how a composite hands a caller-supplied body the strip it laid
+    /// out for it: the callback sees `area` as its [`area`](Self::area), while
+    /// the identity scope stays the composite's, so anything the body declares
+    /// is an ordinary sibling of the composite's other children and shares
+    /// their id namespace. [`Dialog`](crate::Dialog) places its content and
+    /// footer bodies this way. Declaring nothing itself, it costs no identity.
     ///
     /// Not to be confused with [`EventCtx::with_area`], which is a builder
     /// setter: this one opens a sub-area for a callback and declares nothing of
     /// its own.
-    #[doc(hidden)]
     pub fn in_area(
         &mut self,
         area: Rect,
@@ -439,19 +440,6 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     ) {
         let (pass, env) = self.declaring(area, "render_component");
         pass.render_component(id.into(), component, env);
-    }
-
-    /// Render a component prepared before this composite's scope options were
-    /// resolved.
-    #[doc(hidden)]
-    pub fn render_prepared_component(
-        &mut self,
-        id: ChildId,
-        component: PreparedComponent<State, Msg>,
-        area: Rect,
-    ) {
-        let (pass, env) = self.declaring(area, "render_prepared_component");
-        pass.render_prepared_component(id, component, env);
     }
 
     /// Declare a component as a modal layer, painted above everything
@@ -913,46 +901,6 @@ impl TransientValue {
 
 pub(crate) type TransientMap = HashMap<Vec<ChildId>, TransientValue>;
 
-/// A component prepared before its parent composite declares descendants.
-///
-/// This supports advanced copyable composites such as `Dialog`.
-#[doc(hidden)]
-pub struct PreparedComponent<State, Msg> {
-    pub(crate) component: Box<dyn Component<State, Msg>>,
-    pub(crate) options: ScopeOptions,
-    pub(crate) self_focusable: bool,
-    pub(crate) focuses_on_click: bool,
-}
-
-impl<State, Msg> fmt::Debug for PreparedComponent<State, Msg> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PreparedComponent")
-            .field("self_focusable", &self.self_focusable)
-            .field("focuses_on_click", &self.focuses_on_click)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<State, Msg> PreparedComponent<State, Msg> {
-    /// Run [`Component::prepare`] against `state` and record the claims the
-    /// runtime must know before descendants are declared: the component's
-    /// [`ScopeOptions`], whether it can hold focus, and whether a click rather
-    /// than a press focuses it.
-    #[doc(hidden)]
-    pub fn prepare(mut component: Box<dyn Component<State, Msg>>, state: &State) -> Self {
-        component.prepare(state);
-        let options = component.scope_options();
-        let self_focusable = component.is_focusable(state);
-        let focuses_on_click = component.focuses_on_click(state);
-        Self {
-            component,
-            options,
-            self_focusable,
-            focuses_on_click,
-        }
-    }
-}
-
 /// The extra facilities a component gets while handling an event.
 ///
 /// Passed to [`Component::handle_event`] alongside the event and the app state.
@@ -1216,13 +1164,26 @@ pub enum Step {
 /// the instances [`handle_event`](Self::handle_event) is called on afterwards —
 /// possibly against app state newer than the one they were declared with.
 pub trait Component<State, Msg> {
-    /// Prepare this component from the state it is being declared with, before
-    /// [`scope_options`](Component::scope_options) is read.
+    /// Prepare this component from the state it is being declared with.
     ///
-    /// The hook exists for composites whose scope claims depend on their
-    /// children — `Dialog` decides here whether it will have focusable
-    /// descendants. Leaf components take their props as plain values at
-    /// declaration and can ignore it.
+    /// The runtime runs this once per declaration, before it reads any of
+    /// [`scope_options`](Component::scope_options),
+    /// [`is_focusable`](Component::is_focusable),
+    /// [`focuses_on_click`](Component::focuses_on_click), or
+    /// [`interaction_area`](Component::interaction_area) — so a component may
+    /// answer all four from state computed here.
+    ///
+    /// That is what the hook is for: pinning declaration-time state once,
+    /// rather than deriving it again in every answer.
+    /// [`Tooltip`](crate::Tooltip) and [`Select`](crate::Select) resolve here
+    /// whether they are open. It is also where the built-ins fail loud on a
+    /// malformed declaration — [`List`](crate::List), [`Select`](crate::Select),
+    /// and [`Tabs`](crate::Tabs) assert their item values are unique — so the
+    /// panic names the declaring component rather than surfacing later as a
+    /// routing oddity.
+    ///
+    /// Leaf components take their props as plain values at declaration and can
+    /// ignore it.
     fn prepare(&mut self, _state: &State) {}
 
     /// Paint the component. `ctx` carries the paint surface, area, app state,

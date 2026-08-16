@@ -418,11 +418,7 @@ impl<S, M> Tooltip<S, M> {
     /// Without a trigger the Tooltip paints nothing in its area and is only a
     /// hover target.
     #[must_use]
-    pub fn trigger(mut self, f: impl FnOnce(&mut RenderCtx<'_, '_, S, M>) + 'static) -> Self
-    where
-        S: 'static,
-        M: 'static,
-    {
+    pub fn trigger(mut self, f: impl FnOnce(&mut RenderCtx<'_, '_, S, M>) + 'static) -> Self {
         self.trigger = Some(Box::new(f));
         self
     }
