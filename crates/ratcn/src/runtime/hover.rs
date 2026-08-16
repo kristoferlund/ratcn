@@ -54,7 +54,7 @@ impl HoverState {
     /// inside that subtree.
     ///
     /// This is the app-side equivalent of the
-    /// [`RenderCtx::contains_hover`](super::RenderCtx::contains_hover) flag a
+    /// [`PaintCtx::contains_hover`](super::PaintCtx::contains_hover) flag a
     /// component sees.
     #[must_use]
     pub fn contains_path(&self, path: impl IntoIterator<Item = impl Into<ChildId>>) -> bool {

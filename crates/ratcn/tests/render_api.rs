@@ -2,8 +2,8 @@
 
 use ratatui::{Terminal, backend::TestBackend};
 use ratcn::runtime::{
-    ChildId, Component, Event, EventResult, FocusState, KeyCode, KeyEvent, Ratcn, RenderCtx,
-    ScopeOptions,
+    ChildId, Component, Event, EventResult, FocusState, KeyCode, KeyEvent, PaintCtx, Ratcn,
+    RenderCtx, ScopeOptions,
 };
 use ratcn::{Dialog, Theme};
 
@@ -23,6 +23,10 @@ struct Probe;
 
 impl Component<State, Msg> for Probe {
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, State, Msg>) {
+        assert_eq!(ctx.state().marker, 7);
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, State>) {
         assert_eq!(ctx.state().marker, 7);
         let area = ctx.area();
         ctx.with_buffer(|buf| assert!(buf.area.width >= area.width));

@@ -64,7 +64,7 @@ impl FocusState {
     /// inside that subtree.
     ///
     /// This is the app-side equivalent of the
-    /// [`RenderCtx::contains_focus`](super::RenderCtx::contains_focus) flag a
+    /// [`PaintCtx::contains_focus`](super::PaintCtx::contains_focus) flag a
     /// component sees, useful for things like accenting a pane whose contents
     /// hold focus.
     #[must_use]

@@ -492,10 +492,15 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
         let Some(area) = bubble_area(ctx.area(), bounds, self.side, width, height) else {
             return;
         };
+        // The bubble paints after the walk, so it has to own its text rather
+        // than borrow the declaration that sized it.
+        let text = self.text.clone();
         // A hint layer: painted above everything, and inert. The press it
         // floats over still reaches the trigger underneath.
         ctx.hint(BUBBLE_ID, ScopeOptions::default(), area, move |ctx| {
-            ctx.render_widget(widget, area);
+            ctx.paint(move |ctx| {
+                ctx.render_widget(TooltipWidget::new(&text).style(style), area);
+            });
         });
     }
 

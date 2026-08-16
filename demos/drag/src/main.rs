@@ -26,7 +26,7 @@ use ratcn::{
     color::darken,
     runtime::{
         self, CellOffset, Component, DragOptions, DragPhase, Event, EventCtx, EventResult,
-        HoverState, Ratcn, RenderCtx, clamp_offset, offset_rect,
+        HoverState, PaintCtx, Ratcn, RenderCtx, clamp_offset, offset_rect,
     },
 };
 
@@ -152,7 +152,9 @@ struct DraggableBlock {
 }
 
 impl Component<AppState, Msg> for DraggableBlock {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, AppState, Msg>) {
+    fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, AppState, Msg>) {}
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) {
         let area = ctx.area();
         let theme = ctx.theme;
         let background_color = if ctx.hovered {

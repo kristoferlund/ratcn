@@ -249,14 +249,16 @@ impl App {
 
                 let [text_area, list_area] = ctx.area().layout(&content_layout);
 
-                ctx.render_widget(
-                    Paragraph::new(
-                        "Select your favourite sci-fi writers. Use Up/Down to move and Enter to toggle a writer.",
-                    )
-                    .style(Style::default().fg(ctx.theme.muted_foreground))
-                    .wrap(Wrap { trim: true }),
-                    text_area,
-                );
+                ctx.paint(move |ctx| {
+                    ctx.render_widget(
+                        Paragraph::new(
+                            "Select your favourite sci-fi writers. Use Up/Down to move and Enter to toggle a writer.",
+                        )
+                        .style(Style::default().fg(ctx.theme.muted_foreground))
+                        .wrap(Wrap { trim: true }),
+                        text_area,
+                    );
+                });
 
                 ctx.render_component(
                     ids::WRITERS,

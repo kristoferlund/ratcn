@@ -11,12 +11,12 @@ Ratcn enters an app at two calls:
   successful declaration.
 
 The declaration is immediate Rust code. Build components from current state,
-split areas with Ratatui, paint decorative widgets directly, and register
-interactive components with `RenderCtx::render_component`:
+split areas with Ratatui, queue decorative widgets with `RenderCtx::paint`, and
+register interactive components with `RenderCtx::render_component`:
 
 ```rust
 ratcn.render(frame, &state, &state.theme, |ctx| {
-    ctx.render_widget(Paragraph::new("Account"), title_area);
+    ctx.paint(move |ctx| ctx.render_widget(Paragraph::new("Account"), title_area));
     ctx.render_component(
         "save",
         Button::new("Save")
@@ -33,11 +33,17 @@ if let EventResult::Emit(msg) = ratcn.handle_event(event, &state) {
 
 Everything inside the closure works through `&mut RenderCtx` — the same context
 type used by nested scopes, dialog sections, and component render hooks.
-`ctx.render_widget` paints any Ratatui widget immediately, `ctx.area()` is the
-area the current callback is responsible for, and `ctx.state()` is the app
-state for this declaration pass. Components you declare with `render_component` get
-an identity and can receive events; widgets you paint directly are decoration
-and cannot.
+`ctx.area()` is the area the current callback is responsible for, and
+`ctx.state()` is the app state for this declaration pass. Components you declare
+with `render_component` get an identity and can receive events; widgets you
+paint are decoration and cannot.
+
+Declaring does not draw. `ctx.paint` queues a `'static` closure at the point it
+was reached, and the runtime replays the whole queue in that order once the
+tree is complete and focus has resolved — so paint order is still declaration
+order, and the closure gets a `PaintCtx` carrying the theme, the state, the
+area, and the interaction flags rather than borrowing the declaration it came
+from.
 
 Declaring is also how things appear and disappear: an `if` around a
 `render_component` call adds or removes that component for the frame. There is

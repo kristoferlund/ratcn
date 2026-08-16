@@ -5,14 +5,17 @@ description: "Paint ordering and the three layer kinds in ratcn: hint, popup, an
 # Layers and modals
 
 Ratcn paints in declaration order: what you declare later paints on top of what
-you declared earlier. Two mechanisms go beyond that order — deferred paint for
-passive overlays, and **layers** for content that must float above everything.
-Pick the smallest one that does the job:
+you declared earlier. Nothing draws during the declaration itself — every paint
+is queued where it was reached and replayed in that order once the tree is
+complete — but the order you see on screen is the order you wrote. Two
+mechanisms go beyond that order — deferred paint for passive overlays, and
+**layers** for content that must float above everything. Pick the smallest one
+that does the job:
 
 | Mechanism | Paint time and purpose | Interaction |
 | --- | --- | --- |
-| Direct paint (`render_widget`) | Immediate; ordinary Ratatui decoration or paint-only widgets | None |
-| `render_component` | Immediate component paint in declaration order | Identity, geometry, focus, hover, events |
+| `paint` | Declaration order; ordinary Ratatui decoration or paint-only widgets | None |
+| `render_component` | Declaration order, the component before its descendants | Identity, geometry, focus, hover, events |
 | `defer_paint` | After the ordinary declarations in the current layer | Passive paint only |
 | `hint` | A layer that explains: tooltips | Paints only; not a pointer or focus target |
 | `popup` | A layer that offers a choice: dropdowns, menus | Own events; no dim, no capture, no focus stealing |
@@ -21,9 +24,9 @@ Pick the smallest one that does the job:
 Use `defer_paint` for passive overlays that must land on top of the current
 layer — a floating dragged card, say. The closure receives a `Painter` over the
 frame plus the app state; it has no identity and no hit target, so it cannot
-receive events, and it is not a way to defer an interactive component. Direct
-paint in the right declaration position is simpler when ordering already works
-out.
+receive events, and it is not a way to defer an interactive component. A
+`paint` closure in the right declaration position is simpler when ordering
+already works out.
 
 ## The three layer kinds
 

@@ -15,8 +15,8 @@ use ratcn::list_core::{
     self, ListItem, ListItemState, RowViewport, SCROLL_STEP, WheelPark, fit_to_height,
 };
 use ratcn::runtime::{
-    Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton, MouseKind, RenderCtx,
-    ScrollDirection,
+    Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton, MouseKind, PaintCtx,
+    RenderCtx, ScrollDirection,
 };
 use ratcn::selection_indicator;
 use ratcn::text_width::display_width;
@@ -494,7 +494,6 @@ pub struct List<T, S, M> {
     /// so hit-testing and wheel arithmetic work against what is on screen,
     /// never a second copy of app-owned scroll.
     viewport: RowViewport,
-    cursor_visible: bool,
 }
 
 impl<T: fmt::Debug, S, M> fmt::Debug for List<T, S, M> {
@@ -533,7 +532,6 @@ impl<T, S, M> List<T, S, M> {
             style: None,
             focus_symbol: String::new(),
             viewport: RowViewport::new(1),
-            cursor_visible: false,
         }
     }
 
@@ -866,41 +864,6 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for List<T, S, M> {
         let area = ctx.area();
         let state = ctx.state();
         let focused_row = self.focused_index(state);
-        let selected_rows = self.selected_rows(state);
-        let disabled_rows: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
-        let style = self.style.as_ref().map_or_else(
-            || ListStyle::from_theme(ctx.theme),
-            |style| style(ctx.theme),
-        );
-        self.cursor_visible = ctx.focused || ctx.hovered;
-        let selection_mode = if self.selected_many.is_some() {
-            Some(true)
-        } else if self.selected.is_some() {
-            Some(false)
-        } else {
-            None
-        };
-        let rows_per_item = self.viewport.rows_per_item();
-        let items: Vec<Text<'static>> = self
-            .items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                let row = ListItemState {
-                    index,
-                    value: item.value(),
-                    label: item.label(),
-                    focused: self.cursor_visible && focused_row == Some(index),
-                    selected: selected_rows.contains(&index),
-                    disabled: self.disabled || item.is_disabled(),
-                };
-                let text = match &self.render_item {
-                    Some(render_item) => render_item(state, row),
-                    None => default_item_line(&row, selection_mode, &style),
-                };
-                fit_to_height(text, rows_per_item)
-            })
-            .collect();
         // The wheel parks the view against the cursor it left behind. While
         // that cursor has not moved, the parked offset is painted as it is —
         // the wheel may leave the cursor off-screen. Once the cursor moves
@@ -927,14 +890,57 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for List<T, S, M> {
             *stored = park;
         }
         self.viewport.record_painted_offset(offset);
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+        let area = ctx.area();
+        let state = ctx.state();
+        let focused_row = self.focused_index(state);
+        let selected_rows = self.selected_rows(state);
+        let disabled_rows: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
+        let style = self.style.as_ref().map_or_else(
+            || ListStyle::from_theme(ctx.theme),
+            |style| style(ctx.theme),
+        );
+        // One cursor, shown while the list is either focused or under the
+        // pointer; where it sits was decided during declaration.
+        let cursor_visible = ctx.focused || ctx.hovered;
+        let selection_mode = if self.selected_many.is_some() {
+            Some(true)
+        } else if self.selected.is_some() {
+            Some(false)
+        } else {
+            None
+        };
+        let rows_per_item = self.viewport.rows_per_item();
+        let items: Vec<Text<'static>> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let row = ListItemState {
+                    index,
+                    value: item.value(),
+                    label: item.label(),
+                    focused: cursor_visible && focused_row == Some(index),
+                    selected: selected_rows.contains(&index),
+                    disabled: self.disabled || item.is_disabled(),
+                };
+                let text = match &self.render_item {
+                    Some(render_item) => render_item(state, row),
+                    None => default_item_line(&row, selection_mode, &style),
+                };
+                fit_to_height(text, rows_per_item)
+            })
+            .collect();
         ctx.render_widget(
             ListWidget::new(&items)
-                .scroll_offset(offset)
+                .scroll_offset(self.viewport.painted_offset())
                 .focused_row(focused_row)
                 .selected_rows(&selected_rows)
                 .disabled_rows(&disabled_rows)
                 .style(style)
-                .focused(self.cursor_visible)
+                .focused(cursor_visible)
                 .hovered(ctx.hovered)
                 .disabled(self.disabled)
                 .focus_symbol(&self.focus_symbol),

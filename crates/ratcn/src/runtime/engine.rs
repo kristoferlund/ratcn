@@ -16,9 +16,9 @@ use crate::backdrop::dim_background;
 
 use super::{
     ChildId, Component, Event, EventCtx, EventResult, FocusState, HoverState, KeyCode, KeyEvent,
-    ModalState, MouseButton, MouseEvent, MouseKind, MouseTracker, Painter, RenderCtx, ScopeOptions,
-    Step, TabWrap,
-    component::{PaintTarget, TransientMap},
+    ModalState, MouseButton, MouseEvent, MouseKind, MouseTracker, PaintCtx, Painter, RenderCtx,
+    ScopeOptions, Step, TabWrap,
+    component::{InteractionFlags, PaintTarget, TransientMap},
 };
 
 struct FocusBinding<State, Msg> {
@@ -756,19 +756,64 @@ impl<State, Msg> Surface<State, Msg> {
 
 type DeferredPaint<State> = Box<dyn FnOnce(&mut Painter<'_, '_>, &State)>;
 
+type PaintThunk<State> = Box<dyn FnOnce(&mut PaintCtx<'_, '_, State>)>;
+
+/// One entry of the frame's paint queue: what to draw, and where it lands.
+///
+/// Declaring and drawing are separate walks. The declaration walk queues
+/// these in the order it reaches them and draws nothing; [`RenderPass::replay_paint`]
+/// runs the queue afterwards, when the tree is complete and focus has
+/// resolved. Order in the queue is therefore the paint order, and a
+/// component is queued where it opens, so its own paint precedes its
+/// descendants'.
+struct QueuedPaint<State> {
+    /// Index into `RenderPass::canvases`, or `None` to paint on the frame.
+    /// Fixed where the op was queued, so an op belongs to the layer that was
+    /// open at its declaration whatever is open at replay.
+    canvas: Option<usize>,
+    op: PaintOp<State>,
+}
+
+enum PaintOp<State> {
+    /// Call [`Component::paint`] on the component installed at this node.
+    Node { index: usize, site: PaintSite },
+    /// Run a closure queued through [`RenderCtx::paint`].
+    Thunk {
+        site: PaintSite,
+        paint: PaintThunk<State>,
+    },
+    /// Run the deferred thunks registered in `layer`, at the point that
+    /// layer's declaration closed — which is what keeps [`RenderCtx::defer_paint`]
+    /// above its layer's content.
+    FlushDeferred { layer: usize },
+}
+
+/// The two things replay can hand a [`PaintCtx`] to, once the op that named
+/// them has been resolved against the pass. Exists so both are given the
+/// context by one piece of code rather than two.
+enum PaintBody<'a, State, Msg> {
+    Component(&'a mut dyn Component<State, Msg>),
+    Thunk(PaintThunk<State>),
+}
+
+/// The declaration facts a queued op paints with, captured where it was
+/// queued rather than recomputed at replay: these are the walk's own values,
+/// and there is nothing for them to be derived from twice.
+#[derive(Debug, Clone, Copy)]
+struct PaintSite {
+    area: Rect,
+    flags: InteractionFlags,
+}
+
 /// Interaction flags for one identified declaration, derived from its path.
-/// The single source for the leaf/within pairs reported through [`RenderCtx`].
-fn interaction_flags(
-    path: &[ChildId],
-    focus: &FocusState,
-    hover: &HoverState,
-) -> (bool, bool, bool, bool) {
-    (
-        focus.path() == path,
-        focus.path().starts_with(path),
-        hover.path() == path,
-        hover.path().starts_with(path),
-    )
+/// The single source for the leaf/within pairs reported through [`PaintCtx`].
+fn interaction_flags(path: &[ChildId], focus: &FocusState, hover: &HoverState) -> InteractionFlags {
+    InteractionFlags {
+        focused: focus.path() == path,
+        contains_focus: focus.path().starts_with(path),
+        hovered: hover.path() == path,
+        contains_hover: hover.path().starts_with(path),
+    }
 }
 
 /// An identity path formatted as `a/b/c`, for panic messages.
@@ -956,17 +1001,17 @@ pub(crate) struct RenderPass<State, Msg> {
     /// base layer's flush onto the frame after every canvas has composited,
     /// which is what makes root-level `defer_paint` the topmost slot.
     deferred: Vec<(usize, DeferredPaint<State>)>,
-    /// The focus the pass reports through `ctx.focused`/`contains_focus`: the
-    /// resolved path in the paint pass; the raw app snapshot in the structure
-    /// pass, where the flags are provisional and paint is suppressed anyway.
+    /// Every paint this frame owes, in the order the declaration walk reached
+    /// it, replayed by [`Self::replay_paint`] once the walk is over. Built
+    /// only in the paint pass.
+    paint_queue: Vec<QueuedPaint<State>>,
+    /// The focus the pass reports through the interaction flags: the resolved
+    /// path in the paint pass; the raw app snapshot in the structure pass,
+    /// where the flags are provisional and nothing is queued anyway.
     focus: FocusState,
     /// Pointer position available during declaration without changing app-owned
     /// hover state.
     hover_position: Option<Position>,
-    /// Scratch cell buffer lent to [`RenderCtx::with_buffer`] callers during
-    /// the structure pass, so their closures run (their return values may
-    /// feed declarations) without touching the frame.
-    scratch: Option<Buffer>,
     /// Set when any declaration region unwinds — see [`Self::guarded`]. A
     /// poisoned pass can keep declaring (a component may have caught the
     /// panic) but can never commit.
@@ -1009,9 +1054,9 @@ impl<State, Msg> RenderPass<State, Msg> {
             parent_stack: Vec::new(),
             path_cursor: Vec::new(),
             deferred: Vec::new(),
+            paint_queue: Vec::new(),
             focus,
             hover_position: None,
-            scratch: None,
             failed: Rc::new(Cell::new(false)),
             layers_declared: 0,
             layer_stack: Vec::new(),
@@ -1050,10 +1095,53 @@ impl<State, Msg> RenderPass<State, Msg> {
         self.path_cursor.pop();
     }
 
-    /// The canvas paint currently routes to, or `None` for the frame.
-    pub(crate) fn active_canvas_mut(&mut self) -> Option<&mut LayerCanvas> {
-        let index = self.canvas_stack.last().copied()?;
-        Some(&mut self.canvases[index])
+    /// The canvas the ops queued right now belong to, or `None` for the
+    /// frame.
+    fn active_canvas(&self) -> Option<usize> {
+        self.canvas_stack.last().copied()
+    }
+
+    /// Queue an op for the layer currently being declared into. A no-op in
+    /// the structure pass, which declares the same tree and draws none of it.
+    fn queue(&mut self, op: PaintOp<State>) {
+        if self.paints() {
+            let canvas = self.active_canvas();
+            self.paint_queue.push(QueuedPaint { canvas, op });
+        }
+    }
+
+    /// Queue a closure registered through [`RenderCtx::paint`]. The structure
+    /// pass queues nothing, so the closure is dropped here rather than boxed.
+    pub(crate) fn queue_thunk(
+        &mut self,
+        area: Rect,
+        flags: InteractionFlags,
+        paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static,
+    ) {
+        if self.paints() {
+            self.queue(PaintOp::Thunk {
+                site: PaintSite { area, flags },
+                paint: Box::new(paint),
+            });
+        }
+    }
+
+    /// Queue the just-opened node's own paint. `area` is its paint
+    /// allocation, which [`Component::interaction_area`] may have narrowed
+    /// for the node itself but never for what it draws.
+    fn queue_node(&mut self, index: usize, area: Rect, hover: &HoverState) {
+        if !self.paints() {
+            return;
+        }
+        let flags = self
+            .current_path()
+            .map_or_else(InteractionFlags::default, |path| {
+                interaction_flags(path, &self.focus, hover)
+            });
+        self.queue(PaintOp::Node {
+            index,
+            site: PaintSite { area, flags },
+        });
     }
 
     /// Open a layer, declare its root subtree through `declare_root`, and
@@ -1063,20 +1151,13 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// recorded *before* the subtree declares, so a layer declared inside this
     /// one lands after it and `layer_roots` reads outermost-first — which is
     /// what makes `top_layer_root` find the innermost.
-    fn layer(
-        &mut self,
-        kind: LayerKind,
-        area: Rect,
-        theme: &Theme,
-        state: &State,
-        declare_root: impl FnOnce(&mut Self, usize),
-    ) {
+    fn layer(&mut self, kind: LayerKind, area: Rect, declare_root: impl FnOnce(&mut Self, usize)) {
         self.begin_layer(kind, area);
         let index = self.surface.nodes.len();
         self.surface.layer_roots.push(index);
         declare_root(self, index);
         self.surface.nodes[index].layer_kind = Some(kind);
-        self.end_layer(theme, state);
+        self.end_layer();
     }
 
     /// Open a layer: subsequent declarations carry its tag, and (in the paint
@@ -1094,18 +1175,21 @@ impl<State, Msg> RenderPass<State, Msg> {
         }
     }
 
-    /// Close the innermost layer, flushing its deferred paint into its canvas.
-    fn end_layer(&mut self, theme: &Theme, state: &State) {
+    /// Close the innermost layer, queueing its deferred paint behind
+    /// everything the layer declared.
+    fn end_layer(&mut self) {
         let layer = self
             .layer_stack
             .pop()
             .expect("end_layer closes a layer begin_layer opened");
         if self.paints() {
-            let canvas_index = self
-                .canvas_stack
+            // Queued rather than run here: the layer's own content has only
+            // been queued so far, and deferred paint has to land on top of
+            // it.
+            self.queue(PaintOp::FlushDeferred { layer });
+            self.canvas_stack
                 .pop()
                 .expect("paint pass opened a canvas for this layer");
-            self.flush_deferred_for(layer, theme, state, canvas_index);
         }
     }
 
@@ -1141,12 +1225,6 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// same tree but paints nothing.
     pub(crate) const fn paints(&self) -> bool {
         matches!(self.kind, PassKind::Paint { .. })
-    }
-
-    /// The scratch buffer lent to [`RenderCtx::with_buffer`] during the
-    /// structure pass, sized like `area` and reused across calls.
-    pub(crate) fn scratch_buffer(&mut self, area: Rect) -> &mut Buffer {
-        self.scratch.get_or_insert_with(|| Buffer::empty(area))
     }
 
     /// Run `f` as one declaration region: if it unwinds — a panicking
@@ -1313,6 +1391,11 @@ impl<State, Msg> RenderPass<State, Msg> {
             // what it responds to without narrowing where it draws.
             let index = pass.begin_node(id, interaction_area, options, role);
             pass.enter_node(index);
+            // Queued before the subtree declares, so the component's own
+            // paint replays ahead of its descendants' — the paint-before-
+            // children contract, kept by position in the queue rather than by
+            // each component's care.
+            pass.queue_node(index, area, env.hover);
             pass.declare(env.nested(area), |ctx| component.render(ctx));
             pass.leave_node();
             pass.surface.nodes[index].component = Some(component);
@@ -1340,8 +1423,8 @@ impl<State, Msg> RenderPass<State, Msg> {
     ) {
         self.guarded(|pass| {
             pass.assert_unique_modal_id(&id);
-            let (area, theme, state) = (env.area, env.theme, env.state);
-            pass.layer(LayerKind::Modal, area, theme, state, |pass, _| {
+            let area = env.area;
+            pass.layer(LayerKind::Modal, area, |pass, _| {
                 pass.render_component(id, component, env);
             });
         });
@@ -1358,8 +1441,8 @@ impl<State, Msg> RenderPass<State, Msg> {
     ) {
         self.guarded(|pass| {
             pass.assert_unique_modal_id(&id);
-            let (area, theme, state) = (env.area, env.theme, env.state);
-            pass.layer(LayerKind::Modal, area, theme, state, |pass, _| {
+            let area = env.area;
+            pass.layer(LayerKind::Modal, area, |pass, _| {
                 pass.scope(id, options, env, declare);
             });
         });
@@ -1385,8 +1468,8 @@ impl<State, Msg> RenderPass<State, Msg> {
             "a dismiss hook on a layer kind that never dismisses"
         );
         self.guarded(|pass| {
-            let (area, theme, state) = (env.area, env.theme, env.state);
-            pass.layer(kind, area, theme, state, |pass, index| {
+            let area = env.area;
+            pass.layer(kind, area, |pass, index| {
                 pass.scope(id, options, env, declare);
                 pass.surface.nodes[index].on_dismiss = on_dismiss;
             });
@@ -1433,9 +1516,9 @@ impl<State, Msg> RenderPass<State, Msg> {
             depth,
         } = env;
         let hover_position = self.hover_position;
-        let (focused, contains_focus, hovered, contains_hover) = self
+        let flags = self
             .current_path()
-            .map_or((false, false, false, false), |path| {
+            .map_or_else(InteractionFlags::default, |path| {
                 interaction_flags(path, &self.focus, hover)
             });
         self.guarded(|pass| {
@@ -1443,10 +1526,7 @@ impl<State, Msg> RenderPass<State, Msg> {
                 frame,
                 area,
                 theme,
-                focused,
-                contains_focus,
-                hovered,
-                contains_hover,
+                flags,
                 hover_position,
                 hover,
                 transients,
@@ -1465,6 +1545,70 @@ impl<State, Msg> RenderPass<State, Msg> {
         // The structure pass paints nothing, deferred or otherwise.
         if self.paints() {
             self.deferred.push((self.current_layer(), Box::new(paint)));
+        }
+    }
+
+    /// Draw the frame: run every queued op in declaration order, each onto
+    /// the surface its declaration belonged to.
+    ///
+    /// This is the whole of the paint pass's painting apart from
+    /// compositing. Running it here rather than during the walk is what lets
+    /// paint read the resolved focus and the completed tree, and it is why
+    /// [`Component::paint`] runs once per frame while
+    /// [`Component::render`] runs twice.
+    ///
+    /// Only a pass that has already passed every check gets here, so the
+    /// queue is either run whole or not at all: an already-poisoned pass draws
+    /// nothing rather than putting a frame on screen that no event will route
+    /// against. Each op is then guarded exactly as deferred paint is — a
+    /// panicking paint poisons the pass, and the cells it wrote before
+    /// panicking are the one thing that cannot be taken back.
+    fn replay_paint(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
+        if self.failed.get() {
+            return;
+        }
+        for queued in std::mem::take(&mut self.paint_queue) {
+            let QueuedPaint { canvas, op } = queued;
+            let frame = &mut *frame;
+            self.guarded(|pass| {
+                let (site, paint) = match op {
+                    PaintOp::FlushDeferred { layer } => {
+                        let index = canvas.expect("a layer's flush names that layer's canvas");
+                        pass.flush_deferred_for(layer, theme, state, index);
+                        return;
+                    }
+                    PaintOp::Node { index, site } => {
+                        // Unreachable: only a caught declaration panic leaves
+                        // a node without its component, and that pass is
+                        // poisoned before replay is reached at all.
+                        let Some(component) = pass.surface.nodes[index].component.as_deref_mut()
+                        else {
+                            return;
+                        };
+                        (site, PaintBody::Component(component))
+                    }
+                    PaintOp::Thunk { site, paint } => (site, PaintBody::Thunk(paint)),
+                };
+                let target = match canvas {
+                    Some(index) => PaintTarget::Canvas(&mut pass.canvases[index]),
+                    None => PaintTarget::Frame(frame),
+                };
+                let mut ctx = PaintCtx {
+                    target,
+                    theme,
+                    area: site.area,
+                    focused: site.flags.focused,
+                    contains_focus: site.flags.contains_focus,
+                    hovered: site.flags.hovered,
+                    contains_hover: site.flags.contains_hover,
+                    hover_position: pass.hover_position,
+                    state,
+                };
+                match paint {
+                    PaintBody::Component(component) => component.paint(&mut ctx),
+                    PaintBody::Thunk(paint) => paint(&mut ctx),
+                }
+            });
         }
     }
 
@@ -1592,9 +1736,12 @@ impl<State, Msg> RenderPass<State, Msg> {
 ///   one case where a stale layer would be wrong: events are consumed rather
 ///   than routed while the app's modal stack and the surface's disagree.
 ///
-/// Replacement is atomic. If a declaration panics or fails validation the
-/// previous surface stays in charge, though anything already written to the
-/// [`Frame`] is on screen and cannot be taken back.
+/// Replacement is atomic, and so is the frame. A pass that panics or fails
+/// validation leaves the previous surface in charge *and* the previous frame
+/// on screen: declaring does not draw, and every reason to reject a pass is
+/// known before the first cell is written. The one thing that cannot be taken
+/// back is a panic thrown by painting itself, after the pass had already been
+/// accepted.
 pub struct Ratcn<State, Msg> {
     surface: Surface<State, Msg>,
     has_rendered: bool,
@@ -1904,49 +2051,61 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// `declare` closure is the whole UI for this frame: build components from
     /// `state`, place them with
     /// [`render_component`](RenderCtx::render_component), group them with
-    /// [`scope`](RenderCtx::scope), paint whatever else you like. Nothing is
-    /// retained between frames, so there is no widget tree to keep in sync —
-    /// what you declare is what exists.
+    /// [`scope`](RenderCtx::scope), queue whatever else you want drawn with
+    /// [`paint`](RenderCtx::paint). Nothing is retained between frames, so
+    /// there is no widget tree to keep in sync — what you declare is what
+    /// exists.
     ///
     /// The pass has to finish completely before it counts: declaration,
     /// component paint, runtime validation, and deferred paint all have to
     /// succeed. Only then does the new surface replace the old one, and it
     /// happens in one step. A pass that panics or fails validation leaves the
     /// previous surface handling events, so a bad frame degrades interaction to
-    /// "one frame stale" rather than breaking it. What cannot be undone is the
-    /// painting itself: frame writes go out as they are made.
+    /// "one frame stale" rather than breaking it — and it leaves the previous
+    /// *frame* too. Declaration, validation, and the modal-stack check all
+    /// finish before the first cell is written, so a rejected pass never
+    /// reaches the screen. Only a panic thrown by painting itself, once the
+    /// pass has been accepted, can leave cells behind.
+    ///
+    /// # Declaring, then drawing
+    ///
+    /// Nothing draws while the closure runs. Declaration records what exists
+    /// and where; [`Component::paint`] and the closures
+    /// [`RenderCtx::paint`] queues are replayed afterwards, in the order the
+    /// declaration reached them. Paint therefore sees a complete tree and a
+    /// resolved focus, which is what makes its interaction flags trustworthy
+    /// — and it runs once per frame, where declaration runs twice.
     ///
     /// # Ordering within the pass
     ///
-    /// Declaration order is meaningful. It sets Tab order, and it sets
+    /// Declaration order is meaningful. It sets Tab order, it sets paint
+    /// order — a component draws before its own descendants — and it sets
     /// hit-testing order, with later declarations on top — within one layer.
-    /// [`modal`](RenderCtx::modal) and [`popup`](RenderCtx::popup) layers are
-    /// exempt from paint order: each paints into its own canvas, and canvases
-    /// composite over the frame in the order the layers were declared, so
-    /// base content declared *after* a layer still paints beneath it. Layers
-    /// may therefore be declared from anywhere in the tree, whenever their
-    /// owner declares.
+    /// [`modal`](RenderCtx::modal), [`popup`](RenderCtx::popup), and
+    /// [`hint`](RenderCtx::hint) layers are exempt from paint order: each
+    /// paints into its own canvas, and canvases composite over the frame in
+    /// the order the layers were declared, so base content declared *after* a
+    /// layer still paints beneath it. Layers may therefore be declared from
+    /// anywhere in the tree, whenever their owner declares.
     ///
     /// # Two passes, one closure
     ///
     /// The closure runs twice per frame. The first run is the **structure
-    /// pass**: it declares the full tree with every paint call suppressed, so
-    /// the runtime learns identity, geometry, and focusability before anything
-    /// is drawn. Focus then resolves against that complete tree. The second
-    /// run is the **paint pass**: the same declarations again, painted for
-    /// real, with the resolved focus feeding [`RenderCtx::focused`] and
-    /// [`contains_focus`](RenderCtx::contains_focus).
+    /// pass**: it declares the full tree and queues nothing, so the runtime
+    /// learns identity, geometry, and focusability before anything is drawn.
+    /// Focus then resolves against that complete tree. The second run is the
+    /// **paint pass**: the same declarations again, this time building the
+    /// paint queue that is replayed when it ends.
     ///
     /// This puts one contract on the closure: **it must declare the same tree
     /// both times.** Declared structure — which components exist, their ids,
     /// their areas — may depend on anything in `state`, including app-held
-    /// focus, but must not depend on the pass-computed focus flags, which
-    /// legitimately differ between the passes (they are provisional in the
-    /// structure pass). Style and paint may of course use the flags; that is
-    /// what they are for. The runtime validates the contract by comparing the
-    /// two passes' trees and panics naming the first divergent declaration,
-    /// which also catches accidental impurity — mutation through an
-    /// `Rc<RefCell>` app handle, a closure that consumes an iterator.
+    /// focus. It cannot depend on the interaction flags, which are not
+    /// available while declaring at all: they reach paint only, through
+    /// [`PaintCtx`]. The runtime validates the contract by comparing the two
+    /// passes' trees and panics naming the first divergent declaration, which
+    /// also catches accidental impurity — mutation through an `Rc<RefCell>`
+    /// app handle, a closure that consumes an iterator.
     ///
     /// Because the closure is `FnMut` and runs twice, values it moves into
     /// components must be constructible twice — clone per run rather than
@@ -2013,24 +2172,32 @@ impl<State, Msg> Ratcn<State, Msg> {
             DeclarationEnv::root(frame, state, theme, &hover, &mut self.transients),
             &mut declare,
         );
+        // Every reason to reject a pass is known once declaration ends, and
+        // nothing has painted yet — so the checks run first and a rejected
+        // pass never reaches the screen at all.
         pass.assert_valid();
+        self.assert_modal_stack(&pass.surface, state);
+        pass.replay_paint(frame, state, theme);
         pass.finish_frame(frame, state, theme);
         let next = pass.finish();
-        self.assert_modal_stack(&next, state);
         self.commit_surface(next, &stored_hover);
     }
 
     /// Every declared modal root must match the app-owned [`ModalState`], in
-    /// order, before a surface is committed. The stack is what event routing
-    /// compares against to detect the stale window between an app opening or
-    /// closing a modal and the redraw that shows it, so a surface that
-    /// disagrees with it would make that check meaningless.
-    fn assert_modal_stack(&self, next: &Surface<State, Msg>, state: &State) {
+    /// order, before a surface paints or is committed. The stack is what event
+    /// routing compares against to detect the stale window between an app
+    /// opening or closing a modal and the redraw that shows it, so a surface
+    /// that disagrees with it would make that check meaningless.
+    ///
+    /// It reads declaration facts alone — which nodes root a modal layer, and
+    /// their ids — so it can be answered the moment declaration ends, before
+    /// anything is drawn.
+    fn assert_modal_stack(&self, surface: &Surface<State, Msg>, state: &State) {
         let Some(binding) = &self.modal_binding else {
             return;
         };
         let semantic = (binding.read)(state).ids();
-        let declared = next.modal_roots().map(|index| &next.nodes[index].id);
+        let declared = surface.modal_roots().map(|index| &surface.nodes[index].id);
         assert!(
             semantic.iter().eq(declared),
             "declared modal roots do not match app-owned modal ids: expected {semantic:?}"
@@ -2842,7 +3009,7 @@ mod tests {
         panic::{AssertUnwindSafe, catch_unwind},
         sync::{
             Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
 
@@ -3010,7 +3177,9 @@ mod tests {
     }
 
     impl Component<ModalTestState, ModalTestMsg> for ModalFocusRoute {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, ModalTestState, ModalTestMsg>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, ModalTestState, ModalTestMsg>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
             self.rendered
                 .lock()
                 .expect("modal focus render log")
@@ -3110,7 +3279,9 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for FocusLeaf {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             if let Some(rendered) = &self.rendered {
                 rendered
                     .lock()
@@ -3288,7 +3459,9 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             self.rendered
                 .lock()
                 .expect("empty composite render log")
@@ -3308,15 +3481,18 @@ mod tests {
     impl Component<FocusTestState, FocusTestMsg> for FocusComposite {
         fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
-            self.parent_rendered
-                .lock()
-                .expect("parent render log")
-                .push((ctx.focused, ctx.contains_focus));
             ctx.render_component(
                 ChildId::Static("child"),
                 FocusLeaf::recording(Arc::clone(&self.child_rendered)),
                 area,
             );
+        }
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
+            self.parent_rendered
+                .lock()
+                .expect("parent render log")
+                .push((ctx.focused, ctx.contains_focus));
         }
 
         fn handle_event(
@@ -3414,7 +3590,7 @@ mod tests {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     assert_eq!(ctx.area(), root_area);
                     assert_eq!(*ctx.state(), state);
-                    assert!(!ctx.contains_focus);
+                    ctx.paint(|ctx| assert!(!ctx.contains_focus));
                     let scope_contains_focus = Arc::clone(&scope_contains_focus);
                     ctx.scope(
                         ChildId::Static("scope"),
@@ -3423,10 +3599,13 @@ mod tests {
                         move |ctx| {
                             assert_eq!(ctx.area(), scope_area);
                             assert_eq!(*ctx.state(), state);
-                            scope_contains_focus
-                                .lock()
-                                .expect("scope flag log")
-                                .push(ctx.contains_focus);
+                            ctx.paint(move |ctx| {
+                                assert_eq!(ctx.area(), scope_area);
+                                scope_contains_focus
+                                    .lock()
+                                    .expect("scope flag log")
+                                    .push(ctx.contains_focus);
+                            });
                             ctx.render_component(
                                 ChildId::Static("probe"),
                                 ContextProbe {
@@ -3444,12 +3623,11 @@ mod tests {
                 });
             })
             .expect("draw");
-        // False in both passes: startup focus resolves against the complete
-        // tree, and the modal — already known before anything paints — takes
-        // it, so the base scope never even provisionally contains focus.
+        // Paint runs once, after focus resolves: the modal takes it, so the
+        // base scope does not contain it.
         assert_eq!(
             *scope_contains_focus.lock().expect("scope flag log"),
-            [false, false]
+            [false]
         );
     }
 
@@ -3965,34 +4143,37 @@ mod tests {
     }
 
     #[test]
-    fn structure_pass_suppresses_paint_and_the_paint_pass_draws() {
+    fn the_closure_declares_twice_and_queued_paint_runs_once_on_the_frame() {
         let mut ratcn = Ratcn::<(), ()>::new();
         let mut terminal = Terminal::new(TestBackend::new(6, 1)).expect("terminal");
         let theme = Theme::default_dark();
-        let mut scratch_seen = Vec::new();
+        let declared = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(Mutex::new(Vec::new()));
 
         terminal
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &(), &theme, |ctx| {
-                    // `with_buffer` must run its closure in both passes (its
-                    // return value may feed declarations), against a scratch
-                    // buffer in the structure pass.
-                    let before = ctx.with_buffer(|buf| {
-                        buf.cell((0, 0)).expect("probe cell").symbol().to_owned()
-                    });
-                    scratch_seen.push(before);
-                    ctx.with_buffer(|buf| {
-                        buf.cell_mut((0, 0)).expect("probe cell").set_symbol("X");
+                    declared.fetch_add(1, Ordering::SeqCst);
+                    let seen = Arc::clone(&seen);
+                    ctx.paint(move |ctx| {
+                        let before = ctx.with_buffer(|buf| {
+                            buf.cell((0, 0)).expect("probe cell").symbol().to_owned()
+                        });
+                        seen.lock().expect("probe log").push(before);
+                        ctx.with_buffer(|buf| {
+                            buf.cell_mut((0, 0)).expect("probe cell").set_symbol("X");
+                        });
                     });
                     ctx.render_component(ChildId::Static("leaf"), Leaf, area);
                 });
             })
             .expect("draw");
 
-        // The structure pass saw (and wrote) only scratch cells; the paint
-        // pass read the frame before writing to it.
-        assert_eq!(scratch_seen, [" ", " "]);
+        // Both passes declared; the queued paint ran once, and it read and
+        // wrote the frame itself rather than any scratch surface.
+        assert_eq!(declared.load(Ordering::SeqCst), 2);
+        assert_eq!(*seen.lock().expect("probe log"), [" "]);
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer.cell((0, 0)).expect("painted cell").symbol(), "X");
     }
@@ -4295,13 +4476,11 @@ mod tests {
             })
             .expect("draw");
 
-        // The structure pass reports provisional flags (the stored path is
-        // empty, so nothing is focused); the paint pass reports the resolved
-        // focus — startup focus landed on the first leaf, and that is what
-        // painted.
+        // Paint reports the resolved focus, once per leaf: startup focus
+        // landed on the first, and that is what painted focused.
         assert_eq!(
             *rendered.lock().expect("render log"),
-            vec![(false, false), (false, false), (true, true), (false, false)]
+            vec![(true, true), (false, false)]
         );
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
@@ -4359,12 +4538,9 @@ mod tests {
         // agree because both come from the same resolution.
         assert_eq!(
             *collapsed.lock().expect("collapsed render log"),
-            [(false, false), (false, false)]
+            [(false, false)]
         );
-        assert_eq!(
-            *visible.lock().expect("visible render log"),
-            [(false, false), (true, true)]
-        );
+        assert_eq!(*visible.lock().expect("visible render log"), [(true, true)]);
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(FocusTestMsg::Activated(vec![ChildId::Static("visible")])),
@@ -4402,14 +4578,8 @@ mod tests {
 
         // Startup focus resolves once, against the complete tree — the modal
         // is already known, so only the modal paints focused.
-        assert_eq!(
-            *base.lock().expect("base focus log"),
-            [(false, false), (false, false)]
-        );
-        assert_eq!(
-            *modal.lock().expect("modal focus log"),
-            [(false, false), (true, true)]
-        );
+        assert_eq!(*base.lock().expect("base focus log"), [(false, false)]);
+        assert_eq!(*modal.lock().expect("modal focus log"), [(true, true)]);
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(FocusTestMsg::Activated(vec![ChildId::Static("modal")]))
@@ -4445,11 +4615,11 @@ mod tests {
 
         assert_eq!(
             *parent_rendered.lock().expect("parent render log"),
-            vec![(false, false), (false, true)]
+            vec![(false, true)]
         );
         assert_eq!(
             *child_rendered.lock().expect("child render log"),
-            vec![(false, false), (true, true)]
+            vec![(true, true)]
         );
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('p'))), &state),
@@ -4489,11 +4659,11 @@ mod tests {
 
         assert_eq!(
             *empty_rendered.lock().expect("empty composite render log"),
-            vec![(false, false), (false, false)]
+            vec![(false, false)]
         );
         assert_eq!(
             *leaf_rendered.lock().expect("leaf render log"),
-            vec![(false, false), (true, true)]
+            vec![(true, true)]
         );
 
         empty_rendered
@@ -4517,7 +4687,7 @@ mod tests {
             .expect("draw");
         assert_eq!(
             *empty_rendered.lock().expect("empty composite render log"),
-            vec![(false, false), (true, true)]
+            vec![(true, true)]
         );
     }
 
@@ -5420,7 +5590,9 @@ mod tests {
     }
 
     impl Component<ModalPointerState, PointerMsg> for ModalHoverLeaf {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, ModalPointerState, PointerMsg>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, ModalPointerState, PointerMsg>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalPointerState>) {
             self.rendered
                 .lock()
                 .expect("modal hover render log")
@@ -5435,7 +5607,9 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for HoverLeaf {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
             if let Some(rendered) = &self.rendered {
                 rendered
                     .lock()
@@ -6490,10 +6664,12 @@ mod tests {
                             Rect::new(3, 0, 5, 2),
                             ScopeOptions::default().focusable(),
                             move |ctx| {
-                                rendered
-                                    .lock()
-                                    .expect("scope render log")
-                                    .push((ctx.hovered, ctx.contains_hover));
+                                ctx.paint(move |ctx| {
+                                    rendered
+                                        .lock()
+                                        .expect("scope render log")
+                                        .push((ctx.hovered, ctx.contains_hover));
+                                });
                             },
                         );
                     });
@@ -6509,12 +6685,11 @@ mod tests {
         };
         state.hover = hover;
         render(&mut ratcn, &mut terminal, &state);
-        // Frame one: unfocused in both passes. Frame two: the app-held focus
-        // now names the scope, so even the structure pass's provisional flags
-        // match, and the paint pass confirms.
+        // Frame one: not hovered. Frame two: the pointer rests on the scope,
+        // and paint — which runs once, after hover has resolved — sees it.
         assert_eq!(
             *rendered.lock().expect("scope render log"),
-            [(false, false), (false, false), (true, true), (true, true)]
+            [(false, false), (true, true)]
         );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 4, 0), &state),
@@ -7335,16 +7510,7 @@ mod tests {
 
         assert_eq!(
             *rendered.lock().expect("hover render log"),
-            [
-                (false, false),
-                (false, false),
-                (true, true),
-                (true, true),
-                (true, true),
-                (true, true),
-                (false, false),
-                (false, false),
-            ]
+            [(false, false), (true, true), (true, true), (false, false)]
         );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
@@ -7474,20 +7640,11 @@ mod tests {
         render_target(&mut ratcn, &mut terminal);
         render_target(&mut ratcn, &mut terminal);
 
-        // Two entries per successful render (structure pass, then paint pass);
-        // hover is not re-resolved between the passes, so each pair agrees.
+        // One entry per successful render; the failed pass painted nothing
+        // and so recorded nothing.
         assert_eq!(
             *rendered.lock().expect("hover render log"),
-            vec![
-                (true, true),
-                (true, true),
-                (true, true),
-                (true, true),
-                (false, false),
-                (false, false),
-                (false, false),
-                (false, false),
-            ]
+            vec![(true, true), (true, true), (false, false), (false, false)]
         );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 4, 1), &state),
@@ -7579,7 +7736,9 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for LoggingComponent {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {}
+
+        fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             self.log.lock().expect("paint log").push(self.name);
         }
 
@@ -7707,8 +7866,7 @@ mod tests {
             })
             .expect("draw");
 
-        // Structure pass first: components declare (and log) but deferred
-        // overlays are discarded. Then the paint pass. All three overlays
+        // Components paint in declaration order first. All three overlays
         // here were registered from the root context, so they are base
         // declaration decoration: they flush in registration order after the
         // modal canvases composite, painting above everything — the toast
@@ -7720,15 +7878,263 @@ mod tests {
                 "base",
                 "lower",
                 "top",
-                "base",
-                "lower",
-                "top",
                 "base overlay",
                 "lower overlay",
                 "top overlay"
             ]
         );
         assert!(ratcn.modal_is_open());
+    }
+
+    /// The other half of the rule above: paint deferred *inside* a layer
+    /// flushes onto that layer's canvas once the layer has finished
+    /// declaring, so it covers the layer's own content rather than being
+    /// covered by it.
+    #[test]
+    fn overlay_deferred_inside_a_layer_covers_that_layers_content() {
+        let state = PointerState::default();
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(2, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+        terminal
+            .draw(|frame| {
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.popup(
+                        ChildId::Static("panel"),
+                        PopupOptions::default(),
+                        Rect::new(0, 0, 2, 1),
+                        |ctx| {
+                            ctx.paint(|ctx| {
+                                ctx.render_widget(
+                                    ratatui::text::Line::from("PP"),
+                                    Rect::new(0, 0, 2, 1),
+                                );
+                            });
+                            ctx.defer_paint(|painter, _| {
+                                painter.render_widget(
+                                    ratatui::text::Line::from("O"),
+                                    Rect::new(0, 0, 1, 1),
+                                );
+                            });
+                        },
+                    );
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((0, 0)).expect("cell").symbol(), "O");
+        assert_eq!(buffer.cell((1, 0)).expect("cell").symbol(), "P");
+    }
+
+    /// A composite that fills its own area, and a child that draws one cell of
+    /// it.
+    struct BackdropParent;
+
+    impl Component<(), ()> for BackdropParent {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, (), ()>) {
+            let area = ctx.area();
+            ctx.render_component(ChildId::Static("glyph"), GlyphLeaf("C"), area);
+        }
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ()>) {
+            let area = ctx.area();
+            ctx.render_widget(
+                ratatui::text::Line::from("#".repeat(area.width as usize)),
+                area,
+            );
+        }
+    }
+
+    /// A leaf whose whole behavior is putting one identifiable glyph in the
+    /// top-left cell of its area, so a test can name what reached the screen.
+    struct GlyphLeaf(&'static str);
+
+    impl<S, M> Component<S, M> for GlyphLeaf {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, S, M>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+            let area = ctx.area();
+            ctx.render_widget(
+                ratatui::text::Line::from(self.0),
+                Rect {
+                    width: 1,
+                    height: 1,
+                    ..area
+                },
+            );
+        }
+    }
+
+    /// The paint-before-children contract, kept by queue position rather than
+    /// by each component's care: a composite is queued where it opens, so its
+    /// backdrop is drawn before anything it declares inside itself and the
+    /// child's glyph survives on top.
+    #[test]
+    fn a_components_own_paint_lands_beneath_its_descendants_paint() {
+        let mut ratcn = Ratcn::<(), ()>::new();
+        let mut terminal = Terminal::new(TestBackend::new(3, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &(), &theme, |ctx| {
+                    ctx.render_component(ChildId::Static("parent"), BackdropParent, area);
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((0, 0)).expect("cell").symbol(), "C");
+        assert_eq!(buffer.cell((1, 0)).expect("cell").symbol(), "#");
+    }
+
+    /// A pass the runtime rejects is rejected before it draws: declaration,
+    /// validation, and the modal-stack check all finish while the frame is
+    /// still only a description of itself. So the cells already on screen
+    /// survive a bad frame, exactly as the retained surface does.
+    ///
+    /// The divergence here is only detectable once declaration has ended — the
+    /// paint pass declares *fewer* nodes than the structure pass, so every
+    /// declaration it does make validates — which is what puts the rejection
+    /// after the whole queue has been built and before any of it runs.
+    #[test]
+    fn a_rejected_pass_never_touches_the_screen() {
+        let mut ratcn = Ratcn::<(), ()>::new();
+        let mut terminal = Terminal::new(TestBackend::new(3, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &(), &theme, |ctx| {
+                    ctx.render_component(ChildId::Static("first"), GlyphLeaf("A"), area);
+                });
+            })
+            .expect("draw");
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((0, 0))
+                .expect("cell")
+                .symbol(),
+            "A"
+        );
+
+        let mut runs = 0;
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                // What is already on screen, restated so the rejected pass has
+                // something of the host's to overwrite.
+                frame.render_widget(ratatui::text::Line::from("A"), area);
+                let rejected = catch_unwind(AssertUnwindSafe(|| {
+                    ratcn.render(frame, &(), &theme, |ctx| {
+                        runs += 1;
+                        ctx.render_component(ChildId::Static("leaf"), GlyphLeaf("B"), area);
+                        if runs == 1 {
+                            ctx.render_component(ChildId::Static("extra"), GlyphLeaf("B"), area);
+                        }
+                    });
+                }));
+                assert!(rejected.is_err());
+            })
+            .expect("draw");
+
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((0, 0))
+                .expect("cell")
+                .symbol(),
+            "A",
+            "a rejected pass must not have painted"
+        );
+        assert_eq!(ratcn.declared_paths(), vec![vec![ChildId::Static("first")]]);
+    }
+
+    /// The same guarantee for the other rejection the runtime can only answer
+    /// once declaration has ended: declared modal roots that disagree with the
+    /// app's own stack. It is a separate test rather than a case of the one
+    /// above because the binding it needs makes it a differently typed runtime.
+    #[test]
+    fn a_pass_rejected_by_the_modal_stack_never_touches_the_screen() {
+        let state = ModalTestState::default();
+        let mut ratcn = Ratcn::<ModalTestState, ModalTestMsg>::new()
+            .modals(|state: &ModalTestState| &state.modals);
+        let mut terminal = Terminal::new(TestBackend::new(3, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.render_component(ChildId::Static("first"), GlyphLeaf("A"), area);
+                });
+            })
+            .expect("draw");
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                frame.render_widget(ratatui::text::Line::from("A"), area);
+                // Nothing is open in the app's stack, so this modal root is a
+                // declaration the runtime refuses to retain.
+                let rejected = catch_unwind(AssertUnwindSafe(|| {
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        ctx.modal(ChildId::Static("sheet"), GlyphLeaf("B"), area);
+                    });
+                }));
+                assert!(rejected.is_err());
+            })
+            .expect("draw");
+
+        assert_eq!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((0, 0))
+                .expect("cell")
+                .symbol(),
+            "A",
+            "a pass rejected by the modal stack must not have painted"
+        );
+        assert_eq!(ratcn.declared_paths(), vec![vec![ChildId::Static("first")]]);
+    }
+
+    /// A layer's canvas composites whatever was written to it, whichever write
+    /// form did the writing: raw buffer access marks the layer painted exactly
+    /// as a widget does, so a popup that only ever calls `with_buffer` still
+    /// reaches the frame.
+    #[test]
+    fn layer_paint_written_through_with_buffer_composites_onto_the_frame() {
+        let state = PointerState::default();
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(2, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+        terminal
+            .draw(|frame| {
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.popup(
+                        ChildId::Static("panel"),
+                        PopupOptions::default(),
+                        Rect::new(0, 0, 2, 1),
+                        |ctx| {
+                            ctx.paint(|ctx| {
+                                ctx.with_buffer(|buf| {
+                                    buf[(0, 0)].set_symbol("Z");
+                                });
+                            });
+                        },
+                    );
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer.cell((0, 0)).expect("cell").symbol(), "Z");
     }
 
     #[test]
@@ -7764,14 +8170,8 @@ mod tests {
             })
             .expect("draw");
 
-        assert_eq!(
-            *lower.lock().expect("lower focus log"),
-            [(false, false), (false, false)]
-        );
-        assert_eq!(
-            *top.lock().expect("top focus log"),
-            [(false, false), (true, true)]
-        );
+        assert_eq!(*lower.lock().expect("lower focus log"), [(false, false)]);
+        assert_eq!(*top.lock().expect("top focus log"), [(true, true)]);
     }
 
     #[test]
@@ -8048,7 +8448,7 @@ mod tests {
 
         assert_eq!(
             *rendered.lock().expect("modal focus render log"),
-            [(false, false), (false, false)]
+            [(false, false)]
         );
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
@@ -8676,15 +9076,19 @@ mod tests {
                         PopupOptions::default(),
                         Rect::new(0, 0, 2, 1),
                         |ctx| {
-                            ctx.render_widget(
-                                ratatui::text::Line::from("PP"),
-                                Rect::new(0, 0, 2, 1),
-                            );
+                            ctx.paint(|ctx| {
+                                ctx.render_widget(
+                                    ratatui::text::Line::from("PP"),
+                                    Rect::new(0, 0, 2, 1),
+                                );
+                            });
                         },
                     );
                     // …and a base sibling paints over the same cells after —
                     // yet the popup composites on top.
-                    ctx.render_widget(ratatui::text::Line::from("BBBB"), area);
+                    ctx.paint(move |ctx| {
+                        ctx.render_widget(ratatui::text::Line::from("BBBB"), area);
+                    });
                 });
             })
             .expect("draw");
@@ -8795,10 +9199,7 @@ mod tests {
         // Frame one: the `[sheet]` open intent descends into the nested
         // modal's first focusable leaf.
         render_bound_nested_modal(&mut ratcn, &mut terminal, &state, &rendered);
-        assert_eq!(
-            *rendered.lock().expect("inner render log"),
-            [(false, false), (true, true)]
-        );
+        assert_eq!(*rendered.lock().expect("inner render log"), [(true, true)]);
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(ModalTestMsg::Routed("inner"))
@@ -8812,10 +9213,7 @@ mod tests {
         ]);
         rendered.lock().expect("inner render log").clear();
         render_bound_nested_modal(&mut ratcn, &mut terminal, &state, &rendered);
-        assert_eq!(
-            *rendered.lock().expect("inner render log"),
-            [(true, true), (true, true)]
-        );
+        assert_eq!(*rendered.lock().expect("inner render log"), [(true, true)]);
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(ModalTestMsg::Routed("inner"))
@@ -8827,7 +9225,9 @@ mod tests {
     }
 
     impl Component<ModalTestState, ModalTestMsg> for ModalFocusLeaf {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, ModalTestState, ModalTestMsg>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, ModalTestState, ModalTestMsg>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
             self.rendered
                 .lock()
                 .expect("render log")
@@ -8970,10 +9370,7 @@ mod tests {
             .expect("draw");
 
         // Startup focus resolves into the nested modal, full path intact.
-        assert_eq!(
-            *rendered.lock().expect("inner render log"),
-            [(false, false), (true, true)]
-        );
+        assert_eq!(*rendered.lock().expect("inner render log"), [(true, true)]);
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(FocusTestMsg::Activated(vec![
@@ -9060,16 +9457,10 @@ mod tests {
             })
             .expect("draw");
 
-        // The structure pass sees the raw app snapshot, the paint pass the
-        // resolved one: focus moves off the covered branch and into the layer.
-        assert_eq!(
-            *left.lock().expect("left render log"),
-            [(true, true), (false, false)]
-        );
-        assert_eq!(
-            *right.lock().expect("right render log"),
-            [(false, false), (true, true)]
-        );
+        // Paint sees the resolved focus, not the raw app snapshot it started
+        // from: focus moved off the covered branch and into the layer.
+        assert_eq!(*left.lock().expect("left render log"), [(false, false)]);
+        assert_eq!(*right.lock().expect("right render log"), [(true, true)]);
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(FocusTestMsg::Activated(vec![
@@ -9197,7 +9588,7 @@ mod tests {
             ratcn.declared_paths(),
             vec![vec![ChildId::Static("dialog")]]
         );
-        assert_eq!(*log.lock().expect("modal log"), ["dialog", "dialog"]);
+        assert_eq!(*log.lock().expect("modal log"), ["dialog"]);
     }
 
     #[test]
@@ -10087,14 +10478,8 @@ mod tests {
             })
             .expect("draw");
 
-        assert_eq!(
-            *left.lock().expect("left log"),
-            [(true, true), (true, true)]
-        );
-        assert_eq!(
-            *right.lock().expect("right log"),
-            [(false, false), (false, false)]
-        );
+        assert_eq!(*left.lock().expect("left log"), [(true, true)]);
+        assert_eq!(*right.lock().expect("right log"), [(false, false)]);
     }
 
     #[test]
@@ -10134,14 +10519,8 @@ mod tests {
             })
             .expect("draw");
 
-        assert_eq!(
-            *left.lock().expect("left log"),
-            [(true, true), (true, true)]
-        );
-        assert_eq!(
-            *right.lock().expect("right log"),
-            [(false, false), (false, false)]
-        );
+        assert_eq!(*left.lock().expect("left log"), [(true, true)]);
+        assert_eq!(*right.lock().expect("right log"), [(false, false)]);
     }
 
     #[test]

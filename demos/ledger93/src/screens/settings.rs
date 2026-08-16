@@ -58,8 +58,7 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
                 |offset| AppMsg::Settings(Msg::ListScrolled(offset)),
             );
 
-    let theme = ctx.theme;
-    let inner = crate::screens::render_panel(ctx, area, theme, None);
+    let inner = crate::screens::render_panel(ctx, area, None);
 
     let [header, list_area, _gap, preview_area] = inner.layout(&Layout::vertical([
         Constraint::Length(1),
@@ -68,31 +67,36 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
         Constraint::Length(1),
     ]));
 
-    ctx.render_widget(
-        Line::from(Span::styled(
-            "Currency",
-            Style::default()
-                .fg(theme.muted_foreground)
-                .add_modifier(Modifier::BOLD),
-        )),
-        header,
-    );
+    ctx.paint(move |ctx| {
+        ctx.render_widget(
+            Line::from(Span::styled(
+                "Currency",
+                Style::default()
+                    .fg(ctx.theme.muted_foreground)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            header,
+        );
+    });
     ctx.render_component(CURRENCY_ID, currency, list_area);
 
-    let prefs = &state.shared.prefs;
-    ctx.render_widget(
-        Line::from(vec![
-            Span::styled("Preview: ", Style::default().fg(theme.muted_foreground)),
-            Span::styled(
-                shared::format_money(-123_456, prefs),
-                Style::default().fg(theme.destructive),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                shared::format_money(78_900, prefs),
-                Style::default().fg(theme.primary),
-            ),
-        ]),
-        preview_area,
-    );
+    let prefs = state.shared.prefs;
+    ctx.paint(move |ctx| {
+        let theme = ctx.theme;
+        ctx.render_widget(
+            Line::from(vec![
+                Span::styled("Preview: ", Style::default().fg(theme.muted_foreground)),
+                Span::styled(
+                    shared::format_money(-123_456, &prefs),
+                    Style::default().fg(theme.destructive),
+                ),
+                Span::raw("   "),
+                Span::styled(
+                    shared::format_money(78_900, &prefs),
+                    Style::default().fg(theme.primary),
+                ),
+            ]),
+            preview_area,
+        );
+    });
 }

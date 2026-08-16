@@ -10,8 +10,8 @@ use ratatui::{
 use ratcn::Theme;
 use ratcn::runtime::{
     CellOffset, ChildId, Component, DragOptions, DragPhase, Event, EventCtx, EventResult, KeyChord,
-    KeyCode, MeasuredComponent, RenderCtx, ScopeOptions, TabWrap, clamp_offset, is_border,
-    offset_rect, wrapped_height,
+    KeyCode, MeasuredComponent, PaintCtx, RenderCtx, ScopeOptions, TabWrap, clamp_offset,
+    is_border, offset_rect, wrapped_height,
 };
 use ratcn::text_width::{display_width_u16, wrap_to_width};
 
@@ -176,8 +176,8 @@ fn dialog_layout(area: Rect, offset: CellOffset, dims: &DialogDims<'_>) -> Dialo
     }
 }
 
-fn paint_dialog_box<S, M>(
-    ctx: &mut RenderCtx<'_, '_, S, M>,
+fn paint_dialog_box<S>(
+    ctx: &mut PaintCtx<'_, '_, S>,
     box_area: Rect,
     title: &str,
     style: DialogStyle,
@@ -662,30 +662,8 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         let area = ctx.area();
         self.paint_area = area;
         let layout = dialog_layout(area, self.offset, &self.dims());
-        let style = self.style.as_ref().map_or_else(
-            || DialogStyle::from_theme(ctx.theme),
-            |style| style(ctx.theme),
-        );
-        paint_dialog_box(ctx, layout.box_area, &self.title, style);
         match &mut self.body {
-            DialogBody::None => {}
-            DialogBody::Description => {
-                if !self.description.is_empty() {
-                    // Paint from the same wrap that sized the box (`wrapped_height` in
-                    // `dialog_box_base`), so the description can never clip or pad the
-                    // height it asked for.
-                    let lines =
-                        wrap_to_width(&self.description, usize::from(layout.main_area.width))
-                            .into_iter()
-                            .map(Line::from)
-                            .collect::<Vec<_>>();
-                    ctx.render_widget(
-                        Paragraph::new(lines)
-                            .style(Style::default().fg(style.description_foreground)),
-                        layout.main_area,
-                    );
-                }
-            }
+            DialogBody::None | DialogBody::Description => {}
             DialogBody::Content { declare, .. } => {
                 if let Some(declare) = declare.take() {
                     ctx.in_area(layout.main_area, declare);
@@ -726,6 +704,30 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
                     "every dialog action must be declared"
                 );
             }
+        }
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+        let layout = dialog_layout(ctx.area(), self.offset, &self.dims());
+        let style = self.style.as_ref().map_or_else(
+            || DialogStyle::from_theme(ctx.theme),
+            |style| style(ctx.theme),
+        );
+        // Queued where the dialog was declared, so the box lands beneath
+        // everything declared inside it without being painted first here.
+        paint_dialog_box(ctx, layout.box_area, &self.title, style);
+        if matches!(self.body, DialogBody::Description) && !self.description.is_empty() {
+            // Paint from the same wrap that sized the box (`wrapped_height` in
+            // `dialog_box_base`), so the description can never clip or pad the
+            // height it asked for.
+            let lines = wrap_to_width(&self.description, usize::from(layout.main_area.width))
+                .into_iter()
+                .map(Line::from)
+                .collect::<Vec<_>>();
+            ctx.render_widget(
+                Paragraph::new(lines).style(Style::default().fg(style.description_foreground)),
+                layout.main_area,
+            );
         }
     }
 

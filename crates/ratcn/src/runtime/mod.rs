@@ -181,8 +181,8 @@ impl fmt::Display for ChildId {
 }
 
 pub use component::{
-    Component, EventCtx, EventResult, MeasuredComponent, Painter, PopupOptions, RenderCtx,
-    ScopeOptions, Step,
+    Component, EventCtx, EventResult, MeasuredComponent, PaintCtx, Painter, PopupOptions,
+    RenderCtx, ScopeOptions, Step,
 };
 pub use drag::{CellOffset, DragOptions, DragPhase, clamp_offset, offset_rect};
 pub use engine::Ratcn;

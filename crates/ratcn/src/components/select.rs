@@ -30,7 +30,7 @@ use crate::list_core::{
 };
 use crate::runtime::{
     Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind,
-    PopupOptions, RenderCtx, ScrollDirection,
+    PaintCtx, PopupOptions, RenderCtx, ScrollDirection,
 };
 use crate::selection_indicator;
 
@@ -983,25 +983,10 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             height: ctx.area().height.min(1),
             ..ctx.area()
         };
-        let state = ctx.state();
         let style = self.style.as_ref().map_or_else(
             || SelectStyle::from_theme(ctx.theme),
             |style| style(ctx.theme),
         );
-        let selected = self.selected_index(state);
-        let value = selected.map(|index| self.items[index].label());
-        let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
-        let mut trigger = SelectWidget::new(value)
-            .placeholder(&self.placeholder)
-            .focused(ctx.focused)
-            .hovered(ctx.hovered)
-            .disabled(self.disabled)
-            .style(style);
-        if self.resolved_open {
-            trigger = trigger.open(&labels);
-        }
-        ctx.render_widget(trigger, area);
-
         let Some((panel_area, viewport)) = self
             .resolved_open
             .then(|| {
@@ -1041,6 +1026,31 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             panel_area,
             move |ctx| ctx.render_component("options", panel, panel_area),
         );
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+        let area = Rect {
+            height: ctx.area().height.min(1),
+            ..ctx.area()
+        };
+        let state = ctx.state();
+        let style = self.style.as_ref().map_or_else(
+            || SelectStyle::from_theme(ctx.theme),
+            |style| style(ctx.theme),
+        );
+        let selected = self.selected_index(state);
+        let value = selected.map(|index| self.items[index].label());
+        let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
+        let mut trigger = SelectWidget::new(value)
+            .placeholder(&self.placeholder)
+            .focused(ctx.focused)
+            .hovered(ctx.hovered)
+            .disabled(self.disabled)
+            .style(style);
+        if self.resolved_open {
+            trigger = trigger.open(&labels);
+        }
+        ctx.render_widget(trigger, area);
     }
 
     fn handle_event(
@@ -1109,8 +1119,6 @@ impl<T: Clone + PartialEq, S, M> SelectPanel<T, S, M> {
 impl<T: Clone + PartialEq, S, M> Component<S, M> for SelectPanel<T, S, M> {
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
         let state = ctx.state();
-        let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
-        let disabled: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
         let cursor = self.cursor(state);
         let inner = Block::new().borders(Borders::ALL).inner(self.panel_area);
         let len = self.items.len();
@@ -1134,6 +1142,13 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for SelectPanel<T, S, M> {
             *stored = park;
         }
         self.viewport.record_painted_offset(offset);
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+        let state = ctx.state();
+        let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
+        let disabled: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
+        let cursor = self.cursor(state);
         let selected = bound_index(&self.items, state, self.selected.as_ref());
         let rows_per_item = self.viewport.rows_per_item();
         let rows: Option<Vec<Text<'static>>> = self.render_item.as_ref().map(|render_item| {
@@ -1473,7 +1488,9 @@ mod tests {
                 .draw(|frame| {
                     self.ratcn.render(frame, state, &theme, |ctx| {
                         ctx.render_component("fruit", select(items.to_vec()), area);
-                        ctx.render_widget(Line::from("later sibling"), Rect::new(0, 4, 20, 1));
+                        ctx.paint(|ctx| {
+                            ctx.render_widget(Line::from("later sibling"), Rect::new(0, 4, 20, 1));
+                        });
                     });
                 })
                 .expect("draw");
@@ -1528,7 +1545,9 @@ mod tests {
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     ctx.render_component("fruit", select(items()), Rect::new(0, 0, 20, 1));
-                    ctx.render_widget(Line::from("outside panel"), Rect::new(0, 7, 20, 1));
+                    ctx.paint(|ctx| {
+                        ctx.render_widget(Line::from("outside panel"), Rect::new(0, 7, 20, 1));
+                    });
                 });
             })
             .expect("draw");
@@ -2068,7 +2087,9 @@ mod tests {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     ctx.modal_scope("modal", frame_area(), ScopeOptions::default(), |ctx| {
                         ctx.render_component("fruit", select(items()), Rect::new(0, 0, 20, 1));
-                        ctx.render_widget(Line::from("modal sibling"), Rect::new(0, 2, 20, 1));
+                        ctx.paint(|ctx| {
+                            ctx.render_widget(Line::from("modal sibling"), Rect::new(0, 2, 20, 1));
+                        });
                     });
                 });
             })

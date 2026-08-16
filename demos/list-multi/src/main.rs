@@ -136,15 +136,17 @@ impl App {
             );
 
             ctx.render_component(ids::LIST, list, list_area);
-            ctx.render_widget(
-                Paragraph::new(format!(
-                    "Subscribed to {} of {}",
-                    state.subscribed.len(),
-                    TOPICS.len()
-                ))
-                .style(Style::default().fg(muted)),
-                count_area,
+            let count = format!(
+                "Subscribed to {} of {}",
+                state.subscribed.len(),
+                TOPICS.len()
             );
+            ctx.paint(move |ctx| {
+                ctx.render_widget(
+                    Paragraph::new(count).style(Style::default().fg(muted)),
+                    count_area,
+                );
+            });
         });
     }
 }

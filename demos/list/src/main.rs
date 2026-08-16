@@ -146,19 +146,18 @@ impl App {
             );
 
             ctx.render_component(ids::LIST, list, list_area);
-            ctx.render_widget(
-                Paragraph::new(format!("Focus: {}", state.focused_folder.unwrap_or("None")))
-                    .style(Style::default().fg(muted)),
-                focused_area,
-            );
-            ctx.render_widget(
-                Paragraph::new(format!(
-                    "Selected: {}",
-                    state.selected_folder.unwrap_or("None")
-                ))
-                .style(Style::default().fg(muted)),
-                selected_area,
-            );
+            let focused = format!("Focus: {}", state.focused_folder.unwrap_or("None"));
+            let selected = format!("Selected: {}", state.selected_folder.unwrap_or("None"));
+            ctx.paint(move |ctx| {
+                ctx.render_widget(
+                    Paragraph::new(focused).style(Style::default().fg(muted)),
+                    focused_area,
+                );
+                ctx.render_widget(
+                    Paragraph::new(selected).style(Style::default().fg(muted)),
+                    selected_area,
+                );
+            });
         });
     }
 }

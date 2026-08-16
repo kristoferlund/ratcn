@@ -175,9 +175,19 @@ impl App {
             })
             .collect();
 
-        let border = Self::panel_border(panel, ctx.contains_focus, pressed, ctx.theme);
-        let inner_area = border.inner(panel_area);
-        ctx.render_widget(border, panel_area);
+        // The inner rect follows from the borders alone, so it is available
+        // before the border color is: that depends on focus, which only
+        // settles once the whole tree is declared.
+        let inner_area = Block::bordered().inner(panel_area);
+        ctx.paint(move |ctx| {
+            let border = Self::panel_border(panel, ctx.contains_focus, pressed, ctx.theme);
+            debug_assert_eq!(
+                border.inner(panel_area),
+                inner_area,
+                "the painted block's inner rect must match the one the layout used"
+            );
+            ctx.render_widget(border, panel_area);
+        });
 
         let [buttons_area] = inner_area.layout(
             &Layout::vertical([Constraint::Length(ratcn::ButtonSize::Small.height())])

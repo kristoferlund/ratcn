@@ -155,15 +155,13 @@ impl App {
             );
 
             ctx.render_component(ids::LIST, list, list_area);
-            ctx.render_widget(
-                Paragraph::new(format!(
-                    "Invited {} of {}",
-                    state.invited.len(),
-                    PEOPLE.len()
-                ))
-                .style(Style::default().fg(muted)),
-                count_area,
-            );
+            let count = format!("Invited {} of {}", state.invited.len(), PEOPLE.len());
+            ctx.paint(move |ctx| {
+                ctx.render_widget(
+                    Paragraph::new(count).style(Style::default().fg(muted)),
+                    count_area,
+                );
+            });
         });
     }
 }
