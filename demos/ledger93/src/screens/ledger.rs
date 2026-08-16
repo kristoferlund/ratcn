@@ -58,7 +58,7 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
         )
         .render_item(|s: &AppState, row| render_row(row.index, &s.shared.prefs));
 
-    let inner = crate::screens::render_panel(ctx, area, ctx.theme, None);
+    let inner = crate::screens::render_panel(ctx, area, None);
 
     let [list_area, _gap, balance_area] = inner.layout(&Layout::vertical([
         Constraint::Length(shared::SEED.len() as u16),
@@ -68,30 +68,32 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     ctx.render_component(LIST_ID, list, list_area);
 
     let balance = shared::balance();
-    let theme = ctx.theme;
     let amount = shared::format_money(balance, &state.shared.prefs);
-    let amount_color = if balance < 0 {
-        theme.destructive
-    } else {
-        theme.primary
-    };
-    ctx.render_widget(
-        Line::from(vec![
-            Span::styled(
-                "Balance ",
-                Style::default()
-                    .fg(theme.muted_foreground)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                amount,
-                Style::default()
-                    .fg(amount_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        balance_area,
-    );
+    ctx.paint(move |ctx| {
+        let theme = ctx.theme;
+        let amount_color = if balance < 0 {
+            theme.destructive
+        } else {
+            theme.primary
+        };
+        ctx.render_widget(
+            Line::from(vec![
+                Span::styled(
+                    "Balance ",
+                    Style::default()
+                        .fg(theme.muted_foreground)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    amount,
+                    Style::default()
+                        .fg(amount_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            balance_area,
+        );
+    });
 }
 
 /// One ledger row: `Floppy disks (bulk box) ......... ($42.00)`, with dot

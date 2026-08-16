@@ -172,11 +172,16 @@ impl App {
 
             ctx.render_component(ids::TABS, tabs, tabs_area);
 
-            ctx.with_buffer(|buf| buf.set_style(content_area, Style::default().bg(THEME.surface)));
-            ctx.render_widget(
-                Paragraph::new(state.selected.content()).wrap(Wrap { trim: true }),
-                content_area.inner(CONTENT_PADDING),
-            );
+            let content = state.selected.content();
+            ctx.paint(move |ctx| {
+                ctx.with_buffer(|buf| {
+                    buf.set_style(content_area, Style::default().bg(THEME.surface));
+                });
+                ctx.render_widget(
+                    Paragraph::new(content).wrap(Wrap { trim: true }),
+                    content_area.inner(CONTENT_PADDING),
+                );
+            });
         });
     }
 }

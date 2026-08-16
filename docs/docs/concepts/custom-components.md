@@ -13,7 +13,7 @@ lines.
 
 Write a component when the demoed behavior needs real event handling or its own
 interaction identity. Purely decorative content should stay direct paint:
-build a Ratatui widget and render it with `ctx.render_widget`. Paint-only content
+build a Ratatui widget and draw it from a `ctx.paint` closure. Paint-only content
 declared as a component costs identity, traversal, and hit-testing for nothing.
 
 ## The trait
@@ -21,6 +21,8 @@ declared as a component costs identity, traversal, and hit-testing for nothing.
 ```rust
 impl Component<AppState, Msg> for MyComponent {
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, AppState, Msg>) { ... }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) { ... }
 
     fn handle_event(
         &mut self,
@@ -35,7 +37,18 @@ impl Component<AppState, Msg> for MyComponent {
 }
 ```
 
-Every method except `render` has a default. `is_focusable` defaults to `false`;
+Declaring and drawing are two methods because they happen in two walks.
+`render` lays the component out and declares its descendants; it runs in both
+of the frame's passes and paints nothing. `paint` draws, and runs once, after
+the whole tree is declared and focus has resolved — which is why the
+interaction flags (`ctx.focused`, `ctx.contains_focus`, `ctx.hovered`,
+`ctx.contains_hover`) live on `PaintCtx` and not on `RenderCtx`. Anything
+`handle_event` reads back must be recorded in `render`, and must therefore not
+depend on those flags.
+
+Every method except `render` has a default. `paint` defaults to drawing
+nothing, which is right for a composite that is only a container.
+`is_focusable` defaults to `false`;
 override it for anything that should take part in Tab traversal.
 `interaction_area` defaults to returning the supplied paint area unchanged.
 Override it when interactive pixels occupy only part of the allocation. The
@@ -100,8 +113,8 @@ instance itself, such as a drag anchor. A field would reset every frame, so
 long as that path keeps being declared. See [Dragging](./dragging) for the
 standard use.
 
-Paint can read the same value back with `RenderCtx::transient::<T>()` — that is
-how a wheel scroll survives a redraw. Prefer writing from the event side,
+`render` can read the same value back with `RenderCtx::transient::<T>()` — that
+is how a wheel scroll survives a redraw. Prefer writing from the event side,
 where a single event carries the change.
 
 ## Handling events
@@ -131,13 +144,34 @@ path segment. Children nest under the component's identity, and their
 focusability is discovered by the frame's structure pass — there is nothing to
 announce.
 
-Paint container pixels before declaring descendants: retained hit order follows
-declaration order and cannot see direct frame paint performed afterward.
+Container pixels need no care about order. Every component's `paint` is queued
+where `render` declared it and replayed in that order, and a component is
+queued at the point it opens — so a container's background and border land
+beneath everything it declares inside itself, whatever order the two methods
+are written in. The same holds for `ctx.paint` closures: each is queued where
+it was reached.
+
+The queue position is fixed, so decoration that has to cover a composite's
+*descendants* — a dimming wash, a drag ghost — cannot come from `paint` at all;
+`ctx.defer_paint` is the slot for it, flushing after the current layer has
+finished declaring.
+
+What still follows declaration order is hit-testing, and it knows nothing about
+pixels: a later sibling drawn underneath another still takes the clicks over
+its own area.
 
 That is the whole contract. A composite is an ordinary `Component`; there is no
 composite trait to implement and no lifecycle to opt into. What a composite does
 need is somewhere to keep what its builders were handed until `render` uses it,
 and a way to keep answering geometry questions once that is gone.
+
+**Deferred drawing.** A `paint` closure runs after declaration has ended, so it
+owns what it draws with: it is `'static` and receives a `PaintCtx` carrying the
+theme, the state, the area, and the interaction flags. Layout computed while
+declaring has to be moved in. Where a style-dependent widget also produces
+layout — a bordered `Block` whose colors follow focus — compute the layout from
+a plain block (`Block::bordered().padding(p).inner(area)`, which depends only on
+borders and padding) and build the styled one inside the closure.
 
 **Caller-supplied bodies.** A region the caller fills is a closure, and it
 should be `FnOnce` so the caller can move owned values into it. Store it as
@@ -188,7 +222,8 @@ your own.
 - Props that describe the declaration: plain values, set while declaring.
 - State that events compose against: reader closures, read in `handle_event`.
 - Geometry needed to interpret events: the declared area comes from
-  `EventCtx::area`; cache anything beyond it in `render`.
+  `EventCtx::area`; cache anything beyond it in `render`, never in `paint`.
+- Everything that draws: `paint`, styled from its interaction flags.
 - Interactive geometry within the paint area: express it with `interaction_area`.
 - Gesture mechanics that outlive the instance: `ctx.transient`.
 - `is_focusable` reflects the same condition that makes events ignored.

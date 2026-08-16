@@ -146,13 +146,16 @@ impl App {
             ])
             .spacing(1)
             .areas(content_area);
-            ctx.render_widget(
-                Paragraph::new(joke.as_ref())
-                    .alignment(Alignment::Center)
-                    .wrap(Wrap { trim: true })
-                    .style(Style::default().fg(ctx.theme.foreground)),
-                joke_area,
-            );
+            let joke = joke.clone().into_owned();
+            ctx.paint(move |ctx| {
+                ctx.render_widget(
+                    Paragraph::new(joke)
+                        .alignment(Alignment::Center)
+                        .wrap(Wrap { trim: true })
+                        .style(Style::default().fg(ctx.theme.foreground)),
+                    joke_area,
+                );
+            });
 
             let loading = ctx.state().joke.is_loading();
             let refresh = Button::new(if loading {

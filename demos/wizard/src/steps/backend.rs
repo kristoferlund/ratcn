@@ -78,7 +78,7 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
         .iter()
         .map(|command| steps::command(theme, *command))
         .collect::<Vec<_>>();
-    let inner = steps::render_panel(ctx, area, theme, Some("Pick a backend"));
+    let inner = steps::render_panel(ctx, area, Some("Pick a backend"));
 
     let [intro, select_area, commands_area] = inner.layout(
         &Layout::vertical([
@@ -89,17 +89,21 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
         .spacing(1),
     );
 
-    ctx.render_widget(
-        Paragraph::new("One feature per host, none on by default.")
-            .style(Style::default().fg(theme.muted_foreground))
-            .wrap(Wrap { trim: true }),
-        intro,
-    );
+    ctx.paint(move |ctx| {
+        ctx.render_widget(
+            Paragraph::new("One feature per host, none on by default.")
+                .style(Style::default().fg(ctx.theme.muted_foreground))
+                .wrap(Wrap { trim: true }),
+            intro,
+        );
+    });
     ctx.render_component(SELECT_ID, backend, select_area);
-    ctx.render_widget(
-        Paragraph::new(commands).wrap(Wrap { trim: false }),
-        commands_area,
-    );
+    ctx.paint(move |ctx| {
+        ctx.render_widget(
+            Paragraph::new(commands).wrap(Wrap { trim: false }),
+            commands_area,
+        );
+    });
 }
 
 #[cfg(test)]

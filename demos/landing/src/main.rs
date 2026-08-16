@@ -275,7 +275,9 @@ impl App {
             .set_style(frame_area, Style::default().bg(theme.background));
         let state = &self.state;
         self.ratcn.render(frame, state, &theme, |ctx| {
-            ctx.render_widget(header_bar(&theme), header_area(frame_area));
+            ctx.paint(move |ctx| {
+                ctx.render_widget(header_bar(ctx.theme), header_area(frame_area));
+            });
             for (index, tile_area) in tile_areas(frame_area).into_iter().enumerate() {
                 tiles::render(index, ctx, tile_area);
             }

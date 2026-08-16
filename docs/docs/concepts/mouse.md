@@ -109,7 +109,7 @@ The normalized `MouseKind` is `Down`, `Up`, `Click`, `Drag`, `DragEnd`,
   this fallback. `Consumed` vetoes it, while `Emit` returns the component's
   message instead.
 - **Hover** (`Moved`) is its own app-owned path, separate from focus. Bind both
-  at the root with `Ratcn::focus` and `Ratcn::hover`; `RenderCtx::hovered` and
+  at the root with `Ratcn::focus` and `Ratcn::hover`; `PaintCtx::hovered` and
   `contains_hover` then let a component highlight
   under the pointer **without stealing focus**, so keyboard use of the focused
   component keeps working while the mouse drifts over a button.

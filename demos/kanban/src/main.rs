@@ -30,7 +30,7 @@ use ratcn::{
     Theme,
     runtime::{
         self, CellOffset, ChildId, Component, DragOptions, DragPhase, Event, EventCtx, EventResult,
-        Ratcn, RenderCtx, offset_rect,
+        PaintCtx, Ratcn, RenderCtx, offset_rect,
     },
 };
 
@@ -149,26 +149,28 @@ impl App {
         let state = &self.state;
         self.ratcn.render(frame, state, &THEME, |ctx| {
             let column_areas = board_layout.column_areas();
-            for (column_index, column_area) in column_areas.iter().enumerate() {
-                if column_index > 0 {
+            ctx.paint(move |ctx| {
+                for (column_index, column_area) in column_areas.iter().enumerate() {
+                    if column_index > 0 {
+                        ctx.render_widget(
+                            Block::new()
+                                .borders(Borders::LEFT)
+                                .border_set(border::ROUNDED)
+                                .border_style(Style::default().fg(ctx.theme.border)),
+                            *column_area,
+                        );
+                    }
                     ctx.render_widget(
-                        Block::new()
-                            .borders(Borders::LEFT)
-                            .border_set(border::ROUNDED)
-                            .border_style(Style::default().fg(ctx.theme.border)),
-                        *column_area,
+                        Paragraph::new(COLUMN_TITLES[column_index])
+                            .alignment(Alignment::Center)
+                            .style(Style::default().fg(ctx.theme.muted_foreground)),
+                        Rect {
+                            height: 1,
+                            ..*column_area
+                        },
                     );
                 }
-                ctx.render_widget(
-                    Paragraph::new(COLUMN_TITLES[column_index])
-                        .alignment(Alignment::Center)
-                        .style(Style::default().fg(ctx.theme.muted_foreground)),
-                    Rect {
-                        height: 1,
-                        ..*column_area
-                    },
-                );
-            }
+            });
 
             for (column_index, cards_in_column) in state.cards_by_column.iter().enumerate() {
                 for (card_index, card_id) in cards_in_column.iter().enumerate() {
@@ -262,28 +264,43 @@ struct KanbanCard {
 
 impl Component<AppState, Msg> for KanbanCard {
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, AppState, Msg>) {
-        let area = ctx.area();
-        let state = ctx.state();
-        let theme = ctx.theme;
-        if let Some(active_drag) = state
+        // The ghost follows the pointer over every card declared after this
+        // one, so it is deferred to the top of the frame rather than painted
+        // in place.
+        let Some(active_drag) = ctx
+            .state()
             .active_drag
             .as_ref()
             .filter(|active_drag| active_drag.card_id == self.card_id)
-        {
+        else {
+            return;
+        };
+        let dragged_card_area = offset_rect(self.board_layout.area, ctx.area(), active_drag.offset);
+        let dragged_card_id = self.card_id.clone();
+        ctx.defer_paint(move |painter, _state| {
+            let theme = painter.theme;
+            painter.with_buffer(|buf| {
+                paint_card(buf, dragged_card_area, &dragged_card_id, theme);
+            });
+        });
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) {
+        let area = ctx.area();
+        let theme = ctx.theme;
+        let dragging = ctx
+            .state()
+            .active_drag
+            .as_ref()
+            .is_some_and(|active_drag| active_drag.card_id == self.card_id);
+        if dragging {
+            // The card left an empty slot behind: only its outline stays.
             ctx.render_widget(
                 Block::bordered()
                     .border_set(border::ROUNDED)
                     .border_style(Style::default().fg(theme.border)),
                 area,
             );
-            let dragged_card_area = offset_rect(self.board_layout.area, area, active_drag.offset);
-            let dragged_card_id = self.card_id.clone();
-            ctx.defer_paint(move |painter, _state| {
-                let theme = painter.theme;
-                painter.with_buffer(|buf| {
-                    paint_card(buf, dragged_card_area, &dragged_card_id, theme);
-                });
-            });
         } else {
             ctx.with_buffer(|buf| paint_card(buf, area, &self.card_id, theme));
         }

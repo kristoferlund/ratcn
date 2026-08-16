@@ -39,46 +39,27 @@ pub enum EventResult<Msg> {
     Emit(Msg),
 }
 
-/// Everything available while declaring one frame: where to paint, what to
-/// paint with, and how to declare children.
+/// Everything available while declaring one frame: how to declare children,
+/// and the geometry and state to declare them from.
 ///
 /// [`Ratcn`](super::Ratcn) creates this and threads it through the declaration
 /// pass — the root closure gets one, and so does every component's
 /// [`render`](Component::render). Only the library constructs it.
 ///
-/// Painting goes through [`render_widget`](RenderCtx::render_widget),
-/// [`render_stateful_widget`](RenderCtx::render_stateful_widget), and
-/// [`with_buffer`](RenderCtx::with_buffer). The context deliberately never
-/// lends out the ratatui `Frame`: keeping it private means a paint call can
-/// read `ctx.theme`, [`ctx.state()`](RenderCtx::state), and the interaction
-/// flags while building its widget argument, which a borrowed frame would
-/// prevent.
-///
-/// The four interaction flags describe whichever component, [`scope`](Self::scope),
-/// or modal root is currently declaring. The root closure has no identity of
-/// its own, so its flags are always false — enter a named `scope` when container
-/// paint needs to know whether focus or the pointer is somewhere inside it.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "two independent (leaf, within) flag pairs — focus and hover; the bools are the natural shape"
-)]
+/// Declaring does not paint. Nothing here writes to a cell: paint belongs to
+/// [`Component::paint`] and to the closures [`paint`](Self::paint) queues,
+/// which the runtime replays in declaration order once the whole tree is
+/// known. The interaction flags a paint call styles from live on
+/// [`PaintCtx`] for the same reason — during the walk they are still
+/// provisional.
 pub struct RenderCtx<'a, 'frame, State, Msg> {
     pub(crate) frame: &'a mut Frame<'frame>,
     pub(crate) area: Rect,
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
     pub theme: &'a Theme,
-    /// The current identified declaration is the focused leaf.
-    pub focused: bool,
-    /// The focus path passes through or ends at this identified declaration
-    /// (the `focus-within` signal for e.g. pane border highlighting).
-    pub contains_focus: bool,
-    /// The current identified declaration is the hovered leaf. Independent
-    /// of `focused`: a component can be hovered without being focused, and vice
-    /// versa.
-    pub hovered: bool,
-    /// The hover path passes through or ends at this identified declaration (the
-    /// `hover-within` signal).
-    pub contains_hover: bool,
+    /// The interaction flags of the identified declaration this context sits
+    /// in, stamped onto whatever [`paint`](Self::paint) queues here.
+    pub(crate) flags: InteractionFlags,
     pub(crate) hover_position: Option<Position>,
     pub(crate) hover: &'a HoverState,
     pub(crate) transients: Option<&'a mut TransientMap>,
@@ -87,15 +68,31 @@ pub struct RenderCtx<'a, 'frame, State, Msg> {
     pub(crate) state: Option<&'a State>,
 }
 
+/// Where one identified declaration sits in this frame's focus and hover, as
+/// the four flags paint styles from.
+///
+/// They travel as a unit because they are computed as one — from the same
+/// identity path against the same resolved focus and effective hover — and
+/// because the paint queue has to carry them from the declaration that
+/// queued an op to the replay that runs it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "two independent (leaf, within) flag pairs — focus and hover; the bools are the natural shape"
+)]
+pub(crate) struct InteractionFlags {
+    pub(crate) focused: bool,
+    pub(crate) contains_focus: bool,
+    pub(crate) hovered: bool,
+    pub(crate) contains_hover: bool,
+}
+
 impl<State, Msg> fmt::Debug for RenderCtx<'_, '_, State, Msg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderCtx")
             .field("area", &self.area)
             .field("theme", self.theme)
-            .field("focused", &self.focused)
-            .field("contains_focus", &self.contains_focus)
-            .field("hovered", &self.hovered)
-            .field("contains_hover", &self.contains_hover)
+            .field("flags", &self.flags)
             .field("hover_position", &self.hover_position)
             .field("depth", &self.depth)
             .field("declaration_active", &self.pass.is_some())
@@ -104,116 +101,43 @@ impl<State, Msg> fmt::Debug for RenderCtx<'_, '_, State, Msg> {
 }
 
 impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
-    /// Whether paint calls reach a paint surface: false only during the
-    /// structure pass, where the same declarations run with every write
-    /// suppressed. A context built without a pass (a paint-widget unit test)
-    /// always paints.
-    fn paints(&self) -> bool {
-        self.pass.as_deref().is_none_or(RenderPass::paints)
-    }
-
-    /// Paint a ratatui widget onto the active paint surface, immediately.
+    /// Queue paint for the position this declaration occupies.
     ///
-    /// The widget is consumed here; nothing is deferred or allocated. Because
-    /// the context never lends out the frame, the widget expression may read
-    /// `ctx` freely (`ctx.theme`, [`state`](RenderCtx::state), interaction
-    /// flags) in argument position.
+    /// The app-level counterpart of [`Component::paint`], for chrome that has
+    /// no component of its own: a pane border, a background wash, a label.
+    /// The closure runs once, during the replay that follows the declaration
+    /// walk, at the point in the queue where this call was reached — so it
+    /// paints in declaration order relative to the components around it, and
+    /// before anything declared after it. Inside a [`modal`](Self::modal),
+    /// [`popup`](Self::popup), or [`hint`](Self::hint) layer it lands on that
+    /// layer's canvas and composites above everything declared outside;
+    /// otherwise it lands on the frame.
     ///
-    /// Inside a [`modal`](Self::modal) or [`popup`](Self::popup) layer the
-    /// paint lands on that layer's canvas and composites above everything
-    /// declared outside it; otherwise it lands on the frame. A layer
-    /// composites the widget's whole declared `area` opaquely — cells the
-    /// widget left unwritten come through as empty rather than transparent,
-    /// so paint a panel background first, as the built-in layers do. During
-    /// the structure pass (see [`Ratcn::render`](super::Ratcn::render)) the
-    /// call is a no-op: the widget is built and dropped, nothing is painted.
-    pub fn render_widget(&mut self, widget: impl Widget, area: Rect) {
-        if !self.paints() {
-            return;
-        }
-        if let Some(canvas) = self
-            .pass
+    /// Because it runs after declaration has ended, the closure has to own
+    /// what it draws with: it is `'static` and gets a [`PaintCtx`] rather
+    /// than this context. That context reports the area and the interaction
+    /// flags of the declaration `paint` was called from, plus the theme and
+    /// the state the pass was declared with — everything style depends on.
+    /// Layout the closure's caller computed must be moved in.
+    ///
+    /// The flags are the declaring node's, and the root closure has no
+    /// identity of its own — paint queued there always reports all four as
+    /// false. Enter a named [`scope`](Self::scope) when container chrome needs
+    /// to know whether focus or the pointer is somewhere inside it.
+    ///
+    /// Nothing is queued during the structure pass (see
+    /// [`Ratcn::render`](super::Ratcn::render)), so the closure runs exactly
+    /// once per frame.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called outside a [`Ratcn`](super::Ratcn) declaration pass.
+    pub fn paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static) {
+        let (area, flags) = (self.area, self.flags);
+        self.pass
             .as_deref_mut()
-            .and_then(RenderPass::active_canvas_mut)
-        {
-            widget.render(area.intersection(canvas.buffer.area), &mut canvas.buffer);
-            canvas.mark_painted(area);
-        } else {
-            self.frame.render_widget(widget, area);
-        }
-    }
-
-    /// Paint a ratatui stateful widget onto the active paint surface,
-    /// immediately.
-    ///
-    /// The escape hatch for widgets that need a `&mut` widget state during
-    /// paint (e.g. ratatui's `List` with `ListState`). Targets the same
-    /// surface as [`render_widget`](Self::render_widget); a no-op during the
-    /// structure pass — note the widget state is then not touched either.
-    pub fn render_stateful_widget<W: StatefulWidget>(
-        &mut self,
-        widget: W,
-        area: Rect,
-        state: &mut W::State,
-    ) {
-        if !self.paints() {
-            return;
-        }
-        if let Some(canvas) = self
-            .pass
-            .as_deref_mut()
-            .and_then(RenderPass::active_canvas_mut)
-        {
-            widget.render(
-                area.intersection(canvas.buffer.area),
-                &mut canvas.buffer,
-                state,
-            );
-            canvas.mark_painted(area);
-        } else {
-            self.frame.render_stateful_widget(widget, area, state);
-        }
-    }
-
-    /// Run a paint closure over the active paint surface's raw cell buffer,
-    /// immediately.
-    ///
-    /// The escape hatch for direct cell writes (`set_string`, `set_style`,
-    /// per-cell edits). The closure receives only the buffer, so values read
-    /// from `ctx` must be taken as arguments or moved in. Inside a layer, the
-    /// buffer is the layer's canvas and the whole layer footprint counts as
-    /// painted for compositing.
-    ///
-    /// During the structure pass the closure runs against a scratch buffer
-    /// instead — its return value may feed declarations, so it cannot simply
-    /// be skipped — and whatever it writes there is discarded. Reads then see
-    /// only earlier `with_buffer` writes, never painted widget output, so a
-    /// return value that feeds declarations must not depend on painted
-    /// content.
-    #[expect(
-        clippy::missing_panics_doc,
-        reason = "the expect is unreachable: a suppressed paint call implies an active pass"
-    )]
-    pub fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        if !self.paints() {
-            let area = self.frame.area();
-            let pass = self
-                .pass
-                .as_deref_mut()
-                .expect("a suppressed paint call always has a pass");
-            return paint(pass.scratch_buffer(area));
-        }
-        if let Some(canvas) = self
-            .pass
-            .as_deref_mut()
-            .and_then(RenderPass::active_canvas_mut)
-        {
-            let area = canvas.buffer.area;
-            canvas.mark_painted(area);
-            paint(&mut canvas.buffer)
-        } else {
-            paint(self.frame.buffer_mut())
-        }
+            .expect("paint called outside a Ratcn declaration pass")
+            .queue_thunk(area, flags, paint);
     }
 
     /// The area supplied for the current declaration.
@@ -248,7 +172,7 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     ///
     /// The render-time counterpart of [`EventCtx::transient`]: event handlers
     /// write scratch values that mean nothing to the app — a wheel-scrolled
-    /// viewport offset, say — and the next render reads them here to paint
+    /// viewport offset, say — and the next render reads them here to lay out
     /// accordingly.
     ///
     /// `None` when no event handler has stored a value at this path, and in a
@@ -258,8 +182,8 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// [`EventCtx::transient`] for the ownership rules; semantic state does
     /// not belong here.
     ///
-    /// Use [`transient_mut`](Self::transient_mut) when paint must also settle
-    /// the value it reads.
+    /// Use [`transient_mut`](Self::transient_mut) when the declaration must
+    /// also settle the value it reads.
     ///
     /// # Panics
     ///
@@ -272,17 +196,19 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
         Some(transients.get(path)?.expect_ref(path))
     }
 
-    /// [`transient`](Self::transient), for the rare value paint has to settle
-    /// rather than merely read.
+    /// [`transient`](Self::transient), for the rare value a declaration has to
+    /// settle rather than merely read.
     ///
-    /// Some presentation state can only be resolved while painting, because
-    /// only paint knows the geometry: whether a wheel-scrolled viewport still
-    /// holds, given where the cursor now is, is the built-in example.
+    /// Some presentation state can only be resolved once the layout is known,
+    /// because only the layout answers it: whether a wheel-scrolled viewport
+    /// still holds, given where the cursor now is, is the built-in example —
+    /// [`List`](crate::List) settles it in its `render`, alongside the
+    /// arithmetic that produces the offset it stores.
     ///
     /// **The update must be idempotent.** The declaration closure runs twice
     /// per frame (see [`Ratcn::render`](super::Ratcn::render)), so whatever
     /// this writes is written twice and must reach the same value the second
-    /// time — and the value the paint pass reads must be the one the structure
+    /// time — and the value the second pass reads must be the one the first
     /// pass would have read. Settling a flag (`if moved { held = false }`) or
     /// storing a computed offset qualifies; counting, appending, or toggling
     /// does not. Declared structure must never depend on it.
@@ -337,10 +263,7 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
             frame: &mut *self.frame,
             area,
             theme: self.theme,
-            focused: self.focused,
-            contains_focus: self.contains_focus,
-            hovered: self.hovered,
-            contains_hover: self.contains_hover,
+            flags: self.flags,
             hover_position: self.hover_position,
             hover: self.hover,
             transients: self.transients.as_deref_mut(),
@@ -683,19 +606,67 @@ impl<Msg> PopupOptions<Msg> {
     }
 }
 
-/// Where deferred paint lands: the frame for the base layer, a layer's canvas
-/// for paint deferred inside that layer.
+/// Where paint lands: the frame for the base layer, a layer's canvas for
+/// paint that belongs to that layer.
+///
+/// The three write forms are implemented once, here, because routing is the
+/// only thing they do that the two paint contexts do not. [`Painter`] and
+/// [`PaintCtx`] are the two public faces over it, and they differ in what
+/// else they carry rather than in where they write.
 pub(crate) enum PaintTarget<'a, 'frame> {
     Frame(&'a mut Frame<'frame>),
     Canvas(&'a mut super::engine::LayerCanvas),
 }
 
+impl PaintTarget<'_, '_> {
+    fn render_widget(&mut self, widget: impl Widget, area: Rect) {
+        match self {
+            Self::Frame(frame) => frame.render_widget(widget, area),
+            Self::Canvas(canvas) => {
+                widget.render(area.intersection(canvas.buffer.area), &mut canvas.buffer);
+                canvas.mark_painted(area);
+            }
+        }
+    }
+
+    fn render_stateful_widget<W: StatefulWidget>(
+        &mut self,
+        widget: W,
+        area: Rect,
+        state: &mut W::State,
+    ) {
+        match self {
+            Self::Frame(frame) => frame.render_stateful_widget(widget, area, state),
+            Self::Canvas(canvas) => {
+                widget.render(
+                    area.intersection(canvas.buffer.area),
+                    &mut canvas.buffer,
+                    state,
+                );
+                canvas.mark_painted(area);
+            }
+        }
+    }
+
+    fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
+        match self {
+            Self::Frame(frame) => paint(frame.buffer_mut()),
+            Self::Canvas(canvas) => {
+                let area = canvas.buffer.area;
+                canvas.mark_painted(area);
+                paint(&mut canvas.buffer)
+            }
+        }
+    }
+}
+
 /// Paint-only access to the active paint surface, handed to deferred paint
 /// closures.
 ///
-/// Mirrors the paint surface of [`RenderCtx`]: widgets and raw buffer writes,
-/// never the frame itself. Paint deferred inside a modal or popup layer lands
-/// on that layer's canvas and composites with it.
+/// Deferred paint is decoration without identity, so this carries nothing but
+/// the surface and the theme — [`PaintCtx`] is the context for paint that
+/// belongs to a declaration. Paint deferred inside a modal or popup layer
+/// lands on that layer's canvas and composites with it.
 pub struct Painter<'a, 'frame> {
     pub(crate) target: PaintTarget<'a, 'frame>,
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
@@ -711,13 +682,7 @@ impl fmt::Debug for Painter<'_, '_> {
 impl Painter<'_, '_> {
     /// Paint a ratatui widget onto the active paint surface.
     pub fn render_widget(&mut self, widget: impl Widget, area: Rect) {
-        match &mut self.target {
-            PaintTarget::Frame(frame) => frame.render_widget(widget, area),
-            PaintTarget::Canvas(canvas) => {
-                widget.render(area.intersection(canvas.buffer.area), &mut canvas.buffer);
-                canvas.mark_painted(area);
-            }
-        }
+        self.target.render_widget(widget, area);
     }
 
     /// Paint a ratatui stateful widget onto the active paint surface.
@@ -727,30 +692,137 @@ impl Painter<'_, '_> {
         area: Rect,
         state: &mut W::State,
     ) {
-        match &mut self.target {
-            PaintTarget::Frame(frame) => frame.render_stateful_widget(widget, area, state),
-            PaintTarget::Canvas(canvas) => {
-                widget.render(
-                    area.intersection(canvas.buffer.area),
-                    &mut canvas.buffer,
-                    state,
-                );
-                canvas.mark_painted(area);
-            }
-        }
+        self.target.render_stateful_widget(widget, area, state);
     }
 
     /// Run a paint closure over the active paint surface's raw cell buffer.
     /// Inside a layer, the whole layer footprint counts as painted.
     pub fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        match &mut self.target {
-            PaintTarget::Frame(frame) => paint(frame.buffer_mut()),
-            PaintTarget::Canvas(canvas) => {
-                let area = canvas.buffer.area;
-                canvas.mark_painted(area);
-                paint(&mut canvas.buffer)
-            }
-        }
+        self.target.with_buffer(paint)
+    }
+}
+
+/// Everything painting one declaration needs: where to draw, what to draw
+/// with, and where that declaration sits in this frame's interaction.
+///
+/// [`Component::paint`] gets one, and so does every closure queued with
+/// [`RenderCtx::paint`]. Both run during the replay that follows the
+/// declaration walk, which is why this context can declare nothing: by the
+/// time it exists the tree is closed and focus is resolved. That is also what
+/// makes the four interaction flags trustworthy here — during the walk they
+/// are still provisional.
+///
+/// Painting goes through [`render_widget`](Self::render_widget),
+/// [`render_stateful_widget`](Self::render_stateful_widget), and
+/// [`with_buffer`](Self::with_buffer). The context deliberately never lends
+/// out the ratatui `Frame`: keeping it private means a paint call can read
+/// `ctx.theme`, [`ctx.state()`](Self::state), and the interaction flags while
+/// building its widget argument, which a borrowed frame would prevent.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "two independent (leaf, within) flag pairs — focus and hover; the bools are the natural shape"
+)]
+pub struct PaintCtx<'a, 'frame, State> {
+    pub(crate) target: PaintTarget<'a, 'frame>,
+    /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
+    pub theme: &'a Theme,
+    pub(crate) area: Rect,
+    /// This declaration is the focused leaf.
+    pub focused: bool,
+    /// The focus path passes through or ends at this declaration (the
+    /// `focus-within` signal for e.g. pane border highlighting).
+    pub contains_focus: bool,
+    /// This declaration is the hovered leaf. Independent of `focused`: a
+    /// component can be hovered without being focused, and vice versa.
+    pub hovered: bool,
+    /// The hover path passes through or ends at this declaration (the
+    /// `hover-within` signal).
+    pub contains_hover: bool,
+    pub(crate) hover_position: Option<Position>,
+    pub(crate) state: &'a State,
+}
+
+impl<State> fmt::Debug for PaintCtx<'_, '_, State> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PaintCtx")
+            .field("area", &self.area)
+            .field("theme", self.theme)
+            .field("focused", &self.focused)
+            .field("contains_focus", &self.contains_focus)
+            .field("hovered", &self.hovered)
+            .field("contains_hover", &self.contains_hover)
+            .field("hover_position", &self.hover_position)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, State> PaintCtx<'a, '_, State> {
+    /// Paint a ratatui widget onto the active paint surface.
+    ///
+    /// The widget is consumed here; nothing is deferred or allocated. Because
+    /// the context never lends out the frame, the widget expression may read
+    /// `ctx` freely (`ctx.theme`, [`state`](Self::state), interaction flags)
+    /// in argument position.
+    ///
+    /// Inside a [`modal`](RenderCtx::modal), [`popup`](RenderCtx::popup), or
+    /// [`hint`](RenderCtx::hint) layer the paint lands on that layer's canvas
+    /// and composites above everything declared outside it; otherwise it
+    /// lands on the frame. A layer composites the widget's whole declared
+    /// `area` opaquely — cells the widget left unwritten come through as
+    /// empty rather than transparent, so paint a panel background first, as
+    /// the built-in layers do.
+    pub fn render_widget(&mut self, widget: impl Widget, area: Rect) {
+        self.target.render_widget(widget, area);
+    }
+
+    /// Paint a ratatui stateful widget onto the active paint surface.
+    ///
+    /// The escape hatch for widgets that need a `&mut` widget state during
+    /// paint (e.g. ratatui's `List` with `ListState`). Targets the same
+    /// surface as [`render_widget`](Self::render_widget).
+    pub fn render_stateful_widget<W: StatefulWidget>(
+        &mut self,
+        widget: W,
+        area: Rect,
+        state: &mut W::State,
+    ) {
+        self.target.render_stateful_widget(widget, area, state);
+    }
+
+    /// Run a paint closure over the active paint surface's raw cell buffer.
+    ///
+    /// The escape hatch for direct cell writes (`set_string`, `set_style`,
+    /// per-cell edits). The closure receives only the buffer, so values read
+    /// from `ctx` must be taken as arguments or moved in. Inside a layer, the
+    /// buffer is the layer's canvas and the whole layer footprint counts as
+    /// painted for compositing.
+    pub fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
+        self.target.with_buffer(paint)
+    }
+
+    /// The area of the declaration this paint belongs to: a component's paint
+    /// allocation, or the [`RenderCtx::area`] a queued closure was reached
+    /// with.
+    #[must_use]
+    pub const fn area(&self) -> Rect {
+        self.area
+    }
+
+    /// The pointer position from the most recent mouse event, if it is still
+    /// inside the terminal.
+    ///
+    /// This is paint-only runtime information. It does not change the
+    /// app-owned [`HoverState`], which continues to describe the hovered
+    /// declaration path.
+    #[must_use]
+    pub const fn hover_position(&self) -> Option<Position> {
+        self.hover_position
+    }
+
+    /// The app state the pass was declared with.
+    #[must_use]
+    pub const fn state(&self) -> &'a State {
+        self.state
     }
 }
 
@@ -1011,11 +1083,11 @@ impl<'a> EventCtx<'a> {
     /// transient is dropped as soon as its path stops being declared, and
     /// nothing warns you when that happens.
     ///
-    /// Paint reads the same value back with
+    /// The next declaration reads the same value back with
     /// [`RenderCtx::transient`](RenderCtx::transient), which is how a wheel
     /// scroll survives a redraw. Write from here whenever an event can carry
     /// the change; [`RenderCtx::transient_mut`](RenderCtx::transient_mut) is
-    /// the narrow exception, for a value only paint can settle.
+    /// the narrow exception, for a value only the layout can settle.
     ///
     /// In a context built without a dispatch — `EventCtx::default()` in a
     /// component unit test — the value lives and dies with that context
@@ -1158,7 +1230,9 @@ pub enum Step {
 ///    because focus for the whole frame is decided in one pass.
 /// 3. [`interaction_area`](Self::interaction_area) — derive the geometry used
 ///    for focus, hit-testing, and events from the final paint area.
-/// 4. [`render`](Self::render) — paint, and declare descendants if any.
+/// 4. [`render`](Self::render) — lay out, and declare descendants if any.
+/// 5. [`paint`](Self::paint) — draw, once the whole tree has been declared
+///    and focus has resolved.
 ///
 /// The instances from the last successful pass are then retained, and those are
 /// the instances [`handle_event`](Self::handle_event) is called on afterwards —
@@ -1186,14 +1260,33 @@ pub trait Component<State, Msg> {
     /// ignore it.
     fn prepare(&mut self, _state: &State) {}
 
+    /// Declare the component: lay out its area, declare its descendants, and
+    /// record whatever [`handle_event`](Self::handle_event) will need to read
+    /// back.
+    ///
+    /// This runs twice per frame, in both passes (see
+    /// [`Ratcn::render`](super::Ratcn::render)), and paints nothing. What
+    /// belongs here is everything the answer to "what exists, and where" is
+    /// made of: layout arithmetic, child declarations, and the retained
+    /// geometry event routing hit-tests against. All of it must be
+    /// independent of the interaction flags, which are provisional during the
+    /// first pass and are not offered here at all.
+    ///
+    /// Anything that draws belongs in [`paint`](Self::paint).
+    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, State, Msg>);
+
     /// Paint the component. `ctx` carries the paint surface, area, app state,
     /// theme, and interaction state.
     ///
-    /// Paint your own background and border *before* declaring descendants.
-    /// Hit-testing follows declaration order and knows nothing about direct
-    /// frame writes, so painting over a child after declaring it hides the
-    /// child visually while it still swallows clicks.
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, State, Msg>);
+    /// Every component's paint is queued where [`render`](Self::render)
+    /// declared it and replayed once the whole tree is known, so this runs
+    /// exactly once per frame, with focus resolved. Order is declaration
+    /// order, and a component is queued at the point it opens — before its
+    /// descendants — so a container's background and border land beneath
+    /// what it declares inside itself without any care taken here.
+    ///
+    /// A component that draws nothing of its own leaves this defaulted.
+    fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, State>) {}
 
     /// The scope this component opens around its descendants. Read once, before
     /// [`render`](Component::render), so it cannot depend on paint.

@@ -23,10 +23,12 @@ end of a slice the same way, and for the same reason.
 
 Returning a `Result` instead was considered and rejected, for two reasons:
 
-- Components paint as they are declared. By the time a duplicate id can be
-  detected, earlier pixels are already in the frame, and returning an error
-  could not undo them. It would report a broken frame while looking
-  recoverable.
+- Declaring is where these mistakes are found, and declaring does not paint:
+  every mistake is detected while the frame is still only a description of
+  itself. An error value would therefore have to be threaded back out through
+  every nested declaration to reach a caller that could act on it, for a
+  condition the caller cannot act on. A panic reaches the same place in one
+  step.
 - Anything that returns a `Result` invites `?` and `let _ =`. A bug that can be
   passed along quietly will be, and it would resurface later as misrouted
   events, far from where it started. A panic points at the exact call, the
@@ -39,9 +41,10 @@ the whole pass runs under unwind protection. So a panic anywhere along the way
 leaves the last good surface untouched: events keep routing through it, and the
 next successful render replaces it as usual.
 
-Pixels already written to the Ratatui frame are not rolled back, so a failed
-frame can look half-drawn. What cannot happen is a half-routable surface — there
-is no state in which part of a declaration receives events.
+A rejected pass paints nothing at all: declaration, validation, and the modal
+check all complete before the first cell is written, so the previous frame
+stays on screen intact. What also cannot happen is a half-routable surface —
+there is no state in which part of a declaration receives events.
 
 Hosts that want to keep running through a declaration bug can catch the unwind
 around the draw call and keep dispatching events; the retained surface makes
@@ -72,11 +75,11 @@ and covering the open/close gap.
 ## Why every frame declares twice
 
 Every frame, `Ratcn::render` runs the app's declaration closure twice. The
-first run is the *structure pass*: the same declarations with every paint call
-suppressed, so the runtime learns the full tree — identity, geometry, which
-declarations can take focus — before anything is drawn. Focus then resolves
-once, against that complete tree, and the second run — the *paint pass* —
-paints with the resolved focus feeding every `ctx.focused` flag. The paint
+first run is the *structure pass*: the same declarations queueing no paint, so
+the runtime learns the full tree — identity, geometry, which declarations can
+take focus — before anything is drawn. Focus then resolves once, against that
+complete tree, and the second run — the *paint pass* — builds the paint queue
+that is replayed with the resolved focus feeding every flag. The paint
 pass is validated declaration-by-declaration against the structure pass, so a
 closure that declares different trees on its two runs panics naming the first
 divergent path.
@@ -105,10 +108,10 @@ another.
 ### The contract, and its cost
 
 The closure has to declare the same tree both times. It may branch on anything
-in app state, focus included — what it must not branch on is the `ctx.focused`
-and `ctx.contains_focus` flags, which are only provisional during the structure
-pass. Styling and painting may use those flags freely; that is what they are
-for.
+in app state, focus included — what it must not branch on is the interaction
+flags, which are provisional until focus resolves and are therefore not offered
+while declaring at all. They reach `PaintCtx`, where styling uses them freely;
+that is what they are for.
 
 The runtime checks this every frame, so a closure that is not repeatable fails
 the first time it runs rather than going quietly out of step.

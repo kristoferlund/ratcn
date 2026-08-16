@@ -61,7 +61,6 @@ impl State {
 pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
-    let theme = ctx.theme;
     let notifications = List::new(NOTIFICATION_OPTIONS.map(|label| ListItem::new(label, label)))
         .item_focus(
             |state: &AppState| state.notifications_state.focused,
@@ -81,19 +80,22 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     ])
     .spacing(1)
     .areas(inner);
-    ctx.render_widget(
-        Paragraph::new("Notifications").style(
-            Style::default()
-                .fg(theme.foreground)
-                .add_modifier(Modifier::BOLD),
-        ),
-        header_area,
-    );
-    ctx.render_widget(
-        Paragraph::new("Choose which email and push alerts you want to receive.")
-            .style(Style::default().fg(theme.muted_foreground))
-            .wrap(Wrap { trim: true }),
-        intro_area,
-    );
+    ctx.paint(move |ctx| {
+        let theme = ctx.theme;
+        ctx.render_widget(
+            Paragraph::new("Notifications").style(
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            header_area,
+        );
+        ctx.render_widget(
+            Paragraph::new("Choose which email and push alerts you want to receive.")
+                .style(Style::default().fg(theme.muted_foreground))
+                .wrap(Wrap { trim: true }),
+            intro_area,
+        );
+    });
     ctx.render_component("notifications", notifications, list_area);
 }

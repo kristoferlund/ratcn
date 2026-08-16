@@ -17,7 +17,7 @@ use ratcn::linear_nav;
 use ratcn::list_core;
 use ratcn::runtime::{
     Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent, MouseButton,
-    MouseKind, RenderCtx, Step,
+    MouseKind, PaintCtx, RenderCtx, Step,
 };
 
 /// How tall the tab row is drawn. Matches [`ButtonSize`](ratcn::ButtonSize),
@@ -907,16 +907,23 @@ where
     }
 
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
+        let state = ctx.state();
+        let selected = self.selected_index(state);
+        let cursor = self.cursor_index(state);
+        let labels: Vec<&str> = self.items.iter().map(|tab| tab.label.as_str()).collect();
+        // Capture geometry for click hit-testing. The widget chooses visible
+        // tabs from the same inputs, so paint and routing agree.
+        let must_show = cursor.or(selected).unwrap_or(0);
+        self.hits = tab_layout(ctx.area(), &labels, self.size, must_show);
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
         let area = ctx.area();
         let state = ctx.state();
         let selected = self.selected_index(state);
         let cursor = self.cursor_index(state);
         let labels: Vec<&str> = self.items.iter().map(|tab| tab.label.as_str()).collect();
         let disabled: Vec<bool> = (0..self.items.len()).map(|i| self.disabled_at(i)).collect();
-        // Capture geometry for click hit-testing. The widget chooses visible
-        // tabs from the same inputs, so paint and routing agree.
-        let must_show = cursor.or(selected).unwrap_or(0);
-        self.hits = tab_layout(area, &labels, self.size, must_show);
         let hovered_tab = ctx.hover_position().and_then(|position| {
             self.hits
                 .tabs

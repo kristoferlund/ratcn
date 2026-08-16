@@ -92,7 +92,7 @@ The two-pass mechanics behind this live in
 Hover is a second app-owned path, bound with `Ratcn::hover`, tracking what the
 pointer is over. It is deliberately independent of focus: typing keeps going to
 the focused field while the mouse drifts across other controls. A component can
-still highlight under the pointer through `RenderCtx::hovered`.
+still highlight under the pointer through `PaintCtx::hovered`.
 
 A stored hover path can go stale — its target removed, moved, or covered.
 Ratcn resolves the path against the latest frame and simply renders nothing

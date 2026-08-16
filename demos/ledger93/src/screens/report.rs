@@ -49,7 +49,6 @@ impl State {
 pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     let area = ctx.area();
     let state = ctx.state();
-    let theme = ctx.theme;
     // Constrain layout to the widest label so the button keeps its width as the
     // sort toggles; the paint widget measures without declaring anything.
     let button_width = ButtonWidget::new("Sort by: amount").width();
@@ -63,7 +62,7 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
         .on_press(|| AppMsg::Report(Msg::ToggleSort));
     let button_height = sort.height();
 
-    let inner = crate::screens::render_panel(ctx, area, theme, None);
+    let inner = crate::screens::render_panel(ctx, area, None);
 
     let [chart_area, _gap, footer_area] = inner.layout(&Layout::vertical([
         Constraint::Min(0),
@@ -87,14 +86,16 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
                 .text_value(label.clone())
         })
         .collect();
-    ctx.render_widget(
-        BarChartWidget::new(chart_bars)
-            .themed(theme)
-            .max_value(max)
-            .bar_width(9)
-            .bar_gap(1),
-        chart_area,
-    );
+    ctx.paint(move |ctx| {
+        ctx.render_widget(
+            BarChartWidget::new(chart_bars)
+                .themed(ctx.theme)
+                .max_value(max)
+                .bar_width(9)
+                .bar_gap(1),
+            chart_area,
+        );
+    });
 
     let [button_area] = Layout::horizontal([Constraint::Length(button_width)])
         .flex(Flex::Center)

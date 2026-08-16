@@ -26,6 +26,8 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     );
     commands.push(steps::code(theme, state.choices.theme_line()));
 
-    let inner = steps::render_panel(ctx, area, theme, Some("Happy development!"));
-    ctx.render_widget(Paragraph::new(commands).wrap(Wrap { trim: false }), inner);
+    let inner = steps::render_panel(ctx, area, Some("Happy development!"));
+    ctx.paint(move |ctx| {
+        ctx.render_widget(Paragraph::new(commands).wrap(Wrap { trim: false }), inner);
+    });
 }

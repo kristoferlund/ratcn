@@ -6,7 +6,7 @@ use ratatui::{
     style::Style,
     widgets::{Block, Padding},
 };
-use ratcn::{Theme, runtime::RenderCtx};
+use ratcn::runtime::RenderCtx;
 
 pub const PANEL_PADDING: Padding = Padding::new(2, 2, 1, 1);
 
@@ -19,25 +19,35 @@ pub const PANEL_PADDING: Padding = Padding::new(2, 2, 1, 1);
 pub fn render_panel<S, M>(
     ctx: &mut RenderCtx<'_, '_, S, M>,
     area: Rect,
-    theme: &Theme,
     title: Option<&str>,
 ) -> Rect {
-    let border = if ctx.contains_focus {
-        theme.ring
-    } else if ctx.contains_hover {
-        theme.primary
-    } else {
-        theme.border
-    };
-    let mut block = Block::bordered()
-        .border_style(Style::default().fg(border))
-        .style(Style::default().fg(theme.foreground).bg(theme.background))
-        .padding(PANEL_PADDING);
-    if let Some(title) = title {
-        block = block.title(title.to_owned());
-    }
-    let inner = block.inner(area);
-    ctx.render_widget(block, area);
+    // Borders and padding fix the inner rect; the border color does not, so
+    // the block is rebuilt where focus and hover are known.
+    let inner = Block::bordered().padding(PANEL_PADDING).inner(area);
+    let title = title.map(ToOwned::to_owned);
+    ctx.paint(move |ctx| {
+        let theme = ctx.theme;
+        let border = if ctx.contains_focus {
+            theme.ring
+        } else if ctx.contains_hover {
+            theme.primary
+        } else {
+            theme.border
+        };
+        let mut block = Block::bordered()
+            .border_style(Style::default().fg(border))
+            .style(Style::default().fg(theme.foreground).bg(theme.background))
+            .padding(PANEL_PADDING);
+        if let Some(title) = title {
+            block = block.title(title.to_owned());
+        }
+        debug_assert_eq!(
+            block.inner(area),
+            inner,
+            "the painted block's inner rect must match the one the layout used"
+        );
+        ctx.render_widget(block, area);
+    });
     inner
 }
 
