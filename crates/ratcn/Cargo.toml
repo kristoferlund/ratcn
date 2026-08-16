@@ -24,6 +24,13 @@ web-sys = { version = "0.3", optional = true, features = [
     "DataTransfer",
 ] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "frame"
+harness = false
+
 [features]
 default = []
 crossterm = ["ratatui/crossterm"]
