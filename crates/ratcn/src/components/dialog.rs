@@ -9,15 +9,14 @@ use ratatui::{
 
 use crate::Theme;
 use crate::runtime::{
-    BodySlot, CellOffset, ChildId, ChildSlots, Component, DragOptions, DragPhase, Event, EventCtx,
-    EventResult, KeyChord, KeyCode, MeasuredComponent, RenderCtx, ScopeOptions, TabWrap,
-    clamp_offset, is_border, offset_rect, wrapped_height,
+    CellOffset, ChildId, Component, DragOptions, DragPhase, Event, EventCtx, EventResult, KeyChord,
+    KeyCode, MeasuredComponent, RenderCtx, ScopeOptions, TabWrap, clamp_offset, is_border,
+    offset_rect, wrapped_height,
 };
 use crate::text_width::{display_width_u16, wrap_to_width};
 
 type OnOffsetChangeFn<M> = Box<dyn Fn(CellOffset) -> M>;
 type OnDismissFn<M> = Box<dyn Fn() -> M>;
-const DEFAULT_FOOTER_HEIGHT: u16 = 1;
 const ACTION_SPACING: u16 = 2;
 /// Cells of padding inside the border, on every side of the box.
 const PADDING: u16 = 1;
@@ -204,6 +203,65 @@ fn paint_dialog_box<S, M>(
 }
 
 type StyleFn = Box<dyn Fn(&Theme) -> DialogStyle>;
+/// A custom body closure, boxed for storage until the declaration paints it.
+type BodyFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>;
+/// One action's declaration, boxed with the component and id it carries.
+type ActionFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>, Rect)>;
+
+/// What fills the dialog's main area.
+///
+/// The closure is `FnOnce` and gone once painted, but the variant and its
+/// height outlive it: `handle_event` recomputes the same box geometry between
+/// frames and needs to know what the main area was sized for.
+enum DialogBody<S, M> {
+    None,
+    /// The [`description`](Dialog::description) paragraph.
+    Description,
+    Content {
+        height: u16,
+        declare: Option<BodyFn<S, M>>,
+    },
+}
+
+/// What fills the dialog's footer strip: nothing, a custom closure, or the
+/// standard action row. The three are mutually exclusive by construction,
+/// which is what the builder conflict assertions enforce.
+enum DialogFooter<S, M> {
+    None,
+    Custom {
+        height: u16,
+        declare: Option<BodyFn<S, M>>,
+    },
+    Actions(Vec<ActionSlot<S, M>>),
+}
+
+/// One standard action: its measured size, and the declaration that puts it on
+/// screen. The size stays readable after the declaration is consumed, because
+/// event-time geometry sizes the action row from it.
+struct ActionSlot<S, M> {
+    declare: Option<ActionFn<S, M>>,
+    size: ratatui::layout::Size,
+}
+
+impl<S, M> fmt::Debug for DialogBody<S, M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Description => f.write_str("Description"),
+            Self::Content { height, .. } => write!(f, "Content({height})"),
+        }
+    }
+}
+
+impl<S, M> fmt::Debug for DialogFooter<S, M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Custom { height, .. } => write!(f, "Custom({height})"),
+            Self::Actions(actions) => write!(f, "Actions({})", actions.len()),
+        }
+    }
+}
 
 /// A modal dialog: a centered, bordered box with a [`title`](Dialog::title) in
 /// its top border, a main content area (a [`description`](Dialog::description)
@@ -259,15 +317,12 @@ type StyleFn = Box<dyn Fn(&Theme) -> DialogStyle>;
 ///     .action("save", Button::new("Save").on_press(|| Msg::Save));
 /// ```
 pub struct Dialog<S, M> {
-    actions: ChildSlots<S, M>,
     title: String,
     description: String,
     width: Option<u16>,
     height: Option<u16>,
-    content: BodySlot<S, M>,
-    content_height: Option<u16>,
-    footer: BodySlot<S, M>,
-    footer_height: Option<u16>,
+    body: DialogBody<S, M>,
+    footer: DialogFooter<S, M>,
     dismiss_key: KeyChord,
     /// Declaration prop retained with the successful runtime surface.
     offset: CellOffset,
@@ -283,15 +338,12 @@ pub struct Dialog<S, M> {
 impl<S: 'static, M: 'static> fmt::Debug for Dialog<S, M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Dialog")
-            .field("actions", &self.actions.len())
             .field("title", &self.title)
             .field("description", &self.description)
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("content", &self.content.is_configured())
-            .field("content_height", &self.content_height)
-            .field("footer", &self.footer.is_configured())
-            .field("footer_height", &self.footer_height)
+            .field("body", &self.body)
+            .field("footer", &self.footer)
             .field("dismiss_key", &self.dismiss_key)
             .field("offset", &self.offset)
             .field("on_offset_change", &self.on_offset_change.is_some())
@@ -309,15 +361,12 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            actions: ChildSlots::default(),
             title: String::new(),
             description: String::new(),
             width: None,
             height: None,
-            content: BodySlot::None,
-            content_height: None,
-            footer: BodySlot::None,
-            footer_height: None,
+            body: DialogBody::None,
+            footer: DialogFooter::None,
             dismiss_key: KeyChord::from(KeyCode::Esc),
             offset: CellOffset::default(),
             on_offset_change: None,
@@ -340,6 +389,10 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        // Content wins whichever order the two were called in.
+        if !matches!(self.body, DialogBody::Content { .. }) {
+            self.body = DialogBody::Description;
+        }
         self
     }
 
@@ -382,8 +435,10 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
         height: u16,
         f: impl FnOnce(&mut RenderCtx<'_, '_, S, M>) + 'static,
     ) -> Self {
-        self.content.set(f);
-        self.content_height = Some(height);
+        self.body = DialogBody::Content {
+            height,
+            declare: Some(Box::new(f)),
+        };
         self
     }
 
@@ -403,7 +458,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     ///
     /// # Panics
     ///
-    /// Panics if a custom footer or custom footer height was already configured.
+    /// Panics if a custom footer was already configured.
     #[must_use]
     pub fn action(
         mut self,
@@ -411,10 +466,20 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
         component: impl MeasuredComponent<S, M> + 'static,
     ) -> Self {
         assert!(
-            !self.footer.is_configured() && self.footer_height.is_none(),
+            !matches!(self.footer, DialogFooter::Custom { .. }),
             "standard dialog actions cannot be combined with a custom footer"
         );
-        self.actions.push(id, component);
+        let id = id.into();
+        let slot = ActionSlot {
+            size: component.measure(),
+            declare: Some(Box::new(move |ctx, area| {
+                ctx.render_component(id, component, area);
+            })),
+        };
+        match &mut self.footer {
+            DialogFooter::Actions(actions) => actions.push(slot),
+            footer => *footer = DialogFooter::Actions(vec![slot]),
+        }
         self
     }
 
@@ -438,11 +503,13 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
         f: impl FnOnce(&mut RenderCtx<'_, '_, S, M>) + 'static,
     ) -> Self {
         assert!(
-            self.actions.is_empty(),
+            !matches!(self.footer, DialogFooter::Actions(_)),
             "a custom dialog footer cannot be combined with standard actions"
         );
-        self.footer.set(f);
-        self.footer_height = Some(height);
+        self.footer = DialogFooter::Custom {
+            height,
+            declare: Some(Box::new(f)),
+        };
         self
     }
 
@@ -538,20 +605,28 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
         self
     }
 
+    /// The standard action row, empty unless a footer of actions was built.
+    fn actions(&self) -> &[ActionSlot<S, M>] {
+        match &self.footer {
+            DialogFooter::Actions(actions) => actions,
+            DialogFooter::None | DialogFooter::Custom { .. } => &[],
+        }
+    }
+
     fn dims(&self) -> DialogDims<'_> {
         let action_height = self
-            .actions
-            .sizes()
-            .map(|size| size.height)
+            .actions()
+            .iter()
+            .map(|slot| slot.size.height)
             .max()
             .unwrap_or(0);
         let action_width = self
-            .actions
-            .sizes()
+            .actions()
+            .iter()
             .enumerate()
-            .fold(0u16, |width, (index, size)| {
+            .fold(0u16, |width, (index, slot)| {
                 width
-                    .saturating_add(size.width)
+                    .saturating_add(slot.size.width)
                     .saturating_add(if index > 0 { ACTION_SPACING } else { 0 })
             });
         DialogDims {
@@ -559,15 +634,13 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
             description: &self.description,
             width: self.width,
             height: self.height,
-            content_height: if self.content.is_configured() {
-                self.content_height
-            } else {
-                None
+            content_height: match &self.body {
+                DialogBody::Content { height, .. } => Some(*height),
+                DialogBody::None | DialogBody::Description => None,
             },
-            footer_height: if self.footer.is_configured() {
-                self.footer_height.unwrap_or(DEFAULT_FOOTER_HEIGHT)
-            } else {
-                action_height
+            footer_height: match &self.footer {
+                DialogFooter::Custom { height, .. } => *height,
+                DialogFooter::None | DialogFooter::Actions(_) => action_height,
             },
             footer_width: action_width,
         }
@@ -585,10 +658,6 @@ impl<S: 'static, M: 'static> Default for Dialog<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
-    fn prepare(&mut self, state: &S) {
-        self.actions.prepare(state);
-    }
-
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
         let area = ctx.area();
         self.paint_area = area;
@@ -598,50 +667,66 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
             |style| style(ctx.theme),
         );
         paint_dialog_box(ctx, layout.box_area, &self.title, style);
-        if let Some(render) = self.content.consume() {
-            ctx.in_area(layout.main_area, render);
-        } else if !self.description.is_empty() {
-            // Paint from the same wrap that sized the box (`wrapped_height` in
-            // `dialog_box_base`), so the description can never clip or pad the
-            // height it asked for.
-            let lines = wrap_to_width(&self.description, usize::from(layout.main_area.width))
-                .into_iter()
-                .map(Line::from)
-                .collect::<Vec<_>>();
-            ctx.render_widget(
-                Paragraph::new(lines).style(Style::default().fg(style.description_foreground)),
-                layout.main_area,
-            );
+        match &mut self.body {
+            DialogBody::None => {}
+            DialogBody::Description => {
+                if !self.description.is_empty() {
+                    // Paint from the same wrap that sized the box (`wrapped_height` in
+                    // `dialog_box_base`), so the description can never clip or pad the
+                    // height it asked for.
+                    let lines =
+                        wrap_to_width(&self.description, usize::from(layout.main_area.width))
+                            .into_iter()
+                            .map(Line::from)
+                            .collect::<Vec<_>>();
+                    ctx.render_widget(
+                        Paragraph::new(lines)
+                            .style(Style::default().fg(style.description_foreground)),
+                        layout.main_area,
+                    );
+                }
+            }
+            DialogBody::Content { declare, .. } => {
+                if let Some(declare) = declare.take() {
+                    ctx.in_area(layout.main_area, declare);
+                }
+            }
         }
-        if let Some(render) = self.footer.consume() {
-            ctx.in_area(layout.footer_area, render);
+        match &mut self.footer {
+            DialogFooter::None => {}
+            DialogFooter::Custom { declare, .. } => {
+                if let Some(declare) = declare.take() {
+                    ctx.in_area(layout.footer_area, declare);
+                }
+            }
+            DialogFooter::Actions(actions) => {
+                let constraints = actions
+                    .iter()
+                    .map(|slot| Constraint::Length(slot.size.width))
+                    .collect::<Vec<_>>();
+                let areas = Layout::horizontal(constraints)
+                    .flex(Flex::End)
+                    .spacing(ACTION_SPACING)
+                    .split(layout.footer_area);
+                for (slot, column) in actions.iter_mut().zip(areas.iter()) {
+                    // Bottom-align each action within its column of the row.
+                    let height = slot.size.height.min(column.height);
+                    let area = Rect::new(
+                        column.x,
+                        column.bottom().saturating_sub(height),
+                        column.width,
+                        height,
+                    );
+                    if let Some(declare) = slot.declare.take() {
+                        declare(ctx, area);
+                    }
+                }
+                debug_assert!(
+                    actions.iter().all(|slot| slot.declare.is_none()),
+                    "every dialog action must be declared"
+                );
+            }
         }
-        if !self.footer.is_configured() && !self.actions.is_empty() {
-            let constraints = self
-                .actions
-                .sizes()
-                .map(|size| Constraint::Length(size.width))
-                .collect::<Vec<_>>();
-            let areas = Layout::horizontal(constraints)
-                .flex(Flex::End)
-                .spacing(ACTION_SPACING)
-                .split(layout.footer_area);
-            self.actions.render_each(ctx, |index, size| {
-                // Bottom-align each action within its column of the row.
-                let area = areas[index];
-                let height = size.height.min(area.height);
-                Rect::new(
-                    area.x,
-                    area.bottom().saturating_sub(height),
-                    area.width,
-                    height,
-                )
-            });
-        }
-        assert!(
-            self.actions.all_rendered(),
-            "every dialog action must be rendered"
-        );
     }
 
     fn scope_options(&self) -> ScopeOptions {
@@ -1480,6 +1565,91 @@ mod tests {
     }
 
     #[test]
+    fn content_replaces_the_description_in_either_call_order() {
+        for description_first in [true, false] {
+            let state = State::default();
+            let theme = Theme::default_dark();
+            let content_area = Arc::new(Mutex::new(None));
+            let mut ratcn = Ratcn::<State, Msg>::new();
+            let mut terminal = Terminal::new(TestBackend::new(60, 12)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        let observed = Arc::clone(&content_area);
+                        let content = move |ctx: &mut RenderCtx<'_, '_, State, Msg>| {
+                            *observed.lock().expect("content area lock") = Some(ctx.area());
+                        };
+                        let dialog = if description_first {
+                            Dialog::new().description("ignored").content(3, content)
+                        } else {
+                            Dialog::new().content(3, content).description("ignored")
+                        };
+                        ctx.modal(ChildId::Static("dialog"), dialog, area);
+                    });
+                })
+                .expect("draw");
+
+            let main_area = content_area
+                .lock()
+                .expect("content area lock")
+                .expect("the content closure owns the main area");
+            assert_eq!(
+                main_area.height, 3,
+                "the box is sized from the content height, not the description"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_description_leaves_the_main_area_unpainted() {
+        let state = State::default();
+        let theme = Theme::default_dark();
+        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.modal(
+                        ChildId::Static("dialog"),
+                        Dialog::new()
+                            .title("Confirm")
+                            .outer_height(8)
+                            .description(""),
+                        area,
+                    );
+                });
+            })
+            .expect("draw");
+
+        let dims = DialogDims {
+            title: "Confirm",
+            description: "",
+            width: None,
+            height: Some(8),
+            content_height: None,
+            footer_height: 0,
+            footer_width: 0,
+        };
+        let layout = dialog_layout(Rect::new(0, 0, 60, 12), CellOffset::default(), &dims);
+        assert!(
+            layout.main_area.height > 0,
+            "the main area has rows a paragraph could have covered"
+        );
+        assert_ne!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((layout.main_area.x, layout.main_area.y))
+                .expect("main area cell")
+                .fg,
+            theme.muted_foreground,
+            "an empty description paints no paragraph over the box"
+        );
+    }
+
+    #[test]
     fn custom_children_use_runtime_duplicate_id_validation() {
         let state = State::default();
         let mut ratcn = Ratcn::<State, Msg>::new();
@@ -1598,6 +1768,44 @@ mod tests {
         assert_eq!(
             ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(Msg::Second)
+        );
+    }
+
+    #[test]
+    fn action_row_is_end_aligned_at_measured_widths_with_standard_spacing() {
+        let rendered = Arc::new(Mutex::new(Vec::new()));
+        let state = State::default();
+        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
+        let theme = Theme::default_dark();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.modal(
+                        ChildId::Static("dialog"),
+                        Dialog::new()
+                            .action("first", probe(Msg::First, 7, false, &rendered))
+                            .action("second", probe(Msg::Second, 9, false, &rendered)),
+                        area,
+                    );
+                });
+            })
+            .expect("draw");
+
+        // The 48-cell box spans columns 6..54, so the footer strip runs
+        // 8..52 and the row is flushed against its right edge. Both passes
+        // record; the paint pass's entries are the last half.
+        let rendered = rendered.lock().expect("render record lock");
+        assert_eq!(
+            rendered[2],
+            (Msg::First, Rect::new(34, 5, 7, 1)),
+            "each action is rendered at the width it measured"
+        );
+        assert_eq!(
+            rendered[3],
+            (Msg::Second, Rect::new(43, 5, 9, 1)),
+            "ACTION_SPACING cells after the first, ending on the strip's edge"
         );
     }
 
