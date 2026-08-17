@@ -2,8 +2,8 @@
 //! action beside its label, and a collapse the app owns.
 //!
 //! This is the worked example behind the composite walkthrough in
-//! `docs/docs/concepts/custom-components.md`, and the docs page quotes this
-//! file region by region rather than paraphrasing it. It lives in a demo crate
+//! `docs/docs/concepts/building-a-composite.md`, and that page quotes this file
+//! region by region rather than paraphrasing it. It lives in a demo crate
 //! rather than in `ratcn` on purpose: a composite of your own is an ordinary
 //! `Component`, so this one is written outside the library, against its
 //! published API only.
@@ -270,10 +270,13 @@ impl<S: 'static, M: 'static> Fieldset<S, M> {
     }
     // #endregion height
 
+    // #region mapping
     fn is_collapsed(&self, state: &S) -> bool {
         self.collapsed.as_ref().is_some_and(|read| read(state))
     }
 
+    /// The facts this declaration's geometry is derived from — the half of the
+    /// fields that taking a closure does not empty.
     fn facts(&self) -> Facts {
         Facts {
             collapsed: self.collapsed_now,
@@ -282,6 +285,7 @@ impl<S: 'static, M: 'static> Fieldset<S, M> {
             disabled: self.disabled,
         }
     }
+    // #endregion mapping
 
     fn marker(&self, collapsed: bool) -> &'static str {
         match (self.on_toggle.is_some(), collapsed) {
@@ -321,14 +325,15 @@ impl<S: 'static, M: 'static> Component<S, M> for Fieldset<S, M> {
         }
 
         if self.disabled {
-            // A wash over the body's own components cannot come from `paint`,
-            // which is queued where this declaration opened — above the border,
-            // beneath everything declared inside it. Deferred paint flushes
-            // after the layer has finished declaring instead.
+            // A wash over the body's own components cannot come from
+            // `Component::paint`, which is queued where this declaration
+            // *opened* — under everything declared inside it. Queueing a paint
+            // closure here, after those declarations, puts it after them in the
+            // same queue, on the same layer.
             let box_area = layout.box_area;
-            ctx.defer_paint(move |painter, _state| {
-                let dim = Style::default().fg(painter.theme.muted_foreground);
-                painter.with_buffer(|buffer| buffer.set_style(box_area, dim));
+            ctx.paint(move |ctx| {
+                let dim = Style::default().fg(ctx.theme.muted_foreground);
+                ctx.with_buffer(|buffer| buffer.set_style(box_area, dim));
             });
         }
     }
@@ -451,14 +456,14 @@ impl<S: 'static, M: 'static> Component<S, M> for Fieldset<S, M> {
             EventResult::Emit(on_toggle(collapsed))
         })
     }
+    // #endregion impl-interaction
 }
-// #endregion impl-interaction
 
 #[cfg(test)]
 mod tests {
     use ratatui::{Terminal, backend::TestBackend};
     use ratcn::{
-        Button, Theme,
+        Button, ButtonSize, Theme,
         runtime::{FocusState, KeyEvent, Modifiers, MouseEvent, Ratcn},
     };
 
@@ -482,12 +487,16 @@ mod tests {
     }
 
     /// One fieldset, wired the way the demo wires it: a measured action in the
-    /// header and a focusable button in the body.
-    fn fieldset() -> Fieldset<State, Msg> {
+    /// header and a focusable button in the body. The action's size is the
+    /// header's size — a large button is three rows tall.
+    fn group(action: ButtonSize) -> Fieldset<State, Msg> {
         Fieldset::new("Notifications")
             .collapsed(|state: &State| state.collapsed)
             .on_toggle(Msg::Collapse)
-            .action("mute", Button::new("Mute").on_press(|| Msg::Pressed))
+            .action(
+                "mute",
+                Button::new("Mute").size(action).on_press(|| Msg::Pressed),
+            )
             .body(BODY_HEIGHT, |ctx| {
                 let area = ctx.area();
                 ctx.render_component(
@@ -496,6 +505,10 @@ mod tests {
                     Rect { height: 1, ..area },
                 );
             })
+    }
+
+    fn fieldset() -> Fieldset<State, Msg> {
+        group(ButtonSize::Small)
     }
 
     /// A group with nothing focusable in it — no action, and a body that only
@@ -731,26 +744,34 @@ mod tests {
 
     /// `height` and `layout` share their arithmetic, so a caller who allocates
     /// exactly what the fieldset asked for gets a box that fills it — collapsed
-    /// or open.
+    /// or open, and whatever height the action turned out to measure. The large
+    /// action is the case a hard-coded one-row header would get wrong.
     #[test]
     fn the_height_asked_for_is_the_height_the_box_lays_itself_out_to() {
-        for collapsed in [false, true] {
-            let state = State {
-                collapsed,
-                ..State::default()
-            };
-            let mut group = fieldset();
-            let asked = group.height(&state);
-            group.prepare(&state);
+        for (action, header) in [(ButtonSize::Small, 1_u16), (ButtonSize::Large, 3)] {
+            for collapsed in [false, true] {
+                let state = State {
+                    collapsed,
+                    ..State::default()
+                };
+                let mut fieldset = group(action);
+                let asked = fieldset.height(&state);
+                fieldset.prepare(&state);
 
-            let box_area = layout(AREA, &group.facts()).box_area;
+                let layout = layout(AREA, &fieldset.facts());
+                let case = format!("{action:?} action, collapsed: {collapsed}");
 
-            assert_eq!(asked, box_area.height, "collapsed: {collapsed}");
-            assert_eq!(
-                box_area.height,
-                if collapsed { 3 } else { 3 + BODY_HEIGHT },
-                "border, header, and the body only when open",
-            );
+                assert_eq!(asked, layout.box_area.height, "{case}");
+                assert_eq!(
+                    layout.header_area.height, header,
+                    "the header is as tall as the action it measured ({case})",
+                );
+                assert_eq!(
+                    layout.box_area.height,
+                    header + EDGE_Y * 2 + if collapsed { 0 } else { BODY_HEIGHT },
+                    "border, header, and the body only when open ({case})",
+                );
+            }
         }
     }
 }

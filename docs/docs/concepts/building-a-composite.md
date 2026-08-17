@@ -18,8 +18,10 @@ a caller-supplied body, a measured child, retained layout facts, paint that
 follows focus, and keys that bubble.
 
 Tab through the groups below and press `Enter` on a switch; collapse a group
-with `←` and reopen it with `→`; click a header; then switch the plan and watch
-`Billing` go dim and inert, action button included.
+with `←` and reopen it with `→`; click a header. `Billing` starts dim and inert
+on the free plan — nothing in it can be focused, hovered, or clicked, its own
+action button included — until `Upgrade to Pro` turns it on; downgrade again to
+watch the whole section drop back out.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 420px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -71,6 +73,15 @@ empty.**
 render-derived caches, written while declaring and read afterwards, and neither
 is a second copy of app state: one is a pinned reading of it, the other is
 geometry.
+
+One method is the hinge the whole pattern turns on — it names, in one place,
+exactly which fields the geometry is allowed to depend on:
+
+<<< ../../../demos/fieldset/src/fieldset.rs#mapping{rust}
+
+No geometry reads `self.body` or `self.action`. `layout` below takes `Facts` and
+nothing else — it is a free function, not a method — so a later edit cannot
+quietly derive a rect from a closure that may already have been taken.
 
 ## One geometry function
 
@@ -131,7 +142,10 @@ where the caller does the placing.
 `prepare` runs first, before the runtime reads `scope_options`,
 `is_focusable`, or `interaction_area`, and that is the only place the collapsed
 binding can be pinned: `interaction_area(&self, area)` is handed no state, and
-the box it reports must be the box this frame will paint.
+the box it reports must be the box this frame will paint. Not every answer needs
+the pin — `Component::is_focusable(&self, state)` takes state, so a leaf whose
+focusability follows a `disabled` prop just reads it — but `scope_options` and
+`interaction_area` do not, and whatever they depend on has to be settled here.
 
 `render` paints nothing. It records `paint_area`, computes the layout once,
 declares the action, then the body — declaration order is Tab order, and here it
@@ -140,16 +154,29 @@ A collapsed fieldset simply does not declare its body: there is no hiding
 mechanism to maintain, because a declaration that does not happen leaves nothing
 behind.
 
-The `disabled` wash is the interesting part. A composite's own `paint` is queued
-where its declaration *opens*, before everything it declares inside itself —
-which is exactly what you want for a background and a border, and exactly wrong
-for decoration that has to cover the body's components. `ctx.defer_paint` is the
-slot for that: it flushes after the current layer has finished declaring, so the
-wash lands on top of the group. Note what that costs — deferred paint has no
-identity, no hit target, and no geometry of its own, and deferred paint
-registered in the base declaration flushes after *every* layer has composited,
-so a dimmed group under an open modal would draw over the modal. Decoration
-that must respect layers belongs to the layer that declared it.
+The `disabled` wash is the interesting part, because it has three plausible
+spellings and only one of them is right here.
+
+Paint is a queue, filled while declaring and replayed in the order it was
+filled. **`Component::paint` is queued where the declaration opens** — before
+everything the composite declares inside itself. That is exactly what a
+background and a border want, and exactly wrong for a wash: the body's
+components are queued after it and would paint straight over it.
+
+**`ctx.paint` is queued where it is reached.** Called at the end of `render`,
+after the action and the body have been declared, it lands after *their* paint in
+the same queue and on the same layer, and its `PaintCtx` still reports this
+declaration's area and interaction flags. That is what the fieldset uses, and it
+is the answer whenever the decoration has to cover only what the composite
+itself declared.
+
+**`ctx.defer_paint` is the last resort.** It defers until the current layer has
+finished declaring, so it outranks even *later siblings* — a drag ghost floating
+over cards declared after the one being dragged, as the kanban demo does. The
+price is real: deferred paint has no identity, no geometry, and no hit target,
+and paint deferred from the base declaration flushes after every layer has
+composited, so a wash registered there would draw over a modal opened on top of
+it. Use it to outrank siblings; use `ctx.paint` to outrank your own children.
 
 ## Painting
 
@@ -255,8 +282,8 @@ some part of the pattern above could plausibly be written the other way:
 | Test | The mistake it catches |
 |---|---|
 | `two_toggles_without_a_frame_between_them_expand_and_then_collapse` | reading the binding at declaration time instead of event time |
-| `a_group_with_nothing_focusable_inside_is_the_focus_target_itself` | leaving `scope_options().focusable()` off, making a collapsed group a dead end |
-| `left_collapses_the_group_from_a_control_inside_its_body` | consuming keys the body's own controls should see first, or failing to `Ignored` the rest |
+| `a_group_with_nothing_focusable_inside_is_the_focus_target_itself` | leaving `scope_options().focusable()` off, making a collapsed group a dead end — and returning anything but `Ignored` for a key the group has no answer for |
+| `left_collapses_the_group_from_a_control_inside_its_body` | handling the toggle only while the group itself holds focus, so the accordion cannot be driven from a control inside it |
 | `the_header_toggles_on_click_and_the_rows_below_a_collapsed_box_do_not` | hit-testing against something other than the geometry that was painted |
 | `a_disabled_fieldset_ignores_events_meant_for_its_own_children` | dimming a section without making it inert |
 | `the_disabled_wash_covers_what_the_body_declared` | drawing over-the-descendants decoration from `paint`, where the descendants would cover it |
@@ -285,8 +312,9 @@ own `draw` and `handle_event`.
   `prepare` — they are asked without state.
 - Controlled bindings are read at event time; geometry is hit-tested against
   what was painted.
-- Paint styles from `PaintCtx`'s flags; decoration that must cover descendants
-  goes through `ctx.defer_paint`.
+- Paint styles from `PaintCtx`'s flags; decoration that must cover the
+  composite's own descendants is a late `ctx.paint`, and `ctx.defer_paint` only
+  when it must cover later siblings too.
 - Everything the composite does not handle returns `Ignored`.
 
 ## Copying this
