@@ -131,10 +131,26 @@ pub enum DragPhase {
     Ignored,
 }
 
+/// The transient [`EventCtx::drag`] keeps at the component's identity path.
+///
+/// A drag is either running or it is not, so one discriminant says so and the
+/// facts that only mean something while it runs live inside it. The wrapper
+/// exists because the transient store inserts a default before the press fills
+/// it in; a gesture is never *observed* in that empty state, and the release
+/// removes the transient rather than emptying it.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct CapturedDrag {
-    button: Option<MouseButton>,
-    anchor: DragAnchor,
+struct CapturedDrag(Option<ActiveDrag>);
+
+/// A drag under way: the button holding it, where it started from, and
+/// whether it has moved since.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveDrag {
+    /// Only this button's movement and release continue the gesture.
+    button: MouseButton,
+    /// The pressed cell and the offset current when it was pressed.
+    anchor: AnchorPoint,
+    /// The pointer has left the pressed cell, which is what tells a drag from
+    /// a click on the same handle.
     moved: bool,
 }
 
@@ -168,38 +184,42 @@ impl EventCtx<'_> {
         match mouse.kind {
             MouseKind::Down(button) if button == options.button && options.can_start => {
                 self.capture_pointer(button);
-                let state = self.transient::<CapturedDrag>();
-                state.button = Some(button);
-                state.anchor.begin(mouse.column, mouse.row, options.offset);
-                state.moved = false;
+                *self.transient::<CapturedDrag>() = CapturedDrag(Some(ActiveDrag {
+                    button,
+                    anchor: AnchorPoint::at(mouse.column, mouse.row, options.offset),
+                    moved: false,
+                }));
                 DragPhase::Down
             }
             MouseKind::Drag(button) => {
-                let Some(state) = self.transient_if_present::<CapturedDrag>() else {
+                let Some(CapturedDrag(Some(drag))) = self.transient_if_present::<CapturedDrag>()
+                else {
                     return DragPhase::Ignored;
                 };
-                if state.button != Some(button) {
+                if drag.button != button {
                     return DragPhase::Ignored;
                 }
-                let Some(offset) = state.anchor.offset_at(mouse.column, mouse.row) else {
-                    return DragPhase::Ignored;
-                };
-                state.moved = true;
-                DragPhase::Moved { offset, position }
+                drag.moved = true;
+                DragPhase::Moved {
+                    offset: drag.anchor.offset_at(mouse.column, mouse.row),
+                    position,
+                }
             }
             MouseKind::Up(button) => {
-                let Some(state) = self.transient_if_present::<CapturedDrag>().copied() else {
+                let Some(CapturedDrag(Some(drag))) =
+                    self.transient_if_present::<CapturedDrag>().copied()
+                else {
                     return DragPhase::Ignored;
                 };
-                if state.button != Some(button) {
+                if drag.button != button {
                     return DragPhase::Ignored;
                 }
-                let state = self
-                    .take_transient::<CapturedDrag>()
-                    .expect("captured drag disappeared during release");
+                // The gesture is over: drop the stored state and report from
+                // the copy taken above.
+                self.take_transient::<CapturedDrag>();
                 DragPhase::Ended {
                     position,
-                    moved: state.moved,
+                    moved: drag.moved,
                 }
             }
             _ => DragPhase::Ignored,
@@ -210,16 +230,9 @@ impl EventCtx<'_> {
 /// Where a drag started, and the offset it started from — the arithmetic
 /// behind [`DragPhase::Moved`], with no notion of buttons or capture.
 ///
-/// Most components should use [`EventCtx::drag`](EventCtx::drag), which adds
-/// button matching, path-scoped retention, pointer capture, and release
-/// cleanup. This is what that helper is built on.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DragAnchor {
-    point: Option<AnchorPoint>,
-}
-
-/// The anchor once a drag has begun: the pressed cell and the offset current
-/// at that moment.
+/// It exists only inside an [`ActiveDrag`], which is what makes it total: an
+/// anchor with no drag around it is not a state this module can be in, so
+/// [`offset_at`](Self::offset_at) always has an answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AnchorPoint {
     column: u16,
@@ -227,26 +240,25 @@ struct AnchorPoint {
     offset: CellOffset,
 }
 
-impl DragAnchor {
-    /// Start a drag from the pressed cell, anchored to the current `offset`.
-    pub const fn begin(&mut self, column: u16, row: u16, offset: CellOffset) {
-        self.point = Some(AnchorPoint {
+impl AnchorPoint {
+    /// Anchor a drag to the pressed cell and the offset current at that
+    /// moment.
+    const fn at(column: u16, row: u16, offset: CellOffset) -> Self {
+        Self {
             column,
             row,
             offset,
-        });
+        }
     }
 
     /// The offset for the pointer now at `(column, row)`, anchored to where the
-    /// drag began. `None` if no drag is active. The component clamps the result
-    /// however it likes (see [`clamp_offset`]).
-    #[must_use]
-    pub fn offset_at(&self, column: u16, row: u16) -> Option<CellOffset> {
-        let point = self.point?;
-        Some(CellOffset {
-            x: axis_delta(point.offset.x, point.column, column),
-            y: axis_delta(point.offset.y, point.row, row),
-        })
+    /// drag began. The component clamps the result however it likes (see
+    /// [`clamp_offset`]).
+    fn offset_at(self, column: u16, row: u16) -> CellOffset {
+        CellOffset {
+            x: axis_delta(self.offset.x, self.column, column),
+            y: axis_delta(self.offset.y, self.row, row),
+        }
     }
 }
 
@@ -417,18 +429,70 @@ mod tests {
         assert!(capture.is_none());
     }
 
+    /// A running gesture belongs to the button that started it. Another
+    /// button's movement and release are not part of it, and must not move it
+    /// or end it — the same press can be held while a second button is
+    /// clicked elsewhere.
+    #[test]
+    fn a_running_drag_ignores_another_buttons_movement_and_release() {
+        let path = [ChildId::Static("drag")];
+        let mut transients = HashMap::new();
+        let mut capture = None;
+        EventCtx::at(
+            &path,
+            Rect::ZERO,
+            &mut transients,
+            &mut capture,
+            Some(MouseButton::Left),
+        )
+        .drag(
+            &mouse(MouseKind::Down(MouseButton::Left), 5, 5),
+            DragOptions::new(CellOffset::default()),
+        );
+
+        let mut no_capture = None;
+        let mut ctx = EventCtx::at(&path, Rect::ZERO, &mut transients, &mut no_capture, None);
+        assert_eq!(
+            ctx.drag(
+                &mouse(MouseKind::Drag(MouseButton::Right), 9, 2),
+                DragOptions::default(),
+            ),
+            DragPhase::Ignored,
+            "the right button is not what is being dragged"
+        );
+        assert_eq!(
+            ctx.drag(
+                &mouse(MouseKind::Up(MouseButton::Right), 9, 2),
+                DragOptions::default(),
+            ),
+            DragPhase::Ignored,
+            "and releasing it does not end the left gesture"
+        );
+
+        // The left gesture is still there, still anchored, and still counts as
+        // unmoved: nothing the right button did touched it.
+        assert_eq!(
+            ctx.drag(
+                &mouse(MouseKind::Up(MouseButton::Left), 5, 5),
+                DragOptions::default(),
+            ),
+            DragPhase::Ended {
+                position: Position::new(5, 5),
+                moved: false,
+            }
+        );
+        assert!(transients.is_empty());
+    }
+
     #[test]
     fn drag_tracks_delta_from_the_anchor_offset() {
-        let mut anchor = DragAnchor::default();
-        assert_eq!(anchor.offset_at(10, 10), None, "no anchor, no offset");
-
-        // Begin at cell (5, 5) anchored to offset (2, -1).
-        anchor.begin(5, 5, CellOffset::new(2, -1));
+        // Anchored at cell (5, 5) with the offset (2, -1) current there.
+        let anchor = AnchorPoint::at(5, 5, CellOffset::new(2, -1));
 
         // Move to (8, 4): delta (+3, -1) on top of the anchor (2, -1).
-        assert_eq!(anchor.offset_at(8, 4), Some(CellOffset::new(5, -2)));
+        assert_eq!(anchor.offset_at(8, 4), CellOffset::new(5, -2));
         // `offset_at` is pure: asking again from the anchor cell repeats it.
-        assert_eq!(anchor.offset_at(5, 5), Some(CellOffset::new(2, -1)));
+        assert_eq!(anchor.offset_at(5, 5), CellOffset::new(2, -1));
     }
 
     #[test]

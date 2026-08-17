@@ -1,9 +1,4 @@
-use std::{
-    cell::Cell,
-    collections::{HashMap, HashSet},
-    fmt,
-    rc::Rc,
-};
+use std::{cell::Cell, collections::HashMap, fmt, rc::Rc};
 
 use ratatui::{
     Frame,
@@ -1639,10 +1634,12 @@ pub struct Ratcn<State, Msg> {
     focus_binding: Option<FocusBinding<State, Msg>>,
     modal_binding: Option<ModalBinding<State>>,
     root_options: ScopeOptions,
+    /// Raw events in, normalized ones out: which buttons are physically held,
+    /// and whether each has moved since its press.
     mouse_tracker: MouseTracker,
-    captures: HashMap<MouseButton, Vec<ChildId>>,
-    press_targets: HashMap<MouseButton, Option<Vec<ChildId>>>,
-    suppressed: HashSet<MouseButton>,
+    /// What is being tracked for each button whose gesture is under way. One
+    /// entry per button, added by its press and removed by its release.
+    gestures: HashMap<MouseButton, ButtonGesture>,
     transients: TransientMap,
     /// Where the pointer physically is, from the last mouse event. `None`
     /// until the first one, and again once the pointer leaves the terminal.
@@ -1651,6 +1648,92 @@ pub struct Ratcn<State, Msg> {
     /// space. Derived from `pointer` and the retained surface, and rewritten
     /// wherever either changes — pointer motion, and every commit.
     hover: Vec<ChildId>,
+}
+
+/// Everything the runtime tracks for one mouse button between its press and
+/// its release, as one state rather than as facts scattered across parallel
+/// maps.
+///
+/// A button with no entry has no gesture: nothing to route to, nothing to
+/// judge a release against, nothing to swallow. The two states an entry can
+/// be in are exclusive by construction — a gesture that has been called off
+/// keeps no claim and no target, because nothing may act on either again.
+#[derive(Debug)]
+enum ButtonGesture {
+    /// A live gesture.
+    Active {
+        /// The path that claimed it with
+        /// [`EventCtx::capture_pointer`](super::EventCtx::capture_pointer).
+        /// It outranks geometry for every event until the release.
+        capture: Option<Vec<ChildId>>,
+        /// What the press landed on, recorded once the press had been
+        /// delivered and `None` until then. A release is a click when it lands
+        /// on this again.
+        press_target: Option<PressTarget>,
+    },
+    /// The gesture has been called off — its target stopped being declared, or
+    /// a modal transition moved the ground under it — but the button is still
+    /// held. Every event for it is swallowed until the release that ends it.
+    Suppressed,
+}
+
+impl Default for ButtonGesture {
+    /// A gesture that has just begun: nothing claimed yet, no press recorded
+    /// yet.
+    fn default() -> Self {
+        Self::Active {
+            capture: None,
+            press_target: None,
+        }
+    }
+}
+
+impl ButtonGesture {
+    /// The path that claimed this gesture, if one did.
+    fn capture(&self) -> Option<&[ChildId]> {
+        match self {
+            Self::Active { capture, .. } => capture.as_deref(),
+            Self::Suppressed => None,
+        }
+    }
+
+    /// Whether a release with `current` under it lands where the press landed
+    /// — the click test, with "empty space" comparing equal to itself.
+    fn releases_on_target(&self, current: Option<&[ChildId]>) -> bool {
+        match self {
+            Self::Active { press_target, .. } => press_target
+                .as_ref()
+                .is_some_and(|pressed| pressed.holds(current)),
+            Self::Suppressed => false,
+        }
+    }
+}
+
+/// Where a press landed, as the thing its release is judged against.
+///
+/// Empty space is a target like any other: a press and a release that both hit
+/// nothing are still the same place, and so still a click — on nothing.
+#[derive(Debug)]
+enum PressTarget {
+    /// The press landed on this identity path.
+    Path(Vec<ChildId>),
+    /// The press landed where nothing is declared.
+    Nothing,
+}
+
+impl PressTarget {
+    /// What a press that hit `path`, or nothing, landed on.
+    fn at(path: Option<Vec<ChildId>>) -> Self {
+        path.map_or(Self::Nothing, Self::Path)
+    }
+
+    /// Whether a release with `current` under it lands here.
+    fn holds(&self, current: Option<&[ChildId]>) -> bool {
+        match self {
+            Self::Path(path) => current == Some(path.as_slice()),
+            Self::Nothing => current.is_none(),
+        }
+    }
 }
 
 impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
@@ -1662,9 +1745,7 @@ impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
             .field("modal_binding", &self.modal_binding.is_some())
             .field("root_options", &self.root_options)
             .field("mouse_tracker", &self.mouse_tracker)
-            .field("captures", &self.captures)
-            .field("press_targets", &self.press_targets)
-            .field("suppressed", &self.suppressed)
+            .field("gestures", &self.gestures)
             .field("transients", &self.transients.len())
             .field("pointer", &self.pointer)
             .field("hover", &self.hover)
@@ -1681,9 +1762,7 @@ impl<State, Msg> Default for Ratcn<State, Msg> {
             modal_binding: None,
             root_options: ScopeOptions::default(),
             mouse_tracker: MouseTracker::new(),
-            captures: HashMap::new(),
-            press_targets: HashMap::new(),
-            suppressed: HashSet::new(),
+            gestures: HashMap::new(),
             transients: HashMap::new(),
             pointer: None,
             hover: Vec::new(),
@@ -1990,7 +2069,53 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// so a redraw path that kept following the pointer would be the only
     /// thing moving hover mid-gesture.
     fn gesture_in_flight(&self) -> bool {
-        !self.captures.is_empty() || self.mouse_tracker.has_pressed_button()
+        self.any_capture() || self.mouse_tracker.has_pressed_button()
+    }
+
+    /// Whether any button's gesture has been claimed.
+    fn any_capture(&self) -> bool {
+        self.gestures
+            .values()
+            .any(|gesture| gesture.capture().is_some())
+    }
+
+    /// The path that claimed `button`'s gesture, if one did.
+    fn capture_path(&self, button: MouseButton) -> Option<&[ChildId]> {
+        self.gestures.get(&button)?.capture()
+    }
+
+    /// Whether `button`'s events are being swallowed.
+    fn is_suppressed(&self, button: MouseButton) -> bool {
+        matches!(self.gestures.get(&button), Some(ButtonGesture::Suppressed))
+    }
+
+    /// Call off `button`'s gesture, keeping it suppressed until its release.
+    fn suppress(&mut self, button: MouseButton) {
+        self.gestures.insert(button, ButtonGesture::Suppressed);
+    }
+
+    /// The claim and the press target of `button`'s live gesture, to write
+    /// into — starting a gesture if the button has none yet.
+    ///
+    /// `None` means the gesture has been called off, and a caller that finds
+    /// it so writes nothing: a suppressed gesture takes no new claim and no
+    /// new press target, because nothing will ever act on either again. Both
+    /// writers may pass over that quietly rather than guard against it,
+    /// because the suppression stopped the event upstream — every event for a
+    /// suppressed button is swallowed by
+    /// [`deliver_mouse`](Self::deliver_mouse) before a component can claim it
+    /// or a press can land, so there is no fact to record in the first place.
+    fn active_gesture(
+        &mut self,
+        button: MouseButton,
+    ) -> Option<(&mut Option<Vec<ChildId>>, &mut Option<PressTarget>)> {
+        match self.gestures.entry(button).or_default() {
+            ButtonGesture::Active {
+                capture,
+                press_target,
+            } => Some((capture, press_target)),
+            ButtonGesture::Suppressed => None,
+        }
     }
 
     /// Every declared modal root must match the app-owned [`ModalState`], in
@@ -2042,13 +2167,16 @@ impl<State, Msg> Ratcn<State, Msg> {
             // A capture whose component this surface no longer declares cannot
             // receive the rest of its gesture, so the gesture is suppressed
             // instead of silently retargeting to whatever now sits there.
-            self.captures.retain(|button, path| {
-                let present = self.surface.contains_participating_path(path);
-                if !present {
-                    self.suppressed.insert(*button);
+            let Self {
+                gestures, surface, ..
+            } = self;
+            for gesture in gestures.values_mut() {
+                if let Some(path) = gesture.capture()
+                    && !surface.contains_participating_path(path)
+                {
+                    *gesture = ButtonGesture::Suppressed;
                 }
-                present
-            });
+            }
         }
         self.transients
             .retain(|path, _| self.surface.contains_declared_path(path));
@@ -2299,9 +2427,9 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// [`observe_pointer`](Self::observe_pointer) opens it,
     /// [`record_press_target`](Self::record_press_target) stores what the press
     /// landed on for its release to be judged against, and
-    /// [`end_gesture`](Self::end_gesture) closes it. The state those three
-    /// maintain — captures, press targets, suppressions — is meaningful only
-    /// between a press and its release.
+    /// [`end_gesture`](Self::end_gesture) closes it. What they maintain is one
+    /// [`ButtonGesture`] per button, and it exists only between a press and its
+    /// release.
     fn handle_mouse(&mut self, raw: MouseEvent, state: &State) -> EventResult<Msg> {
         if raw.kind == MouseKind::Exited {
             return self.handle_pointer_exit();
@@ -2367,7 +2495,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// its own — a press landing on a focusable control emits a focus change
     /// instead, and the app closes the popup during that update.
     fn deliver_mouse(&mut self, mouse: MouseEvent, state: &State) -> EventResult<Msg> {
-        if mouse_button(mouse.kind).is_some_and(|button| self.suppressed.contains(&button)) {
+        if mouse_button(mouse.kind).is_some_and(|button| self.is_suppressed(button)) {
             return EventResult::Consumed;
         }
         let routed = self.route_mouse(mouse, state);
@@ -2384,19 +2512,22 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// its release against. A capture outranks geometry: a component that
     /// claimed the gesture owns it wherever the pointer then goes.
     fn record_press_target(&mut self, button: MouseButton, mouse: MouseEvent) {
-        let target = self.captures.get(&button).cloned().or_else(|| {
-            self.surface
-                .hit_path(Position::new(mouse.column, mouse.row))
-        });
-        self.press_targets.insert(button, target);
+        let target = self
+            .capture_path(button)
+            .map(<[ChildId]>::to_vec)
+            .or_else(|| {
+                self.surface
+                    .hit_path(Position::new(mouse.column, mouse.row))
+            });
+        if let Some((_, press_target)) = self.active_gesture(button) {
+            *press_target = Some(PressTarget::at(target));
+        }
     }
 
     /// Forget everything tracked for `button`: its gesture ended with this
     /// release.
     fn end_gesture(&mut self, button: MouseButton) {
-        self.captures.remove(&button);
-        self.press_targets.remove(&button);
-        self.suppressed.remove(&button);
+        self.gestures.remove(&button);
     }
 
     /// Does this raw release complete a click? The whole definition lives here,
@@ -2418,26 +2549,32 @@ impl<State, Msg> Ratcn<State, Msg> {
         let MouseKind::Up(button) = raw.kind else {
             return false;
         };
-        if self.captures.contains_key(&button) && self.mouse_tracker.press_moved(button) {
+        let Some(gesture) = self.gestures.get(&button) else {
+            return false;
+        };
+        if gesture.capture().is_some() && self.mouse_tracker.press_moved(button) {
             return false;
         }
-        self.press_targets.get(&button).is_some_and(|pressed| {
-            let current = self.surface.hit_path(Position::new(raw.column, raw.row));
-            pressed.as_deref() == current.as_deref()
-        })
+        let current = self.surface.hit_path(Position::new(raw.column, raw.row));
+        gesture.releases_on_target(current.as_deref())
     }
 
+    /// Call off every gesture under way: each claimed one, and each button
+    /// still physically held. They stay suppressed until their releases.
     fn cancel_pointer_gestures(&mut self) {
-        self.suppressed.extend(self.mouse_tracker.pressed_buttons());
-        self.suppressed.extend(self.captures.keys().copied());
-        self.captures.clear();
+        for button in self.mouse_tracker.pressed_buttons() {
+            self.suppress(button);
+        }
+        for gesture in self.gestures.values_mut() {
+            if gesture.capture().is_some() {
+                *gesture = ButtonGesture::Suppressed;
+            }
+        }
     }
 
     fn reset_pointer_gestures(&mut self) {
         self.mouse_tracker.clear();
-        self.captures.clear();
-        self.press_targets.clear();
-        self.suppressed.clear();
+        self.gestures.clear();
     }
 
     /// The stale-modal-window half of mouse handling: while the semantic modal
@@ -2460,10 +2597,10 @@ impl<State, Msg> Ratcn<State, Msg> {
         // surface the app has already moved past.
         let _ = self.mouse_tracker.feed(raw, false);
         if let Some(button) = pressed {
-            self.suppressed.insert(button);
+            self.suppress(button);
         }
         if let Some(button) = released {
-            self.suppressed.remove(&button);
+            self.end_gesture(button);
         }
     }
 
@@ -2594,7 +2731,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             MouseKind::Drag(button)
             | MouseKind::Up(button)
             | MouseKind::Click(button)
-            | MouseKind::DragEnd(button) => self.captures.get(&button).cloned(),
+            | MouseKind::DragEnd(button) => self.capture_path(button).map(<[ChildId]>::to_vec),
             _ => None,
         };
         captured.or_else(|| {
@@ -2623,8 +2760,10 @@ impl<State, Msg> Ratcn<State, Msg> {
             &mut capture,
             capture_button,
         );
-        if let (Some(button), Some(path)) = (capture_button, capture) {
-            self.captures.insert(button, path);
+        if let (Some(button), Some(path)) = (capture_button, capture)
+            && let Some((claim, _)) = self.active_gesture(button)
+        {
+            *claim = Some(path);
         }
         result
     }
@@ -5459,7 +5598,7 @@ mod tests {
             }))
         );
         assert!(ratcn.transients.is_empty());
-        assert!(!ratcn.captures.contains_key(&MouseButton::Left));
+        assert!(ratcn.capture_path(MouseButton::Left).is_none());
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Drag(MouseButton::Left), 19, 3), &state),
             EventResult::Ignored
@@ -5485,8 +5624,8 @@ mod tests {
 
         render_lifecycle_drag(&mut ratcn, &mut terminal, &state, None, Rect::ZERO);
         assert!(ratcn.transients.is_empty());
-        assert!(!ratcn.captures.contains_key(&MouseButton::Left));
-        assert!(ratcn.suppressed.contains(&MouseButton::Left));
+        assert!(ratcn.capture_path(MouseButton::Left).is_none());
+        assert!(ratcn.is_suppressed(MouseButton::Left));
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 19, 3), &state),
             EventResult::Consumed
@@ -5495,7 +5634,99 @@ mod tests {
             ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 19, 3), &state),
             EventResult::Consumed
         );
-        assert!(!ratcn.suppressed.contains(&MouseButton::Left));
+        assert!(!ratcn.is_suppressed(MouseButton::Left));
+    }
+
+    /// One button's gesture says nothing about another's. A left press that
+    /// claimed a component does not route the right button's release to it,
+    /// and a left gesture called off by a redraw does not swallow the right
+    /// button's events — each button is tracked, cancelled, and ended alone.
+    #[test]
+    fn one_buttons_gesture_never_routes_or_suppresses_another() {
+        let state = PointerState;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal");
+        let theme = Theme::default_dark();
+        let mut render = |ratcn: &mut Ratcn<PointerState, PointerMsg>, grabber| {
+            terminal
+                .draw(|frame| {
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        if grabber {
+                            ctx.render_component(
+                                ChildId::Static("grabber"),
+                                RecordingPointer {
+                                    name: "grabber",
+                                    events: Arc::clone(&events),
+                                    capture: true,
+                                },
+                                Rect::new(0, 0, 5, 2),
+                            );
+                        }
+                        ctx.render_component(
+                            ChildId::Static("other"),
+                            RecordingPointer {
+                                name: "other",
+                                events: Arc::clone(&events),
+                                capture: false,
+                            },
+                            Rect::new(6, 0, 6, 2),
+                        );
+                    });
+                })
+                .expect("draw");
+        };
+
+        render(&mut ratcn, true);
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
+        assert_eq!(
+            ratcn.capture_path(MouseButton::Left),
+            Some([ChildId::Static("grabber")].as_slice())
+        );
+        assert!(
+            ratcn.capture_path(MouseButton::Right).is_none(),
+            "the right button claimed nothing"
+        );
+
+        // The right button's release is routed by its own gesture, not by the
+        // left button's claim.
+        events.lock().expect("pointer event log").clear();
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Right), 8, 0), &state);
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Right), 8, 0), &state);
+        assert!(
+            events
+                .lock()
+                .expect("pointer event log")
+                .iter()
+                .all(|&(name, _)| name == "other"),
+            "the right button's gesture belongs to what it hit"
+        );
+
+        // The left gesture's component disappears: that button is called off,
+        // and only that button.
+        render(&mut ratcn, false);
+        assert!(ratcn.is_suppressed(MouseButton::Left));
+        assert!(!ratcn.is_suppressed(MouseButton::Right));
+
+        events.lock().expect("pointer event log").clear();
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Right), 8, 0), &state);
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Right), 8, 0), &state);
+        assert!(
+            !events.lock().expect("pointer event log").is_empty(),
+            "a suppressed left gesture must not swallow the right button"
+        );
+
+        events.lock().expect("pointer event log").clear();
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 1, 0), &state),
+            EventResult::Consumed,
+            "the called-off left release is swallowed"
+        );
+        assert!(events.lock().expect("pointer event log").is_empty());
+        assert!(
+            !ratcn.is_suppressed(MouseButton::Left),
+            "and that release ends the gesture"
+        );
     }
 
     #[test]
@@ -5576,7 +5807,7 @@ mod tests {
             &[("drag", "drag", Rect::new(0, 0, 4, 2))],
         );
         ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
-        assert!(ratcn.captures.contains_key(&MouseButton::Left));
+        assert!(ratcn.capture_path(MouseButton::Left).is_some());
         assert_eq!(ratcn.mouse_tracker.pressed_buttons(), [MouseButton::Left]);
 
         assert_eq!(
@@ -5584,9 +5815,7 @@ mod tests {
             EventResult::Consumed
         );
         assert!(ratcn.mouse_tracker.pressed_buttons().is_empty());
-        assert!(ratcn.captures.is_empty());
-        assert!(ratcn.press_targets.is_empty());
-        assert!(ratcn.suppressed.is_empty());
+        assert!(ratcn.gestures.is_empty());
 
         // Re-entry is plain motion: it moves hover (which the exit emptied)
         // and nothing else — a surviving press would have made it a drag, and
@@ -5785,8 +6014,8 @@ mod tests {
 
         assert!(transient_dropped.load(Ordering::SeqCst));
         assert!(component_dropped.load(Ordering::SeqCst));
-        assert!(!ratcn.captures.contains_key(&MouseButton::Left));
-        assert!(ratcn.suppressed.contains(&MouseButton::Left));
+        assert!(ratcn.capture_path(MouseButton::Left).is_none());
+        assert!(ratcn.is_suppressed(MouseButton::Left));
     }
 
     #[test]
@@ -6075,6 +6304,28 @@ mod tests {
         assert!(
             log.contains(&("right", MouseKind::DragEnd(MouseButton::Left))),
             "the gesture ends as a drag instead: {log:?}"
+        );
+    }
+
+    /// Empty space is where a press can land like any other, and a release
+    /// somewhere else is no more a click for having started on nothing.
+    #[test]
+    fn a_press_that_started_on_empty_space_clicks_nothing_else() {
+        let state = PointerState;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        render_neighbours(&mut ratcn, &mut terminal, &events, false);
+
+        // Column 5 is the gap between the two components.
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 5, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state);
+
+        let log = events.lock().expect("pointer event log");
+        assert!(
+            !log.iter()
+                .any(|(_, kind)| matches!(kind, MouseKind::Click(_))),
+            "the press landed on nothing, so this release clicks nothing: {log:?}"
         );
     }
 
@@ -6892,8 +7143,8 @@ mod tests {
             )])))
         );
         assert_eq!(
-            ratcn.captures.get(&MouseButton::Left),
-            Some(&vec![ChildId::Static("ignored")])
+            ratcn.capture_path(MouseButton::Left),
+            Some([ChildId::Static("ignored")].as_slice())
         );
         ratcn.handle_event(mouse(MouseKind::Exited, 4, 0), &state);
         assert_eq!(
@@ -7089,7 +7340,7 @@ mod tests {
         assert_eq!(ratcn.hover_path(), [ChildId::Static("left")]);
 
         ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
-        assert!(ratcn.captures.contains_key(&MouseButton::Left));
+        assert!(ratcn.capture_path(MouseButton::Left).is_some());
         ratcn.handle_event(mouse(MouseKind::Moved, 11, 1), &state);
         assert_eq!(
             ratcn.hover_path(),
@@ -7146,7 +7397,7 @@ mod tests {
         ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state);
         ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
         assert!(
-            ratcn.captures.is_empty(),
+            !ratcn.any_capture(),
             "nothing claimed this gesture — the freeze is not about captures"
         );
 
@@ -7199,7 +7450,7 @@ mod tests {
         render(&mut ratcn, false);
         ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state);
         ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
-        assert!(ratcn.captures.contains_key(&MouseButton::Left));
+        assert!(ratcn.capture_path(MouseButton::Left).is_some());
         ratcn.handle_event(mouse(MouseKind::Drag(MouseButton::Left), 8, 1), &state);
         render(&mut ratcn, false);
         assert_eq!(
