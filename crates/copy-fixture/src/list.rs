@@ -668,10 +668,10 @@ impl<T, S, M> List<T, S, M> {
     /// is painted beneath the returned text, so unstyled text inherits row-state
     /// colors while explicit `Text`, `Line`, and `Span` colors are preserved.
     ///
-    /// Return a [`Line`](ratatui::text::Line) for the usual one-line row, or a [`Text`] for a taller
-    /// one — a name above a subtitle, say. A multi-line row also needs
-    /// [`row_height`](Self::row_height) set to match, since every item must be
-    /// the same height for clicks to land on the right one.
+    /// Return a [`Line`](ratatui::text::Line) for the usual one-line row, or a
+    /// [`Text`] for a taller one — a name above a subtitle, say. A multi-line
+    /// row also needs [`row_height`](Self::row_height) set to match, since every
+    /// item must be the same height for clicks to land on the right one.
     #[must_use]
     pub fn render_item<R: Into<Text<'static>>>(
         mut self,

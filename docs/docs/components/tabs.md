@@ -201,7 +201,7 @@ padding, the width the row wants before it starts scrolling. Replace
 
 Every method, with binding requirements and edge-case detail:
 [`Tabs`](https://docs.rs/ratcn/latest/ratcn/struct.Tabs.html),
-[`Tab`](https://docs.rs/ratcn/latest/ratcn/struct.Tab.html),
+[`Tab`](https://docs.rs/ratcn/latest/ratcn/type.Tab.html),
 [`TabsWidget`](https://docs.rs/ratcn/latest/ratcn/struct.TabsWidget.html),
 [`TabsActivation`](https://docs.rs/ratcn/latest/ratcn/enum.TabsActivation.html),
 [`TabsSize`](https://docs.rs/ratcn/latest/ratcn/enum.TabsSize.html),
