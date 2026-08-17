@@ -7,23 +7,15 @@
 
 use std::{io, time::Duration};
 
-#[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
-
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout},
-    style::Style,
+    style::{Color, Style},
 };
 use ratcn::{
     Button, ButtonSize, Theme, Toast, ToastKind, ToasterState, ToasterWidget,
-    runtime::{self, EventResult, FocusState, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-use ratatui::crossterm::event;
-
-#[cfg(target_arch = "wasm32")]
-use ratzilla::WebRenderer;
 
 const THEME: Theme = Theme::default_dark();
 
@@ -99,23 +91,51 @@ impl App {
         }
     }
 
-    fn handle_event(&mut self, event: impl TryInto<runtime::Event>) {
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            match msg {
-                Msg::Focus(focus) => self.state.focus = focus,
-                Msg::MakeToast => {
-                    let (kind, title, description) = self.state.next_flavor();
-                    self.state.toasts.push(
-                        Toast::new(title).kind(kind).description(description),
-                        demo_shared::monotonic_time(),
-                    );
-                }
-                Msg::ToggleSave => self.state.toggle_save(demo_shared::monotonic_time()),
+    fn update(&mut self, msg: Msg) {
+        match msg {
+            Msg::Focus(focus) => self.state.focus = focus,
+            Msg::MakeToast => {
+                let (kind, title, description) = self.state.next_flavor();
+                self.state.toasts.push(
+                    Toast::new(title).kind(kind).description(description),
+                    demo_shared::monotonic_time(),
+                );
             }
+            Msg::ToggleSave => self.state.toggle_save(demo_shared::monotonic_time()),
+        }
+    }
+}
+
+impl demo_shared::Demo for App {
+    fn background(&self) -> Color {
+        THEME.background
+    }
+
+    fn handle_event(&mut self, event: Event) -> bool {
+        match self.ratcn.handle_event(event, &self.state) {
+            EventResult::Emit(msg) => {
+                self.update(msg);
+                true
+            }
+            EventResult::Consumed => true,
+            EventResult::Ignored => false,
         }
     }
 
-    fn draw(&mut self, frame: &mut ratatui::Frame, now: Duration) {
+    /// The next expiry, so a toast disappears on time even when nothing is
+    /// typed. No toast on a timer means nothing to wake for.
+    fn wake(&self) -> Option<Duration> {
+        self.state
+            .toasts
+            .time_until_next_expiry(demo_shared::monotonic_time())
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        // Every frame starts by dropping whatever has run out: the host wakes
+        // for the deadline, and this is what the wake-up is for.
+        let now = demo_shared::monotonic_time();
+        let _ = self.state.toasts.prune_expired(now);
+
         let area = frame.area();
         frame
             .buffer_mut()
@@ -156,66 +176,8 @@ impl App {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> io::Result<()> {
-    let mut app = App::new();
-    ratatui::run(|terminal| {
-        let _input_modes = ratcn::crossterm::InputModes::new()
-            .mouse_capture()
-            .enable()?;
-        loop {
-            let now = demo_shared::monotonic_time();
-            let _ = app.state.toasts.prune_expired(now);
-            terminal.draw(|frame| app.draw(frame, now))?;
-
-            // Block on input, but wake for the next expiry so a toast
-            // disappears on time even when nothing is typed.
-            if let Some(timeout) = app
-                .state
-                .toasts
-                .time_until_next_expiry(demo_shared::monotonic_time())
-                && !event::poll(timeout)?
-            {
-                continue;
-            }
-            let event = event::read()?;
-            if demo_shared::is_quit(&event) {
-                break Ok(());
-            }
-            app.handle_event(event);
-        }
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-fn main() -> io::Result<()> {
-    let backend = demo_shared::web_backend(THEME.background)?;
-    let mut terminal = ratatui::Terminal::new(backend)?;
-    let app = Rc::new(RefCell::new(App::new()));
-
-    terminal
-        .on_key_event({
-            let app = Rc::clone(&app);
-            move |key_event| app.borrow_mut().handle_event(key_event)
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    terminal
-        .on_mouse_event({
-            let app = Rc::clone(&app);
-            move |mouse_event| app.borrow_mut().handle_event(mouse_event)
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    // The browser redraws continuously, so pruning each frame is enough — no
-    // timer needed.
-    terminal.draw_web(move |frame| {
-        let now = demo_shared::monotonic_time();
-        let mut app = app.borrow_mut();
-        let _ = app.state.toasts.prune_expired(now);
-        app.draw(frame, now);
-    });
-
-    Ok(())
+    demo_shared::run(App::new())
 }
 
 #[cfg(test)]

@@ -1,12 +1,13 @@
 //! The app shell owns orchestration and routes messages to the state owner.
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Margin},
-    style::Style,
+    style::{Color, Style},
 };
 use ratcn::{
     ButtonSize, Theme,
-    runtime::{EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
+    runtime::{Event, EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
 };
 
 use crate::nav::{self, Nav, NavMsg, Step};
@@ -53,36 +54,34 @@ impl App {
         }
     }
 
-    pub fn handle_event(&mut self, event: impl TryInto<ratcn::runtime::Event>) {
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            match msg {
-                Msg::Focus(focus) => self.state.focus = focus,
-                Msg::Nav(msg) => {
-                    self.state.nav.update(msg);
-                    // Park focus on the button that continues, so Enter walks
-                    // the whole wizard. Without this the default lands on each
-                    // step's own control instead, and the next Enter opens a
-                    // panel rather than advancing. Tab still reaches the control.
-                    self.state.focus = FocusState::intent([if self.state.nav.step.is_last() {
-                        nav::BACK_ID
-                    } else {
-                        nav::NEXT_ID
-                    }]);
-                }
-                Msg::Backend(msg) => self.state.backend.update(msg),
-                Msg::Theme(msg) => self.state.theme.update(msg),
-                // A committed choice is two writes: the step closes or moves its
-                // cursor, and the shared value the rest of the app reads changes.
-                Msg::Choose(ChoiceMsg::SetBackend(backend)) => {
-                    self.state
-                        .backend
-                        .update(steps::backend::Msg::Committed(backend));
-                    self.state.choices.update(ChoiceMsg::SetBackend(backend));
-                }
-                Msg::Choose(ChoiceMsg::SetTheme(theme)) => {
-                    self.state.theme.update(steps::theme::Msg::Focused(theme));
-                    self.state.choices.update(ChoiceMsg::SetTheme(theme));
-                }
+    fn update(&mut self, msg: Msg) {
+        match msg {
+            Msg::Focus(focus) => self.state.focus = focus,
+            Msg::Nav(msg) => {
+                self.state.nav.update(msg);
+                // Park focus on the button that continues, so Enter walks
+                // the whole wizard. Without this the default lands on each
+                // step's own control instead, and the next Enter opens a
+                // panel rather than advancing. Tab still reaches the control.
+                self.state.focus = FocusState::intent([if self.state.nav.step.is_last() {
+                    nav::BACK_ID
+                } else {
+                    nav::NEXT_ID
+                }]);
+            }
+            Msg::Backend(msg) => self.state.backend.update(msg),
+            Msg::Theme(msg) => self.state.theme.update(msg),
+            // A committed choice is two writes: the step closes or moves its
+            // cursor, and the shared value the rest of the app reads changes.
+            Msg::Choose(ChoiceMsg::SetBackend(backend)) => {
+                self.state
+                    .backend
+                    .update(steps::backend::Msg::Committed(backend));
+                self.state.choices.update(ChoiceMsg::SetBackend(backend));
+            }
+            Msg::Choose(ChoiceMsg::SetTheme(theme)) => {
+                self.state.theme.update(steps::theme::Msg::Focused(theme));
+                self.state.choices.update(ChoiceMsg::SetTheme(theme));
             }
         }
     }
@@ -91,8 +90,27 @@ impl App {
     pub fn palette(&self) -> Theme {
         self.state.choices.palette()
     }
+}
 
-    pub fn draw(&mut self, frame: &mut ratatui::Frame) {
+impl demo_shared::Demo for App {
+    /// The canvas padding is fixed at construction, so it tracks the starting
+    /// theme; choosing another theme leaves it on the previous background.
+    fn background(&self) -> Color {
+        self.palette().background
+    }
+
+    fn handle_event(&mut self, event: Event) -> bool {
+        match self.ratcn.handle_event(event, &self.state) {
+            EventResult::Emit(msg) => {
+                self.update(msg);
+                true
+            }
+            EventResult::Consumed => true,
+            EventResult::Ignored => false,
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
         let theme = self.palette();
         let area = frame.area();
         frame
@@ -156,8 +174,9 @@ fn shell_layout() -> Layout {
 
 #[cfg(test)]
 mod tests {
+    use demo_shared::Demo as _;
     use ratatui::{Terminal, backend::TestBackend};
-    use ratcn::runtime::{ChildId, Event, KeyCode, KeyEvent};
+    use ratcn::runtime::{ChildId, KeyCode, KeyEvent};
 
     use super::*;
     use crate::shared::Backend;

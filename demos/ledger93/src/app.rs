@@ -1,14 +1,15 @@
 //! The app shell owns orchestration and routes messages to the state owner.
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Margin},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 use ratcn::{
     TabsSize, Theme,
-    runtime::{EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
+    runtime::{Event, EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
 };
 
 use crate::nav::{self, Nav, NavMsg, Screen};
@@ -61,37 +62,52 @@ impl App {
         }
     }
 
-    pub fn handle_event(&mut self, event: impl TryInto<ratcn::runtime::Event>) {
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            match msg {
-                Msg::Focus(focus) => self.state.focus = focus,
-                Msg::Nav(NavMsg::Focused(screen)) => {
-                    self.state.nav.update(NavMsg::Focused(screen));
-                }
-                Msg::Nav(NavMsg::Selected(screen)) => {
-                    self.state.nav.update(NavMsg::Selected(screen));
-                    self.state.focus = FocusState::intent([screen_id(screen)]);
-                }
-                Msg::Ledger(msg) => self.state.ledger.update(msg),
-                Msg::Report(msg) => self.state.report.update(msg),
-                Msg::Settings(msg) => self.state.settings.update(msg),
-                Msg::Prefs(PrefsMsg::SetCurrency(currency)) => {
-                    self.state
-                        .settings
-                        .update(screens::settings::Msg::CurrencyFocused(
-                            currency,
-                            self.state.settings.list_scroll,
-                        ));
-                    self.state
-                        .shared
-                        .prefs
-                        .update(PrefsMsg::SetCurrency(currency));
-                }
+    fn update(&mut self, msg: Msg) {
+        match msg {
+            Msg::Focus(focus) => self.state.focus = focus,
+            Msg::Nav(NavMsg::Focused(screen)) => {
+                self.state.nav.update(NavMsg::Focused(screen));
+            }
+            Msg::Nav(NavMsg::Selected(screen)) => {
+                self.state.nav.update(NavMsg::Selected(screen));
+                self.state.focus = FocusState::intent([screen_id(screen)]);
+            }
+            Msg::Ledger(msg) => self.state.ledger.update(msg),
+            Msg::Report(msg) => self.state.report.update(msg),
+            Msg::Settings(msg) => self.state.settings.update(msg),
+            Msg::Prefs(PrefsMsg::SetCurrency(currency)) => {
+                self.state
+                    .settings
+                    .update(screens::settings::Msg::CurrencyFocused(
+                        currency,
+                        self.state.settings.list_scroll,
+                    ));
+                self.state
+                    .shared
+                    .prefs
+                    .update(PrefsMsg::SetCurrency(currency));
             }
         }
     }
+}
 
-    pub fn draw(&mut self, frame: &mut ratatui::Frame) {
+impl demo_shared::Demo for App {
+    fn background(&self) -> Color {
+        THEME.background
+    }
+
+    fn handle_event(&mut self, event: Event) -> bool {
+        match self.ratcn.handle_event(event, &self.state) {
+            EventResult::Emit(msg) => {
+                self.update(msg);
+                true
+            }
+            EventResult::Consumed => true,
+            EventResult::Ignored => false,
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         frame
             .buffer_mut()
@@ -175,8 +191,9 @@ fn shell_layout() -> Layout {
 
 #[cfg(test)]
 mod tests {
+    use demo_shared::Demo as _;
     use ratatui::{Terminal, backend::TestBackend};
-    use ratcn::runtime::{ChildId, Event, KeyCode, KeyEvent};
+    use ratcn::runtime::{ChildId, KeyCode, KeyEvent};
 
     use super::*;
     use crate::{

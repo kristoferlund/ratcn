@@ -17,7 +17,7 @@
 
 - [ ] **Edited a component?** Ran `./crates/copy-fixture/sync.sh` and committed the result.
 - [ ] **Changed public API?** Updated the rustdoc, and the docs page if the behaviour is user-visible.
-- [ ] **Added a demo?** Registered it in the workspace `Cargo.toml` **and** in `package.json`.
+- [ ] **Added a demo?** A directory under `demos/` with a `Cargo.toml` is a workspace member, and one with a `Trunk.toml` is built for the docs site — nothing to register. Ran `npm run demo:build` to confirm it builds.
 - [ ] **Added a dependency?** Explained why below — the library keeps three.
 - [ ] **Needs a newer Rust?** Say so; the MSRV is 1.88 and raising it is a decision.
 

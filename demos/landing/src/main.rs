@@ -6,28 +6,19 @@
 
 use std::{io, time::Duration};
 
-#[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
-
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    style::Style,
+    style::{Color, Style},
     text::{Line, Span},
 };
 use ratcn::{
     Theme, Toast, ToasterState, ToasterWidget,
-    runtime::{self, EventResult, FocusState, KeyChord, ModalState, MouseKind, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, KeyChord, ModalState, MouseKind, Ratcn, TabWrap},
 };
 
 mod screensaver;
 mod tiles;
-
-#[cfg(not(target_arch = "wasm32"))]
-use ratatui::crossterm::event;
-
-#[cfg(target_arch = "wasm32")]
-use ratzilla::WebRenderer;
 
 const TILE_COUNT: usize = tiles::TILES.len();
 const TILE_WIDTH: u16 = 42;
@@ -36,7 +27,11 @@ const TILE_GAP: u16 = 2;
 const GRID_PADDING_X: u16 = 0;
 const GRID_PADDING_Y: u16 = 3;
 
-#[cfg(not(target_arch = "wasm32"))]
+/// How often the screensaver wants a frame while it runs.
+///
+/// Its snow moves in whole cells, one cell every 140 ms at the fastest, so this
+/// cadence shows every step a flake takes — asking for more frames would repaint
+/// the same one.
 const SCREENSAVER_FRAME: Duration = Duration::from_millis(50);
 
 struct App {
@@ -74,95 +69,8 @@ enum AppMsg {
     Release(tiles::release::Msg),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> io::Result<()> {
-    let mut app = App::new();
-    ratatui::run(|terminal| {
-        // RAII: terminal input modes are restored on every exit path.
-        let _input_modes = ratcn::crossterm::InputModes::new()
-            .mouse_capture()
-            .bracketed_paste()
-            .enable()?;
-        loop {
-            let now = demo_shared::monotonic_time();
-            let _ = app.state.toasts.prune_expired(now);
-            terminal.draw(|frame| app.draw(frame, now))?;
-            // Wait for input, the next toast expiry, or — while the
-            // screensaver runs — the next animation frame. A timeout loops
-            // back around to redraw.
-            let toast_timeout = app
-                .state
-                .toasts
-                .time_until_next_expiry(demo_shared::monotonic_time());
-            let timeout = if app.state.modals_state.is_open(screensaver::ID) {
-                Some(toast_timeout.map_or(SCREENSAVER_FRAME, |t| t.min(SCREENSAVER_FRAME)))
-            } else {
-                toast_timeout
-            };
-            if let Some(timeout) = timeout
-                && !event::poll(timeout)?
-            {
-                continue;
-            }
-            let event = event::read()?;
-            if demo_shared::is_quit(&event) {
-                break Ok(());
-            }
-            // Raw backend events go straight in; the runtime converts and
-            // synthesizes Click/Drag.
-            app.handle_event(event);
-        }
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-fn main() -> io::Result<()> {
-    let app = Rc::new(RefCell::new(App::new()));
-    // Canvas padding is fixed at construction, so it tracks the starting theme.
-    // Switching themes at runtime leaves it on the previous background.
-    let backend = demo_shared::web_backend(app.borrow().state.theme().background)?;
-    let mut terminal = ratatui::Terminal::new(backend)?;
-    let paste_listener = demo_shared::BrowserPasteListener::install({
-        let app = Rc::clone(&app);
-        move |text| {
-            let mut app = app.borrow_mut();
-            if !app.ratcn.has_rendered() {
-                return false;
-            }
-            app.handle_event(runtime::Event::Paste(text));
-            true
-        }
-    })?;
-
-    terminal
-        .on_key_event({
-            let app = Rc::clone(&app);
-            move |key_event| {
-                app.borrow_mut().handle_event(key_event);
-            }
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    // Browser mouse: ratzilla reports cell coordinates directly; the runtime's
-    // tracker synthesizes Click/Drag.
-    terminal
-        .on_mouse_event({
-            let app = Rc::clone(&app);
-            move |mouse_event| {
-                app.borrow_mut().handle_event(mouse_event);
-            }
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    terminal.draw_web(move |frame| {
-        let _ = &paste_listener;
-        let now = demo_shared::monotonic_time();
-        let mut app = app.borrow_mut();
-        let _ = app.state.toasts.prune_expired(now);
-        app.draw(frame, now);
-    });
-
-    Ok(())
+    demo_shared::run(App::new())
 }
 
 impl App {
@@ -223,31 +131,9 @@ impl App {
         self.state.toasts.push(toast, demo_shared::monotonic_time());
     }
 
-    fn handle_event(&mut self, event: impl TryInto<runtime::Event>) {
-        let Ok(event): Result<runtime::Event, _> = event.try_into() else {
-            return;
-        };
-        // The screensaver is dismissed by app policy, before routing: any
-        // pointer motion wakes the app. Other events fall through and are
-        // absorbed by the modal layer.
-        if self.state.modals_state.is_open(screensaver::ID)
-            && matches!(&event, runtime::Event::Mouse(mouse) if mouse.kind == MouseKind::Moved)
-        {
-            self.update(AppMsg::ScreensaverDismissed);
-            return;
-        }
-        let modal_active = !self.state.modals_state.ids().is_empty() || self.ratcn.modal_is_open();
-        if !modal_active && self.app_hotkeys(&event) {
-            return;
-        }
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            self.update(msg);
-        }
-    }
-
     /// App-global keys, taking priority over the focused widget.
-    fn app_hotkeys(&mut self, event: &runtime::Event) -> bool {
-        let runtime::Event::Key(key) = event else {
+    fn app_hotkeys(&mut self, event: &Event) -> bool {
+        let Event::Key(key) = event else {
             return false;
         };
         if KeyChord::from('d').alt().matches(key) {
@@ -260,8 +146,61 @@ impl App {
         }
         false
     }
+}
 
-    fn draw(&mut self, frame: &mut Frame, now: Duration) {
+impl demo_shared::Demo for App {
+    /// Bracketed paste natively, and the browser's `paste` event on the web:
+    /// the wiring is the demonstration, since no component reads a paste yet.
+    const PASTE: bool = true;
+
+    /// The canvas padding is fixed at construction, so it tracks the starting
+    /// theme; switching themes leaves it on the previous background.
+    fn background(&self) -> Color {
+        self.state.theme().background
+    }
+
+    fn handle_event(&mut self, event: Event) -> bool {
+        // The screensaver is dismissed by app policy, before routing: any
+        // pointer motion wakes the app. Other events fall through and are
+        // absorbed by the modal layer.
+        if self.state.modals_state.is_open(screensaver::ID)
+            && matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseKind::Moved)
+        {
+            self.update(AppMsg::ScreensaverDismissed);
+            return true;
+        }
+        let modal_active = !self.state.modals_state.ids().is_empty() || self.ratcn.modal_is_open();
+        if !modal_active && self.app_hotkeys(&event) {
+            return true;
+        }
+        match self.ratcn.handle_event(event, &self.state) {
+            EventResult::Emit(msg) => {
+                self.update(msg);
+                true
+            }
+            EventResult::Consumed => true,
+            EventResult::Ignored => false,
+        }
+    }
+
+    /// The next toast expiry, or — while the screensaver runs — its own frame
+    /// cadence, since its snow moves with the clock alone.
+    fn wake(&self) -> Option<Duration> {
+        let expiry = self
+            .state
+            .toasts
+            .time_until_next_expiry(demo_shared::monotonic_time());
+        if self.state.modals_state.is_open(screensaver::ID) {
+            Some(expiry.map_or(SCREENSAVER_FRAME, |expiry| expiry.min(SCREENSAVER_FRAME)))
+        } else {
+            expiry
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        let now = demo_shared::monotonic_time();
+        let _ = self.state.toasts.prune_expired(now);
+
         let frame_area = frame.area();
         let theme = self.state.theme();
         frame

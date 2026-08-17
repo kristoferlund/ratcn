@@ -76,9 +76,15 @@ usually a sign the design should move it to the app instead. See
 declaration-time questions. Matching the surrounding code matters more than
 personal preference.
 
-**Adding a demo means two registrations.** Add it to `members` in the workspace
-`Cargo.toml` *and* to the `demo:build` and `<name>:dev` scripts in
-`package.json`. Miss the second and it silently never builds for the docs site.
+**A demo registers itself.** Any directory under `demos/` is a workspace member,
+and one with a `Trunk.toml` is built for the docs site. Serve a single demo with
+`npm run demo:dev -- <name>` — the name is required, and a wrong one lists the
+demos that exist.
+
+The `demos/*` glob is why every directory there must be a crate: a directory
+without a `Cargo.toml` fails every `cargo` command in the workspace, not just the
+one that touches it. Shared assets belong inside a crate — the fonts and scripts
+the demos share live in `demos/shared/`.
 
 ## Docs
 

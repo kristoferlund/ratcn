@@ -1,32 +1,6 @@
 [workspace]
 resolver = "3"
-members = [
-    "crates/ratcn",
-    "crates/copy-fixture",
-    "demos/shared",
-    "demos/barchart",
-    "demos/barchart-horizontal",
-    "demos/button-large",
-    "demos/button-small",
-    "demos/dialog",
-    "demos/drag",
-    "demos/effects",
-    "demos/kanban",
-    "demos/landing",
-    "demos/list",
-    "demos/list-multi",
-    "demos/list-people",
-    "demos/select",
-    "demos/tabs-basic",
-    "demos/tabs-large",
-    "demos/tabs-disabled",
-    "demos/tabs-automatic",
-    "demos/toast",
-    "demos/tooltip",
-    "demos/ledger93",
-    "demos/panels",
-    "demos/wizard",
-]
+members = ["crates/ratcn", "crates/copy-fixture", "demos/*"]
 
 [workspace.package]
 edition = "2024"
