@@ -120,7 +120,9 @@ The concept pages each cover one idea in depth. Roughly in reading order:
 - [Structuring a larger app](./concepts/composition) — splitting state,
   messages, and rendering per screen once one module is not enough.
 - [Custom components](./concepts/custom-components) — writing your own
-  components with the same powers as the built-ins.
+  components with the same powers as the built-ins, and
+  [Building a composite](./concepts/building-a-composite) — one worked end to
+  end, from its builders to its hit-testing.
 - [Design decisions](./concepts/design-decisions) — why declaration mistakes
   panic, and other deliberate choices, for readers evaluating the library.
 

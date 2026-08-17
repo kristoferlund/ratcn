@@ -166,7 +166,8 @@ its own area.
 That is the whole contract. A composite is an ordinary `Component`; there is no
 composite trait to implement and no lifecycle to opt into. What a composite does
 need is somewhere to keep what its builders were handed until `render` uses it,
-and a way to keep answering geometry questions once that is gone.
+and a way to keep answering geometry questions once that is gone. In practice
+that is four pieces:
 
 **Deferred drawing.** A `paint` closure runs after declaration has ended, so it
 owns what it draws with: it is `'static` and receives a `PaintCtx` carrying the
@@ -186,38 +187,35 @@ sibling namespace, so ids must be unique across every body it declares.
 **Measured children.** A child the composite places itself has to be sized
 before it is declared. Accept it as `impl MeasuredComponent<S, M> + 'static`,
 call `measure()` in the builder, and keep the `Size` beside a closure that
-declares it:
-
-```rust
-struct ActionSlot<S, M> {
-    declare: Option<Box<dyn FnOnce(&mut RenderCtx<'_, S, M>, Rect)>>,
-    size: Size,
-}
-```
-
-The closure is what gets boxed, not the child: `Box<dyn Component>` does not
-itself implement `Component`, so box the `ctx.render_component(id, child, area)`
-call with the child and its id captured inside. `render` computes each area from
-the stored sizes and runs the closures in insertion order, which is also Tab
-order.
+declares it — the closure is what gets boxed, not the child, because
+`Box<dyn Component>` does not itself implement `Component`. `render` computes
+each area from the stored sizes and runs the closures in insertion order, which
+is also Tab order.
 
 **Geometry that outlives the closures.** `handle_event` runs on the retained
 instance, after `render` has taken every closure, and it still has to recompute
 the box the pointer landed in. So keep the layout *facts* — heights, measured
 sizes, the fact that a body was configured at all — in fields that taking a
 closure does not empty, and derive the rects from them in one function that
-`render`, `interaction_area`, and `handle_event` all call. Anything derived
-twice from two places will eventually disagree, and hit-testing is where that
-shows up.
+`render`, `paint`, `interaction_area`, and `handle_event` all call. Anything
+derived twice from two places will eventually disagree, and hit-testing is where
+that shows up.
 
-`Dialog` is the reference implementation of all three: a body that is either a
-description or a caller's closure, a footer that is either a caller's closure or
-a measured action row, a private `dims` every rect comes from, and border
-dragging that re-derives the box between frames. Copy `components/dialog.rs`
-into your own crate and edit it — the `copy-fixture` crate does exactly that
-with every copyable built-in and compiles them against `ratcn` as an ordinary
-external dependency, so nothing Dialog does is out of reach for a component of
-your own.
+[Building a composite](./building-a-composite) works all four through one real
+component — a labeled, collapsible `Fieldset` with a caller-supplied body, a
+measured action, and a disabled state that dims the group and takes it out of
+interaction — quoting the code from a compiled, tested example and covering the
+sharp edge each piece has.
+
+`Dialog` is the library's own reference implementation of the same pattern: a
+body that is either a description or a caller's closure, a footer that is either
+a caller's closure or a measured action row, a private `dims` every rect comes
+from, and border dragging that re-derives the box between frames. Copy
+`components/dialog.rs` into your own crate and edit it — the `copy-fixture`
+crate does exactly that with every copyable built-in and compiles them against
+`ratcn` as an ordinary external dependency, so nothing `Dialog` does is out of
+reach for a component of your own. The `Fieldset` above proves the same from the
+other direction: it lives outside the crate to begin with.
 
 ## Checklist
 

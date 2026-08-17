@@ -36,6 +36,7 @@ Each of these shows one technique end to end.
 | `kanban` | Drag and drop between columns, with cards keeping their identity as they move. See [Dragging](./concepts/dragging). |
 | `drag` | The smallest possible drag: one block, moved anywhere inside the frame. |
 | `panels` | Two focusable panels, each grouping its own children — scopes and Tab boundaries. See [Structuring a larger app](./concepts/composition). |
+| `fieldset` | A composite component written outside the library: a labeled group box with a caller-supplied body, a measured action, and a collapse the app owns. Walked through line by line in [Building a composite](./concepts/building-a-composite). |
 | `effects` | Fetching data without blocking the UI, and feeding the result back in as a message. See [State and messages](./concepts/state-and-messages#effects-and-result-messages). |
 
 ## Components

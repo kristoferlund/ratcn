@@ -197,6 +197,7 @@ export default defineConfig({
             { text: 'Dragging', link: '/docs/concepts/dragging' },
             { text: 'Structuring a larger app', link: '/docs/concepts/composition' },
             { text: 'Custom components', link: '/docs/concepts/custom-components' },
+            { text: 'Building a composite', link: '/docs/concepts/building-a-composite' },
             { text: 'Design decisions', link: '/docs/concepts/design-decisions' }
           ]
         },

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Iframed into the docs site; the page itself has no content to rank. -->
+    <meta name="robots" content="noindex" />
+    <script type="module" src="./demo-errors.js"></script>
+    <script type="module" src="./ratatui-keyboard-capture.js"></script>
+    <link
+      data-trunk
+      rel="rust"
+      data-wasm-opt-params="--enable-bulk-memory --enable-bulk-memory-opt --enable-sign-ext --enable-nontrapping-float-to-int"
+    />
+    <link data-trunk rel="copy-file" href="../shared/demo-errors.js" />
+    <link data-trunk rel="copy-file" href="../shared/ratatui-keyboard-capture.js" />
+    <link data-trunk rel="copy-file" href="../shared/fonts/JetBrainsMonoNerdFontMono-Regular.ttf" />
+    <link data-trunk rel="copy-file" href="../shared/fonts/OFL.txt" />
+    <link data-trunk rel="css" href="../shared/demo.css" />
+    <title>ratcn fieldset demo</title>
+  </head>
+  <body tabindex="0"></body>
+</html>
