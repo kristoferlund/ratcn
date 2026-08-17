@@ -100,7 +100,7 @@ struct DragPanel {
 impl Component<AppState, Msg> for DragPanel {
     fn render(
         &mut self,
-        ctx: &mut RenderCtx<'_, '_, AppState, Msg>,
+        ctx: &mut RenderCtx<'_, AppState, Msg>,
     ) {
         let area = ctx.area();
         // `area` is the panel box already computed by the declaration.

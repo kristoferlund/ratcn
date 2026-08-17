@@ -156,7 +156,7 @@ impl App {
     /// and the rest secondary. Both panels render through here, so they can
     /// only differ by the data passed in.
     fn panel(
-        ctx: &mut RenderCtx<'_, '_, AppState, Msg>,
+        ctx: &mut RenderCtx<'_, AppState, Msg>,
         panel: PanelId,
         button_ids: &'static [&'static str],
     ) {

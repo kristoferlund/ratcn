@@ -172,7 +172,7 @@ impl<T: Clone + PartialEq + 'static> WheelPark<T> {
     /// makes the absent park mean "unparked" rather than "no offset", in the one
     /// place both list-shaped components reach for it.
     pub fn settle_transient<S, M>(
-        ctx: &mut RenderCtx<'_, '_, S, M>,
+        ctx: &mut RenderCtx<'_, S, M>,
         items: &[ListItem<T>],
         cursor: Option<usize>,
         requested: Option<usize>,

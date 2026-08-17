@@ -105,7 +105,7 @@ pub fn stepper(step: Step, theme: &Theme) -> Line<'static> {
 
 /// The Back/Next row. Both buttons keep their ids across steps, so focus stays
 /// on Next and Enter walks the whole wizard.
-pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, Msg>, area: Rect, step: Step) {
+pub fn render(ctx: &mut RenderCtx<'_, AppState, Msg>, area: Rect, step: Step) {
     let back = Button::new("Back")
         .outline()
         .size(ButtonSize::Large)

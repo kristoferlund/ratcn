@@ -859,7 +859,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         );
     }
 
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
+    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
         let area = ctx.area();
         let state = ctx.state();
         let focused_row = self.focused_index(state);

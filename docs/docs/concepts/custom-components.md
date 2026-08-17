@@ -20,7 +20,7 @@ declared as a component costs identity, traversal, and hit-testing for nothing.
 
 ```rust
 impl Component<AppState, Msg> for MyComponent {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, AppState, Msg>) { ... }
+    fn render(&mut self, ctx: &mut RenderCtx<'_, AppState, Msg>) { ... }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) { ... }
 
@@ -178,7 +178,7 @@ borders and padding) and build the styled one inside the closure.
 
 **Caller-supplied bodies.** A region the caller fills is a closure, and it
 should be `FnOnce` so the caller can move owned values into it. Store it as
-`Option<Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>>` and `take()` it in
+`Option<Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>>` and `take()` it in
 `render`, then hand it the area you chose for it with
 `ctx.in_area(area, body)`. The body's children land in the composite's own
 sibling namespace, so ids must be unique across every body it declares.
@@ -190,7 +190,7 @@ declares it:
 
 ```rust
 struct ActionSlot<S, M> {
-    declare: Option<Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>, Rect)>>,
+    declare: Option<Box<dyn FnOnce(&mut RenderCtx<'_, S, M>, Rect)>>,
     size: Size,
 }
 ```

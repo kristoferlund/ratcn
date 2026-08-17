@@ -896,8 +896,11 @@ impl LayerCanvas {
 /// because it is the member that changes per declaration — whoever declares a
 /// child chooses where it goes — while the rest is constant for the whole
 /// pass.
-pub(crate) struct DeclarationEnv<'a, 'frame, State> {
-    pub(crate) frame: &'a mut Frame<'frame>,
+pub(crate) struct DeclarationEnv<'a, State> {
+    /// The whole terminal frame. Declaring never paints, so the frame itself
+    /// stays with [`Ratcn::render`] until the replay; its area is the only part
+    /// a declaration can act on, and it is constant for the pass.
+    pub(crate) frame_area: Rect,
     pub(crate) area: Rect,
     pub(crate) state: &'a State,
     pub(crate) theme: &'a Theme,
@@ -905,18 +908,18 @@ pub(crate) struct DeclarationEnv<'a, 'frame, State> {
     pub(crate) depth: usize,
 }
 
-impl<'a, 'frame, State> DeclarationEnv<'a, 'frame, State> {
+impl<'a, State> DeclarationEnv<'a, State> {
     /// The environment for a root declaration: the app's own closure, covering
     /// the whole frame at depth zero.
     fn root(
-        frame: &'a mut Frame<'frame>,
+        frame_area: Rect,
         state: &'a State,
         theme: &'a Theme,
         transients: &'a mut TransientMap,
     ) -> Self {
         Self {
-            area: frame.area(),
-            frame,
+            frame_area,
+            area: frame_area,
             state,
             theme,
             transients: Some(transients),
@@ -930,9 +933,9 @@ impl<'a, 'frame, State> DeclarationEnv<'a, 'frame, State> {
     /// Depth counts declaration nesting rather than tree nesting, which is why
     /// it advances here — at the point a node starts parenting others — and
     /// not in [`RenderPass::begin_node`].
-    fn nested(&mut self, area: Rect) -> DeclarationEnv<'_, 'frame, State> {
+    fn nested(&mut self, area: Rect) -> DeclarationEnv<'_, State> {
         DeclarationEnv {
-            frame: &mut *self.frame,
+            frame_area: self.frame_area,
             area,
             state: self.state,
             theme: self.theme,
@@ -1269,7 +1272,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         id: ChildId,
         component: impl Component<State, Msg> + 'static,
-        mut env: DeclarationEnv<'_, '_, State>,
+        mut env: DeclarationEnv<'_, State>,
     ) {
         let state = env.state;
         self.guarded(|pass| {
@@ -1326,7 +1329,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         id: ChildId,
         component: impl Component<State, Msg> + 'static,
-        env: DeclarationEnv<'_, '_, State>,
+        env: DeclarationEnv<'_, State>,
     ) {
         self.guarded(|pass| {
             pass.assert_unique_modal_id(&id);
@@ -1339,12 +1342,12 @@ impl<State, Msg> RenderPass<State, Msg> {
 
     /// The scope form of [`modal`](Self::modal): same layer lifecycle, but the
     /// root is an app-declared scope rather than a component.
-    pub(crate) fn modal_scope<'frame>(
+    pub(crate) fn modal_scope(
         &mut self,
         id: ChildId,
         options: ScopeOptions,
-        env: DeclarationEnv<'_, 'frame, State>,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        env: DeclarationEnv<'_, State>,
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
         self.guarded(|pass| {
             pass.assert_unique_modal_id(&id);
@@ -1361,14 +1364,14 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// `on_dismiss` belongs to the caller rather than to the kind, because
     /// only a kind whose policy has `dismiss_on_outside_press` can ever fire
     /// one — hints pass `None` instead of carrying a hook that never runs.
-    pub(crate) fn layer_scope<'frame>(
+    pub(crate) fn layer_scope(
         &mut self,
         id: ChildId,
         kind: LayerKind,
         options: ScopeOptions,
         on_dismiss: Option<Box<dyn Fn() -> Msg>>,
-        env: DeclarationEnv<'_, 'frame, State>,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        env: DeclarationEnv<'_, State>,
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
         debug_assert!(
             on_dismiss.is_none() || kind.policy().dismiss_on_outside_press,
@@ -1383,12 +1386,12 @@ impl<State, Msg> RenderPass<State, Msg> {
         });
     }
 
-    pub(crate) fn scope<'frame>(
+    pub(crate) fn scope(
         &mut self,
         id: ChildId,
         options: ScopeOptions,
-        mut env: DeclarationEnv<'_, 'frame, State>,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        mut env: DeclarationEnv<'_, State>,
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
         self.guarded(|pass| {
             let role = NodeRole::scope(options.focusable);
@@ -1403,13 +1406,13 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Run one declaration closure over the current parent node. The single
     /// construction site for declaration [`RenderCtx`]s: root, scope, modal, and
     /// component render all pass through here.
-    fn declare<'frame>(
+    fn declare(
         &mut self,
-        env: DeclarationEnv<'_, 'frame, State>,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        env: DeclarationEnv<'_, State>,
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
         let DeclarationEnv {
-            frame,
+            frame_area,
             area,
             state,
             theme,
@@ -1419,14 +1422,14 @@ impl<State, Msg> RenderPass<State, Msg> {
         let hover_position = self.hover_position;
         self.guarded(|pass| {
             let mut ctx = RenderCtx {
-                frame,
+                frame_area,
                 area,
                 theme,
                 hover_position,
                 transients,
                 depth,
-                pass: Some(pass),
-                state: Some(state),
+                pass,
+                state,
             };
             declare(&mut ctx);
         });
@@ -1997,12 +2000,12 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// [`modals`](Ratcn::modals) is bound and the declared modal ids do not
     /// exactly match the app's stack. All of these fire before the retained
     /// surface is replaced.
-    pub fn render<'frame>(
+    pub fn render(
         &mut self,
-        frame: &mut Frame<'frame>,
+        frame: &mut Frame,
         state: &State,
         theme: &Theme,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
         let focus_snapshot = self.stored_focus(state);
 
@@ -2014,7 +2017,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         pass.hover_position = self.pointer;
         pass.hover_path.clone_from(&self.hover);
         pass.declare(
-            DeclarationEnv::root(frame, state, theme, &mut self.transients),
+            DeclarationEnv::root(frame.area(), state, theme, &mut self.transients),
             declare,
         );
         // Every reason to reject a pass is known once declaration ends, and
@@ -2929,7 +2932,7 @@ mod tests {
     struct Leaf;
 
     impl Component<(), ()> for Leaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, (), ()>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
 
         fn handle_event(
             &mut self,
@@ -2946,7 +2949,7 @@ mod tests {
     }
 
     impl Component<u8, ()> for ContextProbe {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, u8, ()>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, u8, ()>) {
             assert_eq!(ctx.area(), self.area);
             assert_eq!(*ctx.state(), 7);
         }
@@ -2959,7 +2962,7 @@ mod tests {
     struct Composite;
 
     impl Component<(), ()> for Composite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, (), ()>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, (), ()>) {
             let area = ctx.area();
             ctx.render_component(ChildId::Static("leaf"), Leaf, area);
         }
@@ -2972,7 +2975,7 @@ mod tests {
     struct PanickingLeaf;
 
     impl Component<(), ()> for PanickingLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, (), ()>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {
             panic!("leaf render failed");
         }
     }
@@ -2980,7 +2983,7 @@ mod tests {
     struct PanickingScopeOptions;
 
     impl Component<(), ()> for PanickingScopeOptions {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, (), ()>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
 
         fn scope_options(&self) -> ScopeOptions {
             panic!("scope options failed");
@@ -2994,13 +2997,13 @@ mod tests {
             panic!("declaration prop resolution failed");
         }
 
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, (), ()>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
     }
 
     struct PanickingFocusable;
 
     impl Component<(), ()> for PanickingFocusable {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, (), ()>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
 
         fn is_focusable(&self, _state: &()) -> bool {
             panic!("focusability failed");
@@ -3010,7 +3013,7 @@ mod tests {
     struct PanickingInteractionArea;
 
     impl Component<(), ()> for PanickingInteractionArea {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, (), ()>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
 
         fn interaction_area(&self, _area: Rect) -> Rect {
             panic!("interaction area failed");
@@ -3020,7 +3023,7 @@ mod tests {
     struct EscapingInteractionArea;
 
     impl Component<(), ()> for EscapingInteractionArea {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, (), ()>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
 
         fn interaction_area(&self, area: Rect) -> Rect {
             Rect::new(area.x, area.y, area.width.saturating_add(1), area.height)
@@ -3030,7 +3033,7 @@ mod tests {
     struct CatchingComposite;
 
     impl Component<(), ()> for CatchingComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, (), ()>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, (), ()>) {
             let area = ctx.area();
             let caught = catch_unwind(AssertUnwindSafe(|| {
                 ctx.render_component(ChildId::Static("panicking-child"), PanickingLeaf, area);
@@ -3060,7 +3063,7 @@ mod tests {
     struct ModalRoute(&'static str);
 
     impl Component<ModalTestState, ModalTestMsg> for ModalRoute {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, ModalTestState, ModalTestMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalTestState, ModalTestMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -3081,7 +3084,7 @@ mod tests {
     }
 
     impl Component<ModalTestState, ModalTestMsg> for ModalFocusRoute {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, ModalTestState, ModalTestMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalTestState, ModalTestMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
             self.rendered
@@ -3183,7 +3186,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for FocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             if let Some(rendered) = &self.rendered {
@@ -3222,7 +3225,7 @@ mod tests {
     struct ClickFocusLeaf;
 
     impl Component<FocusTestState, FocusTestMsg> for ClickFocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn is_focusable(&self, _state: &FocusTestState) -> bool {
             true
@@ -3236,12 +3239,8 @@ mod tests {
     type PathLog = Arc<Mutex<Vec<Vec<ChildId>>>>;
 
     /// Record the identity path the declaration pass currently has open.
-    fn record_declared_path(
-        ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>,
-        log: &PathLog,
-    ) {
-        let pass = ctx.pass.as_deref().expect("declaration pass");
-        if let Some(path) = pass.current_path() {
+    fn record_declared_path(ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>, log: &PathLog) {
+        if let Some(path) = ctx.pass.current_path() {
             log.lock().expect("path log").push(path.to_vec());
         }
     }
@@ -3252,7 +3251,7 @@ mod tests {
     struct PathProbe(PathLog);
 
     impl Component<FocusTestState, FocusTestMsg> for PathProbe {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             record_declared_path(ctx, &self.0);
         }
 
@@ -3264,7 +3263,7 @@ mod tests {
     /// The two leaves at the bottom of a depth-four branch, plus the record
     /// for the scope they were declared into.
     fn declare_probe_cells(
-        ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>,
+        ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>,
         top: u16,
         log: &PathLog,
     ) {
@@ -3288,7 +3287,7 @@ mod tests {
     struct DownFocusLeaf(DownBehavior);
 
     impl Component<FocusTestState, FocusTestMsg> for DownFocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -3329,7 +3328,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for AreaAwareComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             assert_eq!(ctx.area(), self.expected_area);
             self.rendered.store(true, Ordering::SeqCst);
             ctx.render_component(ChildId::Static("child"), FocusLeaf::enabled(), ctx.area());
@@ -3360,7 +3359,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             self.rendered
@@ -3380,7 +3379,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for FocusComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
             ctx.render_component(
                 ChildId::Static("child"),
@@ -5130,7 +5129,7 @@ mod tests {
     }
 
     impl Component<HoverFocusState, HoverFocusMsg> for HoverFocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, HoverFocusState, HoverFocusMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, HoverFocusState, HoverFocusMsg>) {}
 
         fn is_focusable(&self, _state: &HoverFocusState) -> bool {
             self.enabled
@@ -5140,7 +5139,7 @@ mod tests {
     struct HoverFocusComposite;
 
     impl Component<HoverFocusState, HoverFocusMsg> for HoverFocusComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, HoverFocusState, HoverFocusMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, HoverFocusState, HoverFocusMsg>) {
             let area = ctx.area();
             ctx.render_component(ChildId::Static("leaf"), HoverFocusLeaf::enabled(), area);
         }
@@ -5166,7 +5165,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for LifecycleDrag {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5188,7 +5187,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for Draggable {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5230,7 +5229,7 @@ mod tests {
     }
 
     impl Component<ModalPointerState, PointerMsg> for ModalHoverLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, ModalPointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalPointerState, PointerMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalPointerState>) {
             self.rendered
@@ -5243,11 +5242,11 @@ mod tests {
     struct ModalPointerLeaf;
 
     impl Component<ModalPointerState, PointerMsg> for ModalPointerLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, ModalPointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalPointerState, PointerMsg>) {}
     }
 
     impl Component<PointerState, PointerMsg> for HoverLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
             if let Some(rendered) = &self.rendered {
@@ -5283,7 +5282,7 @@ mod tests {
     struct EmittingHoverLeaf;
 
     impl Component<PointerState, PointerMsg> for EmittingHoverLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5313,7 +5312,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for CapturingHoverLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
             self.rendered
@@ -5341,7 +5340,7 @@ mod tests {
     struct StringTransient;
 
     impl Component<PointerState, PointerMsg> for StringTransient {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5357,7 +5356,7 @@ mod tests {
     struct NumberTransient;
 
     impl Component<PointerState, PointerMsg> for NumberTransient {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5373,7 +5372,7 @@ mod tests {
     struct TransientProbe;
 
     impl Component<PointerState, PointerMsg> for TransientProbe {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5432,7 +5431,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for CleanupComponent {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5461,7 +5460,7 @@ mod tests {
     struct RouteLeaf(&'static str);
 
     impl Component<PointerState, PointerMsg> for RouteLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5483,7 +5482,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for RecordingPointer {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -6490,7 +6489,7 @@ mod tests {
     struct ThunkProbe(FocusRenderLog);
 
     impl Component<FocusTestState, FocusTestMsg> for ThunkProbe {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             let log = Arc::clone(&self.0);
             ctx.paint(move |ctx| {
                 log.lock()
@@ -6861,7 +6860,7 @@ mod tests {
             self.open = *state;
         }
 
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, bool, ()>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, bool, ()>) {}
 
         fn scope_options(&self) -> ScopeOptions {
             let options = ScopeOptions::default();
@@ -7878,7 +7877,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for LoggingComponent {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             self.log.lock().expect("paint log").push(self.name);
@@ -7905,7 +7904,7 @@ mod tests {
     struct FocusModal;
 
     impl Component<FocusTestState, FocusTestMsg> for FocusModal {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
             ctx.render_component(ChildId::Static("leaf"), FocusLeaf::enabled(), area);
         }
@@ -7918,7 +7917,7 @@ mod tests {
     struct EscapeFocusModal;
 
     impl Component<FocusTestState, FocusTestMsg> for EscapeFocusModal {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
             ctx.render_component(ChildId::Static("first"), FocusLeaf::enabled(), area);
             ctx.render_component(ChildId::Static("second"), FocusLeaf::enabled(), area);
@@ -7932,7 +7931,7 @@ mod tests {
     struct PanickingFocusComponent;
 
     impl Component<FocusTestState, FocusTestMsg> for PanickingFocusComponent {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             panic!("modal render failed");
         }
     }
@@ -7942,7 +7941,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for RecordingFocusModal {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
             ctx.render_component(
                 ChildId::Static("leaf"),
@@ -8074,7 +8073,7 @@ mod tests {
     struct BackdropParent;
 
     impl Component<(), ()> for BackdropParent {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, (), ()>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, (), ()>) {
             let area = ctx.area();
             ctx.render_component(ChildId::Static("glyph"), GlyphLeaf("C"), area);
         }
@@ -8093,7 +8092,7 @@ mod tests {
     struct GlyphLeaf(&'static str);
 
     impl<S, M> Component<S, M> for GlyphLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, S, M>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, S, M>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
             let area = ctx.area();
@@ -8958,7 +8957,7 @@ mod tests {
         struct FocusableLeaf;
 
         impl Component<PointerState, PointerMsg> for FocusableLeaf {
-            fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+            fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
             fn is_focusable(&self, _state: &PointerState) -> bool {
                 true
@@ -9136,7 +9135,7 @@ mod tests {
     struct PopupHost;
 
     impl Component<FocusTestState, FocusTestMsg> for PopupHost {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, FocusTestState, FocusTestMsg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
             ctx.popup(
                 ChildId::Static("panel"),
@@ -9389,7 +9388,7 @@ mod tests {
     }
 
     impl Component<ModalTestState, ModalTestMsg> for ModalFocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, ModalTestState, ModalTestMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalTestState, ModalTestMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
             self.rendered
@@ -9419,7 +9418,7 @@ mod tests {
     struct ClickLeaf(&'static str);
 
     impl Component<PointerState, PointerMsg> for ClickLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,

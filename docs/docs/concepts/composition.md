@@ -45,7 +45,7 @@ ratcn.render(frame, state, &state.theme, |ctx| {
     );
 });
 
-fn render_panel_a(ctx: &mut RenderCtx<'_, '_, AppState, Msg>) {
+fn render_panel_a(ctx: &mut RenderCtx<'_, AppState, Msg>) {
     ctx.render_component("save", Button::new("Save").on_press(|| Msg::Save), ctx.area());
 }
 ```
@@ -103,7 +103,7 @@ impl State {
     pub fn update(&mut self, msg: Msg) { /* only this screen's concerns */ }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) { /* ... */ }
+pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) { /* ... */ }
 ```
 
 The shell composes them by nesting rather than flattening:

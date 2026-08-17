@@ -997,7 +997,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         self.resolved_open = !self.disabled && self.is_open(state);
     }
 
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
+    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
         let area = trigger_area(ctx.area());
         let style = resolve_style(self.style.as_deref(), ctx.theme, SelectStyle::from_theme);
         let Some((panel_area, viewport)) = self
@@ -1123,7 +1123,7 @@ impl<T: Clone + PartialEq, S, M> SelectPanel<T, S, M> {
 }
 
 impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S, M> {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
+    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
         let state = ctx.state();
         let cursor = self.cursor(state);
         // The panel owns its scrolling, so the park supplies the offset: the

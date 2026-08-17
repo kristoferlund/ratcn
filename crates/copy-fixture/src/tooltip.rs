@@ -231,7 +231,7 @@ type OnOpenChangeFn<M> = Rc<dyn Fn(bool) -> M>;
 type OpenBinding<S, M> = (ReadOpenFn<S>, Option<OnOpenChangeFn<M>>);
 type StyleFn = Rc<dyn Fn(&Theme) -> TooltipStyle>;
 /// The trigger closure, boxed for storage until the declaration runs it.
-type TriggerFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>;
+type TriggerFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>;
 
 /// A wrapper that floats an explanation beside the content it describes.
 ///
@@ -427,7 +427,7 @@ impl<S, M> Tooltip<S, M> {
     /// Without a trigger the Tooltip paints nothing in its area and is only a
     /// hover target.
     #[must_use]
-    pub fn trigger(mut self, f: impl FnOnce(&mut RenderCtx<'_, '_, S, M>) + 'static) -> Self {
+    pub fn trigger(mut self, f: impl FnOnce(&mut RenderCtx<'_, S, M>) + 'static) -> Self {
         self.trigger = Some(Box::new(f));
         self
     }
@@ -483,7 +483,7 @@ impl<S, M> Tooltip<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
+    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
         // Read before the trigger declares: `pointer_within` asks about the
         // declaration that is open right now, which is this Tooltip's.
         self.pointer_within = ctx.pointer_within();

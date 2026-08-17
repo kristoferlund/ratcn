@@ -20,7 +20,7 @@ const MONTHLY_CONTRIBUTIONS: [(&str, u64); 6] = [
 
 pub const ID: &str = "contributions";
 
-pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
+pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let inner = render_tile_panel(ctx, area, " alt+5 ");
     let [header_area, intro_area, chart_area] = Layout::vertical([

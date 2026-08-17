@@ -205,9 +205,9 @@ fn paint_dialog_box<S>(
 
 type StyleFn = Box<dyn Fn(&Theme) -> DialogStyle>;
 /// A custom body closure, boxed for storage until the declaration paints it.
-type BodyFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>;
+type BodyFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>;
 /// One action's declaration, boxed with the component and id it carries.
-type ActionFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>, Rect)>;
+type ActionFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>, Rect)>;
 
 /// What fills the dialog's main area.
 ///
@@ -434,7 +434,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     pub fn content(
         mut self,
         height: u16,
-        f: impl FnOnce(&mut RenderCtx<'_, '_, S, M>) + 'static,
+        f: impl FnOnce(&mut RenderCtx<'_, S, M>) + 'static,
     ) -> Self {
         self.body = DialogBody::Content {
             height,
@@ -501,7 +501,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     pub fn footer(
         mut self,
         height: u16,
-        f: impl FnOnce(&mut RenderCtx<'_, '_, S, M>) + 'static,
+        f: impl FnOnce(&mut RenderCtx<'_, S, M>) + 'static,
     ) -> Self {
         assert!(
             !matches!(self.footer, DialogFooter::Actions(_)),
@@ -659,7 +659,7 @@ impl<S: 'static, M: 'static> Default for Dialog<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
+    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
         let area = ctx.area();
         self.paint_area = area;
         let layout = dialog_layout(area, self.offset, &self.dims());
@@ -860,7 +860,7 @@ mod tests {
     }
 
     impl Component<State, Msg> for MeasuredProbe {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, State, Msg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, State, Msg>) {
             self.rendered
                 .lock()
                 .expect("render record lock")
@@ -1383,7 +1383,7 @@ mod tests {
             self.resolves.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn render(&mut self, ctx: &mut RenderCtx<'_, '_, State, Msg>) {
+        fn render(&mut self, ctx: &mut RenderCtx<'_, State, Msg>) {
             let area = ctx.area();
             ctx.render_component(
                 ChildId::Static("inner"),
@@ -1447,7 +1447,7 @@ mod tests {
     struct OptionFocusable;
 
     impl Component<State, Msg> for OptionFocusable {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, State, Msg>) {}
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, State, Msg>) {}
 
         fn scope_options(&self) -> ScopeOptions {
             ScopeOptions::default().focusable()
@@ -1573,7 +1573,7 @@ mod tests {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
                         let observed = Arc::clone(&content_area);
-                        let content = move |ctx: &mut RenderCtx<'_, '_, State, Msg>| {
+                        let content = move |ctx: &mut RenderCtx<'_, State, Msg>| {
                             *observed.lock().expect("content area lock") = Some(ctx.area());
                         };
                         let dialog = if description_first {

@@ -12,7 +12,7 @@ use crate::steps;
 
 pub const SCREEN_ID: &str = "step_project";
 
-pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
+pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let inner = steps::render_panel(ctx, area, Some("Create a project"));
 

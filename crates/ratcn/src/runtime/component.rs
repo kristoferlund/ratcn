@@ -44,9 +44,12 @@ pub enum EventResult<Msg> {
 ///
 /// [`Ratcn`](super::Ratcn) creates this and threads it through the declaration
 /// pass — the root closure gets one, and so does every component's
-/// [`render`](Component::render). Only the library constructs it.
+/// [`render`](Component::render). Only the library constructs it, and only
+/// inside a pass, so everything here is always available.
 ///
-/// Declaring does not paint. Nothing here writes to a cell: paint belongs to
+/// Declaring does not paint. Nothing here writes to a cell — the context does
+/// not carry the frame at all, only [`frame_area`](Self::frame_area), the one
+/// thing about it a declaration has to know. Paint belongs to
 /// [`Component::paint`] and to the closures [`paint`](Self::paint) queues,
 /// which the runtime replays in declaration order once the whole tree is
 /// known. The interaction flags a paint call styles from live on
@@ -54,16 +57,16 @@ pub enum EventResult<Msg> {
 /// context is still building, so while it exists there is nothing to report.
 /// Hover is the exception, because it predates the pass rather than following
 /// from it: [`pointer_within`](Self::pointer_within) is readable here.
-pub struct RenderCtx<'a, 'frame, State, Msg> {
-    pub(crate) frame: &'a mut Frame<'frame>,
+pub struct RenderCtx<'a, State, Msg> {
+    pub(crate) frame_area: Rect,
     pub(crate) area: Rect,
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
     pub theme: &'a Theme,
     pub(crate) hover_position: Option<Position>,
     pub(crate) transients: Option<&'a mut TransientMap>,
     pub(crate) depth: usize,
-    pub(crate) pass: Option<&'a mut RenderPass<State, Msg>>,
-    pub(crate) state: Option<&'a State>,
+    pub(crate) pass: &'a mut RenderPass<State, Msg>,
+    pub(crate) state: &'a State,
 }
 
 /// Where one identified declaration sits in this frame's focus and hover, as
@@ -84,19 +87,19 @@ pub(crate) struct InteractionFlags {
     pub(crate) contains_hover: bool,
 }
 
-impl<State, Msg> fmt::Debug for RenderCtx<'_, '_, State, Msg> {
+impl<State, Msg> fmt::Debug for RenderCtx<'_, State, Msg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderCtx")
             .field("area", &self.area)
+            .field("frame_area", &self.frame_area)
             .field("theme", self.theme)
             .field("hover_position", &self.hover_position)
             .field("depth", &self.depth)
-            .field("declaration_active", &self.pass.is_some())
             .finish_non_exhaustive()
     }
 }
 
-impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
+impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// Queue paint for the position this declaration occupies.
     ///
     /// The app-level counterpart of [`Component::paint`], for chrome that has
@@ -120,16 +123,9 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// identity of its own — paint queued there always reports all four as
     /// false. Enter a named [`scope`](Self::scope) when container chrome needs
     /// to know whether focus or the pointer is somewhere inside it.
-    ///
-    /// # Panics
-    ///
-    /// Panics when called outside a [`Ratcn`](super::Ratcn) declaration pass.
     pub fn paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static) {
         let area = self.area;
-        self.pass
-            .as_deref_mut()
-            .expect("paint called outside a Ratcn declaration pass")
-            .queue_thunk(area, paint);
+        self.pass.queue_thunk(area, paint);
     }
 
     /// The area supplied for the current declaration.
@@ -145,8 +141,8 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// an overlay relative to their declaration while keeping that overlay
     /// within the terminal bounds.
     #[must_use]
-    pub fn frame_area(&self) -> Rect {
-        self.frame.area()
+    pub const fn frame_area(&self) -> Rect {
+        self.frame_area
     }
 
     /// The pointer position from the most recent mouse event, if it is still
@@ -190,14 +186,9 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// It also reports what a gesture froze: while a button is held, hover
     /// stays on whatever the gesture started on rather than following the
     /// pointer.
-    ///
-    /// `false` in a context built outside a [`Ratcn`](super::Ratcn)
-    /// declaration pass.
     #[must_use]
     pub fn pointer_within(&self) -> bool {
-        self.pass
-            .as_deref()
-            .is_some_and(RenderPass::pointer_within_current)
+        self.pass.pointer_within_current()
     }
 
     /// Read the transient stored at the current declaration's identity path,
@@ -208,12 +199,10 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// viewport offset, say — and the next render reads them here to lay out
     /// accordingly.
     ///
-    /// `None` when no event handler has stored a value at this path, and in a
-    /// context built outside a [`Ratcn`](super::Ratcn) declaration pass (a
-    /// paint-widget unit test). Like every transient, the value disappears as
-    /// soon as its path stops being declared — see
-    /// [`EventCtx::transient`] for the ownership rules; semantic state does
-    /// not belong here.
+    /// `None` when no event handler has stored a value at this path. Like every
+    /// transient, the value disappears as soon as its path stops being
+    /// declared — see [`EventCtx::transient`] for the ownership rules; semantic
+    /// state does not belong here.
     ///
     /// Use [`transient_mut`](Self::transient_mut) when the declaration must
     /// also settle the value it reads.
@@ -225,7 +214,7 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     #[must_use]
     pub fn transient<T: 'static>(&self) -> Option<&T> {
         let transients = self.transients.as_deref()?;
-        let path = self.pass.as_deref()?.current_path()?;
+        let path = self.pass.current_path()?;
         Some(transients.get(path)?.expect_ref(path))
     }
 
@@ -257,21 +246,15 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// Panics if the stored transient has a different type: one path holds one
     /// `T`, and reader and writer must agree on it.
     pub fn transient_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        let path = self.pass.as_deref()?.current_path()?.to_vec();
+        let path = self.pass.current_path()?.to_vec();
         let transients = self.transients.as_deref_mut()?;
         Some(transients.get_mut(&path)?.expect_mut(&path))
     }
 
     /// The app state supplied to the current declaration pass.
-    ///
-    /// # Panics
-    ///
-    /// Panics when this context was constructed outside a [`Ratcn`](super::Ratcn)
-    /// declaration pass.
     #[must_use]
-    pub fn state(&self) -> &'a State {
+    pub const fn state(&self) -> &'a State {
         self.state
-            .expect("RenderCtx::state is unavailable outside a Ratcn declaration pass")
     }
 
     /// Run a declaration callback against an area override.
@@ -286,19 +269,15 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// Not to be confused with [`EventCtx::with_area`], which is a builder
     /// setter: this one opens a sub-area for a callback and declares nothing of
     /// its own.
-    pub fn in_area(
-        &mut self,
-        area: Rect,
-        render: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
-    ) {
+    pub fn in_area(&mut self, area: Rect, render: impl FnOnce(&mut RenderCtx<'_, State, Msg>)) {
         let mut ctx = RenderCtx {
-            frame: &mut *self.frame,
+            frame_area: self.frame_area,
             area,
             theme: self.theme,
             hover_position: self.hover_position,
             transients: self.transients.as_deref_mut(),
             depth: self.depth,
-            pass: self.pass.as_deref_mut(),
+            pass: &mut *self.pass,
             state: self.state,
         };
         render(&mut ctx);
@@ -307,34 +286,20 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// The pass and the declaration environment for a child covering `area`.
     ///
     /// Every declaration method needs both, and both come out of the same
-    /// borrow of `self`, so they are produced together. This is also the one
-    /// place `pass` and `state` are unwrapped: a [`RenderCtx`] built outside a
-    /// declaration pass can paint but cannot declare, and `method` names the
-    /// caller so the panic says which call was out of place.
+    /// borrow of `self`, so they are produced together.
     fn declaring(
         &mut self,
         area: Rect,
-        method: &str,
-    ) -> (
-        &mut RenderPass<State, Msg>,
-        DeclarationEnv<'_, 'frame, State>,
-    ) {
-        let state = self
-            .state
-            .unwrap_or_else(|| panic!("{method} called without declaration state"));
+    ) -> (&mut RenderPass<State, Msg>, DeclarationEnv<'_, State>) {
         let env = DeclarationEnv {
-            frame: &mut *self.frame,
+            frame_area: self.frame_area,
             area,
-            state,
+            state: self.state,
             theme: self.theme,
             transients: self.transients.as_deref_mut(),
             depth: self.depth,
         };
-        let pass = self
-            .pass
-            .as_deref_mut()
-            .unwrap_or_else(|| panic!("{method} called outside a Ratcn declaration pass"));
-        (pass, env)
+        (&mut *self.pass, env)
     }
 
     /// Open a nested identity and focus scope around some descendants, without
@@ -355,16 +320,15 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     ///
     /// # Panics
     ///
-    /// Panics when called outside a [`Ratcn`](super::Ratcn) declaration pass or when
-    /// `id` duplicates another child of the same parent.
+    /// Panics when `id` duplicates another child of the same parent.
     pub fn scope(
         &mut self,
         id: impl Into<ChildId>,
         area: Rect,
         options: ScopeOptions,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
-        let (pass, env) = self.declaring(area, "scope");
+        let (pass, env) = self.declaring(area);
         pass.scope(id.into(), options, env, declare);
     }
 
@@ -382,15 +346,14 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     ///
     /// # Panics
     ///
-    /// Panics when called outside a [`Ratcn`](super::Ratcn) declaration pass
-    /// or when `id` duplicates another child of the same parent.
+    /// Panics when `id` duplicates another child of the same parent.
     pub fn render_component(
         &mut self,
         id: impl Into<ChildId>,
         component: impl Component<State, Msg> + 'static,
         area: Rect,
     ) {
-        let (pass, env) = self.declaring(area, "render_component");
+        let (pass, env) = self.declaring(area);
         pass.render_component(id.into(), component, env);
     }
 
@@ -420,15 +383,14 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     ///
     /// # Panics
     ///
-    /// Panics outside a [`Ratcn`](super::Ratcn) declaration pass, or when `id`
-    /// duplicates another modal root's id.
+    /// Panics when `id` duplicates another modal root's id.
     pub fn modal(
         &mut self,
         id: impl Into<ChildId>,
         component: impl Component<State, Msg> + 'static,
         area: Rect,
     ) {
-        let (pass, env) = self.declaring(area, "modal");
+        let (pass, env) = self.declaring(area);
         pass.modal(id.into(), component, env);
     }
 
@@ -455,16 +417,15 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     ///
     /// # Panics
     ///
-    /// Panics outside a [`Ratcn`](super::Ratcn) declaration pass, or when `id`
-    /// duplicates another child of the same parent.
+    /// Panics when `id` duplicates another child of the same parent.
     pub fn hint(
         &mut self,
         id: impl Into<ChildId>,
         options: ScopeOptions,
         area: Rect,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
-        let (pass, env) = self.declaring(area, "hint");
+        let (pass, env) = self.declaring(area);
         pass.layer_scope(id.into(), LayerKind::Hint, options, None, env, declare);
     }
 
@@ -494,16 +455,15 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     ///
     /// # Panics
     ///
-    /// Panics outside a [`Ratcn`](super::Ratcn) declaration pass, or when `id`
-    /// duplicates another child of the same parent.
+    /// Panics when `id` duplicates another child of the same parent.
     pub fn popup(
         &mut self,
         id: impl Into<ChildId>,
         options: PopupOptions<Msg>,
         area: Rect,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
-        let (pass, env) = self.declaring(area, "popup");
+        let (pass, env) = self.declaring(area);
         pass.layer_scope(
             id.into(),
             LayerKind::Popup,
@@ -545,9 +505,9 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
         id: impl Into<ChildId>,
         area: Rect,
         options: ScopeOptions,
-        declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
+        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
     ) {
-        let (pass, env) = self.declaring(area, "modal_scope");
+        let (pass, env) = self.declaring(area);
         pass.modal_scope(id.into(), options, env, declare);
     }
 
@@ -569,15 +529,8 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// not get a `RenderCtx`. It receives a [`Painter`] over the frame (which
     /// carries the theme) and the app state the pass was declared with;
     /// anything else it needs must be moved into the closure here.
-    ///
-    /// # Panics
-    ///
-    /// Panics when called outside a [`Ratcn`](super::Ratcn) declaration pass.
     pub fn defer_paint(&mut self, paint: impl FnOnce(&mut Painter<'_, '_>, &State) + 'static) {
-        self.pass
-            .as_deref_mut()
-            .expect("defer_paint called outside a Ratcn declaration pass")
-            .defer_paint(paint);
+        self.pass.defer_paint(paint);
     }
 }
 
@@ -1304,7 +1257,7 @@ pub trait Component<State, Msg> {
     /// exist yet — focus resolves against the tree this is still building.
     ///
     /// Anything that draws belongs in [`paint`](Self::paint).
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, State, Msg>);
+    fn render(&mut self, ctx: &mut RenderCtx<'_, State, Msg>);
 
     /// Paint the component. `ctx` carries the paint surface, area, app state,
     /// theme, and interaction state.

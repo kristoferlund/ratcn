@@ -16,7 +16,7 @@ pub struct Tile {
     /// A tile with controls is a Tab-trapping scope; a controls-free tile is
     /// a plain focusable leaf.
     pub has_controls: bool,
-    pub render: fn(&mut RenderCtx<'_, '_, AppState, AppMsg>),
+    pub render: fn(&mut RenderCtx<'_, AppState, AppMsg>),
 }
 
 /// The one place that fixes tile order: grid position, alt+N focus keys, and
@@ -54,7 +54,7 @@ pub const TILES: [Tile; 6] = [
     },
 ];
 
-pub fn render(index: usize, ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>, area: Rect) {
+pub fn render(index: usize, ctx: &mut RenderCtx<'_, AppState, AppMsg>, area: Rect) {
     let tile = &TILES[index];
     let options = if tile.has_controls {
         ScopeOptions::default().tab_wrap(TabWrap::Wrap)
