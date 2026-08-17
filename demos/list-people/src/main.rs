@@ -154,6 +154,7 @@ impl demo_shared::Demo for App {
             );
 
             ctx.component(ids::LIST, list, list_area);
+
             let count = format!("Invited {} of {}", state.invited.len(), PEOPLE.len());
             ctx.paint_widget(
                 Paragraph::new(count).style(Style::default().fg(muted)),

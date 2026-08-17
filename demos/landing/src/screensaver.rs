@@ -148,7 +148,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.paint(move |ctx| ctx.widget(Line::from("A"), area));
+                    ctx.paint_widget(Line::from("A"), area);
                     declare(ctx, area, Duration::ZERO);
                 });
             })

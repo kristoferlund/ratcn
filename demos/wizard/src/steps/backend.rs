@@ -72,12 +72,6 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
             |backend| AppMsg::Choose(ChoiceMsg::SetBackend(backend)),
         );
 
-    let commands = state
-        .choices
-        .dependency_commands()
-        .iter()
-        .map(|command| steps::command(theme, *command))
-        .collect::<Vec<_>>();
     let inner = steps::declare_panel(ctx, area, Some("Pick a backend"));
 
     let [intro, select_area, commands_area] = inner.layout(
@@ -89,15 +83,20 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         .spacing(1),
     );
 
-    ctx.paint(move |ctx| {
-        ctx.widget(
-            Paragraph::new("One feature per host, none on by default.")
-                .style(Style::default().fg(ctx.theme.muted_foreground))
-                .wrap(Wrap { trim: true }),
-            intro,
-        );
-    });
+    ctx.paint_widget(
+        Paragraph::new("One feature per host, none on by default.")
+            .style(Style::default().fg(theme.muted_foreground))
+            .wrap(Wrap { trim: true }),
+        intro,
+    );
     ctx.component(SELECT_ID, backend, select_area);
+
+    let commands = state
+        .choices
+        .dependency_commands()
+        .iter()
+        .map(|command| steps::command(theme, *command))
+        .collect::<Vec<_>>();
     ctx.paint_widget(
         Paragraph::new(commands).wrap(Wrap { trim: false }),
         commands_area,

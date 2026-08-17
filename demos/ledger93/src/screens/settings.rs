@@ -67,36 +67,32 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         Constraint::Length(1),
     ]));
 
-    ctx.paint(move |ctx| {
-        ctx.widget(
-            Line::from(Span::styled(
-                "Currency",
-                Style::default()
-                    .fg(ctx.theme.muted_foreground)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            header,
-        );
-    });
+    ctx.paint_widget(
+        Line::from(Span::styled(
+            "Currency",
+            Style::default()
+                .fg(ctx.theme.muted_foreground)
+                .add_modifier(Modifier::BOLD),
+        )),
+        header,
+    );
     ctx.component(CURRENCY_ID, currency, list_area);
 
     let prefs = state.shared.prefs;
-    ctx.paint(move |ctx| {
-        let theme = ctx.theme;
-        ctx.widget(
-            Line::from(vec![
-                Span::styled("Preview: ", Style::default().fg(theme.muted_foreground)),
-                Span::styled(
-                    shared::format_money(-123_456, &prefs),
-                    Style::default().fg(theme.destructive),
-                ),
-                Span::raw("   "),
-                Span::styled(
-                    shared::format_money(78_900, &prefs),
-                    Style::default().fg(theme.primary),
-                ),
-            ]),
-            preview_area,
-        );
-    });
+    let theme = ctx.theme;
+    ctx.paint_widget(
+        Line::from(vec![
+            Span::styled("Preview: ", Style::default().fg(theme.muted_foreground)),
+            Span::styled(
+                shared::format_money(-123_456, &prefs),
+                Style::default().fg(theme.destructive),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                shared::format_money(78_900, &prefs),
+                Style::default().fg(theme.primary),
+            ),
+        ]),
+        preview_area,
+    );
 }

@@ -115,28 +115,26 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let button_layout = Layout::horizontal([Constraint::Length(button_width)]).flex(Flex::Center);
     let inner_area = declare_tile_panel(ctx, area, " alt+2 ");
     let [header_area, body_area, button_row] = inner_area.layout(&content_layout);
-    ctx.paint(move |ctx| {
-        let theme = ctx.theme;
-        ctx.widget(
-            Paragraph::new("Distribute track")
-                .style(
-                    Style::default()
-                        .fg(theme.foreground)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .centered(),
-            header_area,
-        );
-        ctx.widget(
-            Paragraph::new(
-                "Upload your first master to start reaching listeners on Spotify, Apple Music and more.",
+    let theme = ctx.theme;
+    ctx.paint_widget(
+        Paragraph::new("Distribute track")
+            .style(
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
             )
-            .style(Style::default().fg(theme.muted_foreground))
-            .centered()
-            .wrap(Wrap { trim: true }),
-            body_area,
-        );
-    });
+            .centered(),
+        header_area,
+    );
+    ctx.paint_widget(
+        Paragraph::new(
+            "Upload your first master to start reaching listeners on Spotify, Apple Music and more.",
+        )
+        .style(Style::default().fg(theme.muted_foreground))
+        .centered()
+        .wrap(Wrap { trim: true }),
+        body_area,
+    );
     let [button_area] = button_row.layout(&button_layout);
     ctx.component("create_release", create_release, button_area);
 }
@@ -155,14 +153,12 @@ pub fn dialog(offset: CellOffset) -> Dialog<AppState, AppMsg> {
                 Constraint::Length(1),
             ])
             .areas(ctx.area());
-            ctx.paint(move |ctx| {
-                ctx.widget(
-                    Paragraph::new("Set up artwork, metadata, territories, and release date before sending your track to stores.")
-                        .style(Style::default().fg(ctx.theme.muted_foreground))
-                        .wrap(Wrap { trim: true }),
-                    description_area,
-                );
-            });
+            ctx.paint_widget(
+                Paragraph::new("Set up artwork, metadata, territories, and release date before sending your track to stores.")
+                    .style(Style::default().fg(ctx.theme.muted_foreground))
+                    .wrap(Wrap { trim: true }),
+                description_area,
+            );
             ctx.component(
                 "release_media",
                 Select::new(RELEASE_MEDIA.map(|(media, label)| ListItem::new(media, label)))

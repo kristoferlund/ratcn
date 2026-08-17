@@ -154,16 +154,14 @@ impl demo_shared::Demo for App {
             ])
             .areas(panel);
 
-            ctx.paint(move |ctx| {
-                ctx.widget(
-                    Paragraph::new("Project settings").style(
-                        Style::default()
-                            .fg(ctx.theme.foreground)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    title_area,
-                );
-            });
+            ctx.paint_widget(
+                Paragraph::new("Project settings").style(
+                    Style::default()
+                        .fg(ctx.theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                title_area,
+            );
 
             // #region stacking
             // Each group is handed exactly the rows it says it needs, which is
@@ -242,13 +240,11 @@ fn billing(state: &AppState) -> Fieldset<AppState, Msg> {
                 x: ctx.area().x + 1,
                 ..ctx.area()
             };
-            ctx.paint(move |ctx| {
-                ctx.widget(
-                    Paragraph::new(format!("{seats} seats \u{b7} billed monthly"))
-                        .style(Style::default().fg(ctx.theme.muted_foreground)),
-                    area,
-                );
-            });
+            ctx.paint_widget(
+                Paragraph::new(format!("{seats} seats \u{b7} billed monthly"))
+                    .style(Style::default().fg(ctx.theme.muted_foreground)),
+                area,
+            );
         })
 }
 
@@ -272,13 +268,11 @@ fn footer(ctx: &mut DeclareCtx<'_, AppState, Msg>, state: &AppState, area: Rect)
         plan_area,
     );
     let plan = if state.pro { "pro" } else { "free" };
-    ctx.paint(move |ctx| {
-        ctx.widget(
-            Paragraph::new(Line::from(vec![Span::raw(format!("  plan: {plan}"))]))
-                .style(Style::default().fg(ctx.theme.muted_foreground)),
-            hint_area,
-        );
-    });
+    ctx.paint_widget(
+        Paragraph::new(Line::from(vec![Span::raw(format!("  plan: {plan}"))]))
+            .style(Style::default().fg(ctx.theme.muted_foreground)),
+        hint_area,
+    );
 }
 
 #[cfg(test)]

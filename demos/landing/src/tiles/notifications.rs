@@ -80,22 +80,20 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     ])
     .spacing(1)
     .areas(inner);
-    ctx.paint(move |ctx| {
-        let theme = ctx.theme;
-        ctx.widget(
-            Paragraph::new("Notifications").style(
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            header_area,
-        );
-        ctx.widget(
-            Paragraph::new("Choose which email and push alerts you want to receive.")
-                .style(Style::default().fg(theme.muted_foreground))
-                .wrap(Wrap { trim: true }),
-            intro_area,
-        );
-    });
+    let theme = ctx.theme;
+    ctx.paint_widget(
+        Paragraph::new("Notifications").style(
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        ),
+        header_area,
+    );
+    ctx.paint_widget(
+        Paragraph::new("Choose which email and push alerts you want to receive.")
+            .style(Style::default().fg(theme.muted_foreground))
+            .wrap(Wrap { trim: true }),
+        intro_area,
+    );
     ctx.component("notifications", notifications, list_area);
 }

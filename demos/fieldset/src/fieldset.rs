@@ -519,7 +519,7 @@ mod tests {
             .on_toggle(Msg::Collapse)
             .body(BODY_HEIGHT, |ctx| {
                 let area = ctx.area();
-                ctx.paint(move |ctx| ctx.widget(Paragraph::new("email, push"), area));
+                ctx.paint_widget(Paragraph::new("email, push"), area);
             })
     }
 
