@@ -191,6 +191,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `new([bar])` equals `grouped([BarChartGroup::new([bar])])`, two charts
   differing only by an empty group are equal, and `Debug` prints a `groups` list
   rather than a `Bars`/`Groups` enum.
+- Cutting text to a cell width costs a walk over the text rather than a
+  measurement per grapheme cluster. Every component that wraps or truncates
+  goes through it — `Dialog`, `Tooltip`, `Toast`, `Button`, `Tabs` — so a dialog
+  whose description wraps into a dozen rows drops from 71 µs to 51 µs per frame
+  in a release build. Where a ligature spans a cluster boundary, as Arabic
+  lam-alef does in ordinary prose, the cut is still decided by measuring the
+  prefixes themselves, so what fits is unchanged. The list and button benches,
+  which share none of this, do not move.
+- A toast wraps once per frame instead of twice: the height that places it in
+  the stack and the lines that fill it are one measurement rather than two that
+  agree.
+- A `Select` shares its options with its open panel instead of copying them
+  into it. Declaring an open hundred-option select drops from 30 µs to 28 µs
+  per frame; the options themselves are the caller's to build, so this is the
+  smaller half of that cost.
 
 ## [0.0.1]
 

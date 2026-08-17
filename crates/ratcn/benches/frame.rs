@@ -1,7 +1,7 @@
 //! Baseline for the costs a frame carries: declaring and painting the whole
 //! component surface, routing one click against the surface the last frame left
-//! behind, and drawing a long list through a viewport that shows a handful of
-//! its rows.
+//! behind, drawing a long list through a viewport that shows a handful of its
+//! rows, and wrapping a paragraph of prose to the width of a box.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod frame {
@@ -10,7 +10,7 @@ mod frame {
     use criterion::{Criterion, criterion_group};
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
     use ratcn::{
-        Button, List, ListItem, Theme,
+        Button, Dialog, List, ListItem, Theme,
         runtime::{
             Event, FocusState, Modifiers, MouseButton, MouseEvent, MouseKind, Ratcn, RenderCtx,
             ScopeOptions,
@@ -39,6 +39,14 @@ mod frame {
     /// Far enough down that the painted window starts nowhere near the first
     /// item, so a windowed declaration cannot pass by starting at zero.
     const LIST_CURSOR: usize = 500;
+
+    /// Prose that wraps into a dozen rows, wrapped twice per frame: the box
+    /// measures the description to size itself, then paints it at that size.
+    /// Every component that wraps or truncates text goes through the same
+    /// measurement, so its cost per cell shows up here.
+    const DESCRIPTION: &str = "Deleting this workspace removes every board, card, and attachment \
+        it holds, for everyone who can see it. Members lose access the moment the deletion lands, \
+        and nothing here can be restored afterwards, so make sure the exports finished first.";
 
     struct State {
         focus: FocusState,
@@ -152,7 +160,36 @@ mod frame {
         });
     }
 
-    criterion_group!(benches, render, route_click, render_list_1000);
+    fn render_dialog_wrapped(c: &mut Criterion) {
+        let (mut ratcn, mut terminal, state, theme) = surface();
+
+        c.bench_function("render_dialog_wrapped", |b| {
+            b.iter(|| {
+                terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        ratcn.render(frame, &state, &theme, |ctx| {
+                            ctx.render_component(
+                                "dialog",
+                                Dialog::new()
+                                    .title("Delete workspace")
+                                    .description(DESCRIPTION),
+                                area,
+                            );
+                        });
+                    })
+                    .expect("draw");
+            });
+        });
+    }
+
+    criterion_group!(
+        benches,
+        render,
+        route_click,
+        render_list_1000,
+        render_dialog_wrapped
+    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]
