@@ -155,9 +155,13 @@ are written in. The same holds for `ctx.paint` closures: each is queued where
 it was reached.
 
 The queue position is fixed, so decoration that has to cover a composite's
-*descendants* — a dimming wash, a drag ghost — cannot come from `paint` at all;
-`ctx.defer_paint` is the slot for it, flushing after the current layer has
-finished declaring.
+*descendants* — a dimming wash — cannot come from `Component::paint` at all,
+which is queued before them. A `ctx.paint` closure reached *after* those
+declarations is queued after them, on the same layer, and is the usual answer.
+`ctx.defer_paint` goes one step further, flushing after the current layer has
+finished declaring, which is what decoration that must also cover *later
+siblings* — a drag ghost — needs, at the cost of having no identity or geometry
+of its own.
 
 What still follows declaration order is hit-testing, and it knows nothing about
 pixels: a later sibling drawn underneath another still takes the clicks over
@@ -214,16 +218,19 @@ from, and border dragging that re-derives the box between frames. Copy
 `components/dialog.rs` into your own crate and edit it — the `copy-fixture`
 crate does exactly that with every copyable built-in and compiles them against
 `ratcn` as an ordinary external dependency, so nothing `Dialog` does is out of
-reach for a component of your own. The `Fieldset` above proves the same from the
-other direction: it lives outside the crate to begin with.
+reach for a component of your own. The `Fieldset` on the linked page proves the
+same from the other direction: it lives outside the crate to begin with.
 
 ## Checklist
 
 - Semantic state lives in the app; the component reads it and emits messages.
 - Props that describe the declaration: plain values, set while declaring.
 - State that events compose against: reader closures, read in `handle_event`.
-- Geometry needed to interpret events: the declared area comes from
-  `EventCtx::area`; cache anything beyond it in `render`, never in `paint`.
+- Geometry needed to interpret events: `EventCtx::area` is the rect the event
+  was hit-tested against — the interaction area, narrowed if
+  `interaction_area` returned one. Retain the paint allocation in `render` when
+  the geometry has to come from that instead, and cache anything else there
+  too, never in `paint`.
 - Everything that draws: `paint`, styled from its interaction flags.
 - Interactive geometry within the paint area: express it with `interaction_area`.
 - Gesture mechanics that outlive the instance: `ctx.transient`.

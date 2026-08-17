@@ -4,8 +4,8 @@
 //! body, a measured action beside its label, a collapse the app owns, and a
 //! disabled state that dims the whole group and takes it out of interaction.
 //! It is the worked example for
-//! [Custom components](https://ratcn.kristoferlund.se/docs/concepts/custom-components),
-//! which walks through this file piece by piece.
+//! [Building a composite](https://ratcn.kristoferlund.se/docs/concepts/building-a-composite),
+//! which walks through both files piece by piece.
 //!
 //! This file is the caller: it stacks two fieldsets, fills their bodies, and
 //! owns every flag they read.
@@ -26,7 +26,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 use ratcn::{
-    Button, Theme,
+    Button, ButtonSize, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, RenderCtx},
 };
 
@@ -34,7 +34,7 @@ mod fieldset;
 
 const THEME: Theme = Theme::default_dark();
 const DEMO_WIDTH: u16 = 54;
-const DEMO_HEIGHT: u16 = 15;
+const DEMO_HEIGHT: u16 = 17;
 const PADDING_X: u16 = 3;
 const PADDING_Y: u16 = 1;
 /// One row of switches, and one row of billing facts.
@@ -216,7 +216,6 @@ fn notifications(state: &AppState) -> Fieldset<AppState, Msg> {
             ctx.render_component("push", switch("Push", push, || Msg::TogglePush), push_area);
         })
 }
-
 // #endregion caller
 
 /// A group whose body only paints, and which goes inert with the plan: dimmed,
@@ -227,9 +226,14 @@ fn billing(state: &AppState) -> Fieldset<AppState, Msg> {
         .collapsed(|state: &AppState| state.billing_collapsed)
         .on_toggle(|collapsed| Msg::Collapse(Section::Billing, collapsed))
         .disabled(!state.pro)
+        // A three-row action, which the header sizes itself to: the fieldset
+        // measures what it is given rather than assuming a one-row button.
         .action(
             "seat",
-            Button::new("+ Seat").secondary().on_press(|| Msg::AddSeat),
+            Button::new("+ Seat")
+                .secondary()
+                .size(ButtonSize::Large)
+                .on_press(|| Msg::AddSeat),
         )
         .body(BODY_HEIGHT, move |ctx| {
             // Indented to line up with the label above it, which the button
