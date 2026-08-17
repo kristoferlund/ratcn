@@ -38,7 +38,7 @@ const BUTTONS: [(&str, &str, ButtonVariant, ToastKind); 5] = [
 
 pub const ID: &str = "button_variants";
 
-pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
+pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
     let buttons = BUTTONS
@@ -84,7 +84,7 @@ fn button_rows(area: Rect) -> [Rect; BUTTONS.len()] {
 }
 
 fn render_button(
-    ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>,
+    ctx: &mut RenderCtx<'_, AppState, AppMsg>,
     id: &'static str,
     button: Button<AppMsg>,
     row: Rect,

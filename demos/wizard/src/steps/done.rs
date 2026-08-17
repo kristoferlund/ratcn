@@ -8,7 +8,7 @@ use crate::steps;
 
 pub const SCREEN_ID: &str = "step_done";
 
-pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
+pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let state = ctx.state();
     let theme = ctx.theme;

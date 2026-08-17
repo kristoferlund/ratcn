@@ -115,7 +115,7 @@ struct DraggableBlock {
 }
 
 impl Component<AppState, Msg> for DraggableBlock {
-    fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, AppState, Msg>) {}
+    fn render(&mut self, _ctx: &mut RenderCtx<'_, AppState, Msg>) {}
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) {
         let area = ctx.area();

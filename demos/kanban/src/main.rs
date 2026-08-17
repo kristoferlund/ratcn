@@ -240,7 +240,7 @@ struct KanbanCard {
 }
 
 impl Component<AppState, Msg> for KanbanCard {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, AppState, Msg>) {
+    fn render(&mut self, ctx: &mut RenderCtx<'_, AppState, Msg>) {
         // The ghost follows the pointer over every card declared after this
         // one, so it is deferred to the top of the frame rather than painted
         // in place.

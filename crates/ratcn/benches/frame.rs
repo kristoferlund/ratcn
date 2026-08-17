@@ -66,7 +66,7 @@ mod frame {
         Press,
     }
 
-    fn declare(ctx: &mut RenderCtx<'_, '_, State, Msg>) {
+    fn declare(ctx: &mut RenderCtx<'_, State, Msg>) {
         for (index, scope_id) in (0u16..).zip(SCOPE_IDS) {
             let x = index * SCOPE_WIDTH;
             ctx.scope(

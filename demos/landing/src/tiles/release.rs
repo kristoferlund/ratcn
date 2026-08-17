@@ -98,7 +98,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
+pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
     let create_release = Button::new("Create release")

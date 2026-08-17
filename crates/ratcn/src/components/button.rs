@@ -727,7 +727,7 @@ impl<M> Button<M> {
 }
 
 impl<S, M> Component<S, M> for Button<M> {
-    fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, S, M>) {}
+    fn render(&mut self, _ctx: &mut RenderCtx<'_, S, M>) {}
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
         let area = ctx.area();

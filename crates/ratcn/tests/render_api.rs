@@ -22,7 +22,7 @@ enum Msg {
 struct Probe;
 
 impl Component<State, Msg> for Probe {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, State, Msg>) {
+    fn render(&mut self, ctx: &mut RenderCtx<'_, State, Msg>) {
         assert_eq!(ctx.state().marker, 7);
     }
 

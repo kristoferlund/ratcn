@@ -8,7 +8,7 @@ use ratcn::runtime::RenderCtx;
 use crate::{AppMsg, AppState};
 
 pub fn render_tile_panel(
-    ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>,
+    ctx: &mut RenderCtx<'_, AppState, AppMsg>,
     area: Rect,
     title: &'static str,
 ) -> Rect {
@@ -16,7 +16,7 @@ pub fn render_tile_panel(
 }
 
 pub fn render_tile_panel_with_padding(
-    ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>,
+    ctx: &mut RenderCtx<'_, AppState, AppMsg>,
     area: Rect,
     title: &'static str,
     padding: Padding,

@@ -23,7 +23,7 @@ const LABEL: &str = "What's this?";
 const TOOLTIP_TEXT: &str = "Just a tooltip.";
 const TOAST_TEXT: &str = "Just a toast.";
 
-pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
+pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let inner = render_tile_panel(ctx, area, " alt+6 ");
     let button_area = centered(inner, button(false).width());

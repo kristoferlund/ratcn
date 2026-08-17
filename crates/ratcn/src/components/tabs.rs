@@ -886,7 +886,7 @@ where
         }
     }
 
-    fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
+    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
         let state = ctx.state();
         let selected = self.selected_index(state);
         let cursor = self.cursor_index(state);

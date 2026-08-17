@@ -98,6 +98,23 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `RenderCtx` loses its frame lifetime: `RenderCtx<'a, State, Msg>`,
+  where it was `RenderCtx<'a, 'frame, State, Msg>`. Every mention in a signature
+  drops one `'_` — `fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>)`, and the
+  same for a boxed `FnOnce(&mut RenderCtx<'_, S, M>)` a composite stores for a
+  caller-supplied body. `Ratcn::render` is unchanged at the call site.
+  Declaring never paints, so the context no longer carries the ratatui `Frame`
+  at all; it carries `frame_area` instead, which is all `frame_area()` ever
+  answered from. `frame_area()` and `state()` are `const fn` now.
+- **Breaking:** `RenderCtx::state`, `paint`, `defer_paint`, `scope`,
+  `render_component`, `modal`, `modal_scope`, `hint`, and `popup` no longer panic
+  "outside a `Ratcn` declaration pass". The context is only ever constructed
+  inside one — the pass and the state are plain references rather than
+  `Option`s — so there is no passless context left to guard against, and the
+  panic messages that named that state are gone. The duplicate-id and
+  interaction-area panics are unaffected. `RenderCtx::transient` and
+  `transient_mut` still answer `None`, now only for the reason that remains: no
+  event handler has stored a value at this path.
 - **Breaking:** `Tab<T>` is a type alias for `ListItem<T>`. A tab and a list row
   carried the same three things — a value, a label, a disabled flag — behind two
   identical structs. `Tab::new`, `.disabled(true)`, `value()`, `label()`,
