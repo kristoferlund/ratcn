@@ -26,7 +26,7 @@ use ratcn::{
     color::darken,
     runtime::{
         self, CellOffset, Component, DragOptions, DragPhase, Event, EventCtx, EventResult,
-        HoverState, PaintCtx, Ratcn, RenderCtx, clamp_offset, offset_rect,
+        PaintCtx, Ratcn, RenderCtx, clamp_offset, offset_rect,
     },
 };
 
@@ -54,13 +54,11 @@ struct App {
 #[derive(Default)]
 struct AppState {
     block_offset: CellOffset,
-    hover: HoverState,
 }
 
 #[derive(Clone)]
 enum Msg {
     BlockMoved(CellOffset),
-    HoverChanged(HoverState),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -105,7 +103,7 @@ impl App {
     fn new() -> Self {
         Self {
             state: AppState::default(),
-            ratcn: Ratcn::new().hover(|state: &AppState| &state.hover, Msg::HoverChanged),
+            ratcn: Ratcn::new(),
         }
     }
 
@@ -113,7 +111,6 @@ impl App {
         if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
             match msg {
                 Msg::BlockMoved(offset) => self.state.block_offset = offset,
-                Msg::HoverChanged(hover) => self.state.hover = hover,
             }
         }
     }

@@ -9,7 +9,7 @@ use ratatui::{
 };
 use ratcn::{
     ListItem, Select, Theme,
-    runtime::{self, EventResult, FocusState, HoverState, Ratcn},
+    runtime::{self, EventResult, FocusState, Ratcn},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,7 +34,6 @@ const FRUITS: [&str; 10] = [
 #[derive(Default)]
 struct State {
     focus: FocusState,
-    hover: HoverState,
     selected: Option<&'static str>,
     cursor: Option<&'static str>,
     open: bool,
@@ -43,7 +42,6 @@ struct State {
 #[derive(Clone)]
 enum Msg {
     Focus(FocusState),
-    Hover(HoverState),
     Open(bool),
     Focused(&'static str),
     Selected(&'static str),
@@ -58,15 +56,12 @@ impl App {
     fn new() -> Self {
         Self {
             state: State::default(),
-            ratcn: Ratcn::new()
-                .focus(|s: &State| &s.focus, Msg::Focus)
-                .hover(|s: &State| &s.hover, Msg::Hover),
+            ratcn: Ratcn::new().focus(|s: &State| &s.focus, Msg::Focus),
         }
     }
     fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Focus(v) => self.state.focus = v,
-            Msg::Hover(v) => self.state.hover = v,
             Msg::Open(v) => self.state.open = v,
             Msg::Focused(v) => self.state.cursor = Some(v),
             Msg::Selected(v) => {

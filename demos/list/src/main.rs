@@ -18,7 +18,7 @@ use ratatui::{
 };
 use ratcn::{
     List, ListItem, Theme,
-    runtime::{self, EventResult, FocusState, HoverState, Ratcn, TabWrap},
+    runtime::{self, EventResult, FocusState, Ratcn, TabWrap},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,7 +58,6 @@ mod ids {
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
-    hover: HoverState,
     focused_folder: Option<&'static str>,
     selected_folder: Option<&'static str>,
     scroll: usize,
@@ -68,7 +67,6 @@ impl AppState {
     fn update(&mut self, msg: Msg) {
         match msg {
             Msg::FocusChanged(focus) => self.focus = focus,
-            Msg::HoverChanged(hover) => self.hover = hover,
             Msg::FolderFocusChanged(folder, offset) => {
                 self.focused_folder = Some(folder);
                 self.scroll = offset;
@@ -86,7 +84,6 @@ impl AppState {
 
 enum Msg {
     FocusChanged(FocusState),
-    HoverChanged(HoverState),
     FolderFocusChanged(&'static str, usize),
     FolderSelected(&'static str),
     FolderScrollChanged(usize),
@@ -103,7 +100,6 @@ impl App {
             state: AppState::default(),
             ratcn: Ratcn::new()
                 .focus(|state: &AppState| &state.focus, Msg::FocusChanged)
-                .hover(|state: &AppState| &state.hover, Msg::HoverChanged)
                 .tab_wrap(TabWrap::Wrap),
         }
     }

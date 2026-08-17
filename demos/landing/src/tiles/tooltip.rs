@@ -1,8 +1,7 @@
 //! One button that explains itself on hover.
 //!
-//! The tile stores nothing. Whether the bubble shows is a view of the hover
-//! path the runtime already persists, so `open_when` reads it and no message
-//! is routed for the tooltip at all.
+//! The tile stores nothing. The runtime owns hover, so the bubble follows the
+//! pointer on its own and no message is routed for the tooltip at all.
 
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratcn::{
@@ -16,9 +15,7 @@ use super::shared::render_tile_panel;
 
 pub const ID: &str = "tooltip";
 
-/// The Tooltip's own id inside the tile, and the button's id inside that. The
-/// hover path of anything on this button starts `[ID, TIP]`, which is what
-/// `open_when` asks about.
+/// The Tooltip's own id inside the tile, and the button's id inside that.
 const TIP: &str = "tip";
 const TRIGGER: &str = "button";
 
@@ -34,11 +31,9 @@ pub fn render(ctx: &mut RenderCtx<'_, '_, AppState, AppMsg>) {
     let disabled = ctx.state().controls_disabled;
     let tooltip = Tooltip::new(TOOLTIP_TEXT)
         .side(TooltipSide::Top)
-        // Showing is a view of state the runtime already persists: no field to
-        // store, no message to route. A disabled button explains nothing.
-        .open_when(move |state: &AppState| {
-            !state.controls_disabled && state.hover.contains_path([ID, TIP])
-        })
+        // Hover is the runtime's, and the tooltip shows on it by default; all
+        // this adds is that a disabled button explains nothing.
+        .open_when(move |state: &AppState, hovered| hovered && !state.controls_disabled)
         .trigger(move |ctx| {
             let area = ctx.area();
             ctx.render_component(TRIGGER, button(disabled), area);

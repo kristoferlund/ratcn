@@ -23,12 +23,10 @@ over it reaches the control underneath, and it never takes focus.
 ```rust
 use ratcn::{Button, Tooltip};
 
-let tooltip = Tooltip::new("Write the ledger to disk")
-    .open_when(|s: &AppState| s.hover.contains_path(["save_tip"]))
-    .trigger(|ctx| {
-        let area = ctx.area();
-        ctx.render_component("save", Button::new("Save").on_press(|| Msg::Save), area);
-    });
+let tooltip = Tooltip::new("Write the ledger to disk").trigger(|ctx| {
+    let area = ctx.area();
+    ctx.render_component("save", Button::new("Save").on_press(|| Msg::Save), area);
+});
 
 ctx.render_component("save_tip", tooltip, area);
 ```
@@ -40,18 +38,25 @@ and nothing else.
 
 ## State
 
-The app owns whether the bubble is showing — but usually it already does,
-without storing anything. Showing a tooltip is a view of the hover and focus
-paths the runtime persists for you, so `.open_when(read)` is all it takes, and
-all four reference behaviors fall out of one line:
+There is none to keep. A Tooltip shows while the pointer is inside it and hides
+when the pointer leaves, and the runtime owns hover, so the example above
+stores nothing and routes nothing.
+
+`.open_when(read)` replaces that rule when it is not quite what you want. The
+reader gets your state and the same hover answer the default uses:
 
 ```rust
-.open_when(|s: &AppState| {
-    s.hover.contains_path(["save_tip"]) || s.focus.contains_path(["save_tip"])
-})
+// The default, spelled out.
+.open_when(|_: &AppState, hovered| hovered)
+
+// Gated: a disabled control explains nothing.
+.open_when(|s: &AppState, hovered| hovered && !s.controls_disabled)
+
+// Widened: keyboard focus shows it too, which the component cannot see itself.
+.open_when(move |s: &AppState, hovered| hovered || s.focus.contains_path([id]))
 ```
 
-Both queries are root-anchored prefixes, so the id you pass is the Tooltip's
+The focus query is a root-anchored prefix, so the id you pass is the Tooltip's
 own — its trigger's children sit beneath it in the path.
 
 Mind what the focus half does on its own: a click focuses what it hits, so that
@@ -61,27 +66,40 @@ focus with your own note of which device is driving if you want the web's
 `state.keyboard = !matches!(event, Event::Mouse(_))` before routing is enough:
 
 ```rust
-.open_when(move |s: &AppState| {
-    s.hover.contains_path([id]) || (s.keyboard && s.focus.contains_path([id]))
+.open_when(move |s: &AppState, hovered| {
+    hovered || (s.keyboard && s.focus.contains_path([id]))
 })
 ```
 
 Use `.open(read, on_open_change)` instead when the app keeps a flag of its own
 that the Tooltip should change — a first-run hint, a validation failure. That
-form bundles the reader with its message, and the component asks for `true`
-when the pointer moves onto the trigger and `false` on Esc while showing. With
-`.open_when(...)` it emits neither, since there is nothing to write.
+form bundles the same reader with its message, and the component asks for
+`true` when the pointer moves onto the trigger and `false` on Esc while
+showing. Neither `.open_when(...)` nor the default emits anything, since there
+is nothing to write.
 
 ## Interaction
 
-Moving the pointer onto the trigger shows the bubble. Esc hides it while
-something inside the trigger has focus, so a keyboard user can dismiss an
-explanation without reaching for the mouse. Nothing else is captured: keys
-bubble through the bubble to the app, and a press over the bubble goes to
-whatever it covers.
+Moving the pointer onto the trigger shows the bubble, and moving it off hides
+it again. That is the whole of it for a hover-driven tooltip — the two above,
+and the one in the demo — where Esc does nothing: there is no stored flag to
+clear, and the pointer still says the bubble belongs on screen.
+
+Esc belongs to the `.open(read, on_open_change)` form. While such a tooltip is
+open and something inside its trigger has focus, an unmodified Esc bubbles out
+to the Tooltip and asks the app to close it, so a keyboard user can dismiss an
+explanation without reaching for the mouse. Nothing else is captured either
+way: keys bubble through the bubble to the app, and a press over the bubble
+goes to whatever it covers.
 
 A Tooltip is never a Tab stop, and neither is its bubble — focus passes
 straight through to the trigger.
+
+Structure is decided while declaring, so the bubble follows a hover change that
+did not come from the pointer one frame late: open a modal over a showing
+tooltip and the bubble is declared once more, on the frame the modal appears,
+before the next frame drops it. See
+[Focus, hover, and identity](../concepts/focus-hover-identity#where-paint-and-structure-disagree).
 
 ## Placement
 

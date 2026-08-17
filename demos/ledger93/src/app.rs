@@ -8,7 +8,7 @@ use ratatui::{
 };
 use ratcn::{
     TabsSize, Theme,
-    runtime::{EventResult, FocusState, HoverState, Ratcn, ScopeOptions, TabWrap},
+    runtime::{EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
 };
 
 use crate::nav::{self, Nav, NavMsg, Screen};
@@ -29,7 +29,6 @@ mod ids {
 #[derive(Default)]
 pub struct AppState {
     pub focus: FocusState,
-    pub hover: HoverState,
     pub nav: Nav,
     pub shared: Shared,
     pub ledger: screens::ledger::State,
@@ -40,7 +39,6 @@ pub struct AppState {
 #[derive(Clone)]
 pub enum Msg {
     Focus(FocusState),
-    Hover(HoverState),
     Nav(NavMsg),
     Ledger(screens::ledger::Msg),
     Report(screens::report::Msg),
@@ -59,7 +57,6 @@ impl App {
             state: AppState::default(),
             ratcn: Ratcn::new()
                 .focus(|state: &AppState| &state.focus, Msg::Focus)
-                .hover(|state: &AppState| &state.hover, Msg::Hover)
                 .tab_wrap(TabWrap::Wrap),
         }
     }
@@ -68,7 +65,6 @@ impl App {
         if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
             match msg {
                 Msg::Focus(focus) => self.state.focus = focus,
-                Msg::Hover(hover) => self.state.hover = hover,
                 Msg::Nav(NavMsg::Focused(screen)) => {
                     self.state.nav.update(NavMsg::Focused(screen));
                 }

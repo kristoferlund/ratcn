@@ -7,8 +7,8 @@ description: "How dragging works in ratcn: one shared mechanism any component ca
 Dragging in ratcn is not a property of any one component. It is a small, shared
 mechanism that any component — a built-in like `Dialog`, or one you write
 yourself — can opt into. The position being dragged is ordinary **app-owned
-state**, moved the same way focus and hover are: the component emits a message,
-your `update` persists it. See [State and messages](./state-and-messages) for the
+state**, moved the same way focus is: the component emits a message, your
+`update` persists it. See [State and messages](./state-and-messages) for the
 ownership boundary.
 
 Drag the panel below by clicking anywhere on it and moving the mouse.
@@ -229,6 +229,16 @@ Because the offset is app state and moves are emitted live, dragging needs
 nothing special from the render loop: the message updates state, the next frame
 draws the new position — the same one-event-one-message flow as every other
 interaction.
+
+Hover freezes for the length of the gesture. From the press to the release,
+the runtime keeps hover on whatever the gesture started on instead of following
+the pointer: the thing being dragged moves under a pointer that is by
+definition on it, and the panel it passes over is not something the user is
+pointing at. So a dragged component can style itself with `PaintCtx::hovered`
+throughout, and nothing beneath the drag lights up on the way past. The freeze
+holds the path, so a dragged target redeclared at its new position keeps
+painting hovered; if it is covered by a modal or stops being declared, it loses
+hover on that frame even though the gesture continues.
 
 ## What stays your responsibility
 

@@ -2396,6 +2396,66 @@ mod tests {
         assert_eq!(focused.bg, style.focused_background);
     }
 
+    /// Motion inside one component still asks for a redraw. A tabs row paints
+    /// its hovered tab from `PaintCtx::hover_position`, so a motion from one
+    /// tab to the empty end of the row changes the frame without changing
+    /// hover, without moving focus, and without any component handling it. A
+    /// motion is never `Ignored` once a surface exists, and that is the signal
+    /// a host redraws on — the guarantee this row depends on.
+    #[test]
+    fn motion_within_the_row_is_never_ignored_so_hover_position_repaints() {
+        let theme = Theme::default_dark();
+        let style = TabsStyle::from_theme(&theme);
+        let state = State::default();
+        let tabs_area = Rect::new(0, 0, 18, TabsSize::Small.height());
+        let mut ratcn = Ratcn::new();
+        let mut terminal = Terminal::new(TestBackend::new(18, tabs_area.height)).expect("terminal");
+        let draw = |ratcn: &mut Ratcn<State, Msg>, terminal: &mut Terminal<TestBackend>| {
+            terminal
+                .draw(|frame| {
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        ctx.render_component(ChildId::Static("tabs"), manual(), tabs_area);
+                    });
+                })
+                .expect("draw");
+        };
+
+        draw(&mut ratcn, &mut terminal);
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 14, 0), &state),
+            EventResult::Consumed,
+            "arriving on the row"
+        );
+        draw(&mut ratcn, &mut terminal);
+        let hovered_tab = terminal
+            .backend()
+            .buffer()
+            .cell((14, 0))
+            .expect("hovered label cell")
+            .bg;
+        assert_eq!(hovered_tab, style.hovered_background);
+
+        // The empty end of the row is inside the tabs component but on no tab,
+        // so nothing handles the motion. Hover does not move either — the
+        // pointer is on the same component — yet the frame is now wrong.
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 17, 0), &state),
+            EventResult::Consumed,
+            "a motion nothing handled is still the redraw signal"
+        );
+        draw(&mut ratcn, &mut terminal);
+        assert_ne!(
+            terminal
+                .backend()
+                .buffer()
+                .cell((14, 0))
+                .expect("label cell")
+                .bg,
+            style.hovered_background,
+            "the tab under the old pointer position stopped being highlighted"
+        );
+    }
+
     #[test]
     fn hovered_row_shows_the_hover_shift_not_the_focus_shift() {
         use crate::runtime::ScopeOptions;

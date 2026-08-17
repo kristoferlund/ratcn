@@ -25,7 +25,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, ButtonSize, Theme,
-    runtime::{self, EventResult, FocusState, HoverState, Ratcn, wrapped_height},
+    runtime::{self, EventResult, FocusState, Ratcn, wrapped_height},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -52,7 +52,6 @@ struct App {
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
-    hover: HoverState,
     joke: JokeState,
 }
 
@@ -73,7 +72,6 @@ impl JokeState {
 
 enum Msg {
     FocusChanged(FocusState),
-    HoverChanged(HoverState),
     RefreshRequested,
     /// Sent from the background fetch when it finishes, success or not.
     JokeFetchCompleted(Result<String, String>),
@@ -90,9 +88,7 @@ impl App {
     fn new(sender: Sender<Msg>) -> Self {
         Self {
             state: AppState::default(),
-            ratcn: Ratcn::new()
-                .focus(|state: &AppState| &state.focus, Msg::FocusChanged)
-                .hover(|state: &AppState| &state.hover, Msg::HoverChanged),
+            ratcn: Ratcn::new().focus(|state: &AppState| &state.focus, Msg::FocusChanged),
             sender,
         }
     }
@@ -179,7 +175,6 @@ impl App {
 fn update(state: &mut AppState, msg: Msg) -> Option<Effect> {
     match msg {
         Msg::FocusChanged(focus) => state.focus = focus,
-        Msg::HoverChanged(hover) => state.hover = hover,
         Msg::RefreshRequested if !state.joke.is_loading() => {
             state.joke = JokeState::Loading;
             return Some(Effect::FetchJoke);

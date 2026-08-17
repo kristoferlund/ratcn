@@ -108,8 +108,8 @@ The concept pages each cover one idea in depth. Roughly in reading order:
   is declared, how the runtime remembers it, and how events find the right
   component.
 - [Focus, hover, and identity](./concepts/focus-hover-identity) — how components
-  get stable identities, how Tab traversal works, and how focus and hover are
-  stored in your state.
+  get stable identities, how Tab traversal works, why focus lives in your state
+  and hover lives in the runtime.
 - [Layers and modals](./concepts/layers-and-modals) — dialogs, overlays, and
   paint ordering.
 - [Themes](./concepts/themes) — built-in presets and authoring your own palette.

@@ -225,7 +225,7 @@ impl Widget for TooltipWidget<'_> {
     }
 }
 
-type ReadOpenFn<S> = Rc<dyn Fn(&S) -> bool>;
+type ReadOpenFn<S> = Rc<dyn Fn(&S, bool) -> bool>;
 type OnOpenChangeFn<M> = Rc<dyn Fn(bool) -> M>;
 type OpenBinding<S, M> = (ReadOpenFn<S>, Option<OnOpenChangeFn<M>>);
 type StyleFn = Rc<dyn Fn(&Theme) -> TooltipStyle>;
@@ -249,33 +249,37 @@ type TriggerFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>;
 ///
 /// # Who decides when it shows
 ///
-/// Open state is an app-owned controlled binding, like every other value in
-/// this library: the component reads it and asks for changes, but the app's
-/// `update` is what writes it. The Tooltip asks for two of them:
+/// Hover, unless the app says otherwise. Bound to nothing, a Tooltip shows its
+/// bubble while the pointer rests anywhere inside the trigger and hides it
+/// again when the pointer leaves — the runtime owns hover, and
+/// [`RenderCtx::pointer_within`] answers for this declaration while it is
+/// being declared, so nothing is stored and no message is routed.
+///
+/// [`open_when`](Self::open_when) replaces that rule with one of the app's
+/// own. The reader receives both app state and the same hover answer, so the
+/// two compose:
+///
+/// - `|_, hovered| hovered` is the default, spelled out.
+/// - `|state, hovered| hovered && !state.controls_disabled` gates it.
+/// - `|state, hovered| hovered || state.focus.contains_path(["save"])` adds
+///   keyboard focus, which the component cannot observe on its own: focus
+///   changes are the runtime's messages, not this component's events.
+///
+/// Whichever decides it, the answer is read while declaring, so it is the
+/// hover the *previous* frame resolved. Pointer motion hides that: it returns
+/// a non-`Ignored` result, the host redraws, and the redraw sees the new
+/// hover. A hover change with no motion behind it — a modal opening over the
+/// trigger — is one frame late: that frame paints the trigger unhovered and
+/// still declares the bubble, which the frame after drops.
+///
+/// [`open`](Self::open) is the same reader plus a message, for an app that
+/// keeps a flag the Tooltip should change. It asks for two:
 ///
 /// - `on_open_change(true)` when the pointer moves over the trigger while the
 ///   tooltip is closed.
 /// - `on_open_change(false)` on an unmodified Esc, while the tooltip is open
 ///   and focus is somewhere inside the trigger — the key bubbles out of the
 ///   focused child to the Tooltip.
-///
-/// Two reference behaviors are *not* emitted by the component, because it
-/// cannot observe them without a second source of truth. Both are one line in
-/// the [`open`](Self::open) reader instead:
-///
-/// - **Hiding when the pointer leaves.** Mouse events route to what is under
-///   the pointer, so a Tooltip is never told the pointer went elsewhere. The
-///   runtime's [`HoverState`](crate::runtime::HoverState) is the snapshot that
-///   *does* know, so read it: `.open(|s| s.hover.contains_path(["save"]), …)`
-///   shows and hides on hover with nothing else wired.
-/// - **Showing on keyboard focus.** Focus changes are the runtime's messages,
-///   not this component's events. The app-held
-///   [`FocusState`](crate::runtime::FocusState) answers the same way:
-///   `.open(|s| s.focus.contains_path(["save"]) || s.hover.contains_path(["save"]), …)`.
-///
-/// The reader is app-supplied precisely so those compose. When the reader is
-/// derived from hover or focus this way, the component's own emissions become
-/// redundant and are simply applied on top of state that already agrees.
 ///
 /// # Placement
 ///
@@ -302,8 +306,10 @@ pub struct Tooltip<S, M> {
     /// afterwards.
     trigger: Option<TriggerFn<S, M>>,
     style: Option<StyleFn>,
-    /// Declaration prop resolved from app state before rendering.
-    resolved_open: bool,
+    /// Whether the pointer was inside this declaration, as the last render
+    /// read it. Kept so event handling — which has no declaration context —
+    /// resolves openness the same way that render did.
+    pointer_within: bool,
 }
 
 impl<S, M> std::fmt::Debug for Tooltip<S, M> {
@@ -324,9 +330,10 @@ impl<S, M> Tooltip<S, M> {
 
     /// Construct a tooltip showing `text`.
     ///
-    /// Nothing shows until [`open`](Self::open) reads `true`, and nothing sits
-    /// under it until [`trigger`](Self::trigger) declares the content it
-    /// describes.
+    /// It shows while the pointer is inside it until
+    /// [`open_when`](Self::open_when) or [`open`](Self::open) says otherwise,
+    /// and nothing sits under it until [`trigger`](Self::trigger) declares the
+    /// content it describes.
     #[must_use]
     pub fn new(text: impl Into<String>) -> Self {
         Self {
@@ -336,29 +343,29 @@ impl<S, M> Tooltip<S, M> {
             open: None,
             trigger: None,
             style: None,
-            resolved_open: false,
+            pointer_within: false,
         }
     }
 
-    /// Bind whether the bubble is showing, with nothing to write back.
+    /// Decide when the bubble shows, with nothing to write back.
     ///
-    /// The usual form. Showing a tooltip is almost always a *view* of state
-    /// the runtime already persists for you — the hover path, the focus path —
-    /// so there is no separate value to store and no message to route:
+    /// The usual form when the default — showing while the pointer is inside
+    /// the trigger — is not quite the rule. `read` receives app state and
+    /// whether the pointer is within this declaration, and returns whether to
+    /// declare the bubble:
     ///
     /// ```
-    /// # use ratcn::{Tooltip, runtime::{FocusState, HoverState}};
+    /// # use ratcn::{Tooltip, runtime::FocusState};
     /// # #[derive(Default)]
-    /// # struct AppState { hover: HoverState, focus: FocusState }
+    /// # struct AppState { focus: FocusState }
     /// # enum Msg {}
     /// let tip = Tooltip::<AppState, Msg>::new("Save the current file")
-    ///     .open_when(|state: &AppState| {
-    ///         state.hover.contains_path(["save_tip"])
-    ///             || state.focus.contains_path(["save_tip"])
+    ///     .open_when(|state: &AppState, hovered| {
+    ///         hovered || state.focus.contains_path(["save_tip"])
     ///     });
     /// ```
     ///
-    /// Both queries are root-anchored prefixes, so the id to pass is the
+    /// The focus query is a root-anchored prefix, so the id to pass is the
     /// Tooltip's own — its trigger's children sit beneath it.
     ///
     /// Note what the focus half costs: a click focuses what it hits, so on its
@@ -373,32 +380,33 @@ impl<S, M> Tooltip<S, M> {
     /// that the Tooltip should change: with this form the component emits
     /// nothing, so its pointer and Esc handling do not apply.
     #[must_use]
-    pub fn open_when(mut self, read: impl Fn(&S) -> bool + 'static) -> Self {
+    pub fn open_when(mut self, read: impl Fn(&S, bool) -> bool + 'static) -> Self {
         self.open = Some((Rc::new(read), None));
         self
     }
 
     /// Bind whether the bubble is showing, and the message that changes it.
     ///
-    /// `read` runs against current app state during rendering and event
-    /// handling; the bubble is declared only when it returns `true`. Without
-    /// this binding the Tooltip never shows anything and is a pure pass-through
-    /// around its trigger.
+    /// The [`open_when`](Self::open_when) reader plus a writer, for an app that
+    /// keeps its own flag — `|state, _| state.tip_open` is the shape. `read`
+    /// runs during rendering and event handling; the bubble is declared only
+    /// when it returns `true`.
     ///
     /// Reach for [`open_when`](Self::open_when) instead unless the app keeps
-    /// its own flag: showing is usually a view of the hover and focus paths
-    /// the runtime already persists, and then there is nothing to write.
+    /// such a flag: showing is usually a view of hover and focus, and then
+    /// there is nothing to write.
     ///
     /// `on_open_change` receives each requested state — showing is a
     /// continuously tracked value, like a cursor, not a one-shot commit.
     /// The component asks for `true` when the pointer moves onto the trigger,
-    /// and for `false` on Esc while open. Pointer-leave and keyboard focus are
-    /// read from app state rather than emitted; see the type-level docs for the
-    /// one-line readers that cover them.
+    /// and for `false` on Esc while open. Nothing is emitted for the pointer
+    /// leaving: motion away from the trigger routes elsewhere and never
+    /// reaches the Tooltip, so a reader that ignores its `hovered` argument
+    /// keeps the bubble up until the app says otherwise.
     #[must_use]
     pub fn open(
         mut self,
-        read: impl Fn(&S) -> bool + 'static,
+        read: impl Fn(&S, bool) -> bool + 'static,
         on_open_change: impl Fn(bool) -> M + 'static,
     ) -> Self {
         self.open = Some((Rc::new(read), Some(Rc::new(on_open_change))));
@@ -455,8 +463,12 @@ impl<S, M> Tooltip<S, M> {
         self
     }
 
+    /// Whether the bubble should show, from the app's rule or — with none
+    /// bound — from the pointer alone.
     fn is_open(&self, state: &S) -> bool {
-        self.open.as_ref().is_some_and(|(read, _)| read(state))
+        self.open.as_ref().map_or(self.pointer_within, |(read, _)| {
+            read(state, self.pointer_within)
+        })
     }
 
     fn request(&self, open: bool) -> EventResult<M> {
@@ -470,15 +482,15 @@ impl<S, M> Tooltip<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
-    fn prepare(&mut self, state: &S) {
-        self.resolved_open = self.is_open(state);
-    }
-
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
+        // Read before the trigger declares: `pointer_within` asks about the
+        // declaration that is open right now, which is this Tooltip's.
+        self.pointer_within = ctx.pointer_within();
+        let open = self.is_open(ctx.state());
         if let Some(trigger) = self.trigger.take() {
             trigger(ctx);
         }
-        if !self.resolved_open {
+        if !open {
             return;
         }
         let style = self.style.as_ref().map_or_else(
@@ -605,9 +617,7 @@ mod tests {
 
     use super::*;
     use crate::Button;
-    use crate::runtime::{
-        ChildId, FocusState, HoverState, KeyEvent, Modifiers, MouseButton, MouseEvent, Ratcn,
-    };
+    use crate::runtime::{FocusState, KeyEvent, Modifiers, MouseButton, MouseEvent, Ratcn};
 
     const TIP: &str = "Save the file";
 
@@ -616,20 +626,18 @@ mod tests {
         Open(bool),
         Pressed,
         Focus(FocusState),
-        Hover(HoverState),
     }
 
     #[derive(Default)]
     struct State {
         open: bool,
         focus: FocusState,
-        hover: HoverState,
     }
 
     fn tooltip(side: TooltipSide) -> Tooltip<State, Msg> {
         Tooltip::new(TIP)
             .side(side)
-            .open(|state: &State| state.open, Msg::Open)
+            .open(|state: &State, _| state.open, Msg::Open)
             .trigger(|ctx| {
                 let area = ctx.area();
                 ctx.render_component("save", Button::new("Save").on_press(|| Msg::Pressed), area);
@@ -647,11 +655,6 @@ mod tests {
                 terminal: Terminal::new(TestBackend::new(width, height)).expect("terminal"),
                 ratcn: Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
             }
-        }
-
-        fn hovering(mut self) -> Self {
-            self.ratcn = self.ratcn.hover(|state: &State| &state.hover, Msg::Hover);
-            self
         }
 
         fn render(&mut self, state: &State, area: Rect, side: TooltipSide) {
@@ -715,7 +718,7 @@ mod tests {
                     ctx.render_component(
                         "tip",
                         Tooltip::new(TIP)
-                            .open_when(|state: &State| state.open)
+                            .open_when(|state: &State, _| state.open)
                             .trigger(|ctx| {
                                 let area = ctx.area();
                                 ctx.render_component(
@@ -741,8 +744,50 @@ mod tests {
         );
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 4, 6), &state),
-            EventResult::Ignored,
-            "and pointer motion asks for nothing"
+            EventResult::Consumed,
+            "and pointer motion asks for nothing — the runtime's own hover moved, \
+             which is all `Consumed` reports here"
+        );
+    }
+
+    /// The app's rule replaces the default rather than adding to it: a reader
+    /// that never says yes keeps the bubble hidden with the pointer sitting on
+    /// the trigger.
+    #[test]
+    fn an_open_reader_overrides_the_hover_default() {
+        let mut driver = Driver::new(30, 10);
+        let state = State::default();
+        let theme = Theme::default_dark();
+        let render = |driver: &mut Driver| {
+            driver
+                .terminal
+                .draw(|frame| {
+                    driver.ratcn.render(frame, &state, &theme, |ctx| {
+                        ctx.render_component(
+                            "tip",
+                            Tooltip::new(TIP)
+                                .open_when(|_: &State, _| false)
+                                .trigger(|ctx| {
+                                    let area = ctx.area();
+                                    ctx.render_component(
+                                        "save",
+                                        Button::new("Save").on_press(|| Msg::Pressed),
+                                        area,
+                                    );
+                                }),
+                            Rect::new(2, 5, 8, 3),
+                        );
+                    });
+                })
+                .expect("draw");
+        };
+
+        render(&mut driver);
+        driver.event(mouse(MouseKind::Moved, 4, 6), &state);
+        render(&mut driver);
+        assert!(
+            (0..10).all(|row| !driver.row(row).contains(TIP)),
+            "the reader said no, so hovering does not show the bubble"
         );
     }
 
@@ -756,34 +801,75 @@ mod tests {
 
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 4, 6), &state),
-            EventResult::Emit(Msg::Open(true))
+            EventResult::Emit(Msg::Open(true)),
+            "the motion that arrives on the trigger asks the app to open"
         );
-        // Already open, the same motion is not re-announced.
+        // Already open, the same motion is not re-announced: the runtime
+        // consumes it as the ordinary redraw signal instead.
         state.open = true;
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 4, 6), &state),
-            EventResult::Ignored
+            EventResult::Consumed
         );
     }
 
-    // Hide-on-leave is app-driven on purpose: motion away from the trigger
-    // routes to what it hits, so the runtime's hover snapshot — not the
-    // Tooltip — is what reports the leave. This encodes that contract.
+    // The ordinary tooltip: nothing bound, nothing stored, the bubble follows
+    // the pointer in and out. Leaving is the half the component cannot see —
+    // motion away routes to whatever it hits and never reaches the Tooltip —
+    // so it is the runtime's hover that closes the bubble again.
     #[test]
-    fn pointer_leaving_the_trigger_reports_through_hover_not_the_tooltip() {
-        let mut driver = Driver::new(30, 10).hovering();
-        let state = State {
-            open: true,
-            hover: HoverState::intent(["tip", "save"].map(ChildId::from)),
-            ..State::default()
+    fn an_unbound_tooltip_opens_and_closes_with_the_pointer() {
+        let mut driver = Driver::new(30, 10);
+        let state = State::default();
+        let theme = Theme::default_dark();
+        let render = |driver: &mut Driver| {
+            driver
+                .terminal
+                .draw(|frame| {
+                    driver.ratcn.render(frame, &state, &theme, |ctx| {
+                        ctx.render_component(
+                            "tip",
+                            Tooltip::new(TIP).trigger(|ctx| {
+                                let area = ctx.area();
+                                ctx.render_component(
+                                    "save",
+                                    Button::new("Save").on_press(|| Msg::Pressed),
+                                    area,
+                                );
+                            }),
+                            Rect::new(2, 5, 8, 3),
+                        );
+                    });
+                })
+                .expect("draw");
         };
-        driver.render(&state, Rect::new(2, 5, 8, 3), TooltipSide::Top);
 
-        // Empty space: hover empties, and that is the signal an `open` reader
-        // derived from hover closes on.
+        render(&mut driver);
+        assert!(
+            (0..10).all(|row| !driver.row(row).contains(TIP)),
+            "nothing is hovered yet"
+        );
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 4, 6), &state),
+            EventResult::Consumed,
+            "the motion changed hover, so the frame it produced is stale"
+        );
+        render(&mut driver);
+        assert!(
+            (0..10).any(|row| driver.row(row).contains(TIP)),
+            "the pointer is inside the tooltip, so the bubble shows"
+        );
+
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 25, 9), &state),
-            EventResult::Emit(Msg::Hover(HoverState::default()))
+            EventResult::Consumed,
+            "leaving for empty space empties hover"
+        );
+        render(&mut driver);
+        assert!(
+            (0..10).all(|row| !driver.row(row).contains(TIP)),
+            "and the bubble goes with it"
         );
     }
 
@@ -795,7 +881,6 @@ mod tests {
         let state = State {
             open: true,
             focus: FocusState::intent(["tip", "save"]),
-            ..State::default()
         };
         driver.render(&state, Rect::new(2, 5, 8, 3), TooltipSide::Top);
 

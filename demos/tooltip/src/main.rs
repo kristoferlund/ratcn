@@ -1,11 +1,12 @@
 //! Tooltips on a row of buttons: hover or Tab to one and its bubble floats
 //! beside it.
 //!
-//! Two things are on show. First, `open_when` reads state the runtime already
-//! persists — the hover path, and the focus path while the keyboard is what is
-//! driving — so a tooltip appears on hover *and* on Tab, and goes away again
-//! when the pointer or focus moves on. Nothing is stored for the bubble itself
-//! and nothing in `update` writes it. Second, placement: each button in the row
+//! Two things are on show. First, `open_when` combines the hover the runtime
+//! keeps with the focus path the app keeps, counting focus only while the
+//! keyboard is what is driving — so a tooltip appears on hover *and* on Tab,
+//! and goes away again when the pointer or focus moves on. Nothing is stored
+//! for the bubble itself and nothing in `update` writes it. Second, placement:
+//! each button in the row
 //! is named for the side its bubble prefers, and the one pinned to the frame's
 //! top row has no room above it, so its bubble flips below.
 
@@ -20,7 +21,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, Theme, Tooltip, TooltipSide,
-    runtime::{self, EventResult, FocusState, HoverState, Ratcn, TabWrap},
+    runtime::{self, EventResult, FocusState, Ratcn, TabWrap},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -69,7 +70,6 @@ const EDGE: Explained = (
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
-    hover: HoverState,
     /// Whether the last input came from the keyboard.
     ///
     /// A click focuses what it hits, so focus alone cannot say whether the
@@ -83,7 +83,6 @@ struct AppState {
 #[derive(Clone)]
 enum Msg {
     Focus(FocusState),
-    Hover(HoverState),
     Pressed,
 }
 
@@ -101,17 +100,17 @@ fn button(label: &'static str) -> Button<Msg> {
 /// Wrap `label`'s button in the tooltip that explains it.
 ///
 /// `id` is the Tooltip's own id at the root, which makes it the first element
-/// of the focus and hover paths of everything inside it — so a prefix query on
-/// either snapshot answers "is the pointer or the keyboard on this button?"
+/// of the focus path of everything inside it — so a prefix query answers "is
+/// the keyboard on this button?"
 fn explained((id, label, tip, side): Explained) -> Tooltip<AppState, Msg> {
     Tooltip::new(tip)
         .side(side)
-        // Showing is a view of state the runtime already persists, so there is
-        // nothing to store and no message to route. Focus counts only while
-        // the keyboard is driving: a click focuses what it hits, and a bubble
-        // that outlived the click would sit there until focus moved on.
-        .open_when(move |state: &AppState| {
-            state.hover.contains_path([id]) || (state.keyboard && state.focus.contains_path([id]))
+        // The hover half is the runtime's answer, handed to the reader; only
+        // the keyboard half is the app's. Focus counts only while the keyboard
+        // is driving: a click focuses what it hits, and a bubble that outlived
+        // the click would sit there until focus moved on.
+        .open_when(move |state: &AppState, hovered| {
+            hovered || (state.keyboard && state.focus.contains_path([id]))
         })
         .trigger(move |ctx| {
             let area = ctx.area();
@@ -125,7 +124,6 @@ impl App {
             state: AppState::default(),
             ratcn: Ratcn::new()
                 .focus(|state: &AppState| &state.focus, Msg::Focus)
-                .hover(|state: &AppState| &state.hover, Msg::Hover)
                 .tab_wrap(TabWrap::Wrap),
         }
     }
@@ -133,7 +131,6 @@ impl App {
     fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Focus(focus) => self.state.focus = focus,
-            Msg::Hover(hover) => self.state.hover = hover,
             Msg::Pressed => {}
         }
     }

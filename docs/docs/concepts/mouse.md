@@ -108,11 +108,29 @@ The normalized `MouseKind` is `Down`, `Up`, `Click`, `Drag`, `DragEnd`,
   the pointer does not consume the event, so capture plus `Ignored` still gets
   this fallback. `Consumed` vetoes it, while `Emit` returns the component's
   message instead.
-- **Hover** (`Moved`) is its own app-owned path, separate from focus. Bind both
-  at the root with `Ratcn::focus` and `Ratcn::hover`; `PaintCtx::hovered` and
-  `contains_hover` then let a component highlight
-  under the pointer **without stealing focus**, so keyboard use of the focused
-  component keeps working while the mouse drifts over a button.
+- **Hover** is the runtime's own path, separate from focus and from your
+  state: there is nothing to bind. `PaintCtx::hovered` and `contains_hover`
+  let a component highlight under the pointer **without stealing focus**, so
+  keyboard use of the focused component keeps working while the mouse drifts
+  over a button, and `RenderCtx::pointer_within()` answers the same question
+  while declaring, for structure that depends on it. Every pointer event —
+  `Down` and `Up` and `Scroll`, not only `Moved` — records where the pointer
+  is; each committed frame then resolves hover from that position against the
+  surface it just declared. A `Moved` event also resolves it immediately, and
+  still reaches the component under the pointer afterwards.
+- **A motion is never `Ignored`** once a surface exists. It comes back as at
+  least `Consumed` whether or not it moved hover and whether or not any
+  component handled it, because it is always news to the next frame: paint may
+  read the pointer position itself through `PaintCtx::hover_position` (a tabs
+  row highlights the tab under the pointer that way), so motion *within* one
+  component matters as much as motion between two. That result is the redraw
+  signal for a host that redraws on anything but `Ignored`.
+- **A gesture freezes hover.** While a button is held — captured or not —
+  hover stays on whatever the gesture started on, so the geometry a drag moves
+  does not chase the pointer dragging it. The release hands it back. The
+  freeze holds the *path*: a frozen target redeclared elsewhere paints hovered
+  where it now is, and a frozen target that a modal covers or a redraw drops
+  loses hover on that frame, gesture or no gesture.
 - **Focus-follows-mouse** is the opt-in exception. By default hover never moves
   focus. `Ratcn::hover_focus()` applies at the implicit root; a nested scope uses
   `ScopeOptions::hover_focus()`. The first move onto another direct focusable
@@ -125,22 +143,20 @@ The normalized `MouseKind` is `Down`, `Up`, `Click`, `Drag`, `DragEnd`,
   source apply its own drop-target hit test. See [Dragging](./dragging) for the
   full pattern; `EventCtx::drag` owns capture, path-transient gesture state,
   button matching, and release cleanup.
-- **Exit** (`Exited`) cancels an active browser pointer gesture and makes
-  effective hover empty until another pointer event arrives. It is runtime
-  cleanup, not a component event, so a release outside the terminal grid cannot
-  leave a stale drag or hover active when the pointer returns.
+- **Exit** (`Exited`) cancels an active browser pointer gesture and empties
+  hover until another pointer event arrives. It is runtime cleanup, not a
+  component event, so a release outside the terminal grid cannot leave a stale
+  drag or hover active when the pointer returns.
 
-The root bindings are typically configured together, without coupling their
-values:
+Only focus needs wiring at the root:
 
 ```rust
-let ratcn = Ratcn::new()
-    .focus(|state: &AppState| &state.focus, Msg::FocusChanged)
-    .hover(|state: &AppState| &state.hover, Msg::HoverChanged);
+let ratcn = Ratcn::new().focus(|state: &AppState| &state.focus, Msg::FocusChanged);
 ```
 
-The path semantics, stale-hover behavior, and `hover_focus` boundary rules are
-covered in [Focus, hover, and identity](./focus-hover-identity).
+The path semantics, the split between app-owned focus and runtime-owned hover,
+and the `hover_focus` boundary rules are covered in
+[Focus, hover, and identity](./focus-hover-identity).
 
 ## In the browser
 

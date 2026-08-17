@@ -5,8 +5,10 @@ description: "The ownership rules in ratcn: your app owns state, components read
 # State and messages
 
 Your app owns everything with durable meaning: domain data, form values,
-selected rows, focus, hover, open modals, theme selection, toasts. Components
-read that state and return messages; they never mutate it.
+selected rows, focus, open modals, theme selection, toasts. Components read
+that state and return messages; they never mutate it. Hover is the one
+interaction path the runtime keeps for itself — see
+[Focus, hover, and identity](./focus-hover-identity).
 
 The pattern is one app-specific `Msg` enum and one `update` function that is
 the only place state changes. When `handle_event` returns
@@ -72,10 +74,9 @@ Msg::ListFocused { item, offset } => {
 }
 ```
 
-Focus and hover follow the same rule: `Ratcn::focus(read, on_change)` and
-`Ratcn::hover(read, on_change)` read from your state and emit messages for your
-`update` to store. The runtime computes the next path but never writes your
-state behind your back.
+Focus follows the same rule: `Ratcn::focus(read, on_change)` reads from your
+state and emits messages for your `update` to store. The runtime computes the
+next path but never writes your state behind your back.
 
 ## Effects and result messages
 

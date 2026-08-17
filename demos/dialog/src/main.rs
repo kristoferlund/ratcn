@@ -10,7 +10,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, Dialog, List, ListItem, Theme, Toast, ToasterState, ToasterWidget,
-    runtime::{self, CellOffset, EventResult, FocusState, HoverState, ModalState, Ratcn},
+    runtime::{self, CellOffset, EventResult, FocusState, ModalState, Ratcn},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -47,11 +47,10 @@ struct App {
     ratcn: Ratcn<AppState, Msg>,
 }
 
-/// All mutable UI state lives here: domain state, focus, and hover alike.
+/// All mutable UI state lives here: domain state and focus alike.
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
-    hover: HoverState,
     modals: ModalState,
     dialog_offset: CellOffset,
     focused_writer: Option<&'static str>,
@@ -67,7 +66,6 @@ enum Msg {
     SavePressed,
     CancelPressed,
     FocusChanged(FocusState),
-    HoverChanged(HoverState),
     DialogMoved(CellOffset),
     WriterFocusChanged(&'static str, usize),
     WriterToggled(&'static str),
@@ -145,7 +143,6 @@ impl App {
             state: AppState::default(),
             ratcn: Ratcn::new()
                 .focus(|state: &AppState| &state.focus, Msg::FocusChanged)
-                .hover(|state: &AppState| &state.hover, Msg::HoverChanged)
                 .modals(|state: &AppState| &state.modals),
         }
     }
@@ -177,7 +174,6 @@ impl App {
                     self.toast(Toast::info("Cancel pressed"));
                 }
                 Msg::FocusChanged(focus) => self.state.focus = focus,
-                Msg::HoverChanged(hover) => self.state.hover = hover,
                 Msg::DialogMoved(offset) => self.state.dialog_offset = offset,
                 Msg::WriterFocusChanged(writer, offset) => {
                     self.state.focused_writer = Some(writer);

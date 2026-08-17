@@ -172,10 +172,10 @@ sight — the same behavior a scrollable list has elsewhere. Moving the cursor
 again scrolls it back into view. The list always handles the wheel, including
 at the top and bottom of the range, so it never scrolls an enclosing pane.
 
-Pointer motion moves the cursor whether or not the list has focus. The cursor
-is only *painted* on a focused or hovered list, so binding `item_focus`
-without binding `Ratcn::hover` lets the pointer move a cursor you cannot see
-yet; bind hover, or accept that the cursor is where the pointer last was.
+Pointer motion moves the cursor whether or not the list has focus, from the
+motion that enters the list onward. The cursor is only *painted* on a focused
+or hovered list, and the runtime keeps hover itself, so the highlight appears
+on the same frame the pointer arrives.
 
 ## Styling
 

@@ -798,13 +798,12 @@ mod tests {
 
     use super::*;
     use crate::runtime::{
-        FocusState, HoverState, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind, Ratcn,
+        FocusState, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind, Ratcn,
     };
 
     #[derive(Default)]
     struct State {
         focus: FocusState,
-        hover: HoverState,
         offset: CellOffset,
         custom_enabled: bool,
     }
@@ -812,7 +811,6 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     enum Msg {
         Focus(FocusState),
-        Hover(HoverState),
         Moved(CellOffset),
         Dismissed,
         Activated,
@@ -1269,9 +1267,7 @@ mod tests {
     #[test]
     fn dragging_the_dialog_border_moves_it_live() {
         let mut state = State::default();
-        let mut ratcn = Ratcn::new()
-            .focus(|state: &State| &state.focus, Msg::Focus)
-            .hover(|state: &State| &state.hover, Msg::Hover);
+        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
         let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
         render_dialog(&mut ratcn, &mut terminal, &state, false);
 

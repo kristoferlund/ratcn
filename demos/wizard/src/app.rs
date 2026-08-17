@@ -6,7 +6,7 @@ use ratatui::{
 };
 use ratcn::{
     ButtonSize, Theme,
-    runtime::{EventResult, FocusState, HoverState, Ratcn, ScopeOptions, TabWrap},
+    runtime::{EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
 };
 
 use crate::nav::{self, Nav, NavMsg, Step};
@@ -23,7 +23,6 @@ const PADDING_Y: u16 = 1;
 #[derive(Default)]
 pub struct AppState {
     pub focus: FocusState,
-    pub hover: HoverState,
     pub nav: Nav,
     pub choices: Choices,
     pub backend: steps::backend::State,
@@ -33,7 +32,6 @@ pub struct AppState {
 #[derive(Clone)]
 pub enum Msg {
     Focus(FocusState),
-    Hover(HoverState),
     Nav(NavMsg),
     Backend(steps::backend::Msg),
     Theme(steps::theme::Msg),
@@ -51,7 +49,6 @@ impl App {
             state: AppState::default(),
             ratcn: Ratcn::new()
                 .focus(|state: &AppState| &state.focus, Msg::Focus)
-                .hover(|state: &AppState| &state.hover, Msg::Hover)
                 .tab_wrap(TabWrap::Wrap),
         }
     }
@@ -60,7 +57,6 @@ impl App {
         if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
             match msg {
                 Msg::Focus(focus) => self.state.focus = focus,
-                Msg::Hover(hover) => self.state.hover = hover,
                 Msg::Nav(msg) => {
                     self.state.nav.update(msg);
                     // Park focus on the button that continues, so Enter walks

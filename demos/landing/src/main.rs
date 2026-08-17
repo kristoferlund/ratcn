@@ -17,9 +17,7 @@ use ratatui::{
 };
 use ratcn::{
     Theme, Toast, ToasterState, ToasterWidget,
-    runtime::{
-        self, EventResult, FocusState, HoverState, KeyChord, ModalState, MouseKind, Ratcn, TabWrap,
-    },
+    runtime::{self, EventResult, FocusState, KeyChord, ModalState, MouseKind, Ratcn, TabWrap},
 };
 
 mod screensaver;
@@ -49,7 +47,6 @@ struct App {
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
-    hover: HoverState,
     controls_disabled: bool,
     themes_state: tiles::themes::State,
     notifications_state: tiles::notifications::State,
@@ -68,7 +65,6 @@ impl AppState {
 #[derive(Clone)]
 enum AppMsg {
     FocusChanged(FocusState),
-    HoverChanged(HoverState),
     ToggleDisableAll,
     ScreensaverActivated,
     ScreensaverDismissed,
@@ -173,7 +169,6 @@ impl App {
     fn new() -> Self {
         let ratcn = Ratcn::new()
             .focus(|state: &AppState| &state.focus, AppMsg::FocusChanged)
-            .hover(|state: &AppState| &state.hover, AppMsg::HoverChanged)
             .modals(|state: &AppState| &state.modals_state)
             .hover_focus()
             .tab_wrap(TabWrap::Wrap);
@@ -194,7 +189,6 @@ impl App {
     fn update(&mut self, msg: AppMsg) {
         match msg {
             AppMsg::FocusChanged(focus) => self.state.focus = focus,
-            AppMsg::HoverChanged(hover) => self.state.hover = hover,
             AppMsg::ToggleDisableAll => {
                 self.state.controls_disabled = !self.state.controls_disabled;
             }
