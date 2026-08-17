@@ -5,11 +5,13 @@
 //! installs, as one unit. Components build on the [`runtime`](crate::runtime) engine
 //! (focus, events, rendering); the engine never depends on them.
 //!
-//! Interactive components (focusable, event-handling): [`Button`], [`List`],
-//! [`Select`], [`Tabs`], [`Dialog`]. Event-handling but never focusable:
-//! [`Tooltip`], which explains the trigger it wraps rather than acting itself.
-//! Paint-only, with no interactive half:
-//! [`ToasterWidget`], and [`BarChartWidget`] — which is a themed adapter over
+//! Interactive components (focusable, event-handling): [`Button`](crate::Button),
+//! [`List`](crate::List), [`Select`](crate::Select), [`Tabs`](crate::Tabs),
+//! [`Dialog`](crate::Dialog). Event-handling but never focusable:
+//! [`Tooltip`](crate::Tooltip), which explains the trigger it wraps rather than
+//! acting itself. Paint-only, with no interactive half:
+//! [`ToasterWidget`](crate::ToasterWidget), and
+//! [`BarChartWidget`](crate::BarChartWidget) — which is a themed adapter over
 //! ratatui's own `BarChart` rather than a component in the sense used here,
 //! adding theme colors, grouping, and a value-display switch to a chart ratatui
 //! draws.
@@ -32,8 +34,8 @@
 //! - [`selection_indicator`](crate::selection_indicator) — the radio and
 //!   checkbox markers, and the default row they sit on
 //! - [`text_width`](crate::text_width) — display-width measurement and wrapping
-//! - [`toast`](crate::toast) — the app-owned toast queue [`ToasterWidget`]
-//!   paints
+//! - [`toast`](crate::toast) — the app-owned toast queue
+//!   [`ToasterWidget`](crate::ToasterWidget) paints
 //!
 //! What a component module never builds on is a *sibling component*: a
 //! component that draws a border constructs a plain ratatui `Block` itself. So
@@ -103,20 +105,14 @@
 //! its visual frame is pure geometry functions so event handling can re-derive the
 //! box for hit-testing (see the module).
 
-mod barchart;
-mod button;
-mod dialog;
-mod list;
-mod select;
-mod tabs;
-mod toast;
-mod tooltip;
-
-pub use barchart::{BarChartGroup, BarChartStyle, BarChartWidget};
-pub use button::{Button, ButtonRenderMode, ButtonSize, ButtonStyle, ButtonVariant, ButtonWidget};
-pub use dialog::{Dialog, DialogStyle};
-pub use list::{List, ListStyle, ListWidget};
-pub use select::{Select, SelectStyle, SelectWidget};
-pub use tabs::{Tab, TabLayout, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget, tab_layout};
-pub use toast::{ToastPosition, ToasterStyle, ToasterWidget};
-pub use tooltip::{Tooltip, TooltipSide, TooltipStyle, TooltipWidget};
+// The crate root re-exports each component's types straight from its module, so
+// every name is written down once. Nothing else in the crate reaches in here: a
+// component never depends on a sibling.
+pub(crate) mod barchart;
+pub(crate) mod button;
+pub(crate) mod dialog;
+pub(crate) mod list;
+pub(crate) mod select;
+pub(crate) mod tabs;
+pub(crate) mod toast;
+pub(crate) mod tooltip;
