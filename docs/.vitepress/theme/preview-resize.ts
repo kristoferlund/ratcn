@@ -10,8 +10,9 @@
 //
 // We mirror that math here to choose the matching iframe HEIGHT, so every tile
 // fits at full height with no centering gap and no clipping. The demo sizes its
-// canvas exactly once, at wasm boot — beamterm pins the canvas CSS to fixed
-// pixel values and neither it nor ratzilla listens for resizes — so whenever
+// canvas exactly once, at wasm boot: its host does redraw on a window resize,
+// but beamterm pins the canvas CSS to the pixel size it booted at, so the
+// flush-time check ratzilla resizes on never sees the canvas change. Whenever
 // the right height differs from the height the demo booted at, the iframe must
 // be reloaded to re-render the WebAssembly at the new size.
 
@@ -48,10 +49,9 @@ function heightFor(columns: number): number {
   return Math.ceil((cells + 1) * CELL_H * slack)
 }
 
-function wire(iframe: HTMLIFrameElement): void {
-  if (iframe.dataset.fixedSized) return
-  iframe.dataset.fixedSized = '1'
-
+// Sizes `iframe` now and keeps it sized. Returns a disposer that takes the
+// observer, the listener, and any pending debounce back off again.
+function wire(iframe: HTMLIFrameElement): () => void {
   // The column count currently applied; 0 until the first measurement.
   let columns = 0
 
@@ -89,19 +89,22 @@ function wire(iframe: HTMLIFrameElement): void {
   apply()
   // Observing the iframe catches container resizes too; a height change we make
   // re-fires it, but `apply` no-ops when the column count is unchanged.
-  new ResizeObserver(onResize).observe(iframe)
+  const observer = new ResizeObserver(onResize)
+  observer.observe(iframe)
   window.addEventListener('resize', onResize)
+
+  return () => {
+    clearTimeout(timer)
+    observer.disconnect()
+    window.removeEventListener('resize', onResize)
+  }
 }
 
-export function initPreviewAutoSize(): void {
-  const tick = (attempt: number) => {
-    const iframe = document.querySelector<HTMLIFrameElement>('.ratcn-landing-preview-frame')
-    if (iframe) {
-      wire(iframe)
-    } else if (attempt < 30) {
-      // The home page may not be mounted yet right after a route change.
-      setTimeout(() => tick(attempt + 1), 100)
-    }
-  }
-  tick(0)
+// Wires the landing preview iframe, if the page in the DOM has one. The caller
+// owns the returned disposer and must run it before wiring again: one wiring is
+// live at a time, so navigating between the home page and the docs cannot
+// strand an observer, a listener, or a timer on a page that is gone.
+export function initPreviewAutoSize(): () => void {
+  const iframe = document.querySelector<HTMLIFrameElement>('.ratcn-landing-preview-frame')
+  return iframe ? wire(iframe) : () => {}
 }
