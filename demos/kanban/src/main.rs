@@ -8,7 +8,8 @@
 //!   and pointer movement outside the source card;
 //! - while dragging, an empty bordered placeholder holds the card's slot, and
 //!   the dragged card is painted above the board;
-//! - releasing over a column moves the card there.
+//! - releasing over a column moves the card there, and releasing anywhere off
+//!   the board cancels the drag.
 //!
 //! The app owns card placement and the active semantic drag. Ratcn retains only
 //! the transient gesture anchor and pointer capture.
@@ -21,7 +22,7 @@ use std::{cell::RefCell, rc::Rc};
 use ratatui::{
     Frame,
     buffer::Buffer,
-    layout::{Alignment, Constraint, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Layout, Margin, Position, Rect},
     style::Style,
     symbols::border,
     widgets::{Block, Borders, Clear, Paragraph, Widget},
@@ -81,7 +82,11 @@ impl AppState {
 enum Msg {
     DragStarted(ActiveDrag),
     DragMoved(CellOffset),
-    CardDropped { target_column_index: usize },
+    /// A release ends the drag; `None` is a release off the board, which moves
+    /// nothing.
+    CardDropped {
+        target_column_index: Option<usize>,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -198,13 +203,15 @@ fn update(state: &mut AppState, msg: Msg) {
             }
         }
         // The release commits: the card leaves its old column and joins the
-        // bottom of the one it landed on. Landing back on its own column is a
-        // cancelled drag — the card keeps its position rather than moving to
-        // the bottom.
+        // bottom of the one it landed on. Landing back on its own column, or
+        // outside the board altogether, is a cancelled drag — the card keeps
+        // its position rather than moving to the bottom. Either way the drag
+        // ends, because the release is what ends it.
         Msg::CardDropped {
             target_column_index,
         } => {
             if let Some(active_drag) = state.active_drag.take()
+                && let Some(target_column_index) = target_column_index
                 && let Some(source_column_index) = state
                     .cards_by_column
                     .iter()
@@ -230,12 +237,13 @@ impl BoardLayout {
         Layout::horizontal([Constraint::Ratio(1, 3); COLUMN_COUNT]).areas(self.area)
     }
 
-    /// The board column under a pointer position when the card is released.
-    fn column_index_at(&self, pointer_column: u16) -> usize {
+    /// The board column under a pointer position when the card is released, or
+    /// `None` for a release outside the board on any side — the columns tile the
+    /// board area exactly, so anything they do not contain is off the board.
+    fn column_index_at(&self, position: Position) -> Option<usize> {
         self.column_areas()
             .iter()
-            .position(|column_area| pointer_column < column_area.right())
-            .unwrap_or(COLUMN_COUNT - 1)
+            .position(|column_area| column_area.contains(position))
     }
 
     /// The area a card occupies in its column's ordered list. A dragged card
@@ -338,7 +346,7 @@ impl Component<AppState, Msg> for KanbanCard {
                         .is_some_and(|active_drag| active_drag.card_id == self.card_id)
                 {
                     EventResult::Emit(Msg::CardDropped {
-                        target_column_index: self.board_layout.column_index_at(position.x),
+                        target_column_index: self.board_layout.column_index_at(position),
                     })
                 } else {
                     EventResult::Consumed
@@ -384,7 +392,7 @@ mod tests {
         update(
             &mut state,
             Msg::CardDropped {
-                target_column_index: 2,
+                target_column_index: Some(2),
             },
         );
 
@@ -406,11 +414,72 @@ mod tests {
         update(
             &mut state,
             Msg::CardDropped {
-                target_column_index: 0,
+                target_column_index: Some(0),
             },
         );
 
         assert_eq!(state.cards_by_column[0].first(), Some(&dragged));
         assert!(state.active_drag.is_none());
+    }
+
+    #[test]
+    fn a_release_off_the_board_cancels_the_drag_without_moving_the_card() {
+        let mut state = AppState::new();
+        let dragged = state.cards_by_column[0][0].clone();
+
+        update(&mut state, dragging(&dragged));
+        update(
+            &mut state,
+            Msg::CardDropped {
+                target_column_index: None,
+            },
+        );
+
+        assert_eq!(
+            state.cards_by_column[0].first(),
+            Some(&dragged),
+            "a drop with no target column leaves the card where it was"
+        );
+        assert!(
+            state.active_drag.is_none(),
+            "the release ends the gesture even when it moves nothing"
+        );
+    }
+
+    #[test]
+    fn every_column_is_hit_testable_and_the_four_sides_are_not() {
+        let board = BoardLayout {
+            area: Rect::new(4, 2, 30, 12),
+        };
+        let columns = board.column_areas();
+
+        for (index, column) in columns.iter().enumerate() {
+            for position in [
+                Position::new(column.x, column.y),
+                Position::new(column.right() - 1, column.bottom() - 1),
+            ] {
+                assert_eq!(
+                    board.column_index_at(position),
+                    Some(index),
+                    "{position:?} is inside column {index}"
+                );
+            }
+        }
+
+        // One cell past each edge of the board: the pointer is over the app but
+        // not over any column, so there is no column to drop into.
+        let area = board.area;
+        for (side, position) in [
+            ("left", Position::new(area.x - 1, area.y)),
+            ("right", Position::new(area.right(), area.y)),
+            ("above", Position::new(area.x, area.y - 1)),
+            ("below", Position::new(area.x, area.bottom())),
+        ] {
+            assert_eq!(
+                board.column_index_at(position),
+                None,
+                "a release {side} the board has no target column"
+            );
+        }
     }
 }

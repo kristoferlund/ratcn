@@ -83,7 +83,8 @@ grouped bars too. Set `.direction(Direction::Horizontal)` for horizontal groups
 — that is `ratatui::layout::Direction`, the layout axis. The runtime's own
 `Forward`/`Backward` enum is `ratcn::runtime::Step`, a different type.
 Horizontal group labels occupy the space reserved by `.group_gap(...)` and are
-not drawn when that gap is `0`.
+not drawn when that gap is `0`. A group with no bars is dropped: it paints
+nothing, and it takes neither space nor a group gap in `.width()`/`.height()`.
 
 ```rust
 use ratcn::BarChartGroup;
@@ -99,7 +100,8 @@ BarChartWidget::grouped(vec![
 ## Bar shape
 
 `.bar_width(...)` and `.bar_gap(...)` size the bars; `.group_gap(...)` adds space
-between clusters in a grouped chart. `.show_values(false)` hides the number
+between clusters in a grouped chart, on top of the bar gap that already separates
+the two bars either side of the boundary. `.show_values(false)` hides the number
 printed inside each bar, for bars too narrow to fit one.
 
 A vertical bar rarely ends exactly on a cell boundary, so its top cell is drawn

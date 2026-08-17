@@ -206,16 +206,21 @@ pub fn nav_key_target(
     disabled: impl Fn(usize) -> bool,
 ) -> Option<NavOutcome> {
     let movement = nav_move(key)?;
+    // A list with nothing enabled does not navigate, cursor or no cursor. This
+    // is asked before any movement because the index helpers below answer in
+    // plain indices: with everything disabled they hand back `from`, which
+    // would read as `Stay` — a key consumed by a control that cannot move.
+    let first = first_enabled(len, &disabled)?;
     let Some(cursor) = cursor else {
-        return first_enabled(len, &disabled).map(NavOutcome::Move);
+        return Some(NavOutcome::Move(first));
     };
     // Half a page still moves at least one item, so Ctrl+D in a one-row
     // viewport behaves like Down rather than doing nothing.
     let half = (page_size / 2).max(1);
     let target = match movement {
         NavMove::Step(direction) => step_enabled(len, cursor, direction, &disabled),
-        NavMove::Edge(Step::Backward) => first_enabled(len, &disabled)?,
-        NavMove::Edge(Step::Forward) => last_enabled(len, &disabled)?,
+        NavMove::Edge(Step::Backward) => first,
+        NavMove::Edge(Step::Forward) => last_enabled(len, &disabled).unwrap_or(first),
         NavMove::Page(direction) => page_enabled(len, cursor, direction, page_size, &disabled),
         NavMove::HalfPage(direction) => page_enabled(len, cursor, direction, half, &disabled),
     };
@@ -312,6 +317,7 @@ pub fn index_at_row(len: usize, scroll_offset: usize, local_row: usize) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::Modifiers;
 
     #[test]
     fn step_enabled_skips_disabled_indices() {
@@ -486,6 +492,42 @@ mod tests {
             nav_key_target(KeyCode::Home.into(), 3, Some(1), 1, |_| true),
             None
         );
+    }
+
+    #[test]
+    fn nav_key_target_never_stays_in_an_all_disabled_list() {
+        // A cursor parked in a list with nothing enabled has nowhere to go, and
+        // `Stay` would be a lie: it tells the caller to consume the key. Every
+        // movement must decline instead, not just the Home/End pair whose index
+        // helpers happen to answer `None`.
+        for key in [
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Home,
+            KeyCode::End,
+        ] {
+            assert_eq!(
+                nav_key_target(key.into(), 3, Some(1), 2, |_| true),
+                None,
+                "{key:?} in an all-disabled list"
+            );
+        }
+        for code in ['n', 'p', 'd', 'u'] {
+            let key = KeyEvent {
+                code: KeyCode::Char(code),
+                modifiers: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                },
+            };
+            assert_eq!(
+                nav_key_target(key, 3, Some(1), 2, |_| true),
+                None,
+                "Ctrl+{code} in an all-disabled list"
+            );
+        }
     }
 
     #[test]

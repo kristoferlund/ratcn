@@ -105,7 +105,11 @@ impl BarChartStyle {
 /// [`show_values`](Self::show_values).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BarChartWidget<'a> {
-    data: BarChartData<'a>,
+    /// Every chart is a list of groups, so measurement and painting have one
+    /// shape to handle. Ungrouped bars are one unlabeled group, and groups with
+    /// no bars are dropped on the way in — ratatui drops them before painting,
+    /// and a group that never paints must not be measured either.
+    groups: Vec<BarChartGroup<'a>>,
     style: BarChartStyle,
     max_value: Option<u64>,
     direction: Direction,
@@ -114,12 +118,6 @@ pub struct BarChartWidget<'a> {
     group_gap: u16,
     bar_set: symbols::bar::Set<'a>,
     show_values: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BarChartData<'a> {
-    Bars(Vec<Bar<'a>>),
-    Groups(Vec<BarChartGroup<'a>>),
 }
 
 /// One group of bars for [`BarChartWidget::grouped`]. Mirrors ratatui's
@@ -154,7 +152,7 @@ impl<'a> BarChartWidget<'a> {
     /// A vertical chart of `bars`, using [`BarChartStyle::fallback`].
     #[must_use]
     pub fn new(bars: impl IntoIterator<Item = Bar<'a>>) -> Self {
-        Self::with_data(BarChartData::Bars(bars.into_iter().collect()))
+        Self::with_groups([BarChartGroup::new(bars)])
     }
 
     /// The same as [`new`](Self::new), named for when the direction matters to
@@ -175,14 +173,21 @@ impl<'a> BarChartWidget<'a> {
     /// categories. See [`BarChartGroup`]. Use
     /// [`direction`](Self::direction) to make a grouped chart horizontal. A
     /// horizontal group label needs a non-zero [`group_gap`](Self::group_gap).
+    ///
+    /// A group with no bars is dropped: it paints nothing, so it occupies no
+    /// space and adds no [`group_gap`](Self::group_gap) either. Filtered data
+    /// can therefore be passed straight in without collapsing the gaps by hand.
     #[must_use]
     pub fn grouped(groups: impl IntoIterator<Item = BarChartGroup<'a>>) -> Self {
-        Self::with_data(BarChartData::Groups(groups.into_iter().collect()))
+        Self::with_groups(groups)
     }
 
-    fn with_data(data: BarChartData<'a>) -> Self {
+    fn with_groups(groups: impl IntoIterator<Item = BarChartGroup<'a>>) -> Self {
         Self {
-            data,
+            groups: groups
+                .into_iter()
+                .filter(|group| !group.bars.is_empty())
+                .collect(),
             style: BarChartStyle::fallback(),
             max_value: None,
             direction: Direction::Vertical,
@@ -308,27 +313,23 @@ impl<'a> BarChartWidget<'a> {
         self
     }
 
+    /// Cells the whole chart spans along its grouping axis.
+    ///
+    /// A [`bar_gap`](Self::bar_gap) sits between every adjacent pair of bars,
+    /// including the pair either side of a group boundary — ratatui advances by
+    /// `bar_gap + bar_width` after every bar and only then adds the
+    /// [`group_gap`](Self::group_gap), which is why that gap is documented as
+    /// extra space *on top of* the bar gap. So the span is every bar's width,
+    /// one bar gap per gap between bars, and one group gap per boundary.
     fn grouping_span(&self) -> u16 {
-        let group_spans: Vec<u16> = match &self.data {
-            BarChartData::Bars(bars) => vec![bar_span(bars.len(), self.bar_width, self.bar_gap)],
-            BarChartData::Groups(groups) => groups
-                .iter()
-                .map(|group| bar_span(group.bars.len(), self.bar_width, self.bar_gap))
-                .collect(),
-        };
-        group_spans
-            .into_iter()
-            .enumerate()
-            .fold(0, |span, (index, group)| {
-                span.saturating_add(group).saturating_add(if index > 0 {
-                    self.group_gap
-                } else {
-                    0
-                })
-            })
+        let bars: usize = self.groups.iter().map(|group| group.bars.len()).sum();
+        let boundaries = u16::try_from(self.groups.len().saturating_sub(1)).unwrap_or(u16::MAX);
+        bar_span(bars, self.bar_width, self.bar_gap)
+            .saturating_add(boundaries.saturating_mul(self.group_gap))
     }
 }
 
+/// Cells `count` bars of `width` span with a `gap` between adjacent pairs.
 fn bar_span(count: usize, width: u16, gap: u16) -> u16 {
     let count = u16::try_from(count).unwrap_or(u16::MAX);
     count
@@ -346,23 +347,18 @@ impl<'a> Widget for BarChartWidget<'a> {
                 bars.into_iter().map(|bar| bar.text_value("")).collect()
             }
         };
-        let mut chart = match self.data {
-            BarChartData::Bars(bars) => BarChart::new(strip_values(bars)),
-            BarChartData::Groups(groups) => {
-                let groups: Vec<BarGroup<'a>> = groups
-                    .into_iter()
-                    .map(|group| {
-                        let bars = strip_values(group.bars);
-                        match group.label {
-                            Some(label) => BarGroup::with_label(label, bars),
-                            None => BarGroup::new(bars),
-                        }
-                    })
-                    .collect();
-                BarChart::grouped(groups)
-            }
-        };
-        chart = chart
+        let groups: Vec<BarGroup<'a>> = self
+            .groups
+            .into_iter()
+            .map(|group| {
+                let bars = strip_values(group.bars);
+                match group.label {
+                    Some(label) => BarGroup::with_label(label, bars),
+                    None => BarGroup::new(bars),
+                }
+            })
+            .collect();
+        let mut chart = BarChart::grouped(groups)
             .style(
                 Style::default()
                     .fg(self.style.foreground)

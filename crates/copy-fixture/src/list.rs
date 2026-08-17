@@ -819,9 +819,7 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
     }
 
     fn handle_key(&self, key: KeyEvent, state: &S, area: Rect) -> EventResult<M> {
-        if self.focused_item.is_none()
-            || linear_nav::first_enabled(self.items.len(), |i| self.disabled_at(i)).is_none()
-        {
+        if self.focused_item.is_none() {
             return EventResult::Ignored;
         }
         let cursor = self.focused_index(state);
