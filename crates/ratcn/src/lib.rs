@@ -133,11 +133,14 @@ pub mod toast;
 
 #[doc(inline)]
 pub use components::{
-    BarChartGroup, BarChartStyle, BarChartWidget, Button, ButtonRenderMode, ButtonSize,
-    ButtonStyle, ButtonVariant, ButtonWidget, Dialog, DialogStyle, List, ListStyle, ListWidget,
-    Select, SelectStyle, SelectWidget, Tab, TabLayout, Tabs, TabsActivation, TabsSize, TabsStyle,
-    TabsWidget, ToastPosition, ToasterStyle, ToasterWidget, Tooltip, TooltipSide, TooltipStyle,
-    TooltipWidget, tab_layout,
+    barchart::{BarChartGroup, BarChartStyle, BarChartWidget},
+    button::{Button, ButtonRenderMode, ButtonSize, ButtonStyle, ButtonVariant, ButtonWidget},
+    dialog::{Dialog, DialogStyle},
+    list::{List, ListStyle, ListWidget},
+    select::{Select, SelectStyle, SelectWidget},
+    tabs::{Tab, TabLayout, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget, tab_layout},
+    toast::{ToastPosition, ToasterStyle, ToasterWidget},
+    tooltip::{Tooltip, TooltipSide, TooltipStyle, TooltipWidget},
 };
 #[doc(inline)]
 pub use list_core::{ListItem, ListItemState};
