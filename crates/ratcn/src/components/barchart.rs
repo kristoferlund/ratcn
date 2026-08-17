@@ -105,7 +105,11 @@ impl BarChartStyle {
 /// [`show_values`](Self::show_values).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BarChartWidget<'a> {
-    data: BarChartData<'a>,
+    /// Every chart is a list of groups, so measurement and painting have one
+    /// shape to handle. Ungrouped bars are one unlabeled group, and groups with
+    /// no bars are dropped on the way in — ratatui drops them before painting,
+    /// and a group that never paints must not be measured either.
+    groups: Vec<BarChartGroup<'a>>,
     style: BarChartStyle,
     max_value: Option<u64>,
     direction: Direction,
@@ -114,12 +118,6 @@ pub struct BarChartWidget<'a> {
     group_gap: u16,
     bar_set: symbols::bar::Set<'a>,
     show_values: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BarChartData<'a> {
-    Bars(Vec<Bar<'a>>),
-    Groups(Vec<BarChartGroup<'a>>),
 }
 
 /// One group of bars for [`BarChartWidget::grouped`]. Mirrors ratatui's
@@ -154,7 +152,7 @@ impl<'a> BarChartWidget<'a> {
     /// A vertical chart of `bars`, using [`BarChartStyle::fallback`].
     #[must_use]
     pub fn new(bars: impl IntoIterator<Item = Bar<'a>>) -> Self {
-        Self::with_data(BarChartData::Bars(bars.into_iter().collect()))
+        Self::with_groups([BarChartGroup::new(bars)])
     }
 
     /// The same as [`new`](Self::new), named for when the direction matters to
@@ -175,14 +173,21 @@ impl<'a> BarChartWidget<'a> {
     /// categories. See [`BarChartGroup`]. Use
     /// [`direction`](Self::direction) to make a grouped chart horizontal. A
     /// horizontal group label needs a non-zero [`group_gap`](Self::group_gap).
+    ///
+    /// A group with no bars is dropped: it paints nothing, so it occupies no
+    /// space and adds no [`group_gap`](Self::group_gap) either. Filtered data
+    /// can therefore be passed straight in without collapsing the gaps by hand.
     #[must_use]
     pub fn grouped(groups: impl IntoIterator<Item = BarChartGroup<'a>>) -> Self {
-        Self::with_data(BarChartData::Groups(groups.into_iter().collect()))
+        Self::with_groups(groups)
     }
 
-    fn with_data(data: BarChartData<'a>) -> Self {
+    fn with_groups(groups: impl IntoIterator<Item = BarChartGroup<'a>>) -> Self {
         Self {
-            data,
+            groups: groups
+                .into_iter()
+                .filter(|group| !group.bars.is_empty())
+                .collect(),
             style: BarChartStyle::fallback(),
             max_value: None,
             direction: Direction::Vertical,
@@ -308,27 +313,23 @@ impl<'a> BarChartWidget<'a> {
         self
     }
 
+    /// Cells the whole chart spans along its grouping axis.
+    ///
+    /// A [`bar_gap`](Self::bar_gap) sits between every adjacent pair of bars,
+    /// including the pair either side of a group boundary — ratatui advances by
+    /// `bar_gap + bar_width` after every bar and only then adds the
+    /// [`group_gap`](Self::group_gap), which is why that gap is documented as
+    /// extra space *on top of* the bar gap. So the span is every bar's width,
+    /// one bar gap per gap between bars, and one group gap per boundary.
     fn grouping_span(&self) -> u16 {
-        let group_spans: Vec<u16> = match &self.data {
-            BarChartData::Bars(bars) => vec![bar_span(bars.len(), self.bar_width, self.bar_gap)],
-            BarChartData::Groups(groups) => groups
-                .iter()
-                .map(|group| bar_span(group.bars.len(), self.bar_width, self.bar_gap))
-                .collect(),
-        };
-        group_spans
-            .into_iter()
-            .enumerate()
-            .fold(0, |span, (index, group)| {
-                span.saturating_add(group).saturating_add(if index > 0 {
-                    self.group_gap
-                } else {
-                    0
-                })
-            })
+        let bars: usize = self.groups.iter().map(|group| group.bars.len()).sum();
+        let boundaries = u16::try_from(self.groups.len().saturating_sub(1)).unwrap_or(u16::MAX);
+        bar_span(bars, self.bar_width, self.bar_gap)
+            .saturating_add(boundaries.saturating_mul(self.group_gap))
     }
 }
 
+/// Cells `count` bars of `width` span with a `gap` between adjacent pairs.
 fn bar_span(count: usize, width: u16, gap: u16) -> u16 {
     let count = u16::try_from(count).unwrap_or(u16::MAX);
     count
@@ -346,23 +347,18 @@ impl<'a> Widget for BarChartWidget<'a> {
                 bars.into_iter().map(|bar| bar.text_value("")).collect()
             }
         };
-        let mut chart = match self.data {
-            BarChartData::Bars(bars) => BarChart::new(strip_values(bars)),
-            BarChartData::Groups(groups) => {
-                let groups: Vec<BarGroup<'a>> = groups
-                    .into_iter()
-                    .map(|group| {
-                        let bars = strip_values(group.bars);
-                        match group.label {
-                            Some(label) => BarGroup::with_label(label, bars),
-                            None => BarGroup::new(bars),
-                        }
-                    })
-                    .collect();
-                BarChart::grouped(groups)
-            }
-        };
-        chart = chart
+        let groups: Vec<BarGroup<'a>> = self
+            .groups
+            .into_iter()
+            .map(|group| {
+                let bars = strip_values(group.bars);
+                match group.label {
+                    Some(label) => BarGroup::with_label(label, bars),
+                    None => BarGroup::new(bars),
+                }
+            })
+            .collect();
+        let mut chart = BarChart::grouped(groups)
             .style(
                 Style::default()
                     .fg(self.style.foreground)
@@ -851,6 +847,192 @@ mod tests {
         let mut short_buffer = Buffer::empty(short);
         chart().render(short, &mut short_buffer);
         assert!(bar_cells(&short_buffer) < bar_cells(&buffer));
+    }
+
+    #[test]
+    fn empty_groups_change_neither_the_measured_nor_the_painted_chart() {
+        // A group with no bars paints nothing — ratatui drops it before
+        // painting — so it must not claim a group gap in the measurement
+        // either, wherever in the list it sits. A chart measured wider than it
+        // paints leaves a stripe of unused cells in every layout that trusts
+        // `width()`/`height()`.
+        let bar_cells = |buffer: &Buffer| {
+            buffer
+                .content()
+                .iter()
+                .filter(|cell| cell.symbol() == "█")
+                .count()
+        };
+        for direction in [Direction::Vertical, Direction::Horizontal] {
+            // Swept over the bar gap because a boundary costs a bar gap as well
+            // as a group gap: at `bar_gap(0)` an over-measured empty group and
+            // an under-measured boundary would have hidden each other.
+            for bar_gap in [0u16, 1, 2] {
+                let chart = |groups: Vec<BarChartGroup<'static>>| {
+                    BarChartWidget::grouped(groups)
+                        .direction(direction)
+                        .max_value(1)
+                        .show_values(false)
+                        .bar_width(1)
+                        .bar_gap(bar_gap)
+                        .group_gap(1)
+                };
+                let bar = || BarChartGroup::new(vec![Bar::default().value(1)]);
+                let empty = || BarChartGroup::new(Vec::new());
+                let grouping_span = |chart: &BarChartWidget<'_>| {
+                    if direction == Direction::Vertical {
+                        chart.width()
+                    } else {
+                        chart.height()
+                    }
+                };
+                let area = |span: u16| {
+                    if direction == Direction::Vertical {
+                        Rect::new(0, 0, span, 1)
+                    } else {
+                        Rect::new(0, 0, 1, span)
+                    }
+                };
+                let label = format!("{direction:?} bar_gap {bar_gap}");
+
+                let two_groups = chart(vec![bar(), bar()]);
+                // Two 1-cell bars either side of one boundary, which costs the
+                // bar gap plus the 1-cell group gap.
+                let measured = grouping_span(&two_groups);
+                assert_eq!(measured, 3 + bar_gap, "{label}");
+                let mut painted = Buffer::empty(area(measured));
+                two_groups.render(area(measured), &mut painted);
+                assert_eq!(bar_cells(&painted), 2, "{label} paints both bars");
+
+                for (position, groups) in [
+                    ("leading", vec![empty(), bar(), bar()]),
+                    ("middle", vec![bar(), empty(), bar()]),
+                    ("trailing", vec![bar(), bar(), empty()]),
+                ] {
+                    let with_empty = chart(groups);
+                    assert_eq!(
+                        grouping_span(&with_empty),
+                        measured,
+                        "a {position} empty group must not be measured ({label})"
+                    );
+                    let mut buffer = Buffer::empty(area(measured));
+                    with_empty.render(area(measured), &mut buffer);
+                    assert_eq!(
+                        buffer, painted,
+                        "a {position} empty group must not shift what paints ({label})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_grouped_chart_measures_exactly_what_it_paints_at_every_gap() {
+        // A group boundary costs a bar gap *and* a group gap: ratatui advances
+        // by `bar_gap + bar_width` after every bar and only then adds the group
+        // gap. Measuring the group gap alone made every multi-group chart with a
+        // bar gap — and 1 is the default — claim less space than it paints, so
+        // the last bar was dropped by whatever laid the chart out.
+        let bar_cells = |buffer: &Buffer| {
+            buffer
+                .content()
+                .iter()
+                .filter(|cell| cell.symbol() == "█")
+                .count()
+        };
+        for direction in [Direction::Vertical, Direction::Horizontal] {
+            for bar_width in [1u16, 2, 3] {
+                for bar_gap in [0u16, 1, 2] {
+                    for group_gap in [0u16, 1, 2] {
+                        for shape in [
+                            vec![1usize],
+                            vec![1, 1],
+                            vec![2, 2],
+                            vec![1, 2, 1],
+                            vec![0, 1, 1],
+                            vec![1, 0, 1],
+                            vec![1, 1, 0],
+                        ] {
+                            let groups = shape.iter().map(|count| {
+                                BarChartGroup::new(
+                                    std::iter::repeat_with(|| Bar::default().value(1)).take(*count),
+                                )
+                            });
+                            let chart = BarChartWidget::grouped(groups)
+                                .direction(direction)
+                                .max_value(1)
+                                .show_values(false)
+                                .bar_width(bar_width)
+                                .bar_gap(bar_gap)
+                                .group_gap(group_gap);
+                            let measured = if direction == Direction::Vertical {
+                                chart.width()
+                            } else {
+                                chart.height()
+                            };
+                            let area = if direction == Direction::Vertical {
+                                Rect::new(0, 0, measured, 1)
+                            } else {
+                                Rect::new(0, 0, 1, measured)
+                            };
+                            let mut buffer = Buffer::empty(area);
+                            chart.render(area, &mut buffer);
+
+                            let label = format!(
+                                "{direction:?}, bar_width {bar_width}, bar_gap {bar_gap}, group_gap {group_gap}, groups {shape:?}"
+                            );
+                            let bars: usize = shape.iter().sum();
+                            assert_eq!(
+                                bar_cells(&buffer),
+                                bars * usize::from(bar_width),
+                                "every bar must paint whole inside the measured span: {label}"
+                            );
+                            let last_cell = if direction == Direction::Vertical {
+                                (measured - 1, 0)
+                            } else {
+                                (0, measured - 1)
+                            };
+                            assert_eq!(
+                                buffer.cell(last_cell).expect("last cell").symbol(),
+                                "█",
+                                "the measured span must end where the last bar does: {label}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_documented_grouped_example_measures_what_it_paints() {
+        // The chart the grouped docs show: two labelled groups of two bars at
+        // the default `bar_width` of 3 and `bar_gap` of 1, with `group_gap(2)`.
+        let chart = || {
+            let group = |label: &'static str| {
+                BarChartGroup::new(vec![Bar::default().value(1), Bar::default().value(1)])
+                    .label(label)
+            };
+            BarChartWidget::grouped(vec![group("Q1"), group("Q2")])
+                .max_value(1)
+                .show_values(false)
+                .group_gap(2)
+        };
+
+        // Four 3-cell bars, a 1-cell bar gap between each adjacent pair, and the
+        // 2-cell group gap on top of the boundary's bar gap: 12 + 3 + 2.
+        assert_eq!(chart().width(), 17);
+
+        let area = Rect::new(0, 0, 17, 2);
+        let mut buffer = Buffer::empty(area);
+        chart().render(area, &mut buffer);
+        let bar_row: String = buffer
+            .content()
+            .iter()
+            .take(17)
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert_eq!(bar_row, "███ ███   ███ ███");
     }
 
     #[test]

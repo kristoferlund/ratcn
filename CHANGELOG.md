@@ -168,6 +168,29 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Rendering one retained composite instance twice by hand no longer panics; the
   second render declares nothing. Every frame builds a fresh instance, so this
   was never reachable through `Ratcn::render`.
+- `linear_nav::nav_key_target` returns `None` for every movement when no index in
+  `0..len` is enabled, as its contract already said. Given a `Some(cursor)`, a
+  step or a page used to answer `NavOutcome::Stay` — the answer that tells a
+  control to consume the key — while the Home and End edges declined. `List` no
+  longer needs its own all-disabled check before asking.
+- `BarChartWidget::width` and `height` measure what a grouped chart paints. Two
+  errors met at the group boundary:
+  - A boundary costs a `bar_gap` as well as a `group_gap`. Ratatui advances by
+    `bar_gap + bar_width` after every bar and only then adds the `group_gap` —
+    which is what `group_gap` being extra space *on top of* the bar gap has
+    always meant — while the measurement counted the group gap alone. Every
+    multi-group chart with a bar gap, and the default bar gap is 1, measured
+    `bar_gap` per boundary short of what it painted, so a layout that trusted the
+    measurement clipped the last bar. The docs' own grouped example was one.
+  - A group with no bars occupies no space. Ratatui drops empty groups before
+    painting, so a chart holding one measured a `group_gap` too wide, wherever
+    the empty group sat.
+  The two errors partly cancelled, which is why some grouped charts measured
+  correctly by accident.
+- `BarChartWidget` holds one list of groups, and its derived traits follow:
+  `new([bar])` equals `grouped([BarChartGroup::new([bar])])`, two charts
+  differing only by an empty group are equal, and `Debug` prints a `groups` list
+  rather than a `Bars`/`Groups` enum.
 
 ## [0.0.1]
 

@@ -819,9 +819,7 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
     }
 
     fn handle_key(&self, key: KeyEvent, state: &S, area: Rect) -> EventResult<M> {
-        if self.focused_item.is_none()
-            || linear_nav::first_enabled(self.items.len(), |i| self.disabled_at(i)).is_none()
-        {
+        if self.focused_item.is_none() {
             return EventResult::Ignored;
         }
         let cursor = self.focused_index(state);
@@ -2180,6 +2178,88 @@ mod tests {
             state.component_focus,
             crate::runtime::FocusState::intent(["other"])
         );
+    }
+
+    /// A list with nothing enabled has nowhere for a cursor to go, so it must
+    /// consume no key at all: every one bubbles to the app. Nothing single
+    /// enforces this — `linear_nav::nav_key_target` declines, the commit keys
+    /// find a disabled cursor, and everything else falls through — so it is
+    /// pinned here against a future key arm that forgets to ask.
+    #[test]
+    fn an_all_disabled_list_consumes_no_key() {
+        let all_disabled = || {
+            [
+                item(Task::A, "A").disabled(true),
+                item(Task::B, "B").disabled(true),
+                item(Task::C, "C").disabled(true),
+            ]
+        };
+        let keys = || {
+            [
+                key(KeyCode::Up),
+                key(KeyCode::Down),
+                key(KeyCode::PageUp),
+                key(KeyCode::PageDown),
+                key(KeyCode::Home),
+                key(KeyCode::End),
+                key(KeyCode::Char('j')),
+                key(KeyCode::Char('k')),
+                ctrl_key('n'),
+                ctrl_key('p'),
+                ctrl_key('d'),
+                ctrl_key('u'),
+                key(KeyCode::Enter),
+                key(KeyCode::Char(' ')),
+            ]
+        };
+        // A cursor is parked on one of the disabled items: the state that used
+        // to name an enabled item still names one after it is disabled.
+        let state = State {
+            focused: Some(Task::B),
+            component_focus: crate::runtime::FocusState::intent(["list"]),
+            ..State::default()
+        };
+        let area = Rect::new(0, 0, 20, 3);
+
+        // Driven directly as a `Component`.
+        let mut list = List::new(all_disabled())
+            .item_focus(|state: &State| state.focused, Msg::Focused)
+            .selection(|state: &State| state.selected, Msg::Selected);
+        for event in keys() {
+            assert_eq!(
+                list.handle_event(&event, &state, &mut EventCtx::default().with_area(area)),
+                EventResult::Ignored,
+                "{event:?} handled directly"
+            );
+        }
+
+        // Driven through the runtime with focus stored on the list, which is
+        // how a real app reaches it: a stored path routes keys to the component
+        // it names whether or not that component would accept new focus.
+        let theme = Theme::default_dark();
+        let mut ratcn =
+            Ratcn::new().focus(|state: &State| &state.component_focus, Msg::ComponentFocus);
+        let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.render_component(
+                        "list",
+                        List::new(all_disabled())
+                            .item_focus(|state: &State| state.focused, Msg::Focused)
+                            .selection(|state: &State| state.selected, Msg::Selected),
+                        area,
+                    );
+                });
+            })
+            .expect("draw");
+        for event in keys() {
+            assert_eq!(
+                ratcn.handle_event(event.clone(), &state),
+                EventResult::Ignored,
+                "{event:?} routed through the runtime"
+            );
+        }
     }
 
     #[test]
