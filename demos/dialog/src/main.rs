@@ -1,23 +1,15 @@
 use std::{io, time::Duration};
 
-#[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
-
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout},
-    style::Style,
+    style::{Color, Style},
     widgets::{Paragraph, Wrap},
 };
 use ratcn::{
     Button, Dialog, List, ListItem, Theme, Toast, ToasterState, ToasterWidget,
-    runtime::{self, CellOffset, EventResult, FocusState, ModalState, Ratcn},
+    runtime::{CellOffset, Event, EventResult, FocusState, ModalState, Ratcn},
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-use ratatui::crossterm::event;
-
-#[cfg(target_arch = "wasm32")]
-use ratzilla::WebRenderer;
 
 const THEME: Theme = Theme::default_dark();
 const WRITERS: [&str; 8] = [
@@ -72,69 +64,8 @@ enum Msg {
     WriterScrollChanged(usize),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> io::Result<()> {
-    let mut app = App::new();
-    ratatui::run(|terminal| {
-        // RAII: mouse reporting is restored on every exit path (a `?` or panic).
-        let _input_modes = ratcn::crossterm::InputModes::new()
-            .mouse_capture()
-            .enable()?;
-        loop {
-            let now = demo_shared::monotonic_time();
-            let _ = app.state.toasts.prune_expired(now);
-            terminal.draw(|frame| app.draw(frame, now))?;
-            // Wait for input or the next toast expiry, which wakes the loop to prune and redraw.
-            if let Some(timeout) = app
-                .state
-                .toasts
-                .time_until_next_expiry(demo_shared::monotonic_time())
-                && !event::poll(timeout)?
-            {
-                continue;
-            }
-            let event = event::read()?;
-            if demo_shared::is_quit(&event) {
-                break Ok(());
-            }
-            app.handle_event(event);
-        }
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-fn main() -> io::Result<()> {
-    let backend = demo_shared::web_backend(THEME.background)?;
-    let mut terminal = ratatui::Terminal::new(backend)?;
-
-    let app = Rc::new(RefCell::new(App::new()));
-
-    terminal
-        .on_key_event({
-            let app = Rc::clone(&app);
-            move |key_event| {
-                app.borrow_mut().handle_event(key_event);
-            }
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    terminal
-        .on_mouse_event({
-            let app = Rc::clone(&app);
-            move |mouse_event| {
-                app.borrow_mut().handle_event(mouse_event);
-            }
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    terminal.draw_web(move |frame| {
-        let now = demo_shared::monotonic_time();
-        let mut app = app.borrow_mut();
-        let _ = app.state.toasts.prune_expired(now);
-        app.draw(frame, now);
-    });
-
-    Ok(())
+    demo_shared::run(App::new())
 }
 
 impl App {
@@ -147,57 +78,82 @@ impl App {
         }
     }
 
-    fn handle_event(&mut self, event: impl TryInto<runtime::Event>) {
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            match msg {
-                Msg::OpenDialog => {
-                    self.state
-                        .draft_writers
-                        .clone_from(&self.state.saved_writers);
-                    self.state
-                        .modals
-                        .open(ids::DIALOG, &mut self.state.focus)
-                        .expect("dialog cannot be nested under itself");
-                }
-                Msg::SavePressed => {
-                    self.state
-                        .saved_writers
-                        .clone_from(&self.state.draft_writers);
-                    self.state.modals.close(&mut self.state.focus);
-                    self.toast(Toast::success("Selection saved"));
-                }
-                Msg::CancelPressed => {
-                    self.state
-                        .draft_writers
-                        .clone_from(&self.state.saved_writers);
-                    self.state.modals.close(&mut self.state.focus);
-                    self.toast(Toast::info("Cancel pressed"));
-                }
-                Msg::FocusChanged(focus) => self.state.focus = focus,
-                Msg::DialogMoved(offset) => self.state.dialog_offset = offset,
-                Msg::WriterFocusChanged(writer, offset) => {
-                    self.state.focused_writer = Some(writer);
-                    self.state.writer_scroll_position = offset;
-                }
-                Msg::WriterToggled(writer) => {
-                    self.state.focused_writer = Some(writer);
-                    if let Some(position) = self
-                        .state
-                        .draft_writers
-                        .iter()
-                        .position(|selected| *selected == writer)
-                    {
-                        self.state.draft_writers.remove(position);
-                    } else {
-                        self.state.draft_writers.push(writer);
-                    }
-                }
-                Msg::WriterScrollChanged(offset) => self.state.writer_scroll_position = offset,
+    fn update(&mut self, msg: Msg) {
+        match msg {
+            Msg::OpenDialog => {
+                self.state
+                    .draft_writers
+                    .clone_from(&self.state.saved_writers);
+                self.state
+                    .modals
+                    .open(ids::DIALOG, &mut self.state.focus)
+                    .expect("dialog cannot be nested under itself");
             }
+            Msg::SavePressed => {
+                self.state
+                    .saved_writers
+                    .clone_from(&self.state.draft_writers);
+                self.state.modals.close(&mut self.state.focus);
+                self.toast(Toast::success("Selection saved"));
+            }
+            Msg::CancelPressed => {
+                self.state
+                    .draft_writers
+                    .clone_from(&self.state.saved_writers);
+                self.state.modals.close(&mut self.state.focus);
+                self.toast(Toast::info("Cancel pressed"));
+            }
+            Msg::FocusChanged(focus) => self.state.focus = focus,
+            Msg::DialogMoved(offset) => self.state.dialog_offset = offset,
+            Msg::WriterFocusChanged(writer, offset) => {
+                self.state.focused_writer = Some(writer);
+                self.state.writer_scroll_position = offset;
+            }
+            Msg::WriterToggled(writer) => {
+                self.state.focused_writer = Some(writer);
+                if let Some(position) = self
+                    .state
+                    .draft_writers
+                    .iter()
+                    .position(|selected| *selected == writer)
+                {
+                    self.state.draft_writers.remove(position);
+                } else {
+                    self.state.draft_writers.push(writer);
+                }
+            }
+            Msg::WriterScrollChanged(offset) => self.state.writer_scroll_position = offset,
+        }
+    }
+}
+
+impl demo_shared::Demo for App {
+    fn background(&self) -> Color {
+        THEME.background
+    }
+
+    fn handle_event(&mut self, event: Event) -> bool {
+        match self.ratcn.handle_event(event, &self.state) {
+            EventResult::Emit(msg) => {
+                self.update(msg);
+                true
+            }
+            EventResult::Consumed => true,
+            EventResult::Ignored => false,
         }
     }
 
-    fn draw(&mut self, frame: &mut ratatui::Frame, now: Duration) {
+    /// The next toast expiry, which wakes the host to prune and redraw.
+    fn wake(&self) -> Option<Duration> {
+        self.state
+            .toasts
+            .time_until_next_expiry(demo_shared::monotonic_time())
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        let now = demo_shared::monotonic_time();
+        let _ = self.state.toasts.prune_expired(now);
+
         let area = frame.area();
         frame
             .buffer_mut()
@@ -222,7 +178,9 @@ impl App {
             frame.area(),
         );
     }
+}
 
+impl App {
     fn toast(&mut self, toast: Toast<'static>) {
         self.state.toasts.push(toast, demo_shared::monotonic_time());
     }

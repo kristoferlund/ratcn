@@ -3,8 +3,8 @@
 //! The pattern: `update` is the only writer of app state and stays pure —
 //! instead of doing I/O it *returns* an [`Effect`]. `execute` runs the effect
 //! in the background (a thread natively, a spawned future on wasm), and the
-//! result comes back as a [`Msg`] on an mpsc channel that the event loop
-//! drains before drawing. The UI never waits on the network.
+//! result comes back as a [`Msg`] on an mpsc channel the app drains at the top
+//! of every frame. The UI never waits on the network.
 
 mod fetch;
 
@@ -12,30 +12,23 @@ use std::{
     borrow::Cow,
     io,
     sync::mpsc::{self, Receiver, Sender},
+    time::Duration,
 };
-
-#[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
 
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Flex, Layout},
-    style::Style,
+    style::{Color, Style},
     widgets::{Paragraph, Wrap},
 };
 use ratcn::{
     Button, ButtonSize, Theme,
-    runtime::{self, EventResult, FocusState, Ratcn, wrapped_height},
+    runtime::{Event, EventResult, FocusState, Ratcn, wrapped_height},
 };
 
-#[cfg(not(target_arch = "wasm32"))]
-use ratatui::crossterm::event;
-
-#[cfg(target_arch = "wasm32")]
-use ratzilla::WebRenderer;
-
-#[cfg(not(target_arch = "wasm32"))]
-const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+/// How often to look for a completion while a fetch is in flight. The channel
+/// wakes nothing by itself, so the host has to come back and ask.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CONTENT_WIDTH: u16 = 50;
 const THEME: Theme = Theme::default_dark();
 
@@ -46,7 +39,10 @@ mod ids {
 struct App {
     state: AppState,
     ratcn: Ratcn<AppState, Msg>,
+    /// Effects report back through this pair: `execute` gets a clone of the
+    /// sender, and [`App::drain`] applies whatever has arrived.
     sender: Sender<Msg>,
+    receiver: Receiver<Msg>,
 }
 
 #[derive(Default)]
@@ -85,11 +81,13 @@ enum Effect {
 }
 
 impl App {
-    fn new(sender: Sender<Msg>) -> Self {
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::channel();
         Self {
             state: AppState::default(),
             ratcn: Ratcn::new().focus(|state: &AppState| &state.focus, Msg::FocusChanged),
             sender,
+            receiver,
         }
     }
 
@@ -104,24 +102,45 @@ impl App {
 
     /// Apply every message the background work has queued since the last
     /// frame. Returns whether anything changed, so the caller knows to redraw.
-    fn drain(&mut self, receiver: &Receiver<Msg>) -> bool {
+    fn drain(&mut self) -> bool {
         let mut dispatched = false;
-        while let Ok(msg) = receiver.try_recv() {
+        while let Ok(msg) = self.receiver.try_recv() {
             self.dispatch(msg);
             dispatched = true;
         }
         dispatched
     }
+}
+
+impl demo_shared::Demo for App {
+    fn background(&self) -> Color {
+        THEME.background
+    }
 
     /// Route one input event through ratcn; a component that reacts emits a
     /// `Msg`, which feeds the same `dispatch` path as everything else.
-    fn handle_event(&mut self, event: impl TryInto<runtime::Event>) {
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            self.dispatch(msg);
+    fn handle_event(&mut self, event: Event) -> bool {
+        match self.ratcn.handle_event(event, &self.state) {
+            EventResult::Emit(msg) => {
+                self.dispatch(msg);
+                true
+            }
+            EventResult::Consumed => true,
+            EventResult::Ignored => false,
         }
     }
 
+    /// A fetch in flight is the only thing here that finishes without an input
+    /// event, so it is the only reason to wake on the clock.
+    fn wake(&self) -> Option<Duration> {
+        self.state.joke.is_loading().then_some(POLL_INTERVAL)
+    }
+
     fn draw(&mut self, frame: &mut Frame) {
+        // Completions arrive between frames; applying them here is what turns a
+        // wake-up into the frame that shows the new joke.
+        let _ = self.drain();
+
         let area = frame.area();
         frame
             .buffer_mut()
@@ -210,74 +229,11 @@ fn joke_text(state: &JokeState) -> Cow<'_, str> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> io::Result<()> {
-    let (sender, receiver) = mpsc::channel();
-    let mut app = App::new(sender);
-    // Kick off the first fetch before the loop starts.
+    let mut app = App::new();
+    // Kick off the first fetch before the first frame.
     app.dispatch(Msg::RefreshRequested);
-    ratatui::run(|terminal| {
-        let _input_modes = ratcn::crossterm::InputModes::new()
-            .mouse_capture()
-            .enable()?;
-        let mut dirty = true;
-        loop {
-            // Background results arrive between input events, so apply them
-            // (and redraw) before blocking on the next event.
-            dirty |= app.drain(&receiver);
-            if dirty {
-                terminal.draw(|frame| app.draw(frame))?;
-                dirty = false;
-            }
-
-            // While a fetch is in flight, poll with a timeout instead of
-            // blocking on input: a timeout loops back to `drain`, so the
-            // completion message is picked up without a keypress.
-            if app.state.joke.is_loading() && !event::poll(POLL_INTERVAL)? {
-                continue;
-            }
-            let event = event::read()?;
-            if demo_shared::is_quit(&event) {
-                break Ok(());
-            }
-            app.handle_event(event);
-            dirty = true;
-        }
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-fn main() -> io::Result<()> {
-    let backend = demo_shared::web_backend(THEME.background)?;
-    let mut terminal = ratatui::Terminal::new(backend)?;
-    let (sender, receiver) = mpsc::channel();
-    let mut app = App::new(sender);
-    app.dispatch(Msg::RefreshRequested);
-    let app = Rc::new(RefCell::new(app));
-
-    terminal
-        .on_key_event({
-            let app = Rc::clone(&app);
-            move |key_event| app.borrow_mut().handle_event(key_event)
-        })
-        .map_err(|error| io::Error::other(error.to_string()))?;
-
-    terminal
-        .on_mouse_event({
-            let app = Rc::clone(&app);
-            move |mouse_event| app.borrow_mut().handle_event(mouse_event)
-        })
-        .map_err(|error| io::Error::other(error.to_string()))?;
-
-    // Ratzilla redraws on animation frames, so draining here picks up fetch
-    // completions without the explicit wake-up the native loop needs.
-    terminal.draw_web(move |frame| {
-        let mut app = app.borrow_mut();
-        let _ = app.drain(&receiver);
-        app.draw(frame);
-    });
-
-    Ok(())
+    demo_shared::run(app)
 }
 
 // The payoff of a pure `update`: state logic is testable without a terminal,
@@ -323,16 +279,15 @@ mod tests {
 
     #[test]
     fn draining_completion_messages_updates_app_state() {
-        let (sender, receiver) = mpsc::channel();
-        let mut app = App::new(sender.clone());
+        let mut app = App::new();
         app.state.joke = JokeState::Loading;
-        sender
+        app.sender
             .send(Msg::JokeFetchCompleted(Ok(
                 "Delivered through the queue.".to_owned()
             )))
-            .expect("host owns the receiver");
+            .expect("the app owns the receiver");
 
-        assert!(app.drain(&receiver));
+        assert!(app.drain());
 
         assert_eq!(
             app.state.joke,

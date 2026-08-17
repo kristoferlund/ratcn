@@ -1,9 +1,9 @@
 //! The Alt+S screensaver: gentle snowfall on a hand-rolled modal layer.
 //!
 //! The effect is a pure function of the time elapsed since activation, so
-//! there is no animation state to store or tick: the native loop polls on a
-//! short timeout while the layer is open, wasm redraws every animation frame,
-//! and both simply repaint from the clock. Deterministic per-flake parameters
+//! there is no animation state to store or tick: while the layer is open the
+//! app asks the host for a frame every `SCREENSAVER_FRAME`, on either platform,
+//! and each one simply repaints from the clock. Deterministic per-flake parameters
 //! come from a hash instead of an RNG, which keeps the demo dependency-free
 //! and the animation identical across native and wasm.
 

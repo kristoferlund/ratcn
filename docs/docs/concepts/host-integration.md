@@ -104,6 +104,14 @@ Register mouse callbacks the same way; see
 including toast pruning, belongs in the draw callback or another host callback
 that can cause a frame, since there is no blocking loop to return to.
 
+`draw_web` renders on every animation frame, whether or not anything changed. A
+host that would rather pay for frames it needs can keep the terminal and call
+`Terminal::draw` itself: request one animation frame when an event routes to
+something — any `EventResult` but `Ignored` — and one when a deadline the app
+named passes, and none while the app is idle. Motion is always at least
+`Consumed` once a surface exists, so hover stays live under that rule. The demos
+run on such a host, in `demos/shared`.
+
 For paste, register a DOM `paste` listener and forward `text/plain` clipboard
 data as `Event::Paste` — ratzilla does not provide this callback itself. The
 demos wrap the wiring in `demo_shared::BrowserPasteListener`. Before calling

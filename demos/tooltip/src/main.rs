@@ -12,22 +12,15 @@
 
 use std::io;
 
-#[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
-
 use ratatui::{
+    Frame,
     layout::{Constraint, Flex, Layout},
-    style::Style,
+    style::{Color, Style},
 };
 use ratcn::{
     Button, Theme, Tooltip, TooltipSide,
-    runtime::{self, EventResult, FocusState, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-use ratatui::crossterm::event;
-#[cfg(target_arch = "wasm32")]
-use ratzilla::WebRenderer;
 
 const THEME: Theme = Theme::default_dark();
 
@@ -134,20 +127,34 @@ impl App {
             Msg::Pressed => {}
         }
     }
+}
 
-    fn handle_event(&mut self, event: impl TryInto<runtime::Event>) {
-        let Ok(event) = event.try_into() else {
-            return;
-        };
-        // Record which device the user is on before routing, so the tooltip
-        // reader can tell keyboard focus from the focus a click leaves behind.
-        self.state.keyboard = !matches!(event, runtime::Event::Mouse(_));
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            self.update(msg);
-        }
+impl demo_shared::Demo for App {
+    fn background(&self) -> Color {
+        THEME.background
     }
 
-    fn draw(&mut self, frame: &mut ratatui::Frame) {
+    fn handle_event(&mut self, event: Event) -> bool {
+        // Record which device the user is on before routing, so the tooltip
+        // reader can tell keyboard focus from the focus a click leaves behind.
+        let keyboard = !matches!(event, Event::Mouse(_));
+        // Switching device changes which bubbles are open, so it needs a frame
+        // in its own right: a key the runtime ignores still reveals the bubble
+        // on the focused trigger.
+        let switched = self.state.keyboard != keyboard;
+        self.state.keyboard = keyboard;
+        let routed = match self.ratcn.handle_event(event, &self.state) {
+            EventResult::Emit(msg) => {
+                self.update(msg);
+                true
+            }
+            EventResult::Consumed => true,
+            EventResult::Ignored => false,
+        };
+        switched || routed
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         frame
             .buffer_mut()
@@ -180,41 +187,50 @@ impl App {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> io::Result<()> {
-    let mut app = App::new();
-    ratatui::run(|terminal| {
-        let _modes = ratcn::crossterm::InputModes::new()
-            .mouse_capture()
-            .enable()?;
-        loop {
-            terminal.draw(|frame| app.draw(frame))?;
-            let event = event::read()?;
-            if demo_shared::is_quit(&event) {
-                break Ok(());
-            }
-            app.handle_event(event);
-        }
-    })
+    demo_shared::run(App::new())
 }
 
-#[cfg(target_arch = "wasm32")]
-fn main() -> io::Result<()> {
-    let backend = demo_shared::web_backend(THEME.background)?;
-    let mut terminal = ratatui::Terminal::new(backend)?;
-    let app = Rc::new(RefCell::new(App::new()));
-    terminal
-        .on_key_event({
-            let app = Rc::clone(&app);
-            move |event| app.borrow_mut().handle_event(event)
+#[cfg(test)]
+mod tests {
+    use demo_shared::Demo as _;
+    use ratcn::runtime::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind};
+
+    use super::*;
+
+    fn typed() -> Event {
+        Event::Key(KeyEvent::new(KeyCode::Char('x')))
+    }
+
+    fn clicked() -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseKind::Click(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: Default::default(),
         })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    terminal
-        .on_mouse_event({
-            let app = Rc::clone(&app);
-            move |event| app.borrow_mut().handle_event(event)
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    terminal.draw_web(move |frame| app.borrow_mut().draw(frame));
-    Ok(())
+    }
+
+    /// The device switch opens and closes bubbles by itself, so it has to ask
+    /// for the frame that shows the change — the runtime routing the event is a
+    /// separate question, and a key nothing reacts to still switches the device.
+    #[test]
+    fn switching_input_device_needs_a_frame_of_its_own() {
+        let mut app = App::new();
+
+        assert!(
+            app.handle_event(typed()),
+            "mouse to keyboard reveals the bubble on the focused trigger"
+        );
+        assert!(app.state.keyboard);
+        assert!(
+            !app.handle_event(typed()),
+            "a second key nothing reacts to changes nothing"
+        );
+        assert!(
+            app.handle_event(clicked()),
+            "keyboard to mouse hides it again"
+        );
+        assert!(!app.state.keyboard);
+    }
 }

@@ -6,24 +6,16 @@
 
 use std::io;
 
-#[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
-
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Margin},
-    style::Style,
+    style::{Color, Style},
     widgets::{Paragraph, Wrap},
 };
 use ratcn::{
     Tab, Tabs, Theme,
-    runtime::{self, EventResult, FocusState, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-use ratatui::crossterm::event;
-
-#[cfg(target_arch = "wasm32")]
-use ratzilla::WebRenderer;
 
 const THEME: Theme = Theme::default_dark();
 const DEMO_WIDTH: u16 = 54;
@@ -91,45 +83,8 @@ struct App {
     ratcn: Ratcn<AppState, Msg>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> io::Result<()> {
-    let mut app = App::new();
-    ratatui::run(|terminal| {
-        let _input_modes = ratcn::crossterm::InputModes::new()
-            .mouse_capture()
-            .enable()?;
-        loop {
-            terminal.draw(|frame| app.draw(frame))?;
-            let event = event::read()?;
-            if demo_shared::is_quit(&event) {
-                break Ok(());
-            }
-            app.handle_event(event);
-        }
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-fn main() -> io::Result<()> {
-    let backend = demo_shared::web_backend(THEME.background)?;
-    let mut terminal = ratatui::Terminal::new(backend)?;
-    let app = Rc::new(RefCell::new(App::new()));
-
-    terminal
-        .on_key_event({
-            let app = Rc::clone(&app);
-            move |key_event| app.borrow_mut().handle_event(key_event)
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    terminal
-        .on_mouse_event({
-            let app = Rc::clone(&app);
-            move |mouse_event| app.borrow_mut().handle_event(mouse_event)
-        })
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    terminal.draw_web(move |frame| app.borrow_mut().draw(frame));
-    Ok(())
+    demo_shared::run(App::new())
 }
 
 impl App {
@@ -141,14 +96,25 @@ impl App {
                 .tab_wrap(TabWrap::Wrap),
         }
     }
+}
 
-    fn handle_event(&mut self, event: impl TryInto<runtime::Event>) {
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            self.state.update(msg);
+impl demo_shared::Demo for App {
+    fn background(&self) -> Color {
+        THEME.background
+    }
+
+    fn handle_event(&mut self, event: Event) -> bool {
+        match self.ratcn.handle_event(event, &self.state) {
+            EventResult::Emit(msg) => {
+                self.state.update(msg);
+                true
+            }
+            EventResult::Consumed => true,
+            EventResult::Ignored => false,
         }
     }
 
-    fn draw(&mut self, frame: &mut ratatui::Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         frame
             .buffer_mut()
