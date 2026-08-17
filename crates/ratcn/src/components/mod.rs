@@ -108,6 +108,13 @@
 // The crate root re-exports each component's types straight from its module, so
 // every name is written down once. Nothing else in the crate reaches in here: a
 // component never depends on a sibling.
+//
+// This module is private, so rustdoc does not document it and CI's `-D warnings`
+// never resolves the links above: the `crate::` targets in that documentation are
+// maintained by hand. What resolves them is
+// `cargo doc --document-private-items`, which needs
+// `-A rustdoc::redundant_explicit_links` to be readable — inside the private doc
+// set, explicit targets that the public one needs read as redundant.
 pub(crate) mod barchart;
 pub(crate) mod button;
 pub(crate) mod dialog;

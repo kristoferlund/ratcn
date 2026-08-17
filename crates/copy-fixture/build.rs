@@ -12,16 +12,27 @@
 //! inserts, so a compile error at `<component>.rs:412` in `OUT_DIR` is line 412
 //! of `crates/ratcn/src/components/<component>.rs`.
 //!
-//! The inventory is `src/bin/`: one two-line stub per component, each including
-//! the module generated for the binary it is compiled as. This script fails if
-//! a component has no stub or a stub has no component, so the set cannot drift
-//! from `crates/ratcn/src/components/`.
+//! The inventory is `src/bin/`: one stub per component, each including the module
+//! generated for the binary it is compiled as. This script fails if a component
+//! has no stub, if a stub has no component, or if a stub is not [`STUB`] byte for
+//! byte — a stub that had been emptied to `fn main() {}` would pass the inventory
+//! while its component went unchecked. So the set cannot drift from
+//! `crates/ratcn/src/components/`, and nor can what a target actually compiles.
 
 use std::{
     collections::BTreeSet,
     env, fs,
     path::{Path, PathBuf},
 };
+
+/// Every stub in `src/bin`, byte for byte. `CARGO_BIN_NAME` is what makes one
+/// text serve all of them: cargo sets it to the target being compiled, which is
+/// the component whose copy that target includes.
+const STUB: &str = r#"// One component module, copied at build time and compiled alone. See build.rs.
+include!(concat!(env!("OUT_DIR"), "/", env!("CARGO_BIN_NAME"), ".rs"));
+
+fn main() {}
+"#;
 
 fn main() {
     let manifest_dir =
@@ -54,6 +65,16 @@ fn main() {
     );
 
     for component in &components {
+        let stub_path = stubs_dir.join(format!("{component}.rs"));
+        let stub = fs::read_to_string(&stub_path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", stub_path.display()));
+        assert!(
+            stub == STUB,
+            "{} does not compile the component's copy. A target here is only a gate while it \
+             includes the generated module, so replace the file with exactly:\n\n{STUB}",
+            stub_path.display()
+        );
+
         let source_path = components_dir.join(format!("{component}.rs"));
         let source = fs::read_to_string(&source_path)
             .unwrap_or_else(|err| panic!("read {}: {err}", source_path.display()));
@@ -70,6 +91,12 @@ fn joined<'a>(names: impl Iterator<Item = &'a String>) -> String {
 }
 
 /// The `.rs` module names directly inside `dir`, which must exist.
+///
+/// Single-file modules only: a component written as a directory —
+/// `components/widget/mod.rs` — is invisible here, so it would be copied by
+/// nothing and the inventory would not notice. Every component is one file today,
+/// which is also what "copy the module into your project" means; the day one is
+/// not, this function is what has to learn about it.
 fn module_names(dir: &Path) -> BTreeSet<String> {
     fs::read_dir(dir)
         .unwrap_or_else(|err| panic!("read {}: {err}", dir.display()))
@@ -95,6 +122,11 @@ fn module_names(dir: &Path) -> BTreeSet<String> {
 /// than re-running behavior. Inner doc comments become ordinary comments because
 /// the copy is included into the stub that compiles it, and `include!` cannot
 /// carry an inner attribute.
+///
+/// Everything from the test module down is dropped, which is worth knowing when
+/// checking that the gate still bites: a deliberate private-API or sibling
+/// reference has to go *above* `#[cfg(test)] mod tests`, or it is truncated away
+/// and the build stays green for the wrong reason.
 fn copy_of(source: &str, source_path: &Path) -> String {
     let mut lines: Vec<&str> = source.lines().collect();
     if let Some(tests) = lines.iter().position(|line| line.starts_with("mod tests")) {
