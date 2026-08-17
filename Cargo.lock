@@ -554,6 +554,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fieldset"
+version = "0.0.1"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
