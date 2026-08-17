@@ -62,7 +62,6 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         |preset| AppMsg::Choose(ChoiceMsg::SetTheme(preset)),
     );
 
-    let line = steps::code(theme, state.choices.theme_line());
     let inner = steps::declare_panel(ctx, area, Some("Pick a theme"));
 
     let [intro, list_area, code_area] = inner.layout(
@@ -74,14 +73,14 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         .spacing(1),
     );
 
-    ctx.paint(move |ctx| {
-        ctx.widget(
-            Paragraph::new("Seven presets ship with ratcn.")
-                .style(Style::default().fg(ctx.theme.muted_foreground))
-                .wrap(Wrap { trim: true }),
-            intro,
-        );
-    });
+    ctx.paint_widget(
+        Paragraph::new("Seven presets ship with ratcn.")
+            .style(Style::default().fg(theme.muted_foreground))
+            .wrap(Wrap { trim: true }),
+        intro,
+    );
     ctx.component(LIST_ID, presets, list_area);
+
+    let line = steps::code(theme, state.choices.theme_line());
     ctx.paint_widget(Paragraph::new(line), code_area);
 }

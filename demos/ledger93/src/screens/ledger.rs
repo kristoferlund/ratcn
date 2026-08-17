@@ -69,31 +69,29 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
 
     let balance = shared::balance();
     let amount = shared::format_money(balance, &state.shared.prefs);
-    ctx.paint(move |ctx| {
-        let theme = ctx.theme;
-        let amount_color = if balance < 0 {
-            theme.destructive
-        } else {
-            theme.primary
-        };
-        ctx.widget(
-            Line::from(vec![
-                Span::styled(
-                    "Balance ",
-                    Style::default()
-                        .fg(theme.muted_foreground)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    amount,
-                    Style::default()
-                        .fg(amount_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            balance_area,
-        );
-    });
+    let theme = ctx.theme;
+    let amount_color = if balance < 0 {
+        theme.destructive
+    } else {
+        theme.primary
+    };
+    ctx.paint_widget(
+        Line::from(vec![
+            Span::styled(
+                "Balance ",
+                Style::default()
+                    .fg(theme.muted_foreground)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                amount,
+                Style::default()
+                    .fg(amount_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        balance_area,
+    );
 }
 
 /// One ledger row: `Floppy disks (bulk box) ......... ($42.00)`, with dot

@@ -127,9 +127,7 @@ impl demo_shared::Demo for App {
             let [stepper, panel, buttons] = area.layout(&shell_layout());
             let step = state.nav.step;
 
-            ctx.paint(move |ctx| {
-                ctx.widget(nav::stepper(step, ctx.theme), stepper);
-            });
+            ctx.paint_widget(nav::stepper(step, ctx.theme), stepper);
 
             ctx.scope(
                 screen_id(step),

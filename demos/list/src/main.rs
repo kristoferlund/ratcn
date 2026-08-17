@@ -145,18 +145,18 @@ impl demo_shared::Demo for App {
             );
 
             ctx.component(ids::LIST, list, list_area);
+
             let focused = format!("Focus: {}", state.focused_folder.unwrap_or("None"));
+            ctx.paint_widget(
+                Paragraph::new(focused).style(Style::default().fg(muted)),
+                focused_area,
+            );
+
             let selected = format!("Selected: {}", state.selected_folder.unwrap_or("None"));
-            ctx.paint(move |ctx| {
-                ctx.widget(
-                    Paragraph::new(focused).style(Style::default().fg(muted)),
-                    focused_area,
-                );
-                ctx.widget(
-                    Paragraph::new(selected).style(Style::default().fg(muted)),
-                    selected_area,
-                );
-            });
+            ctx.paint_widget(
+                Paragraph::new(selected).style(Style::default().fg(muted)),
+                selected_area,
+            );
         });
     }
 }

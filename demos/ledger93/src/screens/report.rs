@@ -86,16 +86,14 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
                 .text_value(label.clone())
         })
         .collect();
-    ctx.paint(move |ctx| {
-        ctx.widget(
-            BarChartWidget::new(chart_bars)
-                .themed(ctx.theme)
-                .max_value(max)
-                .bar_width(9)
-                .bar_gap(1),
-            chart_area,
-        );
-    });
+    ctx.paint_widget(
+        BarChartWidget::new(chart_bars)
+            .themed(ctx.theme)
+            .max_value(max)
+            .bar_width(9)
+            .bar_gap(1),
+        chart_area,
+    );
 
     let [button_area] = Layout::horizontal([Constraint::Length(button_width)])
         .flex(Flex::Center)

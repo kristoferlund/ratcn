@@ -19,20 +19,18 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let [intro, commands] =
         inner.layout(&Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).spacing(1));
 
-    ctx.paint(move |ctx| {
-        let theme = ctx.theme;
-        ctx.widget(
-            Paragraph::new("A plain binary crate is all ratcn needs.")
-                .style(Style::default().fg(theme.muted_foreground))
-                .wrap(Wrap { trim: true }),
-            intro,
-        );
-        ctx.widget(
-            Paragraph::new(vec![
-                steps::command(theme, "cargo new my-app"),
-                steps::command(theme, "cd my-app"),
-            ]),
-            commands,
-        );
-    });
+    let theme = ctx.theme;
+    ctx.paint_widget(
+        Paragraph::new("A plain binary crate is all ratcn needs.")
+            .style(Style::default().fg(theme.muted_foreground))
+            .wrap(Wrap { trim: true }),
+        intro,
+    );
+    ctx.paint_widget(
+        Paragraph::new(vec![
+            steps::command(theme, "cargo new my-app"),
+            steps::command(theme, "cd my-app"),
+        ]),
+        commands,
+    );
 }

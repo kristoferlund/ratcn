@@ -135,6 +135,7 @@ impl demo_shared::Demo for App {
             );
 
             ctx.component(ids::LIST, list, list_area);
+
             let count = format!(
                 "Subscribed to {} of {}",
                 state.subscribed.len(),
