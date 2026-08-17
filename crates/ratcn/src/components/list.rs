@@ -178,9 +178,9 @@ impl ListStyle {
 /// [`Ratcn`](crate::runtime::Ratcn) or the component layer: render it directly
 /// and keep driving selection and scrolling however you already do.
 ///
-/// Rows are pre-rendered [`Text`]s — one per item, each free to span several
-/// lines — and everything else is addressed by *item index*: which item the
-/// cursor is on, which are selected, which are disabled.
+/// Rows are pre-rendered [`Text`]s, each free to span several lines, and
+/// everything else is addressed by *item index*: which item the cursor is on,
+/// which are selected, which are disabled.
 /// Explicit colors in the supplied text are preserved; row styles provide the
 /// colors for text that does not set its own.
 /// That makes it easy to drive from any data you like, but it also means the
@@ -191,10 +191,11 @@ impl ListStyle {
 /// by a value you choose, and adds keyboard and mouse handling. It paints
 /// through this widget internally.
 ///
-/// Scrolling is an input: pass the index of the topmost visible item with
-/// [`scroll_offset`](Self::scroll_offset) each frame. The widget paints exactly what it is
-/// told and never adjusts the offset, so whatever owns it — your app, or the
-/// [`List`] component — is the only scroll policy in play.
+/// Scrolling is the caller's: hand over the rows that are actually on screen and
+/// say where they start with [`first_item`](Self::first_item). The widget holds
+/// no scroll position and never adjusts one, so whatever owns it — your app, or
+/// the [`List`] component — is the only scroll policy in play, and a long list
+/// costs a long list's worth of [`Text`] only if you build one.
 ///
 /// # Sizing and row heights
 ///
@@ -207,18 +208,17 @@ impl ListStyle {
 /// Rows may be any height — each item is a [`Text`], so one item may be one
 /// line and the next three, and the widget paints each at its own height.
 /// Keeping them uniform is the caller's job whenever anything maps a screen row
-/// back to an item, because the offset arithmetic counts *items*, not lines:
-/// [`scroll_offset`](Self::scroll_offset) skips a number of items, so mixed
-/// heights make the row a click lands on no longer correspond to the item that
-/// arithmetic names. The [`List`] component takes that job on — it normalizes
-/// every item to its [`row_height`](List::row_height) with
+/// back to an item, because the arithmetic that does so counts *items*, not
+/// lines: mixed heights make the row a click lands on no longer correspond to
+/// the item that arithmetic names. The [`List`] component takes that job on —
+/// it normalizes every item to its [`row_height`](List::row_height) with
 /// [`fit_to_height`](crate::list_core::fit_to_height), padding short rows and
 /// truncating tall ones — which is why clicking, paging, and wheel scrolling
 /// are exact there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListWidget<'a> {
     items: &'a [Text<'static>],
-    scroll_offset: usize,
+    first_item: usize,
     focused_row: Option<usize>,
     selected_rows: &'a [usize],
     disabled_rows: &'a [bool],
@@ -230,13 +230,17 @@ pub struct ListWidget<'a> {
 }
 
 impl<'a> ListWidget<'a> {
-    /// A list of `items`, nothing focused or selected, using
+    /// The rows to paint, top to bottom, nothing focused or selected, using
     /// [`ListStyle::fallback`].
+    ///
+    /// These are the rows on screen, not a whole list to scroll through:
+    /// a scrolled caller passes the window and names its position with
+    /// [`first_item`](Self::first_item).
     #[must_use]
     pub const fn new(items: &'a [Text<'static>]) -> Self {
         Self {
             items,
-            scroll_offset: 0,
+            first_item: 0,
             focused_row: None,
             selected_rows: &[],
             disabled_rows: &[],
@@ -262,16 +266,19 @@ impl<'a> ListWidget<'a> {
         self
     }
 
-    /// Index of the topmost visible item. Defaults to 0. Matches
-    /// [`SelectWidget::scroll_offset`](crate::SelectWidget::scroll_offset).
+    /// The index the first row given to [`new`](Self::new) has in the whole
+    /// list. Defaults to 0.
     ///
-    /// Items before it are skipped, items after it paint top to bottom until
-    /// the area runs out. The widget never adjusts this value — keep-visible
-    /// and clamping policy belong to the caller (see
+    /// It is what lines the painted window up with the index-addressed state:
+    /// [`focused_row`](Self::focused_row), [`selected_rows`](Self::selected_rows),
+    /// and [`disabled_rows`](Self::disabled_rows) all count from the start of
+    /// the list, not from the top of the window, so scrolling changes only this
+    /// number and the rows. The widget never adjusts it — keep-visible and
+    /// clamping policy belong to the caller (see
     /// [`linear_nav`](crate::linear_nav) for the arithmetic [`List`] uses).
     #[must_use]
-    pub const fn scroll_offset(mut self, scroll_offset: usize) -> Self {
-        self.scroll_offset = scroll_offset;
+    pub const fn first_item(mut self, first_item: usize) -> Self {
+        self.first_item = first_item;
         self
     }
 
@@ -286,8 +293,10 @@ impl<'a> ListWidget<'a> {
         self
     }
 
-    /// Indices of the selected rows. Pass one index for single selection, or
-    /// several for multi-selection; the widget does not care which you mean.
+    /// Indices of the selected rows, counting from the start of the list. Pass
+    /// one index for single selection, or several for multi-selection; the
+    /// widget does not care which you mean. Only rows it paints are consulted,
+    /// so a windowed caller need only name the selected rows in its window.
     ///
     /// This is an index list, not a mask: selection is sparse — usually zero or
     /// one row, any number under multi-selection — so you name the selected
@@ -300,8 +309,8 @@ impl<'a> ListWidget<'a> {
         self
     }
 
-    /// A disabled flag per row, positionally matched to the items. Entries past
-    /// the end of the slice read as enabled, so a short slice is fine.
+    /// A disabled flag per item, counting from the start of the list. Entries
+    /// past the end of the slice read as enabled, so a short slice is fine.
     ///
     /// This is a positional mask, not an index list: disabledness is a property
     /// of every row, usually derived straight from the items, so one flag per
@@ -379,10 +388,11 @@ impl Widget for ListWidget<'_> {
         let text_width = area.width.saturating_sub(symbol_width);
 
         let mut y = area.y;
-        for (index, item) in self.items.iter().enumerate().skip(self.scroll_offset) {
+        for (row, item) in self.items.iter().enumerate() {
             if y >= area.bottom() {
                 break;
             }
+            let index = self.first_item.saturating_add(row);
             let height = u16::try_from(item.lines.len().max(1))
                 .unwrap_or(u16::MAX)
                 .min(area.bottom() - y);
@@ -442,9 +452,9 @@ type StyleFn = Box<dyn Fn(&Theme) -> ListStyle>;
 /// item value, never by row index, so filtering or reordering the list keeps the
 /// same item current.
 ///
-/// Item values must be unique within each declaration. Duplicate values panic
-/// during declaration because focus, selection, and pointer actions would
-/// otherwise be ambiguous.
+/// Item values must be unique within each declaration, or focus, selection, and
+/// pointer actions are ambiguous. A debug build panics on duplicates during
+/// declaration.
 ///
 /// - [`item_focus`](Self::item_focus) — the cursor. Without it the list is
 ///   paint- and pointer-only, is not a keyboard focus stop, and ignores keys.
@@ -591,12 +601,13 @@ impl<T, S, M> List<T, S, M> {
 
     /// Bind multi-selection: any number of items chosen, checkbox style.
     ///
-    /// `read` is a predicate asked "is this one selected?" for each item, rather
-    /// than a function returning a collection. That way your app can store the
-    /// selection however it likes — a `HashSet`, a flag on each record, a
-    /// computed rule — without converting it every frame. `on_toggle` is called
-    /// with the item the user flipped; your update function decides whether that
-    /// means adding or removing.
+    /// `read` is a predicate asked "is this one selected?" for each row the list
+    /// draws, rather than a function returning a collection. That way your app
+    /// can store the selection however it likes — a `HashSet`, a flag on each
+    /// record, a computed rule — without converting it every frame, and a list
+    /// scrolled to fifteen of a thousand rows asks fifteen times. `on_toggle`
+    /// is called with the item the user flipped; your update function decides
+    /// whether that means adding or removing.
     ///
     /// When [`item_focus`](Self::item_focus) is also bound, the update handling
     /// a pointer toggle should store this value as item focus as well. A click
@@ -632,8 +643,11 @@ impl<T, S, M> List<T, S, M> {
     /// out of sight — the behavior a scrollable list has everywhere else. It
     /// emits the offset one notch away from the painted one, and consumes the
     /// event without emitting when the app already holds that value. Paint
-    /// resumes scrolling the cursor into view as soon as the cursor moves
-    /// again. Render-driven adjustment itself cannot emit a message.
+    /// resumes scrolling the cursor into view as soon as anything moves — the
+    /// cursor, or the items under it; see
+    /// [`WheelPark`](crate::list_core::WheelPark) for exactly when the wheeled
+    /// view stops being honored. Render-driven adjustment itself cannot emit a
+    /// message.
     ///
     /// Only needed when something outside the list has to know or change where
     /// it is scrolled to, such as a scrollbar drawn alongside it. Left unbound,
@@ -719,7 +733,7 @@ impl<T, S, M> List<T, S, M> {
     }
 }
 
-impl<T: Clone + PartialEq, S, M> List<T, S, M> {
+impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
     fn disabled_at(&self, index: usize) -> bool {
         list_core::disabled_at(&self.items, index)
     }
@@ -730,18 +744,6 @@ impl<T: Clone + PartialEq, S, M> List<T, S, M> {
 
     fn selected_index(&self, state: &S) -> Option<usize> {
         list_core::index_of(&self.items, &(self.selected.as_ref()?)(state)?)
-    }
-
-    fn selected_rows(&self, state: &S) -> Vec<usize> {
-        if let Some(selected_many) = &self.selected_many {
-            return self
-                .items
-                .iter()
-                .enumerate()
-                .filter_map(|(index, item)| selected_many(state, item.value()).then_some(index))
-                .collect();
-        }
-        self.selected_index(state).into_iter().collect()
     }
 
     fn move_focus(&self, index: usize, state: &S, area: Rect) -> EventResult<M> {
@@ -795,12 +797,13 @@ impl<T: Clone + PartialEq, S, M> List<T, S, M> {
             step,
             SCROLL_STEP,
         );
-        // Park the view and the cursor it left behind, so the next render
-        // honors this offset instead of scrolling the cursor back into view.
-        // The park lives on the list's identity and outlives this instance,
-        // which is what lets an unbound list scroll at all.
-        ctx.transient::<WheelPark>()
-            .park(next, self.focused_index(state));
+        // Park the view against the list as the cursor was left in it, so the
+        // next render honors this offset instead of scrolling the cursor back
+        // into view. The park lives on the list's identity and outlives this
+        // instance, which is what lets an unbound list scroll at all.
+        let cursor = self.focused_index(state);
+        ctx.transient::<WheelPark<T>>()
+            .park(next, &self.items, cursor);
         // Keep this retained instance's hit-testing aligned with the offset
         // the next paint will use.
         self.viewport.record_painted_offset(next);
@@ -851,9 +854,13 @@ impl<T: Clone + PartialEq, S, M> List<T, S, M> {
     }
 }
 
-impl<T: Clone + PartialEq, S, M> Component<S, M> for List<T, S, M> {
+impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
     fn prepare(&mut self, _state: &S) {
-        list_core::assert_unique_values(self.items.iter().map(ListItem::value), "List");
+        // Quadratic in the item count and re-derived on every frame's fresh
+        // instance, so a release build takes the items on trust.
+        if cfg!(debug_assertions) {
+            list_core::assert_unique_values(self.items.iter().map(ListItem::value), "List");
+        }
         assert!(
             !(self.selected.is_some() && self.selected_many.is_some()),
             "List::selection(...) and List::multi_selection(...) cannot be used together; choose one selection mode"
@@ -864,39 +871,28 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for List<T, S, M> {
         let area = ctx.area();
         let state = ctx.state();
         let focused_row = self.focused_index(state);
-        // The wheel parks the view against the cursor it left behind. While
-        // that cursor has not moved, the parked offset is painted as it is —
-        // the wheel may leave the cursor off-screen. Once the cursor moves
-        // again (keys, hover, the app), it is scrolled back into view. A
-        // bound scroll offset always wins over the park: the app owns it.
-        let mut park = ctx
-            .transient_mut::<WheelPark>()
-            .map_or_else(WheelPark::default, |park| {
-                park.settle(focused_row);
-                *park
-            });
-        let requested_offset = self
-            .scroll
-            .as_ref()
-            .map_or_else(|| park.offset(), |scroll| scroll(state));
-        let offset = self.viewport.cursor_visible_offset(
+        let requested = self.scroll.as_ref().map(|scroll| scroll(state));
+        // The wheel parks the view against the list as it stood. While nothing
+        // has moved under it, the parked offset is painted as it is — the wheel
+        // may leave the cursor off-screen. Once the cursor moves, or the items
+        // do, it is scrolled back into view. A bound scroll offset always wins
+        // over the park: the app owns it.
+        let mut unparked = WheelPark::default();
+        let park = ctx.transient_mut::<WheelPark<T>>().unwrap_or(&mut unparked);
+        park.settle(
+            &self.items,
+            focused_row,
+            requested,
+            &mut self.viewport,
             area,
-            self.items.len(),
-            requested_offset,
-            park.cursor_to_show(focused_row),
         );
-        park.record(offset);
-        if let Some(stored) = ctx.transient_mut::<WheelPark>() {
-            *stored = park;
-        }
-        self.viewport.record_painted_offset(offset);
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
         let area = ctx.area();
         let state = ctx.state();
         let focused_row = self.focused_index(state);
-        let selected_rows = self.selected_rows(state);
+        let selected_row = self.selected_index(state);
         let disabled_rows: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
         let style = self.style.as_ref().map_or_else(
             || ListStyle::from_theme(ctx.theme),
@@ -913,17 +909,36 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for List<T, S, M> {
             None
         };
         let rows_per_item = self.viewport.rows_per_item();
-        let items: Vec<Text<'static>> = self
-            .items
+        // Only the rows on screen are built, however long the list is. The
+        // count rounds up because the area's trailing rows still paint the item
+        // that starts in them, clipped; every index below counts from the start
+        // of the list, so a custom `render_item` and retained hit-testing see
+        // the same positions whatever the view is scrolled to.
+        let first_item = self.viewport.painted_offset().min(self.items.len());
+        let last_item = first_item
+            .saturating_add(usize::from(area.height.div_ceil(rows_per_item)))
+            .min(self.items.len());
+        let mut selected_rows: Vec<usize> = Vec::new();
+        let items: Vec<Text<'static>> = self.items[first_item..last_item]
             .iter()
             .enumerate()
-            .map(|(index, item)| {
+            .map(|(position, item)| {
+                let index = first_item + position;
+                // Asked per painted row rather than looked up in a list of every
+                // selected index, which would make painting quadratic.
+                let selected = match &self.selected_many {
+                    Some(selected_many) => selected_many(state, item.value()),
+                    None => selected_row == Some(index),
+                };
+                if selected {
+                    selected_rows.push(index);
+                }
                 let row = ListItemState {
                     index,
                     value: item.value(),
                     label: item.label(),
                     focused: cursor_visible && focused_row == Some(index),
-                    selected: selected_rows.contains(&index),
+                    selected,
                     disabled: self.disabled || item.is_disabled(),
                 };
                 let text = match &self.render_item {
@@ -935,7 +950,7 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for List<T, S, M> {
             .collect();
         ctx.render_widget(
             ListWidget::new(&items)
-                .scroll_offset(self.viewport.painted_offset())
+                .first_item(first_item)
                 .focused_row(focused_row)
                 .selected_rows(&selected_rows)
                 .disabled_rows(&disabled_rows)
@@ -1054,6 +1069,7 @@ mod tests {
         D,
         E,
         F,
+        G,
     }
 
     #[derive(Debug, PartialEq)]
@@ -1478,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_cursor_paints_the_caller_owned_scroll_offset() {
+    fn hidden_cursor_paints_the_caller_owned_window() {
         let items = [
             Text::from("Alpha"),
             Text::from("Bravo"),
@@ -1488,12 +1504,12 @@ mod tests {
         let area = Rect::new(0, 0, 10, 2);
 
         // An unfocused or disabled list shows no cursor and reserves no focus
-        // symbol column, but still paints from the offset it was given.
+        // symbol column, but still paints the window it was given.
         for (focused, disabled) in [(false, false), (true, true)] {
             let mut buffer = Buffer::empty(area);
 
-            ListWidget::new(&items)
-                .scroll_offset(2)
+            ListWidget::new(&items[2..])
+                .first_item(2)
                 .focused_row(Some(3))
                 .focused(focused)
                 .disabled(disabled)
@@ -1949,6 +1965,45 @@ mod tests {
         );
     }
 
+    /// The park is anchored to the item the cursor sits on, not to its row.
+    /// Swapping that item for another at the same index puts a different item
+    /// under the cursor, so the hold ends and the new item is scrolled in.
+    #[test]
+    fn replacing_the_anchored_item_releases_the_wheel_park() {
+        let mut driver = TestBackendDriver::new(20, 3);
+        let mut state = State {
+            focused: Some(Task::A),
+            ..State::default()
+        };
+        driver.render(&state, six_items());
+
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Scroll(ScrollDirection::Down), 2, 0),
+                &state
+            ),
+            EventResult::Emit(Msg::Scrolled(3))
+        );
+        state.scroll = 3;
+        driver.render(&state, six_items());
+        assert!(
+            driver.row(0).contains("Delta"),
+            "the wheel parked the view away from the cursor: {}",
+            driver.row(0)
+        );
+
+        let mut items = six_items().to_vec();
+        items[0] = item(Task::G, "Golf");
+        state.focused = Some(Task::G);
+        driver.render(&state, items);
+
+        assert!(
+            driver.row(0).contains("Golf"),
+            "a park anchored by row would still be holding Delta on screen: {}",
+            driver.row(0)
+        );
+    }
+
     /// Hover moves the cursor from the very first pointer motion, with no
     /// paint round-trip first, exactly as it does over a `Select` panel.
     #[test]
@@ -2258,7 +2313,10 @@ mod tests {
         assert!(message.contains("List::multi_selection(...)"));
     }
 
+    // The check is a debug-build assertion, so this contract only exists where
+    // debug assertions do.
     #[test]
+    #[cfg(debug_assertions)]
     fn duplicate_item_values_fail_declaration_with_the_documented_panic() {
         let mut list: List<Task, State, Msg> =
             List::new([item(Task::A, "First"), item(Task::A, "Second")]);
@@ -2381,6 +2439,63 @@ mod tests {
             ),
             EventResult::Emit(Msg::Toggled(Task::A)),
             "Space toggles the cursor instead of typeahead-moving to the space-prefixed label"
+        );
+    }
+
+    /// A long list costs a screenful of rows, not a listful. The window that
+    /// paints is the only part built, and the indices it carries stay global,
+    /// so a custom row closure and the click that lands on its row agree on
+    /// which item they mean.
+    #[test]
+    fn a_scrolled_list_builds_only_its_window_and_keeps_indices_global() {
+        #[derive(Default)]
+        struct BigState {
+            scroll: usize,
+        }
+        #[derive(Debug, PartialEq)]
+        enum BigMsg {
+            Scrolled(usize),
+            Chose(usize),
+        }
+
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = std::rc::Rc::clone(&seen);
+        let items: Vec<ListItem<usize>> = (0..1000)
+            .map(|index| ListItem::new(index, format!("Item {index}")))
+            .collect();
+        let state = BigState { scroll: 40 };
+        let theme = Theme::default_dark();
+        let mut ratcn = Ratcn::<BigState, BigMsg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(20, 5)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &state, &theme, |ctx| {
+                    ctx.render_component(
+                        ChildId::Static("list"),
+                        List::new(items)
+                            .scroll(|state: &BigState| state.scroll, BigMsg::Scrolled)
+                            .selection(|_: &BigState| None, BigMsg::Chose)
+                            .render_item(move |_: &BigState, row: ListItemState<'_, usize>| {
+                                recorded.borrow_mut().push(row.index);
+                                Line::from(row.label.to_string())
+                            }),
+                        area,
+                    );
+                });
+            })
+            .expect("draw");
+
+        assert_eq!(
+            *seen.borrow(),
+            (40..45).collect::<Vec<usize>>(),
+            "one screenful of rows is built, whatever the list's length"
+        );
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Click(MouseButton::Left), 2, 2), &state),
+            EventResult::Emit(BigMsg::Chose(42)),
+            "the third painted row is the forty-third item"
         );
     }
 

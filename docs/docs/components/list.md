@@ -38,9 +38,11 @@ ctx.render_component("folders", list, area);
 
 Items are identified by your own values, not by row index, so sorting or
 filtering the list keeps the same item selected. Those values must be unique
-within one list. `item_focus` is the cursor and
-`selection` is the committed choice — separate, so a user can browse without
-changing anything.
+within one list, or focus, selection, and clicks are ambiguous; a debug build
+panics on duplicates as the list declares, and a release build takes the items
+on trust — the scan is quadratic and every frame would repeat it. `item_focus`
+is the cursor and `selection` is the committed choice — separate, so a user can
+browse without changing anything.
 
 Arrow keys move the cursor one item at a time; Home and End jump to the first
 and last enabled item, and PageUp and PageDown move it a visible page at a time.
@@ -53,8 +55,8 @@ single-letter app hotkey keeps working while a list has focus.
 ## Multi-selection
 
 Any number of items at once, with checkbox markers. Instead of a selected value
-you give a predicate: `List` asks "is this one selected?" per item, so the
-selection can live in a `HashSet`, a `Vec`, or a flag on each record.
+you give a predicate: `List` asks "is this one selected?" per row it draws, so
+the selection can live in a `HashSet`, a `Vec`, or a flag on each record.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 400px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -168,9 +170,13 @@ redraw. If scroll is unbound, ignore the second callback argument.
 
 The mouse wheel is the one input that does not follow the cursor. It scrolls
 the view and leaves the cursor where it is, so the cursor can scroll out of
-sight — the same behavior a scrollable list has elsewhere. Moving the cursor
-again scrolls it back into view. The list always handles the wheel, including
-at the top and bottom of the range, so it never scrolls an enclosing pane.
+sight — the same behavior a scrollable list has elsewhere. The wheeled view is
+held only while the list stays as it was: the item under the cursor is still
+that item, still on that row, in a list of the same length. Move the cursor,
+replace that item, reorder, filter, insert, or remove, and the hold ends and
+the cursor is scrolled back into view — a held row number means nothing once
+the rows have moved. The list always handles the wheel, including at the top and
+bottom of the range, so it never scrolls an enclosing pane.
 
 Pointer motion moves the cursor whether or not the list has focus, from the
 motion that enters the list onward. The cursor is only *painted* on a focused
@@ -198,18 +204,18 @@ List::new(items).style(|theme| {
 
 `ListWidget` draws a list without focus or events. It is an ordinary Ratatui
 widget, so it works in a plain Ratatui app with no `Ratcn` runtime. Rows are
-pre-rendered `Text`s and everything is addressed by index. Explicit colors in
-those `Text`s are preserved:
+pre-rendered `Text`s and everything else is addressed by index. Explicit colors
+in those `Text`s are preserved:
 
 ```rust
 use ratatui::text::Text;
 use ratcn::ListWidget;
 
-let items = vec![Text::from("Inbox"), Text::from("Archive")];
+let rows = vec![Text::from("Inbox"), Text::from("Archive")];
 
 frame.render_widget(
-    ListWidget::new(&items)
-        .scroll_offset(scroll_offset)
+    ListWidget::new(&rows[scroll_offset.min(rows.len())..])
+        .first_item(scroll_offset)
         .focused_row(Some(0))
         .selected_rows(&[1])
         .disabled_rows(&[false, true])
@@ -221,18 +227,26 @@ frame.render_widget(
 );
 ```
 
-Scrolling is an input: pass the index of the topmost visible item with
-`scroll_offset` each frame. The widget paints exactly what it is told and never
-adjusts the value, so your app stays the only scroll policy.
+Scrolling is yours: hand over the rows that are on screen and say where they
+start with `first_item`. Every other index — `focused_row`, `selected_rows`,
+`disabled_rows` — counts from the start of the list, so scrolling changes only
+that number and the rows. The widget holds no scroll position and never adjusts
+one, so your app stays the only scroll policy, and a thousand-item list costs a
+thousand `Text`s only if you build them.
 
 The widget is area-driven — it fills the area you give it and has nothing to
 measure — and it paints each item at whatever height its `Text` is. Keeping
-those heights uniform is yours to do here, because `scroll_offset` counts items
-rather than lines; the `List` component does it for you.
+those heights uniform is yours to do here, because the arithmetic that maps a
+screen row back to an item counts items rather than lines; the `List` component
+does it for you.
 
 The two row inputs use different encodings on purpose: `selected_rows` is a
 list of selected indices, since selection is sparse, while `disabled_rows` is
-one flag per row, parallel to the items.
+one flag per item. Both are read at the item's own index, and only for the rows
+the widget paints — so a windowed caller can name just the selected rows inside
+its window, but `disabled_rows` is a positional mask and has to be padded up to
+the window: entry *n* describes item *n*, and entries past the end of the slice
+read as enabled.
 
 `.disabled(true)` dims the whole widget, as `.disabled_rows(...)` does for
 single rows. Replace `.themed(...)` with `.style(...)` to supply exact widget

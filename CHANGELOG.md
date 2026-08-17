@@ -70,6 +70,52 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `ListWidget` takes the rows on screen rather than the whole
+  list. `ListWidget::scroll_offset` is replaced by `ListWidget::first_item`,
+  the index `items[0]` has in the whole list; `focused_row`, `selected_rows`,
+  and `disabled_rows` still count from the start of the list, so scrolling
+  changes only that number and the rows. `new(&items).scroll_offset(n)` becomes
+  `new(&items[n.min(items.len())..]).first_item(n)` — the clamp matters, because
+  the old call painted an empty list for an offset past the end where slicing
+  panics. The widget holds no scroll position, and a long list costs a long
+  list's worth of `Text` only if the caller builds one.
+- **Breaking:** `SelectWidget::option_rows` is `SelectWidget::visible_option_rows`
+  and takes one row per *painted* option, in paint order, starting at
+  `scroll_offset`. `open` still takes every option, because the panel's height
+  is measured from their count.
+- **Breaking:** `List`'s `Component` implementation requires `T: 'static`.
+  `RenderCtx::render_component` already required it of any `List` declared
+  through the runtime, so a declared list is unaffected; a `List` driven
+  directly through the `Component` trait — `prepare`/`handle_event` against an
+  `EventCtx::default()`, which is how the transient docs suggest testing one —
+  now needs an owned item type too. The park below keeps an item value in the
+  transient store, and while a transient is keyed by its identity *path*, the
+  type stored at that path is asserted on read, so the value's type is part of
+  what reader and writer must agree on.
+- **Breaking:** `list_core::WheelPark` is generic over the item value, and the
+  wheel's hold now persists only while the list has not moved under it: the
+  anchored item is still at its anchored row, in a list of the same length,
+  with the cursor still on it. Replacing that item, reordering, filtering,
+  inserting, removing, or moving the cursor releases the hold and scrolls the
+  cursor back into view. Before, a hold anchored by row index survived an item
+  being swapped for another at the same position and left the new one
+  off-screen.
+  - `settle`, `record`, `cursor_to_show`, and `offset` collapse into one
+    `settle(items, cursor, requested, viewport, area)` that releases the hold,
+    computes the offset, and records it in the `RowViewport`.
+  - `park(offset, items, cursor)` replaces `park(offset, cursor)` and captures
+    the whole anchor itself, so no caller can assemble half of one. It is no
+    longer `const`, and its impl block requires `T: Clone` to keep the value.
+  - `WheelPark` is no longer `Copy`, and `Debug`, `Clone`, `PartialEq`, and `Eq`
+    now hold only when the item type does. `Default` is unconditional.
+- **Breaking:** `List`, `Select`, and `Tabs` check their item values for
+  duplicates only under `cfg!(debug_assertions)`. The scan is quadratic —
+  values are only `PartialEq`, so there is nothing to sort or hash by — and
+  every frame declares a fresh component, so the check ran once per frame in
+  every build. A debug build still runs it; a release build no longer pays for
+  an answer that cannot change unless the items do. The panic message is
+  unchanged, and the rustdoc and guides now say the failure is debug-only
+  rather than promising it unconditionally.
 - **Breaking:** a `Tooltip` with no `open_when`/`open` binding shows while the
   pointer is inside it, where before it never showed at all. Both readers take
   `Fn(&S, bool) -> bool`, the second argument being that same hover answer, so
@@ -90,6 +136,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   draws moves to `Component::paint`.
 - **Breaking:** `Dialog` and `Tooltip` hold their bodies, footer, and actions in
   private types. Their builders are unchanged.
+- `List` and a `Select` panel build only the rows they paint. A thousand-item
+  list showing fifteen rows builds fifteen, `render_item` still receives each
+  row's index in the whole list, and a multi-selection predicate is asked once
+  per painted row rather than once per item. Declaring and painting a
+  thousand-item list into a fifteen-row frame drops from 457 µs to 40 µs in a
+  release build, split evenly between two causes: dropping the per-frame
+  uniqueness scan is 208 µs of it and grows with the square of the item count,
+  and building one screenful of rows instead of a listful is the other 209 µs
+  and grows linearly. A debug build keeps the first cost. The button benches,
+  which share no code with either change, do not move.
 - A component's own paint now always precedes its descendants' — a component is
   queued at the point it opens, so container chrome needs no care about
   ordering. The converse is no longer expressible from `paint`: decoration that

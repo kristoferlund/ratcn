@@ -8,9 +8,9 @@
 //! - A **row** is terminal geometry: the one or more screen rows used to paint
 //!   an option.
 //!
-//! For example, [`SelectWidget::option_rows`] accepts pre-rendered screen rows
-//! for the widget's semantic options, while [`Select::render_item`] receives the
-//! shared item state used by List.
+//! For example, [`SelectWidget::visible_option_rows`] accepts pre-rendered
+//! screen rows for the options on screen, while [`Select::render_item`]
+//! receives the shared item state used by List.
 
 use std::{fmt, rc::Rc};
 
@@ -283,8 +283,14 @@ impl<'a> SelectWidget<'a> {
         self
     }
 
-    /// Pre-rendered screen rows to paint instead of each option's default
-    /// marker-and-label line, positionally matched to the semantic options.
+    /// Pre-rendered screen rows to paint instead of the default
+    /// marker-and-label line — one per *painted* option, in paint order,
+    /// starting at [`scroll_offset`](Self::scroll_offset).
+    ///
+    /// [`open`](Self::open) still takes every option, because the panel's
+    /// height is measured from their count; these are only the rows that
+    /// appear, so a long option list costs a long list's worth of [`Text`] only
+    /// if you build one.
     ///
     /// Each `Text` may span several lines; pair this with
     /// [`row_height`](Self::row_height) so every option occupies the same
@@ -292,7 +298,7 @@ impl<'a> SelectWidget<'a> {
     /// beneath the supplied text, so unstyled text inherits them while
     /// explicit colors remain intact.
     #[must_use]
-    pub const fn option_rows(mut self, option_rows: &'a [Text<'static>]) -> Self {
+    pub const fn visible_option_rows(mut self, option_rows: &'a [Text<'static>]) -> Self {
         self.option_rows = Some(option_rows);
         self
     }
@@ -499,7 +505,7 @@ fn render_panel(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
                 .resolve_row(widget.focused_option == Some(index), selected, disabled),
         );
         if let Some(rows) = widget.option_rows {
-            if let Some(text) = rows.get(index) {
+            if let Some(text) = rows.get(row) {
                 text.render(row_area, buf);
             }
             continue;
@@ -602,8 +608,9 @@ fn emit_item<T: Clone, M>(
 /// and the first Tab or `BackTab` closes and consumes that traversal key. A
 /// following Tab can move focus after the app applies the close message. The
 /// wheel scrolls the panel and leaves item focus where it is, so the cursor
-/// may scroll out of sight until something moves it again — the same wheel
-/// behavior as [`List`](ratcn::List).
+/// may scroll out of sight until the cursor or the options move — the same
+/// wheel behavior as [`List`](ratcn::List), held under the rule
+/// [`WheelPark`](ratcn::list_core::WheelPark) states.
 /// While open, typing a printable character jumps item focus to
 /// the next enabled option whose label starts with it, case-insensitively,
 /// cycling past the end — the same single-character typeahead as
@@ -974,7 +981,11 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
 
 impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for Select<T, S, M> {
     fn prepare(&mut self, state: &S) {
-        list_core::assert_unique_values(self.items.iter().map(ListItem::value), "Select");
+        // Quadratic in the option count and re-derived on every frame's fresh
+        // instance, so a release build takes the items on trust.
+        if cfg!(debug_assertions) {
+            list_core::assert_unique_values(self.items.iter().map(ListItem::value), "Select");
+        }
         self.resolved_open = !self.disabled && self.is_open(state);
     }
 
@@ -1116,32 +1127,17 @@ impl<T: Clone + PartialEq, S, M> SelectPanel<T, S, M> {
     }
 }
 
-impl<T: Clone + PartialEq, S, M> Component<S, M> for SelectPanel<T, S, M> {
+impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S, M> {
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
         let state = ctx.state();
         let cursor = self.cursor(state);
         let inner = Block::new().borders(Borders::ALL).inner(self.panel_area);
-        let len = self.items.len();
         // The panel owns its scrolling, so the park supplies the offset: the
         // view stays where the wheel left it — cursor visible or not — until
-        // the cursor moves, and the park dies with the popup.
-        let mut park = ctx
-            .transient_mut::<WheelPark>()
-            .map_or_else(WheelPark::default, |park| {
-                park.settle(cursor);
-                *park
-            });
-        let offset = self.viewport.cursor_visible_offset(
-            inner,
-            len,
-            park.offset(),
-            park.cursor_to_show(cursor),
-        );
-        park.record(offset);
-        if let Some(stored) = ctx.transient_mut::<WheelPark>() {
-            *stored = park;
-        }
-        self.viewport.record_painted_offset(offset);
+        // the cursor or the options move, and the park dies with the popup.
+        let mut unparked = WheelPark::default();
+        let park = ctx.transient_mut::<WheelPark<T>>().unwrap_or(&mut unparked);
+        park.settle(&self.items, cursor, None, &mut self.viewport, inner);
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
@@ -1151,11 +1147,21 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for SelectPanel<T, S, M> {
         let cursor = self.cursor(state);
         let selected = bound_index(&self.items, state, self.selected.as_ref());
         let rows_per_item = self.viewport.rows_per_item();
+        // Only the options on screen are built, however many the select has.
+        // The panel is laid out to a whole number of rows, so there is no
+        // clipped trailing option to account for. Indices stay global, as a
+        // custom `render_item` and the panel's hit-testing both read them.
+        let inner = Block::new().borders(Borders::ALL).inner(self.panel_area);
+        let first_option = self.viewport.painted_offset().min(self.items.len());
+        let last_option = first_option
+            .saturating_add(self.viewport.visible_items(inner))
+            .min(self.items.len());
         let rows: Option<Vec<Text<'static>>> = self.render_item.as_ref().map(|render_item| {
-            self.items
+            self.items[first_option..last_option]
                 .iter()
                 .enumerate()
-                .map(|(index, item)| {
+                .map(|(position, item)| {
+                    let index = first_option + position;
                     let row = ListItemState {
                         index,
                         value: item.value(),
@@ -1177,7 +1183,7 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for SelectPanel<T, S, M> {
             .scroll_offset(self.viewport.painted_offset())
             .style(self.style);
         if let Some(rows) = &rows {
-            widget = widget.option_rows(rows);
+            widget = widget.visible_option_rows(rows);
         }
         ctx.render_widget(SelectPanelWidget(widget), self.panel_area);
     }
@@ -1234,11 +1240,13 @@ impl<T: Clone + PartialEq, S, M> Component<S, M> for SelectPanel<T, S, M> {
                     step,
                     SCROLL_STEP,
                 );
-                // Park the view in the transient store: render honors it
-                // until the cursor moves, and it survives redraws because it
-                // lives on the panel's identity, not on this per-frame
-                // instance. The cursor itself never moves on wheel.
-                ctx.transient::<WheelPark>().park(offset, cursor);
+                // Park the view in the transient store against the options as
+                // they stand: render honors it until the cursor or the options
+                // move, and it survives redraws because it lives on the panel's
+                // identity, not on this per-frame instance. The cursor itself
+                // never moves on wheel.
+                ctx.transient::<WheelPark<T>>()
+                    .park(offset, &self.items, cursor);
                 // Keep this retained instance's hit-testing aligned with the
                 // offset the next paint will use.
                 self.viewport.record_painted_offset(offset);

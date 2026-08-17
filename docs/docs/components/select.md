@@ -36,9 +36,11 @@ ctx.render_component("fruit", select, area);
 ```
 
 Options use the same value-keyed `ListItem` as `List`, so reordering them does
-not change the selected value. Those values must be unique within one Select. In Select terminology, an item supplies value
-identity, an option is one choice, and a row is the terminal space used to draw
-that option.
+not change the selected value. Those values must be unique within one Select; a
+debug build panics on duplicates as the Select declares, and a release build
+takes them on trust, exactly as in [List](./list). In Select terminology, an item
+supplies value identity, an option is one choice, and a row is the terminal space
+used to draw that option.
 
 ## State
 
@@ -72,8 +74,10 @@ pointer, including the first option where it overlays the trigger row. Pressing
 outside dismisses the panel while leaving the underlying control clickable.
 The mouse wheel is the one input that does not follow the cursor. It scrolls
 the panel and leaves the cursor where it is, so the cursor can scroll out of
-sight — the same wheel behavior as [List](./list). Moving the cursor again
-scrolls it back into view.
+sight — the same wheel behavior as [List](./list), and held under the same rule:
+only while the option under the cursor is still that option, still on that row,
+in an option list of the same length. Moving the cursor, or changing the options
+under it, scrolls the cursor back into view.
 Modified keys other than the closing Tab chords bubble to app hotkeys,
 as does a typed character matching no option. Paste events also bubble because
 Select has no text-editing behavior.
@@ -169,10 +173,12 @@ frame.render_widget(
 Call `.height(...)` and `.visible_options(...)` on the built widget when the
 surrounding layout needs to reserve exactly the rows it will paint — they read
 openness, disabled state, option count, and row height from the instance.
-`.option_rows(...)` accepts pre-rendered screen rows for the semantic options;
-pair it with `.row_height(...)` for multi-line rows. Together they are the
-paint-only counterpart of the component's `.render_item(...)`. Replace
-`.themed(...)` with `.style(...)` to supply exact widget colors.
+`.visible_option_rows(...)` accepts pre-rendered screen rows for the options
+actually painted — the ones from `scroll_offset` on, in paint order — while
+`.open(...)` still takes every option, because the panel's height is measured
+from their count. Pair it with `.row_height(...)` for multi-line rows. Together
+they are the paint-only counterpart of the component's `.render_item(...)`.
+Replace `.themed(...)` with `.style(...)` to supply exact widget colors.
 
 ## Full API
 

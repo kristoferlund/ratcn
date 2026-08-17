@@ -1285,7 +1285,9 @@ pub trait Component<State, Msg> {
     /// malformed declaration — [`List`](crate::List), [`Select`](crate::Select),
     /// and [`Tabs`](crate::Tabs) assert their item values are unique — so the
     /// panic names the declaring component rather than surfacing later as a
-    /// routing oddity.
+    /// routing oddity. A check whose answer changes only when the props do, and
+    /// whose cost grows with them, belongs behind `cfg!(debug_assertions)`:
+    /// every frame declares a fresh instance, so every frame runs this hook.
     ///
     /// Leaf components take their props as plain values at declaration and can
     /// ignore it.
