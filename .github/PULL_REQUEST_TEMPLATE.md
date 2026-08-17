@@ -9,13 +9,14 @@
 
 - [ ] `cargo fmt --all`
 - [ ] `cargo test -p ratcn --all-features`
+- [ ] `cargo test --workspace`
 - [ ] `cargo clippy -p ratcn --all-features --all-targets -- -D warnings`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo clippy --workspace --all-targets --target wasm32-unknown-unknown -- -D warnings`
 
 ## If applicable
 
-- [ ] **Edited a component?** Ran `./crates/copy-fixture/sync.sh` and committed the result.
+- [ ] **Added a component?** Added `crates/copy-fixture/src/bin/<component>.rs`, two lines copied from its neighbours, so the new module is compiled as a copy too. Editing a component needs nothing: the copy is made at build time.
 - [ ] **Changed public API?** Updated the rustdoc, and the docs page if the behaviour is user-visible.
 - [ ] **Added a demo?** A directory under `demos/` with a `Cargo.toml` is a workspace member, and one with a `Trunk.toml` is built for the docs site — nothing to register. Ran `npm run demo:build` to confirm it builds.
 - [ ] **Added a dependency?** Explained why below — the library keeps three.

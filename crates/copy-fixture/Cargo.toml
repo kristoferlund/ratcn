@@ -9,5 +9,7 @@ publish = false
 ratatui.workspace = true
 ratcn.workspace = true
 
+# A copied component module is the whole point and nothing calls it: every item
+# in every generated target is dead code here.
 [lints.rust]
 dead_code = "allow"
