@@ -446,8 +446,8 @@ const fn content_y_offset(size: TabsSize) -> u16 {
 /// can be built from data that changes without the selection sliding onto a
 /// different tab. `value` is usually the same enum the app matches on to decide
 /// what to draw below the row. Values must be unique within a [`Tabs`]
-/// declaration; duplicate values panic during declaration because selection and
-/// tab focus would otherwise be ambiguous.
+/// declaration, or selection and tab focus are ambiguous; a debug build panics
+/// on duplicates during declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tab<T> {
     value: T,
@@ -903,7 +903,11 @@ where
     T: Clone + PartialEq,
 {
     fn prepare(&mut self, _state: &S) {
-        list_core::assert_unique_values(self.items.iter().map(Tab::value), "Tabs");
+        // Quadratic in the tab count and re-derived on every frame's fresh
+        // instance, so a release build takes the tabs on trust.
+        if cfg!(debug_assertions) {
+            list_core::assert_unique_values(self.items.iter().map(Tab::value), "Tabs");
+        }
     }
 
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
@@ -1998,6 +2002,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     fn duplicate_tab_values_fail_declaration() {
         let mut tabs: Tabs<Screen, State, Msg> =
             Tabs::new([Tab::new(Screen::A, "First"), Tab::new(Screen::A, "Second")]);
@@ -2865,7 +2870,10 @@ mod tests {
         assert!(!tabs.items[0].is_disabled());
     }
 
+    // The check is a debug-build assertion, so this contract only exists where
+    // debug assertions do.
     #[test]
+    #[cfg(debug_assertions)]
     fn duplicate_tab_values_panic_with_the_shared_message() {
         let mut tabs: Tabs<Screen, State, Msg> =
             Tabs::new([Tab::new(Screen::A, "First"), Tab::new(Screen::A, "Second")]);

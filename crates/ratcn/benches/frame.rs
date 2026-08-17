@@ -1,6 +1,7 @@
-//! Baseline for the two costs a frame carries: declaring and painting the whole
-//! component surface, and routing one click against the surface the last frame
-//! left behind.
+//! Baseline for the costs a frame carries: declaring and painting the whole
+//! component surface, routing one click against the surface the last frame left
+//! behind, and drawing a long list through a viewport that shows a handful of
+//! its rows.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod frame {
@@ -9,7 +10,7 @@ mod frame {
     use criterion::{Criterion, criterion_group};
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
     use ratcn::{
-        Button, Theme,
+        Button, List, ListItem, Theme,
         runtime::{
             Event, FocusState, Modifiers, MouseButton, MouseEvent, MouseKind, Ratcn, RenderCtx,
             ScopeOptions,
@@ -30,8 +31,18 @@ mod frame {
     const CLICK_COLUMN: u16 = SCOPE_WIDTH + 1;
     const CLICK_ROW: u16 = 12;
 
+    /// A thousand items against a fifteen-row viewport: the frame paints about
+    /// one percent of the list, so anything the declaration does per item shows
+    /// up here and nowhere else.
+    const LIST_LEN: usize = 1000;
+    const LIST_HEIGHT: u16 = 15;
+    /// Far enough down that the painted window starts nowhere near the first
+    /// item, so a windowed declaration cannot pass by starting at zero.
+    const LIST_CURSOR: usize = 500;
+
     struct State {
         focus: FocusState,
+        cursor: Option<usize>,
     }
 
     enum Msg {
@@ -39,6 +50,11 @@ mod frame {
         /// events but never apply the messages, so the payload stays unread.
         #[expect(dead_code, reason = "constructed by the focus binding, never applied")]
         Focus(FocusState),
+        #[expect(
+            dead_code,
+            reason = "constructed by the item-focus binding, never applied"
+        )]
+        Cursor(usize, usize),
         Press,
     }
 
@@ -68,6 +84,7 @@ mod frame {
             Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("terminal"),
             State {
                 focus: FocusState::intent(["s1", "b12"]),
+                cursor: Some(LIST_CURSOR),
             },
             Theme::default_dark(),
         )
@@ -109,7 +126,33 @@ mod frame {
         });
     }
 
-    criterion_group!(benches, render, route_click);
+    fn render_list_1000(c: &mut Criterion) {
+        let (mut ratcn, _, state, theme) = surface();
+        let mut terminal = Terminal::new(TestBackend::new(WIDTH, LIST_HEIGHT)).expect("terminal");
+        let items: Vec<ListItem<usize>> = (0..LIST_LEN)
+            .map(|index| ListItem::new(index, format!("Item {index}")))
+            .collect();
+
+        c.bench_function("render_list_1000", |b| {
+            b.iter(|| {
+                terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        ratcn.render(frame, &state, &theme, |ctx| {
+                            ctx.render_component(
+                                "list",
+                                List::new(items.clone())
+                                    .item_focus(|state: &State| state.cursor, Msg::Cursor),
+                                area,
+                            );
+                        });
+                    })
+                    .expect("draw");
+            });
+        });
+    }
+
+    criterion_group!(benches, render, route_click, render_list_1000);
 }
 
 #[cfg(not(target_arch = "wasm32"))]

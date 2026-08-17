@@ -29,8 +29,7 @@ use crate::linear_nav::{self};
 /// components can never scroll at different speeds.
 pub const SCROLL_STEP: usize = 3;
 
-/// Where a wheel left the view, and whether it still holds it there against
-/// the cursor.
+/// Where a wheel left the view, and which item it holds the view against.
 ///
 /// The wheel scrolls the view and leaves the cursor alone, so it can push the
 /// cursor off-screen — and paint must not immediately drag it back. That needs
@@ -40,18 +39,26 @@ pub const SCROLL_STEP: usize = 3;
 /// by paint, and it disappears with the component's identity (a select's park
 /// dies when its popup closes).
 ///
+/// The hold stands only while the list has not moved under it: the item the
+/// cursor was left on is still that item, still at that row, in a list still
+/// that long. Each half of that earns its place. Anchoring by row alone would
+/// survive one item being swapped for another at the same position and leave the
+/// new one off-screen — these components key focus and selection by value, so
+/// the value is what identifies the anchor. Anchoring by value alone would
+/// survive reordering, filtering, insertion, and removal, leaving a parked
+/// offset that says nothing about which items now sit there. Requiring all of it
+/// is what makes the held offset worth honoring: while the hold stands, the row
+/// it names still holds the same items it named.
+///
 /// The rules, in the order they matter:
 ///
 /// - [`park`](Self::park) records a wheel scroll: the view moves to `offset`
-///   and holds there while the cursor stays where the wheel left it.
-/// - [`settle`](Self::settle) runs once per frame, where the list declares.
-///   It releases the hold for good once anything has moved the cursor, and
-///   then records the offset that declaration resolved. Releasing is
+///   and holds there while the list stays as it was.
+/// - [`settle`](Self::settle) runs once per frame, where the component
+///   declares. It releases the hold for good once anything has moved, and
+///   answers with the offset that declaration paints from. Releasing is
 ///   permanent: without it, moving the cursor away and back would revive a
 ///   stale park and throw the cursor off-screen again.
-/// - [`cursor_to_show`](Self::cursor_to_show) tells the layout whether to keep
-///   the cursor visible. While the park holds, it does not — that is the whole
-///   point of the wheel.
 ///
 /// The declaration settles it rather than event handling because only the
 /// declaration sees every cursor change: a select's options are scrolled by
@@ -62,62 +69,102 @@ pub const SCROLL_STEP: usize = 3;
 ///
 /// This is render-derived presentation state. The cursor, the selection, and
 /// any app-bound scroll offset stay app-owned.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct WheelPark {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WheelPark<T> {
     offset: usize,
-    anchor: Option<usize>,
-    parked: bool,
+    /// What the list looked like where it mattered when the wheel parked.
+    /// `None` while nothing holds the view.
+    held: Option<Anchor<T>>,
 }
 
-impl WheelPark {
-    /// Record a wheel scroll to `offset`, holding the view there while the
-    /// cursor stays at `cursor`.
-    pub const fn park(&mut self, offset: usize, cursor: Option<usize>) {
+/// The list as the wheel left it: the item under the cursor, the row it sat on,
+/// and how many items there were. Captured together in [`WheelPark::park`] so no
+/// caller can assemble a half-anchor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Anchor<T> {
+    value: T,
+    index: usize,
+    len: usize,
+}
+
+/// An unparked view at the top of the list: nothing holds it, so the cursor is
+/// kept visible.
+impl<T> Default for WheelPark<T> {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            held: None,
+        }
+    }
+}
+
+impl<T: Clone + PartialEq> WheelPark<T> {
+    /// Record a wheel scroll to `offset`, holding the view there while `items`
+    /// still reads as it does now where `cursor` sits.
+    ///
+    /// A `cursor` of `None` anchors nothing: with no cursor there is none to
+    /// push off-screen, and the view simply starts from `offset`.
+    pub fn park(&mut self, offset: usize, items: &[ListItem<T>], cursor: Option<usize>) {
         self.offset = offset;
-        self.anchor = cursor;
-        self.parked = true;
+        self.held = cursor
+            .and_then(|index| Some((items.get(index)?, index)))
+            .map(|(item, index)| Anchor {
+                value: item.value.clone(),
+                index,
+                len: items.len(),
+            });
     }
 
-    /// Release the hold once anything has moved the cursor away from where the
-    /// wheel left it. A released park never holds again, so returning to that
-    /// cursor cannot revive it. Call this before
-    /// [`cursor_to_show`](Self::cursor_to_show).
-    pub const fn settle(&mut self, cursor: Option<usize>) {
-        if !same_index(self.anchor, cursor) {
-            self.parked = false;
+    /// Settle the hold and answer with the offset this frame paints from,
+    /// recorded in `viewport` so event-time hit-testing answers against what
+    /// this frame paints.
+    ///
+    /// `cursor` is where the cursor sits among `items`, and `requested` an
+    /// app-bound scroll offset — `None` for a component that owns its own
+    /// scrolling, which resumes from where the wheel left the view.
+    ///
+    /// While the hold stands the cursor may sit off-screen, which is the whole
+    /// point of the wheel. It stands only while the cursor is still on the
+    /// anchored row, that row still carries the anchored item, and `items` is
+    /// still the length it was. Replacing that item, reordering, filtering,
+    /// inserting, removing, or moving the cursor elsewhere all release the hold
+    /// and scroll the cursor back into view: a parked offset is worth honoring
+    /// only while it still names the rows it was parked on.
+    pub fn settle(
+        &mut self,
+        items: &[ListItem<T>],
+        cursor: Option<usize>,
+        requested: Option<usize>,
+        viewport: &mut RowViewport,
+        area: Rect,
+    ) {
+        if !self
+            .held
+            .as_ref()
+            .is_some_and(|anchor| anchor.holds(items, cursor))
+        {
+            self.held = None;
         }
-    }
-
-    /// Record the offset paint resolved, so the next frame starts from the
-    /// view actually on screen.
-    pub const fn record(&mut self, painted: usize) {
-        self.offset = painted;
-    }
-
-    /// The offset to paint from, for a component that owns its own scrolling.
-    /// A component with an app-bound offset reads that instead.
-    #[must_use]
-    pub const fn offset(&self) -> usize {
-        self.offset
-    }
-
-    /// The cursor paint must keep visible: `None` while the wheel still holds
-    /// the view, so the cursor may sit off-screen.
-    #[must_use]
-    pub const fn cursor_to_show(&self, cursor: Option<usize>) -> Option<usize> {
-        if self.parked && same_index(self.anchor, cursor) {
-            None
-        } else {
-            cursor
-        }
+        let offset = viewport.cursor_visible_offset(
+            area,
+            items.len(),
+            requested.unwrap_or(self.offset),
+            if self.held.is_some() { None } else { cursor },
+        );
+        self.offset = offset;
+        viewport.record_painted_offset(offset);
     }
 }
 
-const fn same_index(left: Option<usize>, right: Option<usize>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => left == right,
-        (None, None) => true,
-        _ => false,
+impl<T: PartialEq> Anchor<T> {
+    /// Whether the list still reads as it did where this anchor was taken, with
+    /// the cursor still on it.
+    fn holds(&self, items: &[ListItem<T>], cursor: Option<usize>) -> bool {
+        cursor == Some(self.index)
+            && items.len() == self.len
+            && items
+                .get(self.index)
+                .is_some_and(|item| item.value == self.value)
     }
 }
 
@@ -133,9 +180,10 @@ const fn same_index(left: Option<usize>, right: Option<usize>) -> bool {
 /// text as both value and label, which is fine for short static lists where
 /// the labels are unique.
 ///
-/// Values must be unique within one component's declaration. Duplicate values
-/// panic during declaration because focus, selection, and pointer actions
-/// would otherwise be ambiguous — see [`assert_unique_values`].
+/// Values must be unique within one component's declaration, or focus,
+/// selection, and pointer actions are ambiguous — two rows would answer to the
+/// same identity. A debug build panics on duplicates during declaration; see
+/// [`assert_unique_values`] for why the check stops there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListItem<T> {
     value: T,
@@ -253,13 +301,20 @@ pub fn disabled_at<T>(items: &[ListItem<T>], index: usize) -> bool {
 
 /// Panic if two of the given item values are equal.
 ///
-/// Call it from a component's declaration-time validation (`resolve`) with an
+/// Call it from a component's declaration-time validation (`prepare`) with an
 /// iterator over the identifying values — e.g. `items.iter().map(ListItem::value)`
 /// for [`ListItem`]s, or the equivalent for any other value-keyed item type.
 /// Duplicate values would make focus, selection, and pointer actions
 /// ambiguous — two rows would answer to the same identity — so declaration
 /// fails loudly rather than one of them winning silently. `component` names
 /// the caller in the panic message.
+///
+/// Item values are only [`PartialEq`], so there is nothing to sort or hash by
+/// and the scan is quadratic: every value is compared with every later one.
+/// Components declare a fresh instance every frame, which is why the built-in
+/// ones guard this call with [`cfg!(debug_assertions)`](cfg) — the answer
+/// cannot change unless the items do, and a release build should not re-derive
+/// it sixty times a second.
 ///
 /// # Panics
 ///
@@ -402,6 +457,80 @@ mod tests {
         assert_eq!(
             message,
             "List item values must be unique within a List declaration"
+        );
+    }
+
+    #[test]
+    fn a_park_persists_only_while_its_item_stays_put() {
+        let numbered = |values: [u8; 6]| values.map(|value| ListItem::new(value, "row"));
+        // Two items fit, so a park at 4 leaves a cursor near the top off-screen.
+        let area = Rect::new(0, 0, 10, 2);
+        let mut viewport = RowViewport::new(1);
+        let unchanged = numbered([1, 2, 3, 4, 5, 6]);
+        let mut park = WheelPark::default();
+
+        park.park(4, &unchanged, Some(0));
+        park.settle(&unchanged, Some(0), None, &mut viewport, area);
+        assert_eq!(
+            viewport.painted_offset(),
+            4,
+            "nothing moved, so the wheel keeps the view where it left it"
+        );
+
+        // The anchored item is still in the list, at another row: the parked
+        // offset no longer names the rows it was parked on.
+        park.park(4, &unchanged, Some(0));
+        park.settle(
+            &numbered([2, 3, 1, 4, 5, 6]),
+            Some(2),
+            None,
+            &mut viewport,
+            area,
+        );
+        assert_eq!(
+            viewport.painted_offset(),
+            2,
+            "reordering releases the hold and shows the cursor"
+        );
+
+        // Another item at the anchored row.
+        park.park(4, &unchanged, Some(0));
+        park.settle(
+            &numbered([7, 2, 3, 4, 5, 6]),
+            Some(0),
+            None,
+            &mut viewport,
+            area,
+        );
+        assert_eq!(
+            viewport.painted_offset(),
+            0,
+            "a different item under the cursor releases the hold"
+        );
+    }
+
+    /// A park holds a row number, which only means something in a list of the
+    /// same length. Filtering one out from under it must not leave the view
+    /// clamped to a tail that no longer holds those items.
+    #[test]
+    fn filtering_the_list_under_a_park_brings_the_cursor_back() {
+        let area = Rect::new(0, 0, 10, 2);
+        let mut viewport = RowViewport::new(1);
+        let long: Vec<ListItem<u8>> = (0..60).map(|value| ListItem::new(value, "row")).collect();
+        let mut park = WheelPark::default();
+
+        park.park(45, &long, Some(0));
+        park.settle(&long, Some(0), None, &mut viewport, area);
+        assert_eq!(viewport.painted_offset(), 45, "the wheel holds the view");
+
+        // The filter keeps the cursor's own item exactly where it was and drops
+        // half the tail, so only the length gives the change away.
+        let filtered: Vec<ListItem<u8>> = long.iter().take(30).cloned().collect();
+        park.settle(&filtered, Some(0), None, &mut viewport, area);
+        assert_eq!(
+            viewport.painted_offset(),
+            0,
+            "the cursor comes back into view instead of the view clamping to the new tail"
         );
     }
 
