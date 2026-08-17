@@ -18,10 +18,10 @@ Run the same checks CI runs:
 ```sh
 cargo fmt --all
 cargo test -p ratcn --all-features
+cargo test --workspace
 cargo clippy -p ratcn --all-features --all-targets -- -D warnings
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --target wasm32-unknown-unknown -- -D warnings
-./crates/copy-fixture/sync.sh
 ```
 
 `rust-toolchain.toml` pins the toolchain, so `rustup` will fetch the right
@@ -30,10 +30,17 @@ between Rust releases — without it your local output would not match CI's.
 
 Three of those need explaining.
 
-**`sync.sh` is not optional.** Every component module is meant to be copied
-into someone else's project, so `crates/copy-fixture` holds a generated copy of
-each one with `crate::` rewritten to `ratcn::`. If you edit a component, run
-the script and commit the result. CI fails if the copy is out of date.
+**Copyability is checked by the build.** Every component module is meant to be
+copied into someone else's project, so it has to compile as an external crate
+against `ratcn`'s public API alone. `crates/copy-fixture` makes that copy in its
+build script — `crate::` rewritten to `ratcn::`, the test module dropped — and
+compiles each component as its own binary target, so a reach at a private item
+or at a sibling component fails there. `cargo test --workspace` above builds
+those targets, as does `cargo check -p copy-fixture` on its own. Nothing is
+generated into the repository and there is nothing to run by hand; edit a
+component and the next build re-copies it. Adding a component means adding
+`crates/copy-fixture/src/bin/<component>.rs`, two lines copied from its
+neighbours — the build script fails with that instruction if you forget.
 
 **`--all-targets` matters.** Over half this crate's source is test code. Without
 that flag clippy skips all of it.
@@ -48,8 +55,9 @@ the pin explicitly: `cargo +1.88.0 test -p ratcn --features crossterm`.
 |---|---|
 | `cargo fmt` | One formatting, no debates |
 | Tests, default and all features | Both feature paths compile and behave |
+| Tests, workspace | Demo tests run, rather than only compiling |
 | Clippy on library, workspace, and wasm | Including test code |
-| Copy-fixture sync and compile | Components stay copyable |
+| Each component compiles in isolation | Components stay copyable |
 | Rustdoc with warnings denied | No broken doc links |
 | `cargo package` | The crate can actually be published |
 | Tests on Rust 1.88 | The MSRV stays true |

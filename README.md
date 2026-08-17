@@ -77,8 +77,9 @@ A copied module still depends on:
 - `ratatui` itself.
 
 Components never depend on sibling components, so each module copies alone.
-The `copy-fixture` crate in this repository compiles each component as a copied
-module, so the claim is checked by the build rather than asserted.
+The `copy-fixture` crate in this repository makes that copy at build time and
+compiles each component on its own, so the claim is checked by the build rather
+than asserted.
 
 ## Documentation
 

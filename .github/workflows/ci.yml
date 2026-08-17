@@ -48,16 +48,19 @@ jobs:
         run: cargo test -p ratcn --locked
       - name: Tests, all features
         run: cargo test -p ratcn --all-features --locked
+      # The demo crates have tests of their own. The clippy steps below compile
+      # them; only this step runs them.
+      - name: Tests, workspace
+        run: cargo test --workspace --locked
 
-      # The copy-out promise: every component module must still compile against
-      # ratcn's public API after `crate::` is rewritten to `ratcn::`. The diff
-      # check fails if a contributor edited a component without re-running the
-      # script.
-      - name: Copyable components are in sync
-        run: ./crates/copy-fixture/sync.sh
-      - name: Copyable components are committed
-        run: git diff --exit-code -- crates/copy-fixture/src
-      - name: Copyable components compile
+      # The copy-out promise: every component module must compile against
+      # ratcn's public API alone. copy-fixture's build script makes the copy a
+      # consumer makes — `crate::` rewritten to `ratcn::`, tests dropped — and
+      # compiles each component as its own binary target, so a reach at a
+      # sibling component fails as surely as a reach at a private item. Nothing
+      # is committed and there is no sync step; a component with no target in
+      # that crate fails the build script.
+      - name: Copyable components compile in isolation
         run: cargo check -p copy-fixture --locked
 
       # --all-targets matters: without it clippy lints only the lib target and
