@@ -387,12 +387,16 @@ pub enum ScrollDirection {
 /// the interactive grid cannot become a drag after the pointer returns.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct MouseTracker {
-    presses: std::collections::HashMap<MouseButton, Press>,
-    press_order: Vec<MouseButton>,
+    /// One entry per held button, oldest press first — so the last is the one
+    /// movement belongs to. Kept as a list rather than a map plus an order,
+    /// because the order *is* the state and a hand-held pointer holds at most
+    /// a few buttons.
+    presses: Vec<Press>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Press {
+    button: MouseButton,
     column: u16,
     row: u16,
     /// The pointer has left the pressed cell, so this press has emitted at
@@ -419,21 +423,21 @@ impl MouseTracker {
     ) -> Vec<MouseEvent> {
         match event.kind {
             MouseKind::Down(button) => {
-                self.presses.insert(
+                self.presses.retain(|press| press.button != button);
+                self.presses.push(Press {
                     button,
-                    Press {
-                        column: event.column,
-                        row: event.row,
-                        moved: false,
-                    },
-                );
-                self.press_order.retain(|held| *held != button);
-                self.press_order.push(button);
+                    column: event.column,
+                    row: event.row,
+                    moved: false,
+                });
                 vec![event]
             }
             MouseKind::Up(button) => {
-                let press = self.presses.remove(&button);
-                self.press_order.retain(|held| *held != button);
+                let press = self
+                    .presses
+                    .iter()
+                    .position(|press| press.button == button)
+                    .map(|index| self.presses.remove(index));
                 let follow = match press {
                     // Landing back on the press target wins over having moved:
                     // movement nobody claimed as a drag is drift within the
@@ -448,18 +452,15 @@ impl MouseTracker {
                 out.extend(follow.map(|kind| MouseEvent { kind, ..event }));
                 out
             }
-            MouseKind::Moved => match self.press_order.last().copied() {
-                Some(button) => {
-                    let press = self
-                        .presses
-                        .get_mut(&button)
-                        .expect("press order contains only held buttons");
+            // Movement belongs to the most recent press: the last entry.
+            MouseKind::Moved => match self.presses.last_mut() {
+                Some(press) => {
                     if !press.moved && press.column == event.column && press.row == event.row {
                         return Vec::new();
                     }
                     press.moved = true;
                     vec![MouseEvent {
-                        kind: MouseKind::Drag(button),
+                        kind: MouseKind::Drag(press.button),
                         ..event
                     }]
                 }
@@ -468,7 +469,7 @@ impl MouseTracker {
             // Some backends (crossterm) deliver `Drag` natively; it still marks
             // the press as moved so its release ends as a `DragEnd`.
             MouseKind::Drag(button) => {
-                if let Some(press) = self.presses.get_mut(&button) {
+                if let Some(press) = self.press_mut(button) {
                     press.moved = true;
                 }
                 vec![event]
@@ -483,7 +484,7 @@ impl MouseTracker {
     }
 
     pub(crate) fn pressed_buttons(&self) -> Vec<MouseButton> {
-        self.presses.keys().copied().collect()
+        self.presses.iter().map(|press| press.button).collect()
     }
 
     pub(crate) fn has_pressed_button(&self) -> bool {
@@ -494,12 +495,19 @@ impl MouseTracker {
     /// to tell a claimed *drag* from a claimed press that never moved, which
     /// decides whether its release can still be a click.
     pub(crate) fn press_moved(&self, button: MouseButton) -> bool {
-        self.presses.get(&button).is_some_and(|press| press.moved)
+        self.press(button).is_some_and(|press| press.moved)
     }
 
     pub(crate) fn clear(&mut self) {
         self.presses.clear();
-        self.press_order.clear();
+    }
+
+    fn press(&self, button: MouseButton) -> Option<&Press> {
+        self.presses.iter().find(|press| press.button == button)
+    }
+
+    fn press_mut(&mut self, button: MouseButton) -> Option<&mut Press> {
+        self.presses.iter_mut().find(|press| press.button == button)
     }
 }
 
