@@ -52,6 +52,18 @@ pub fn last_enabled(len: usize, disabled: impl Fn(usize) -> bool) -> Option<usiz
     (0..len).rev().find(|&i| !disabled(i))
 }
 
+/// Is there any index a cursor could land on — that is, does `0..len` hold an
+/// enabled one?
+///
+/// The focusability question every item control asks: an empty control, or one
+/// whose every item is disabled, has nothing for a cursor to sit on and so is
+/// not a focus stop. Answered from [`first_enabled`], so the two cannot
+/// disagree about what "enabled somewhere" means.
+#[must_use]
+pub fn has_enabled(len: usize, disabled: impl Fn(usize) -> bool) -> bool {
+    first_enabled(len, disabled).is_some()
+}
+
 /// Move `page_size` physical rows from `from`, landing on an enabled item. At
 /// either end, this clamps to the furthest enabled item in that direction.
 /// An out-of-range `from` is clamped before movement.

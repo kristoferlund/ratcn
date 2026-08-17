@@ -204,5 +204,5 @@ pub use event::{
     ScrollDirection, Unsupported,
 };
 pub use focus::{FocusState, TabWrap};
-pub use geometry::{is_border, wrapped_height};
+pub use geometry::{fixed_height, is_border, wrapped_height};
 pub use modal::{ModalOpenError, ModalState};

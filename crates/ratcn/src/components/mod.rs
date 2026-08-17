@@ -17,7 +17,9 @@
 //! # What a component depends on
 //!
 //! A component module builds on the crate's core — [`runtime`](crate::runtime),
-//! [`theme`](crate::theme), [`color`](crate::color) — and on the shared helper
+//! [`theme`](crate::theme) (whose [`resolve_style`](crate::theme::resolve_style)
+//! is how every one of them turns a declared style override or the active theme
+//! into the colors it paints), [`color`](crate::color) — and on the shared helper
 //! modules, which are the pieces more than one component would otherwise
 //! duplicate:
 //!
@@ -26,9 +28,9 @@
 //! - [`linear_nav`](crate::linear_nav) — index arithmetic for moving through an
 //!   ordered set of items
 //! - [`list_core`](crate::list_core) — value-keyed items, the uniform-row
-//!   viewport, and the wheel park
+//!   viewport, the wheel park, and what a pointer gesture over a row asks for
 //! - [`selection_indicator`](crate::selection_indicator) — the radio and
-//!   checkbox markers
+//!   checkbox markers, and the default row they sit on
 //! - [`text_width`](crate::text_width) — display-width measurement and wrapping
 //! - [`toast`](crate::toast) — the app-owned toast queue [`ToasterWidget`]
 //!   paints
@@ -115,6 +117,6 @@ pub use button::{Button, ButtonRenderMode, ButtonSize, ButtonStyle, ButtonVarian
 pub use dialog::{Dialog, DialogStyle};
 pub use list::{List, ListStyle, ListWidget};
 pub use select::{Select, SelectStyle, SelectWidget};
-pub use tabs::{Tab, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget};
+pub use tabs::{Tab, TabLayout, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget, tab_layout};
 pub use toast::{ToastPosition, ToasterStyle, ToasterWidget};
 pub use tooltip::{Tooltip, TooltipSide, TooltipStyle, TooltipWidget};

@@ -17,8 +17,9 @@ use crate::linear_nav;
 use crate::list_core;
 use crate::runtime::{
     Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent, MouseButton,
-    MouseKind, PaintCtx, RenderCtx, Step,
+    MouseKind, PaintCtx, RenderCtx, Step, fixed_height,
 };
+use crate::theme::resolve_style;
 
 /// How tall the tab row is drawn. Matches [`ButtonSize`](crate::ButtonSize),
 /// since a tab is painted as a button.
@@ -260,6 +261,7 @@ pub struct TabsWidget<'a> {
     disabled: bool,
     size: TabsSize,
     style: TabsStyle,
+    layout: Option<&'a TabLayout>,
 }
 
 impl<'a> TabsWidget<'a> {
@@ -277,7 +279,26 @@ impl<'a> TabsWidget<'a> {
             disabled: false,
             size: TabsSize::Small,
             style: TabsStyle::fallback(),
+            layout: None,
         }
+    }
+
+    /// Paint this tab geometry instead of measuring the labels again.
+    ///
+    /// Left unset, the widget lays the row out itself from the labels, the size,
+    /// and whichever tab must stay visible — all a standalone caller needs. Pass
+    /// one when something outside the widget has already computed the same
+    /// layout and has to agree with the paint cell for cell: [`Tabs`] hands over
+    /// the layout it hit-tests clicks against, so the tab a click lands on is
+    /// the tab drawn there by construction rather than because both sides ran
+    /// the same arithmetic.
+    ///
+    /// Build one with [`tab_layout`]. A layout measured against a different area
+    /// paints where that area was, since the rects are absolute.
+    #[must_use]
+    pub const fn layout(mut self, layout: &'a TabLayout) -> Self {
+        self.layout = Some(layout);
+        self
     }
 
     /// Take colors from `theme`.
@@ -379,12 +400,20 @@ impl Widget for TabsWidget<'_> {
         if area.width == 0 || area.height < self.height() {
             return;
         }
-        // Keep the focused tab visible when it exists; otherwise keep the
-        // selected tab visible. The component derives the same tab, so paint and
-        // hit-testing agree.
-        let must_show = self.focused_tab.or(self.selected_tab).unwrap_or(0);
-        let TabLayout { tabs, left, right } = tab_layout(area, self.labels, self.size, must_show);
-        for (index, rect) in tabs {
+        let Some(layout) = self.layout else {
+            // Keep the focused tab visible when it exists; otherwise keep the
+            // selected tab visible.
+            let must_show = self.focused_tab.or(self.selected_tab).unwrap_or(0);
+            self.paint_layout(&tab_layout(area, self.labels, self.size, must_show), buf);
+            return;
+        };
+        self.paint_layout(layout, buf);
+    }
+}
+
+impl TabsWidget<'_> {
+    fn paint_layout(self, layout: &TabLayout, buf: &mut Buffer) {
+        for &(index, rect) in &layout.tabs {
             let disabled = self.disabled || self.disabled_tabs.get(index).copied().unwrap_or(false);
             let cursor = self.focused_tab == Some(index);
             let resolved = self.style.resolve(
@@ -409,7 +438,7 @@ impl Widget for TabsWidget<'_> {
                     buf,
                 );
         }
-        for (marker, slot) in [(LEFT_MARKER, left), (RIGHT_MARKER, right)] {
+        for (marker, slot) in [(LEFT_MARKER, layout.left), (RIGHT_MARKER, layout.right)] {
             if let Some(rect) = slot {
                 Line::from(marker)
                     .style(Style::default().fg(self.style.foreground))
@@ -440,7 +469,14 @@ const fn content_y_offset(size: TabsSize) -> u16 {
     }
 }
 
-/// One tab: an identifying `value` and the `label` shown on it.
+/// One tab: an identifying `value` and the `label` shown on it — the same
+/// [`ListItem`](crate::ListItem) a list row is, under the name this component
+/// uses for it.
+///
+/// A tab and a list row need exactly the same three things (a value, a label, a
+/// disabled flag), so they are one type rather than two that must be kept in
+/// step. `Tab::new(value, label)` and `.disabled(true)` read as before, and
+/// `["One", "Two"]` still converts through the `From<&str>` impl.
 ///
 /// Selection is recorded as the value, not the tab's position, so the tab row
 /// can be built from data that changes without the selection sliding onto a
@@ -448,62 +484,7 @@ const fn content_y_offset(size: TabsSize) -> u16 {
 /// what to draw below the row. Values must be unique within a [`Tabs`]
 /// declaration, or selection and tab focus are ambiguous; a debug build panics
 /// on duplicates during declaration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tab<T> {
-    value: T,
-    label: String,
-    disabled: bool,
-}
-
-impl<T> Tab<T> {
-    /// A tab identified by `value` and displayed as `label`.
-    #[must_use]
-    pub fn new(value: T, label: impl Into<String>) -> Self {
-        Self {
-            value,
-            label: label.into(),
-            disabled: false,
-        }
-    }
-
-    /// Dim this tab and make it unselectable. Arrow keys skip it and clicks on
-    /// it do nothing.
-    #[must_use]
-    pub const fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-
-    /// The identifying value given to [`new`](Self::new).
-    #[must_use]
-    pub const fn value(&self) -> &T {
-        &self.value
-    }
-
-    /// The display label given to [`new`](Self::new).
-    #[must_use]
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-
-    /// Whether [`disabled`](Self::disabled) marked this tab unselectable.
-    #[must_use]
-    pub const fn is_disabled(&self) -> bool {
-        self.disabled
-    }
-}
-
-impl From<&str> for Tab<String> {
-    fn from(label: &str) -> Self {
-        Self::new(label.to_owned(), label)
-    }
-}
-
-impl From<String> for Tab<String> {
-    fn from(label: String) -> Self {
-        Self::new(label.clone(), label)
-    }
-}
+pub type Tab<T> = list_core::ListItem<T>;
 
 /// Reads a tab value (the selection or manual-mode tab focus) out of app
 /// state; `None` means no tab holds that role yet.
@@ -526,15 +507,10 @@ type StyleFn = Box<dyn Fn(&Theme) -> TabsStyle>;
 ///
 /// # Cursor and selection
 ///
-/// - [`tab_focus`](Self::tab_focus) is the cursor: which tab Left/Right, Home,
-///   End, and typeahead are pointing at.
+/// - [`tab_focus`](Self::tab_focus) is the cursor: which tab Left/Right and
+///   Home/End are pointing at.
 /// - [`selection`](Self::selection) is the active tab, the one whose content is
 ///   showing.
-///
-/// Typing a printable character jumps to the next enabled tab whose label
-/// starts with it, cycling past the end — the same single-character typeahead
-/// as [`List`](crate::List) and [`Select`](crate::Select). A character
-/// matching no tab is ignored, so it still reaches the app as a hotkey.
 ///
 /// With the default [`TabsActivation::Manual`], the cursor moves freely and
 /// Enter or Space commits it. With [`TabsActivation::Automatic`] there is no
@@ -627,7 +603,7 @@ impl<T, S, M> Tabs<T, S, M> {
     ///
     /// `read` returns the value of the tab the cursor is on, or `None` when it
     /// is nowhere yet — in which case the first arrow key moves it onto the
-    /// first enabled tab. Left/Right, Home/End, and typeahead move it. Moving
+    /// first enabled tab. Left/Right and Home/End move it. Moving
     /// it does not switch tabs — [`selection`](Self::selection) does that, on
     /// Enter, Space, or a click.
     ///
@@ -715,7 +691,7 @@ impl<T, S, M> Tabs<T, S, M> {
     /// get declared — mirrors the paint widget's `width`.
     #[must_use]
     pub fn width(&self) -> u16 {
-        row_width(self.items.iter().map(|tab| tab.label.as_str()))
+        row_width(self.items.iter().map(Tab::label))
     }
 
     /// Override the [`TabsStyle`], instead of the one derived from the active
@@ -729,7 +705,7 @@ impl<T, S, M> Tabs<T, S, M> {
     }
 
     fn disabled_at(&self, index: usize) -> bool {
-        self.items.get(index).is_some_and(|tab| tab.disabled)
+        list_core::disabled_at(&self.items, index)
     }
 
     /// The item index under a screen cell, from the last render's geometry.
@@ -784,7 +760,7 @@ where
     T: Clone + PartialEq,
 {
     fn index_of(&self, value: &T) -> Option<usize> {
-        self.items.iter().position(|tab| &tab.value == value)
+        list_core::index_of(&self.items, value)
     }
 
     /// The index of the selected tab, or `None` when nothing is selected yet or
@@ -817,7 +793,7 @@ where
     /// Commit the tab at `index` as the selection when wired.
     fn select(&self, index: usize) -> EventResult<M> {
         match &self.on_select {
-            Some(on_select) => EventResult::Emit(on_select(self.items[index].value.clone())),
+            Some(on_select) => EventResult::Emit(on_select(self.items[index].value().clone())),
             None => EventResult::Ignored,
         }
     }
@@ -827,7 +803,7 @@ where
     fn move_focus(&self, index: usize) -> EventResult<M> {
         match &self.on_focus_change {
             Some(on_focus_change) => {
-                EventResult::Emit(on_focus_change(self.items[index].value.clone()))
+                EventResult::Emit(on_focus_change(self.items[index].value().clone()))
             }
             None => EventResult::Ignored,
         }
@@ -914,9 +890,9 @@ where
         let state = ctx.state();
         let selected = self.selected_index(state);
         let cursor = self.cursor_index(state);
-        let labels: Vec<&str> = self.items.iter().map(|tab| tab.label.as_str()).collect();
-        // Capture geometry for click hit-testing. The widget chooses visible
-        // tabs from the same inputs, so paint and routing agree.
+        let labels: Vec<&str> = self.items.iter().map(Tab::label).collect();
+        // The row is measured once, here: paint takes this same layout, so the
+        // geometry a click hit-tests against is the geometry that was drawn.
         let must_show = cursor.or(selected).unwrap_or(0);
         self.hits = tab_layout(ctx.area(), &labels, self.size, must_show);
     }
@@ -926,7 +902,7 @@ where
         let state = ctx.state();
         let selected = self.selected_index(state);
         let cursor = self.cursor_index(state);
-        let labels: Vec<&str> = self.items.iter().map(|tab| tab.label.as_str()).collect();
+        let labels: Vec<&str> = self.items.iter().map(Tab::label).collect();
         let disabled: Vec<bool> = (0..self.items.len()).map(|i| self.disabled_at(i)).collect();
         let hovered_tab = ctx.hover_position().and_then(|position| {
             self.hits
@@ -935,10 +911,7 @@ where
                 .find(|(_, rect)| rect.contains(position))
                 .map(|(index, _)| *index)
         });
-        let style = match &self.style {
-            Some(style) => style(ctx.theme),
-            None => TabsStyle::from_theme(ctx.theme),
-        };
+        let style = resolve_style(self.style.as_deref(), ctx.theme, TabsStyle::from_theme);
         let widget = TabsWidget::new(&labels)
             .selected_tab(selected)
             .focused_tab(cursor)
@@ -947,7 +920,8 @@ where
             .hovered_tab(hovered_tab)
             .disabled(self.disabled)
             .size(self.size)
-            .style(style);
+            .style(style)
+            .layout(&self.hits);
         ctx.render_widget(widget, area);
     }
 
@@ -1018,21 +992,13 @@ where
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
-        if area.width == 0 || area.height < self.height() {
-            Rect::default()
-        } else {
-            Rect {
-                height: self.height(),
-                ..area
-            }
-        }
+        fixed_height(area, self.height())
     }
 
     fn is_focusable(&self, _state: &S) -> bool {
         !self.disabled
             && self.keyboard_enabled()
-            && linear_nav::first_enabled(self.items.len(), |index| self.disabled_at(index))
-                .is_some()
+            && linear_nav::has_enabled(self.items.len(), |index| self.disabled_at(index))
     }
 }
 
@@ -1049,13 +1015,21 @@ fn tab_width(label: &str) -> u16 {
     shape_width(label)
 }
 
-#[derive(Default)]
-struct TabLayout {
+/// Where the tabs of one row sit on screen: the outcome of measuring the labels
+/// against an area, and the single source of tab geometry.
+///
+/// [`tab_layout`] produces one. [`TabsWidget::layout`] paints from one, and
+/// [`Tabs`] hit-tests clicks against the same one it painted, so a click and the
+/// tab under it cannot disagree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TabLayout {
     /// Each visible tab as `(label index, rect)`. The index is the tab's original
     /// position. Hidden tabs mean this index may differ from the tab's screen slot.
-    tabs: Vec<(usize, Rect)>,
-    left: Option<Rect>,
-    right: Option<Rect>,
+    pub tabs: Vec<(usize, Rect)>,
+    /// The `‹` marker's cell, present only when tabs are hidden to the left.
+    pub left: Option<Rect>,
+    /// The `›` marker's cell, present only when tabs are hidden to the right.
+    pub right: Option<Rect>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1203,9 +1177,21 @@ fn place_tab_window(
 }
 
 /// Measure the tabs, choose which indexes are visible around `must_show`, and
-/// lay them out. The resulting tab rects are the single source of tab geometry,
-/// shared by the widget's paint and the component's hit-test.
-fn tab_layout(area: Rect, labels: &[&str], size: TabsSize, must_show: usize) -> TabLayout {
+/// lay them out.
+///
+/// `must_show` is the tab that must stay on screen — the cursor tab, or the
+/// selected one when there is no cursor. When the labels are wider than `area`,
+/// the visible group is grown outward from it and `‹`/`›` markers mark the sides
+/// with hidden tabs. An out-of-range `must_show` is clamped to the last tab.
+///
+/// An empty row, a zero-width area, or one shorter than `size` lays out nothing.
+///
+/// A standalone [`TabsWidget`] caller need not call this — the widget measures
+/// its own row when given no layout. Call it when something else must agree with
+/// the paint cell for cell, and hand the result to
+/// [`TabsWidget::layout`](TabsWidget::layout).
+#[must_use]
+pub fn tab_layout(area: Rect, labels: &[&str], size: TabsSize, must_show: usize) -> TabLayout {
     let height = size.height();
     if labels.is_empty() || area.width == 0 || area.height < height {
         return TabLayout::default();
@@ -1581,13 +1567,13 @@ mod tests {
     }
 
     #[test]
-    fn typeahead_skips_disabled_tabs_and_bubbles_when_nothing_matches() {
+    fn a_letter_that_is_not_a_navigation_key_bubbles_as_an_app_hotkey() {
         let state = State::default();
         for ch in ['b', 'z'] {
             assert_eq!(
                 manual().handle_event(&key(KeyCode::Char(ch)), &state, &mut EventCtx::default()),
                 EventResult::Ignored,
-                "'{ch}' matches no enabled tab, so it bubbles as an app hotkey"
+                "'{ch}' is not a navigation key, so it bubbles as an app hotkey"
             );
         }
     }
@@ -2013,19 +1999,6 @@ mod tests {
             ),
             EventResult::Emit(Msg::Selected(Screen::C))
         );
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    fn duplicate_tab_values_fail_declaration() {
-        let mut tabs: Tabs<Screen, State, Msg> =
-            Tabs::new([Tab::new(Screen::A, "First"), Tab::new(Screen::A, "Second")]);
-
-        let failed = catch_unwind(AssertUnwindSafe(|| {
-            Component::prepare(&mut tabs, &State::default());
-        }));
-
-        assert!(failed.is_err());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! The shared substance of components built from an ordered set of
-//! value-keyed items: item identity, and a uniform-row viewport.
+//! value-keyed items: item identity, a uniform-row viewport, and what a pointer
+//! gesture over one of those rows asks for.
 //!
 //! [`List`](crate::List) is one presentation of such a set; a Select dropdown
 //! or a menu is another. What they present differs, but what they *are* — an
@@ -10,13 +11,17 @@
 //!
 //! The module splits along that line. [`assert_unique_values`] applies to any
 //! component keyed by item value, whatever its own item type and however it is
-//! laid out — [`Tabs`](crate::Tabs) uses it for a row of tabs. Everything else
-//! here — [`ListItem`], [`RowViewport`], [`WheelPark`] — assumes items stacked
-//! in a scrolling column of uniform-height rows.
+//! laid out — [`Tabs`](crate::Tabs) uses it for a row of tabs, and so is
+//! [`ListItem`] itself, which a tab is. Everything else here —
+//! [`RowViewport`], [`WheelPark`], [`windowed_rows`], [`row_intent`] — assumes
+//! items stacked in a scrolling column of uniform-height rows.
 //!
-//! Nothing here paints or handles events. Components own their look, their
-//! bindings, and their messages; this module answers only the questions every
-//! one of them asks.
+//! Nothing here paints or emits. [`row_intent`] decides what a pointer gesture
+//! over a row means, but not what to say about it: components own their look,
+//! their bindings, and their messages, and this module answers only the
+//! questions every one of them asks.
+
+use std::ops::Range;
 
 use ratatui::{
     layout::{Position, Rect},
@@ -24,6 +29,7 @@ use ratatui::{
 };
 
 use crate::linear_nav::{self};
+use crate::runtime::{MouseButton, MouseKind, RenderCtx};
 
 /// Items a wheel notch moves the view by, shared so two list-shaped
 /// components can never scroll at different speeds.
@@ -156,6 +162,30 @@ impl<T: Clone + PartialEq> WheelPark<T> {
     }
 }
 
+impl<T: Clone + PartialEq + 'static> WheelPark<T> {
+    /// [`settle`](Self::settle) the park stored at the current declaration's
+    /// identity, or an unparked view when nothing is stored there.
+    ///
+    /// A park is written by a wheel event and read back by the next declaration,
+    /// so a declaration that has never been wheeled finds nothing — and must
+    /// still resolve the offset it paints from. Settling through here is what
+    /// makes the absent park mean "unparked" rather than "no offset", in the one
+    /// place both list-shaped components reach for it.
+    pub fn settle_transient<S, M>(
+        ctx: &mut RenderCtx<'_, '_, S, M>,
+        items: &[ListItem<T>],
+        cursor: Option<usize>,
+        requested: Option<usize>,
+        viewport: &mut RowViewport,
+        area: Rect,
+    ) {
+        let mut unparked = Self::default();
+        ctx.transient_mut::<Self>()
+            .unwrap_or(&mut unparked)
+            .settle(items, cursor, requested, viewport, area);
+    }
+}
+
 impl<T: PartialEq> Anchor<T> {
     /// Whether the list still reads as it did where this anchor was taken, with
     /// the cursor still on it.
@@ -282,6 +312,103 @@ pub fn fit_to_height(mut text: Text<'static>, height: u16) -> Text<'static> {
         text.lines.push(Line::default());
     }
     text
+}
+
+/// Map the window `rows` of `items` to the lines a widget paints, each forced to
+/// `row_height` lines.
+///
+/// `row` is handed each item with its index *in the whole list*, never in the
+/// window: focus, selection, and the arithmetic that turns a click's screen row
+/// back into an item all count from the start of the list, so a windowed paint
+/// that renumbered its rows would light up and answer for the wrong one. Both
+/// list-shaped components build their painted rows through here, so neither can
+/// renumber them.
+///
+/// The result is one row per item in `rows`, each exactly `row_height` lines
+/// tall — see [`fit_to_height`] for why that is not the closure's choice.
+///
+/// # Panics
+///
+/// Panics if `rows` is not within `items`, as any slice would.
+#[must_use]
+pub fn windowed_rows<T>(
+    items: &[ListItem<T>],
+    rows: Range<usize>,
+    row_height: u16,
+    mut row: impl FnMut(usize, &ListItem<T>) -> Text<'static>,
+) -> Vec<Text<'static>> {
+    let first = rows.start;
+    items[rows]
+        .iter()
+        .enumerate()
+        .map(|(position, item)| fit_to_height(row(first + position, item), row_height))
+        .collect()
+}
+
+/// What a pointer gesture over a column of value-keyed rows asks for.
+///
+/// The answer [`row_intent`] gives, kept separate from any component's messages
+/// so both list-shaped components can reach the same decision and then emit
+/// their own bindings from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowIntent {
+    /// A primary press landed on a disabled row: consume it. The runtime focuses
+    /// an unhandled press on the component it hit, and dead content must not be
+    /// a way to focus the control through it.
+    BlockPress,
+    /// Move the cursor onto this row.
+    Focus(usize),
+    /// Commit this row.
+    Commit(usize),
+    /// Motion within the row the cursor already sits on: answered, with nothing
+    /// to emit.
+    Stay,
+    /// Nothing here answers this gesture; let it bubble.
+    Bubble,
+}
+
+/// What a pointer gesture asks of a column of rows: the shared decision behind
+/// [`List`](crate::List)'s rows and a Select panel's options.
+///
+/// `kind` is the gesture, `row` the item the pointer is over (`None` off the
+/// rows — see [`RowViewport::row_at`]), `cursor` where the cursor sits, and
+/// `commits` whether the control has a selection binding to commit to.
+///
+/// The rules, whichever control asks:
+///
+/// - A disabled row answers nothing, except that a primary press on one is
+///   consumed ([`RowIntent::BlockPress`]).
+/// - Motion onto another row moves the cursor; motion within the cursor's own
+///   row is [`RowIntent::Stay`]. One cursor, moved by keys and pointer alike.
+/// - A primary click commits its row, or moves the cursor there when there is
+///   nothing to commit to — the same thing hovering already does.
+/// - Everything else bubbles: a press on an enabled row (the runtime's to turn
+///   into focus), a release, a drag, a non-primary button, a wheel notch (which
+///   scrolls the view rather than addressing a row, so each control handles it
+///   before asking).
+///
+/// A gesture that hit no row bubbles. A control whose footprint is opaque to the
+/// pointer consumes that itself; this cannot know.
+#[must_use]
+pub fn row_intent<T>(
+    kind: MouseKind,
+    items: &[ListItem<T>],
+    row: Option<usize>,
+    cursor: Option<usize>,
+    commits: bool,
+) -> RowIntent {
+    let Some(index) = row else {
+        return RowIntent::Bubble;
+    };
+    let disabled = disabled_at(items, index);
+    match kind {
+        MouseKind::Down(MouseButton::Left) if disabled => RowIntent::BlockPress,
+        MouseKind::Moved | MouseKind::Click(MouseButton::Left) if disabled => RowIntent::Bubble,
+        MouseKind::Moved if cursor == Some(index) => RowIntent::Stay,
+        MouseKind::Click(MouseButton::Left) if commits => RowIntent::Commit(index),
+        MouseKind::Moved | MouseKind::Click(MouseButton::Left) => RowIntent::Focus(index),
+        _ => RowIntent::Bubble,
+    }
 }
 
 /// The index of the item whose value equals `value`, or `None` when no item
@@ -531,6 +658,98 @@ mod tests {
             viewport.painted_offset(),
             0,
             "the cursor comes back into view instead of the view clamping to the new tail"
+        );
+    }
+
+    /// The whole shared pointer policy, as one table: both list-shaped
+    /// components answer from this, so a change here is a change to both.
+    #[test]
+    fn row_intent_answers_each_gesture_over_a_row() {
+        let items = [
+            ListItem::new(0, "a"),
+            ListItem::new(1, "b"),
+            ListItem::new(2, "c").disabled(true),
+        ];
+        let cursor = Some(1);
+        let down = MouseKind::Down(MouseButton::Left);
+        let click = MouseKind::Click(MouseButton::Left);
+
+        // A press only ever blocks a disabled row; on an enabled one it is the
+        // runtime's to turn into focus.
+        assert_eq!(
+            row_intent(down, &items, Some(2), cursor, true),
+            RowIntent::BlockPress
+        );
+        assert_eq!(
+            row_intent(down, &items, Some(0), cursor, true),
+            RowIntent::Bubble
+        );
+        // Motion moves the one cursor, and rests on the row it is already on.
+        assert_eq!(
+            row_intent(MouseKind::Moved, &items, Some(0), cursor, true),
+            RowIntent::Focus(0)
+        );
+        assert_eq!(
+            row_intent(MouseKind::Moved, &items, Some(1), cursor, true),
+            RowIntent::Stay
+        );
+        assert_eq!(
+            row_intent(MouseKind::Moved, &items, Some(2), cursor, true),
+            RowIntent::Bubble,
+            "a disabled row is not somewhere the cursor may go"
+        );
+        // A click commits, or moves the cursor when there is nothing to commit.
+        assert_eq!(
+            row_intent(click, &items, Some(0), cursor, true),
+            RowIntent::Commit(0)
+        );
+        assert_eq!(
+            row_intent(click, &items, Some(0), cursor, false),
+            RowIntent::Focus(0)
+        );
+        assert_eq!(
+            row_intent(click, &items, Some(2), cursor, true),
+            RowIntent::Bubble
+        );
+        // Off the rows, and gestures a column does not answer at all.
+        assert_eq!(
+            row_intent(click, &items, None, cursor, true),
+            RowIntent::Bubble
+        );
+        for kind in [
+            MouseKind::Up(MouseButton::Left),
+            MouseKind::Drag(MouseButton::Left),
+            MouseKind::Down(MouseButton::Right),
+            MouseKind::Click(MouseButton::Middle),
+        ] {
+            assert_eq!(
+                row_intent(kind, &items, Some(0), cursor, true),
+                RowIntent::Bubble,
+                "{kind:?} is not a column's gesture"
+            );
+        }
+    }
+
+    /// A windowed paint numbers its rows by their position in the whole list, or
+    /// the row a click lands on is not the row that was drawn there.
+    #[test]
+    fn windowed_rows_hands_out_global_indices_and_a_uniform_height() {
+        let items: Vec<ListItem<u8>> = (0..6).map(|value| ListItem::new(value, "row")).collect();
+        let rows = windowed_rows(&items, 2..5, 2, |index, item| {
+            Text::from(format!("{index}:{}", item.value()))
+        });
+
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows.iter().all(|row| row.lines.len() == 2),
+            "every row is padded to the declared height"
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.lines[0].to_string())
+                .collect::<Vec<_>>(),
+            ["2:2", "3:3", "4:4"],
+            "the window's third item is item 4, not item 2"
         );
     }
 

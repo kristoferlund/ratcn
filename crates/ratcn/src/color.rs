@@ -75,57 +75,26 @@ pub const fn resolve_rgb(color: Color) -> Option<(u8, u8, u8)> {
     }
 }
 
-/// Darken a color toward black by `amount` percent. Amounts above 100 are
-/// treated as 100.
+/// Darken a color toward black by `amount` percent — [`dim`] against
+/// [`Color::Black`]. Amounts above 100 are treated as 100.
 ///
 /// Channels come from [`resolve_rgb`]; `Indexed` and [`Color::Reset`] pass
 /// through unchanged.
 #[must_use]
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "`c * keep / 100` with c <= 255 and keep <= 100 is <= 255, so the `as u8` cast cannot truncate"
-)]
 pub const fn darken(color: Color, amount: u16) -> Color {
-    match resolve_rgb(color) {
-        Some((r, g, b)) => {
-            let amount = if amount > 100 { 100 } else { amount };
-            let keep = 100 - amount;
-            // `+ 50` rounds to nearest rather than flooring.
-            Color::Rgb(
-                ((r as u16 * keep + 50) / 100) as u8,
-                ((g as u16 * keep + 50) / 100) as u8,
-                ((b as u16 * keep + 50) / 100) as u8,
-            )
-        }
-        None => color,
-    }
+    dim(color, Color::Black, amount)
 }
 
-/// Lighten a color toward white by `amount` percent — the mirror of
-/// [`darken`], for a dark fill that should brighten (rather than deepen) as it
-/// gains prominence on focus. Amounts above 100 are treated as 100.
+/// Lighten a color toward white by `amount` percent — [`dim`] against
+/// [`Color::White`], the mirror of [`darken`], for a dark fill that should
+/// brighten (rather than deepen) as it gains prominence on focus. Amounts above
+/// 100 are treated as 100.
 ///
 /// Channels come from [`resolve_rgb`]; `Indexed` and [`Color::Reset`] pass
 /// through unchanged.
 #[must_use]
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "`c*(100-amount)/100 + 255*amount/100` is a weighted average of c and 255, both <= 255, so it stays <= 255 and the `as u8` cast cannot truncate"
-)]
 pub const fn lighten(color: Color, amount: u16) -> Color {
-    match resolve_rgb(color) {
-        Some((r, g, b)) => {
-            let amount = if amount > 100 { 100 } else { amount };
-            let keep = 100 - amount;
-            // `+ 50` rounds to nearest rather than flooring.
-            Color::Rgb(
-                ((r as u16 * keep + 255 * amount + 50) / 100) as u8,
-                ((g as u16 * keep + 255 * amount + 50) / 100) as u8,
-                ((b as u16 * keep + 255 * amount + 50) / 100) as u8,
-            )
-        }
-        None => color,
-    }
+    dim(color, Color::White, amount)
 }
 
 /// Blend `color` toward `toward` by `amount` percent, keeping a fraction of the
@@ -184,6 +153,35 @@ mod tests {
             dim(Color::Red, Color::Black, 50),
             dim(Color::Rgb(128, 0, 0), Color::Rgb(0, 0, 0), 50)
         );
+    }
+
+    /// `darken` and `lighten` are `dim` against black and white, which holds
+    /// only if the blend rounds identically to the standalone weighted average
+    /// each of them used to compute — every channel value against every
+    /// percentage, since one rounding difference would show as an off-by-one
+    /// fill.
+    #[test]
+    fn darkening_and_lightening_round_as_a_blend_toward_the_endpoints() {
+        for amount in 0..=100_u16 {
+            let keep = 100 - amount;
+            for channel in 0..=255_u8 {
+                let color = Color::Rgb(channel, channel, channel);
+                let scaled = u16::from(channel) * keep;
+                let dark = u8::try_from((scaled + 50) / 100).expect("a darkened channel fits u8");
+                let light = u8::try_from((scaled + 255 * amount + 50) / 100)
+                    .expect("a lightened channel fits u8");
+                assert_eq!(
+                    darken(color, amount),
+                    Color::Rgb(dark, dark, dark),
+                    "darken({channel}, {amount})"
+                );
+                assert_eq!(
+                    lighten(color, amount),
+                    Color::Rgb(light, light, light),
+                    "lighten({channel}, {amount})"
+                );
+            }
+        }
     }
 
     #[test]

@@ -128,15 +128,16 @@ pub mod list_core;
 pub mod runtime;
 pub mod selection_indicator;
 pub mod text_width;
-mod theme;
+pub mod theme;
 pub mod toast;
 
 #[doc(inline)]
 pub use components::{
     BarChartGroup, BarChartStyle, BarChartWidget, Button, ButtonRenderMode, ButtonSize,
     ButtonStyle, ButtonVariant, ButtonWidget, Dialog, DialogStyle, List, ListStyle, ListWidget,
-    Select, SelectStyle, SelectWidget, Tab, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget,
-    ToastPosition, ToasterStyle, ToasterWidget, Tooltip, TooltipSide, TooltipStyle, TooltipWidget,
+    Select, SelectStyle, SelectWidget, Tab, TabLayout, Tabs, TabsActivation, TabsSize, TabsStyle,
+    TabsWidget, ToastPosition, ToasterStyle, ToasterWidget, Tooltip, TooltipSide, TooltipStyle,
+    TooltipWidget, tab_layout,
 };
 #[doc(inline)]
 pub use list_core::{ListItem, ListItemState};

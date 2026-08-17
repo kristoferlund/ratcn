@@ -757,11 +757,7 @@ mod crossterm_conv {
             };
             Ok(Self {
                 code,
-                modifiers: Modifiers {
-                    ctrl: event.modifiers.contains(ct::KeyModifiers::CONTROL),
-                    alt: event.modifiers.contains(ct::KeyModifiers::ALT),
-                    shift: event.modifiers.contains(ct::KeyModifiers::SHIFT),
-                },
+                modifiers: modifiers(event.modifiers),
             })
         }
     }

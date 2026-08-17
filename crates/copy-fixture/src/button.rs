@@ -15,8 +15,9 @@ use ratcn::color::{
 };
 use ratcn::runtime::{
     Component, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton, MouseKind,
-    PaintCtx, RenderCtx,
+    PaintCtx, RenderCtx, fixed_height,
 };
+use ratcn::theme::resolve_style;
 
 /// How tall a button is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -730,10 +731,9 @@ impl<S, M> Component<S, M> for Button<M> {
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
         let area = ctx.area();
-        let style = match &self.style {
-            Some(style) => style(ctx.theme),
-            None => ButtonStyle::from_theme(ctx.theme, self.variant),
-        };
+        let style = resolve_style(self.style.as_deref(), ctx.theme, |theme| {
+            ButtonStyle::from_theme(theme, self.variant)
+        });
         let widget = ButtonWidget::new(&self.label)
             .style(style)
             .size(self.size)
@@ -778,14 +778,7 @@ impl<S, M> Component<S, M> for Button<M> {
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
-        if area.width == 0 || area.height < self.height() {
-            Rect::default()
-        } else {
-            Rect {
-                height: self.height(),
-                ..area
-            }
-        }
+        fixed_height(area, self.height())
     }
 }
 

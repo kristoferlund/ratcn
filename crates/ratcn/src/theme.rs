@@ -1,7 +1,36 @@
+//! The base palette every component derives its colors from, and the one place
+//! a declared style override is resolved against it.
+//!
+//! A [`Theme`] stores base colors only. Each component owns a style struct whose
+//! `from_theme` derives every slot it paints from those bases (with the shifts in
+//! [`color`](crate::color)), and a `style(...)` builder that replaces the whole
+//! derivation with a closure. [`resolve_style`] is the fork between the two,
+//! shared so a theme switch cannot reach some components and miss others.
+
 use ratatui::style::Color;
 
 use crate::color::dim;
 use ratatui::symbols::border;
+
+/// The style a component paints with: the override it was declared with, or the
+/// colors derived from the active theme.
+///
+/// `custom` is the closure a component's `style(...)` builder stored. It is run
+/// against `theme` on every render rather than once at declaration, which is what
+/// makes a style built from its argument follow a theme switch; a fixed style
+/// ignores the argument. With nothing declared, `from_theme` — the component's
+/// own derivation — answers instead.
+#[must_use]
+pub fn resolve_style<S>(
+    custom: Option<&dyn Fn(&Theme) -> S>,
+    theme: &Theme,
+    from_theme: impl FnOnce(&Theme) -> S,
+) -> S {
+    match custom {
+        Some(custom) => custom(theme),
+        None => from_theme(theme),
+    }
+}
 
 /// A border line style for component-local styling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
