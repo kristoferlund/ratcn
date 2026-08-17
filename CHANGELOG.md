@@ -52,7 +52,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `TabLayout`, `tab_layout`, and `TabsWidget::layout`. A tab row's geometry is a
   value now, so `Tabs` can hand the layout it hit-tests clicks against to the
   paint that draws them. A standalone `TabsWidget` given no layout still
-  measures its own row, so nothing about that use changes.
+  measures its own row, so nothing about that use changes. `TabLayout`'s three
+  fields — `tabs`, `left`, `right` — are public and it is not
+  `#[non_exhaustive]`, so it can be built and matched literally; adding a field
+  would therefore be a breaking change.
 
 ### Removed
 
@@ -89,12 +92,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   four.
 - **Breaking:** `runtime::compose`, with `BodyFn`, `BodySlot`, and `ChildSlots`.
   A composite now holds a caller-supplied body as
-  `Option<Box<dyn FnOnce(&mut RenderCtx<'_, '_, S, M>)>>` and a measured child
+  `Option<Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>>` and a measured child
   as a closure that declares it, both private to the component. See the custom
   components guide; `Dialog` is the reference implementation.
 - **Breaking:** `runtime::PreparedComponent` and
   `RenderCtx::render_prepared_component`. Preparing a component is internal to
   `RenderCtx::render_component` again.
+- The `Tabs` test `duplicate_tab_values_fail_declaration`, which asserted only
+  that declaring duplicate tab values panics. Its twin
+  `duplicate_tab_values_panic_with_the_shared_message` has the same setup and
+  asserts the exact message, so the contract is unchanged and stays checked.
 
 ### Changed
 
@@ -105,28 +112,33 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   caller-supplied body. `Ratcn::render` is unchanged at the call site.
   Declaring never paints, so the context no longer carries the ratatui `Frame`
   at all; it carries `frame_area` instead, which is all `frame_area()` ever
-  answered from. `frame_area()` and `state()` are `const fn` now.
+  answered from. `frame_area()` and `state()` are `const fn` now, and `Debug`
+  drops `declaration_active` (nothing left to report) and gains `frame_area`.
 - **Breaking:** `RenderCtx::state`, `paint`, `defer_paint`, `scope`,
   `render_component`, `modal`, `modal_scope`, `hint`, and `popup` no longer panic
   "outside a `Ratcn` declaration pass". The context is only ever constructed
   inside one — the pass and the state are plain references rather than
   `Option`s — so there is no passless context left to guard against, and the
-  panic messages that named that state are gone. The duplicate-id and
-  interaction-area panics are unaffected. `RenderCtx::transient` and
-  `transient_mut` still answer `None`, now only for the reason that remains: no
-  event handler has stored a value at this path.
+  five panic messages that named that state are gone. The duplicate-id and
+  interaction-area panics are unaffected. Two methods that answered for a
+  passless context now answer for a pass: `RenderCtx::pointer_within` is never
+  `false` merely for want of one, and `transient` / `transient_mut` still answer
+  `None` only for the reason that remains — no event handler has stored a value
+  at this path.
 - **Breaking:** `Tab<T>` is a type alias for `ListItem<T>`. A tab and a list row
   carried the same three things — a value, a label, a disabled flag — behind two
   identical structs. `Tab::new`, `.disabled(true)`, `value()`, `label()`,
   `is_disabled()`, and the `&str`/`String` conversions all read as before, and
   `Tabs` still takes `Tab`s. What changes: the two are now one type, so a trait
-  implemented for both no longer compiles, and `Debug` on a `Tab` (or on a
-  `Tabs`' items) prints `ListItem { .. }`.
-- **Breaking:** the `List` and `Select` rustdoc no longer describes a
-  single-character typeahead. Neither component ever implemented one — a plain
+  implemented for both no longer compiles; `Debug` on a `Tab` names it
+  `ListItem { value: .., label: .., disabled: .. }`; and the docs.rs page for it
+  is `type.Tab.html` rather than `struct.Tab.html`.
+- **Breaking:** the `List`, `Select`, and `Tabs` rustdoc no longer describes a
+  single-character typeahead. None of the three ever implemented one — a plain
   letter has always bubbled as an app hotkey, which is what
-  [Keyboard](https://ratcn.kristoferlund.se/docs/concepts/keyboard) says. Only
-  the promise is gone; no behavior changed.
+  [Keyboard](https://ratcn.kristoferlund.se/docs/concepts/keyboard) says under
+  "What is not here". Only the promise is gone; no behavior changed. The `Tabs`
+  test that was named for the absent feature is renamed for what it checks.
 - **Breaking:** `ListWidget` takes the rows on screen rather than the whole
   list. `ListWidget::scroll_offset` is replaced by `ListWidget::first_item`,
   the index `items[0]` has in the whole list; `focused_row`, `selected_rows`,

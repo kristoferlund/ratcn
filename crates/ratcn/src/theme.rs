@@ -16,10 +16,14 @@ use ratatui::symbols::border;
 /// colors derived from the active theme.
 ///
 /// `custom` is the closure a component's `style(...)` builder stored. It is run
-/// against `theme` on every render rather than once at declaration, which is what
-/// makes a style built from its argument follow a theme switch; a fixed style
-/// ignores the argument. With nothing declared, `from_theme` — the component's
-/// own derivation — answers instead.
+/// against the theme the frame is being painted with, never once at declaration —
+/// which is what makes a style built from its argument follow a theme switch; a
+/// fixed style ignores the argument. With nothing declared, `from_theme` — the
+/// component's own derivation — answers instead.
+///
+/// Every built-in resolves in `paint`, where the colors are actually needed, bar
+/// [`Select`](crate::Select), which also resolves in `render` because the style
+/// is a prop of the panel it declares there.
 #[must_use]
 pub fn resolve_style<S>(
     custom: Option<&dyn Fn(&Theme) -> S>,
