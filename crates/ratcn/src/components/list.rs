@@ -15,7 +15,7 @@ use crate::list_core::{
     self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelPark,
 };
 use crate::runtime::{
-    Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseKind, PaintCtx, RenderCtx,
+    Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseKind, PaintCtx,
     ScrollDirection,
 };
 use crate::selection_indicator;
@@ -432,7 +432,7 @@ type RenderItemFn<S, T> = Box<dyn for<'a> Fn(&S, ListItemState<'a, T>) -> Text<'
 type StyleFn = Box<dyn Fn(&Theme) -> ListStyle>;
 
 /// A scrollable list of items, declared with
-/// [`render_component`](crate::runtime::RenderCtx::render_component).
+/// [`component`](crate::runtime::DeclareCtx::component).
 ///
 /// # Cursor and selection are different things
 ///
@@ -859,7 +859,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         );
     }
 
-    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let area = ctx.area();
         let state = ctx.state();
         let focused_row = self.focused_index(state);
@@ -935,7 +935,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                 }
             },
         );
-        ctx.render_widget(
+        ctx.widget(
             ListWidget::new(&items)
                 .first_item(first_item)
                 .focused_row(focused_row)
@@ -1075,7 +1075,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     self.ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("list"),
                             List::new(items.clone())
                                 .item_focus(|state: &State| state.focused, Msg::Focused)
@@ -1139,7 +1139,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     self.ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("list"),
                             List::new(items.to_vec())
                                 .item_focus(|state: &State| state.focused, Msg::Focused)
@@ -1376,7 +1376,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         "list",
                         List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
                             .selection(|state: &State| state.selected, Msg::Selected)
@@ -1417,7 +1417,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         "list",
                         List::new([
                             item(Task::A, "selected"),
@@ -1566,7 +1566,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("list"),
                         List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
                             .item_focus(|state: &State| state.focused, Msg::Focused)
@@ -1638,12 +1638,12 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("other"),
                         crate::Button::<RoutedMsg>::new("Other"),
                         Rect::new(0, 0, 20, 1),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("list"),
                         List::new([
                             item(Task::A, "Alpha"),
@@ -1826,7 +1826,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("list"),
                             List::new(six_items())
                                 .item_focus(|state: &State| state.focused, Msg::Focused),
@@ -1879,7 +1879,7 @@ mod tests {
                     .draw(|frame| {
                         let area = frame.area();
                         ratcn.render(frame, state, &theme, |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("list"),
                                 List::new(six_items())
                                     .item_focus(|state: &State| state.focused, Msg::Focused),
@@ -2012,13 +2012,13 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         "list",
                         List::new([item(Task::A, "Alpha")])
                             .selection(|state: &State| state.selected, Msg::Selected),
                         Rect::new(0, 0, 20, 1),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         "button",
                         crate::Button::new("Next").on_press(|| Msg::Pressed),
                         Rect::new(0, 1, 20, 1),
@@ -2046,13 +2046,13 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         "plain",
                         List::new([item(Task::A, "Alpha")])
                             .item_focus(|state: &State| state.focused, Msg::Focused),
                         Rect::new(0, 0, 20, 1),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         "custom",
                         List::new([item(Task::B, "Bravo")]).render_item(|_, row| {
                             Line::from(format!("{} selected={}", row.label, row.selected))
@@ -2091,12 +2091,12 @@ mod tests {
                 terminal
                     .draw(|frame| {
                         ratcn.render(frame, state, &theme, |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 "other",
                                 crate::Button::<Msg>::new("Other"),
                                 Rect::new(0, 0, 20, 1),
                             );
-                            ctx.render_component(
+                            ctx.component(
                                 "list",
                                 List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
                                     .item_focus(|state: &State| state.focused, Msg::Focused)
@@ -2208,7 +2208,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         "list",
                         List::new(all_disabled())
                             .item_focus(|state: &State| state.focused, Msg::Focused)
@@ -2332,7 +2332,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     driver.ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             "list",
                             List::new([item(Task::A, "Alpha")])
                                 .selection(|_: &State| None, Msg::Selected)
@@ -2517,7 +2517,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("list"),
                         List::new(items)
                             .scroll(|state: &BigState| state.scroll, BigMsg::Scrolled)

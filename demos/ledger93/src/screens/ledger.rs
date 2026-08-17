@@ -8,7 +8,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use ratcn::{List, ListItem, runtime::RenderCtx};
+use ratcn::{List, ListItem, runtime::DeclareCtx};
 
 use crate::app::{AppState, Msg as AppMsg};
 use crate::shared;
@@ -44,7 +44,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let state = ctx.state();
     let list = List::new(shared::SEED.map(|entry| ListItem::new(entry.label, entry.label)))
@@ -58,14 +58,14 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         )
         .render_item(|s: &AppState, row| render_row(row.index, &s.shared.prefs));
 
-    let inner = crate::screens::render_panel(ctx, area, None);
+    let inner = crate::screens::declare_panel(ctx, area, None);
 
     let [list_area, _gap, balance_area] = inner.layout(&Layout::vertical([
         Constraint::Length(shared::SEED.len() as u16),
         Constraint::Min(0),
         Constraint::Length(1),
     ]));
-    ctx.render_component(LIST_ID, list, list_area);
+    ctx.component(LIST_ID, list, list_area);
 
     let balance = shared::balance();
     let amount = shared::format_money(balance, &state.shared.prefs);
@@ -76,7 +76,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         } else {
             theme.primary
         };
-        ctx.render_widget(
+        ctx.widget(
             Line::from(vec![
                 Span::styled(
                     "Balance ",

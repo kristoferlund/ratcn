@@ -8,7 +8,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use ratcn::{List, ListItem, runtime::RenderCtx};
+use ratcn::{List, ListItem, runtime::DeclareCtx};
 
 use crate::app::{AppState, Msg as AppMsg};
 use crate::shared::{self, Currency, PrefsMsg};
@@ -40,7 +40,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let state = ctx.state();
     let currency =
@@ -58,7 +58,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
                 |offset| AppMsg::Settings(Msg::ListScrolled(offset)),
             );
 
-    let inner = crate::screens::render_panel(ctx, area, None);
+    let inner = crate::screens::declare_panel(ctx, area, None);
 
     let [header, list_area, _gap, preview_area] = inner.layout(&Layout::vertical([
         Constraint::Length(1),
@@ -68,7 +68,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     ]));
 
     ctx.paint(move |ctx| {
-        ctx.render_widget(
+        ctx.widget(
             Line::from(Span::styled(
                 "Currency",
                 Style::default()
@@ -78,12 +78,12 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
             header,
         );
     });
-    ctx.render_component(CURRENCY_ID, currency, list_area);
+    ctx.component(CURRENCY_ID, currency, list_area);
 
     let prefs = state.shared.prefs;
     ctx.paint(move |ctx| {
         let theme = ctx.theme;
-        ctx.render_widget(
+        ctx.widget(
             Line::from(vec![
                 Span::styled("Preview: ", Style::default().fg(theme.muted_foreground)),
                 Span::styled(

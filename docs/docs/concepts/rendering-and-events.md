@@ -11,13 +11,14 @@ Ratcn enters an app at two calls:
   successful declaration.
 
 The declaration is immediate Rust code. Build components from current state,
-split areas with Ratatui, queue decorative widgets with `RenderCtx::paint`, and
-register interactive components with `RenderCtx::render_component`:
+split areas with Ratatui, queue decorative widgets with
+`DeclareCtx::paint_widget`, and register interactive components with
+`DeclareCtx::component`:
 
 ```rust
 ratcn.render(frame, &state, &state.theme, |ctx| {
-    ctx.paint(move |ctx| ctx.render_widget(Paragraph::new("Account"), title_area));
-    ctx.render_component(
+    ctx.paint_widget(Paragraph::new("Account"), title_area);
+    ctx.component(
         "save",
         Button::new("Save")
             .disabled(state.saving)
@@ -31,23 +32,26 @@ if let EventResult::Emit(msg) = ratcn.handle_event(event, &state) {
 }
 ```
 
-Everything inside the closure works through `&mut RenderCtx` — the same context
-type used by nested scopes, dialog sections, and component render hooks.
+Everything inside the closure works through `&mut DeclareCtx` — the same context
+type used by nested scopes, dialog sections, and a component's own `declare`.
 `ctx.area()` is the area the current callback is responsible for, and
 `ctx.state()` is the app state for this declaration pass. Components you declare
-with `render_component` get an identity and can receive events; widgets you
-paint are decoration and cannot.
+with `component` get an identity and can receive events; widgets you paint are
+decoration and cannot.
 
 Declaring does not draw. `ctx.paint` queues a `'static` closure at the point it
 was reached, and the runtime replays the whole queue in that order once the
 tree is complete and focus has resolved — so paint order is still declaration
 order, and the closure gets a `PaintCtx` carrying the theme, the state, the
 area, and the interaction flags rather than borrowing the declaration it came
-from.
+from. `ctx.paint_widget(widget, area)` is that call for the common case of one
+independent write: same queue position, no closure to write. Reach for the
+closure when several writes share captured data, when one reads the interaction
+flags, or when they belong together as a single op.
 
-Declaring is also how things appear and disappear: an `if` around a
-`render_component` call adds or removes that component for the frame. There is
-no separate mount/unmount step.
+Declaring is also how things appear and disappear: an `if` around a `component`
+call adds or removes that component for the frame. There is no separate
+mount/unmount step.
 
 ## What an event sees
 

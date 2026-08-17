@@ -37,7 +37,7 @@
 //! [`Ratcn::render`] runs the closure once, and that run draws nothing: it
 //! builds the tree and queues the paint each declaration owes. Focus resolves
 //! against the finished tree, and only then does the queue run — which is why
-//! [`PaintCtx`] carries the interaction flags and [`RenderCtx`] does not.
+//! [`PaintCtx`] carries the interaction flags and [`DeclareCtx`] does not.
 //! Declaring once means the closure may have side effects and may move what it
 //! captures into the components it declares.
 //!
@@ -56,7 +56,7 @@
 //! moves by message. Hover is a fact about where the mouse physically is,
 //! which no app decides, so the runtime keeps it and rewrites it whenever the
 //! pointer or the surface moves. Apps read it structurally through
-//! [`RenderCtx::pointer_within`] and paint from [`PaintCtx::hovered`] and
+//! [`DeclareCtx::pointer_within`] and paint from [`PaintCtx::hovered`] and
 //! [`PaintCtx::contains_hover`].
 //!
 //! This module is the public namespace for both using the runtime and writing
@@ -190,8 +190,8 @@ impl fmt::Display for ChildId {
 }
 
 pub use component::{
-    Component, EventCtx, EventResult, MeasuredComponent, PaintCtx, Painter, PopupOptions,
-    RenderCtx, ScopeOptions, Step,
+    Component, DeclareCtx, EventCtx, EventResult, MeasuredComponent, PaintCtx, Painter,
+    PopupOptions, ScopeOptions, Step,
 };
 pub use drag::{CellOffset, DragOptions, DragPhase, clamp_offset, offset_rect};
 pub use engine::Ratcn;

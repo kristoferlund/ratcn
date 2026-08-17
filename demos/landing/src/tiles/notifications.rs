@@ -5,11 +5,11 @@ use ratatui::{
     style::{Modifier, Style},
     widgets::{Paragraph, Wrap},
 };
-use ratcn::{List, ListItem, runtime::RenderCtx};
+use ratcn::{List, ListItem, runtime::DeclareCtx};
 
 use crate::{AppMsg, AppState};
 
-use super::shared::render_tile_panel;
+use super::shared::declare_tile_panel;
 
 const NOTIFICATION_OPTIONS: [&str; 5] = [
     "Transaction alerts",
@@ -58,7 +58,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
     let notifications = List::new(NOTIFICATION_OPTIONS.map(|label| ListItem::new(label, label)))
@@ -72,7 +72,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         )
         .disabled(controls_disabled);
 
-    let inner = render_tile_panel(ctx, area, " alt+4 ");
+    let inner = declare_tile_panel(ctx, area, " alt+4 ");
     let [header_area, intro_area, list_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(2),
@@ -82,7 +82,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     .areas(inner);
     ctx.paint(move |ctx| {
         let theme = ctx.theme;
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new("Notifications").style(
                 Style::default()
                     .fg(theme.foreground)
@@ -90,12 +90,12 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
             ),
             header_area,
         );
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new("Choose which email and push alerts you want to receive.")
                 .style(Style::default().fg(theme.muted_foreground))
                 .wrap(Wrap { trim: true }),
             intro_area,
         );
     });
-    ctx.render_component("notifications", notifications, list_area);
+    ctx.component("notifications", notifications, list_area);
 }

@@ -10,21 +10,28 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `RenderCtx::pointer_within`, asking whether the pointer rests on the current
+- `DeclareCtx::pointer_within`, asking whether the pointer rests on the current
   declaration or anything inside it. Hover is known before a pass starts — it
   was resolved against the last committed frame — so unlike focus it is
   readable while declaring, and structure may depend on it. `Tooltip` is the
   reference consumer.
 - `Component::paint`, where a component draws. It is queued where
-  `Component::render` declared the component and replayed once the whole tree
+  `Component::declare` declared the component and replayed once the whole tree
   is declared and focus has resolved, so it runs once per frame and a
   component draws before its own descendants. It defaults to drawing nothing.
 - `runtime::PaintCtx`, the context `paint` receives: the paint surface
-  (`render_widget`, `render_stateful_widget`, `with_buffer`), the theme, the
+  (`widget`, `stateful_widget`, `with_buffer`), the theme, the
   declared area, the app state, the pointer position, and the four interaction
   flags.
-- `RenderCtx::paint`, the app-level counterpart for chrome with no component
+- `DeclareCtx::paint`, the app-level counterpart for chrome with no component
   of its own. It queues a `'static` closure at the point it is reached.
+- `DeclareCtx::paint_widget`, the shorthand for a paint op that is one write:
+  `ctx.paint_widget(widget, area)` queues exactly what
+  `ctx.paint(move |ctx| ctx.widget(widget, area))` queues, at the same position
+  in the paint queue. The widget is `'static`, so it owns its content —
+  `Paragraph::new(String)` qualifies, a widget borrowing from state does not.
+  Writes that share captured data, read the interaction flags, or belong
+  together as one op stay with `DeclareCtx::paint`.
 - `theme` is a public module, holding `theme::resolve_style` — the one fork
   between a declared `style(...)` override and a component's own `from_theme`
   derivation. Every styled component resolves through it, so a theme switch
@@ -66,7 +73,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it — from press to release hover stays on what the gesture started on,
   unless that target is covered or stops being declared. Apps drop the field, the message
   variant, the `update` arm, and the binding; `PaintCtx::hovered` /
-  `contains_hover` and the new `RenderCtx::pointer_within` are how it is read.
+  `contains_hover` and the new `DeclareCtx::pointer_within` are how it is read.
   A stored path could go stale, so the reconciliation that resolved it — and
   the corrections it emitted on the next pointer event — are gone with the
   type.
@@ -83,7 +90,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   idempotent: ...`) are gone with it.
 - **Breaking:** `RenderCtx::render_widget`, `RenderCtx::render_stateful_widget`,
   and `RenderCtx::with_buffer`. Declaring no longer paints: use
-  `RenderCtx::paint` from an app declaration and `Component::paint` from a
+  `DeclareCtx::paint` from an app declaration and `Component::paint` from a
   component. The scratch buffer `with_buffer` used to run against is gone with
   them — a paint closure runs once, against the real surface.
 - **Breaking:** the `RenderCtx::focused`, `contains_focus`, `hovered`, and
@@ -92,12 +99,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   four.
 - **Breaking:** `runtime::compose`, with `BodyFn`, `BodySlot`, and `ChildSlots`.
   A composite now holds a caller-supplied body as
-  `Option<Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>>` and a measured child
+  `Option<Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>>` and a measured child
   as a closure that declares it, both private to the component. See the custom
   components guide; `Dialog` is the reference implementation.
 - **Breaking:** `runtime::PreparedComponent` and
   `RenderCtx::render_prepared_component`. Preparing a component is internal to
-  `RenderCtx::render_component` again.
+  `DeclareCtx::component` again.
 - The `Tabs` test `duplicate_tab_values_fail_declaration`, which asserted only
   that declaring duplicate tab values panics. Its twin
   `duplicate_tab_values_panic_with_the_shared_message` has the same setup and
@@ -105,23 +112,41 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Breaking:** `RenderCtx` loses its frame lifetime: `RenderCtx<'a, State, Msg>`,
-  where it was `RenderCtx<'a, 'frame, State, Msg>`. Every mention in a signature
-  drops one `'_` — `fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>)`, and the
-  same for a boxed `FnOnce(&mut RenderCtx<'_, S, M>)` a composite stores for a
+- **Breaking:** `runtime::RenderCtx` is `runtime::DeclareCtx`. `render` now
+  names one thing — `Ratcn::render`, the whole frame — while `declare` names
+  tree building and `paint` names cell writing. Every signature, bound, and
+  stored body follows: `fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>)`,
+  `Option<Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>>`.
+- **Breaking:** `Component::render` is `Component::declare`. The hook is
+  otherwise unchanged — it lays the component out, declares descendants, and
+  paints nothing. `prepare`, `paint`, `scope_options`, `interaction_area`,
+  `is_focusable`, and `handle_event` keep their names.
+- **Breaking:** `RenderCtx::render_component` is `DeclareCtx::component`, in the
+  noun family it declares alongside: `scope`, `modal`, `modal_scope`, `popup`,
+  `hint`, `in_area`.
+- **Breaking:** `PaintCtx::render_widget` and `PaintCtx::render_stateful_widget`
+  are `PaintCtx::widget` and `PaintCtx::stateful_widget`, and the same two
+  methods on `Painter` are `Painter::widget` and `Painter::stateful_widget`.
+  `with_buffer` is unchanged on both.
+- **Breaking:** the declaration context loses its frame lifetime:
+  `DeclareCtx<'a, State, Msg>`, where the 0.0.1 type was
+  `RenderCtx<'a, 'frame, State, Msg>` — one migration with the rename above.
+  Every mention in a signature drops one `'_` —
+  `fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>)`, and the same for a
+  boxed `FnOnce(&mut DeclareCtx<'_, S, M>)` a composite stores for a
   caller-supplied body. `Ratcn::render` is unchanged at the call site.
   Declaring never paints, so the context no longer carries the ratatui `Frame`
   at all; it carries `frame_area` instead, which is all `frame_area()` ever
   answered from. `frame_area()` and `state()` are `const fn` now, and `Debug`
   drops `declaration_active` (nothing left to report) and gains `frame_area`.
-- **Breaking:** `RenderCtx::state`, `paint`, `defer_paint`, `scope`,
-  `render_component`, `modal`, `modal_scope`, `hint`, and `popup` no longer panic
+- **Breaking:** `DeclareCtx::state`, `paint`, `defer_paint`, `scope`,
+  `component`, `modal`, `modal_scope`, `hint`, and `popup` no longer panic
   "outside a `Ratcn` declaration pass". The context is only ever constructed
   inside one — the pass and the state are plain references rather than
   `Option`s — so there is no passless context left to guard against, and the
   five panic messages that named that state are gone. The duplicate-id and
   interaction-area panics are unaffected. Two methods that answered for a
-  passless context now answer for a pass: `RenderCtx::pointer_within` is never
+  passless context now answer for a pass: `DeclareCtx::pointer_within` is never
   `false` merely for want of one, and `transient` / `transient_mut` still answer
   `None` only for the reason that remains — no event handler has stored a value
   at this path.
@@ -153,7 +178,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `scroll_offset`. `open` still takes every option, because the panel's height
   is measured from their count.
 - **Breaking:** `List`'s `Component` implementation requires `T: 'static`.
-  `RenderCtx::render_component` already required it of any `List` declared
+  `DeclareCtx::component` already required it of any `List` declared
   through the runtime, so a declared list is unaffected; a `List` driven
   directly through the `Component` trait — `prepare`/`handle_event` against an
   `EventCtx::default()`, which is how the transient docs suggest testing one —
@@ -199,7 +224,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** `Ratcn::render`'s declaration closure is `FnOnce` rather than
   `FnMut`. Values may be moved into the components it declares instead of
   cloned per run.
-- **Breaking:** `Component::render` is declaration only. It lays the component
+- **Breaking:** `Component::declare` is declaration only. It lays the component
   out, declares its descendants, and records what `handle_event` reads back;
   it writes no cells and is not offered the interaction flags. Everything that
   draws moves to `Component::paint`.
@@ -218,18 +243,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A component's own paint now always precedes its descendants' — a component is
   queued at the point it opens, so container chrome needs no care about
   ordering. The converse is no longer expressible from `paint`: decoration that
-  must cover a composite's descendants belongs in `RenderCtx::defer_paint`. The
+  must cover a composite's descendants belongs in `DeclareCtx::defer_paint`. The
   kanban demo's drag ghost was already written that way; nothing in-tree had to
   move.
 - A rejected pass paints nothing. Declaration, validation, and the modal-stack
   check all complete before the first cell is written, so a poisoned or
   modal-mismatched pass leaves the previous frame on screen as well as the
   previous surface.
-- The declaration closure and every `Component::render` now run once per
+- The declaration closure and every `Component::declare` now run once per
   frame rather than twice. Anything a declaration does beyond declaring — a
   counter, a log, an `Rc<RefCell>` write — happens half as often, and
-  `RenderCtx::transient_mut` writes once rather than twice.
-- `RenderCtx::in_area` is documented rather than hidden: it is how a composite
+  `DeclareCtx::transient_mut` writes once rather than twice.
+- `DeclareCtx::in_area` is documented rather than hidden: it is how a composite
   hands a caller-supplied body the area it laid out for it.
 - A `Dialog` action is prepared where it is declared rather than in the dialog's
   own `prepare`. Preparation reads only the declaring state, which cannot change

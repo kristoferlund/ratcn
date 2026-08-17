@@ -5,11 +5,11 @@ use ratatui::{
     style::{Modifier, Style},
     widgets::{Paragraph, Wrap},
 };
-use ratcn::{List, ListItem, Theme, runtime::RenderCtx};
+use ratcn::{List, ListItem, Theme, runtime::DeclareCtx};
 
 use crate::{AppMsg, AppState};
 
-use super::shared::render_tile_panel;
+use super::shared::declare_tile_panel;
 
 pub const ID: &str = "themes";
 const THEMES: &[Theme] = Theme::presets();
@@ -54,7 +54,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
     let themes = List::new(
@@ -72,7 +72,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     )
     .disabled(controls_disabled);
 
-    let inner = render_tile_panel(ctx, area, " alt+1 ");
+    let inner = declare_tile_panel(ctx, area, " alt+1 ");
     let [header_area, intro_area, list_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(3),
@@ -82,7 +82,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     .areas(inner);
     ctx.paint(move |ctx| {
         let theme = ctx.theme;
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new("Themes").style(
                 Style::default()
                     .fg(theme.foreground)
@@ -90,12 +90,12 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
             ),
             header_area,
         );
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new("Ratcn includes seven preset themes and supports custom themes.")
                 .style(Style::default().fg(theme.muted_foreground))
                 .wrap(Wrap { trim: true }),
             intro_area,
         );
     });
-    ctx.render_component("themes", themes, list_area);
+    ctx.component("themes", themes, list_area);
 }

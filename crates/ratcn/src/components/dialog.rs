@@ -9,9 +9,9 @@ use ratatui::{
 
 use crate::Theme;
 use crate::runtime::{
-    CellOffset, ChildId, Component, DragOptions, DragPhase, Event, EventCtx, EventResult, KeyChord,
-    KeyCode, MeasuredComponent, PaintCtx, RenderCtx, ScopeOptions, TabWrap, clamp_offset,
-    is_border, offset_rect, wrapped_height,
+    CellOffset, ChildId, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx,
+    EventResult, KeyChord, KeyCode, MeasuredComponent, PaintCtx, ScopeOptions, TabWrap,
+    clamp_offset, is_border, offset_rect, wrapped_height,
 };
 use crate::text_width::{display_width_u16, wrap_to_width};
 use crate::theme::resolve_style;
@@ -186,7 +186,7 @@ fn paint_dialog_box<S>(
     if box_area.width == 0 || box_area.height == 0 {
         return;
     }
-    ctx.render_widget(Clear, box_area);
+    ctx.widget(Clear, box_area);
     let mut block = Block::bordered()
         .border_style(Style::default().fg(style.border))
         .style(Style::default().bg(style.background))
@@ -200,14 +200,14 @@ fn paint_dialog_box<S>(
             ),
         );
     }
-    ctx.render_widget(block, box_area);
+    ctx.widget(block, box_area);
 }
 
 type StyleFn = Box<dyn Fn(&Theme) -> DialogStyle>;
 /// A custom body closure, boxed for storage until the declaration paints it.
-type BodyFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>;
+type BodyFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
 /// One action's declaration, boxed with the component and id it carries.
-type ActionFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>, Rect)>;
+type ActionFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>, Rect)>;
 
 /// What fills the dialog's main area.
 ///
@@ -272,7 +272,7 @@ impl<S, M> fmt::Debug for DialogFooter<S, M> {
 /// # Declaring one
 ///
 /// A `Dialog` is an ordinary [`Component`], but declare it with
-/// [`RenderCtx::modal`] rather than `render_component` — that is what puts it on
+/// [`DeclareCtx::modal`] rather than `component` — that is what puts it on
 /// its own layer, above everything declared before it, and gives it the whole
 /// layer's keyboard fallback. Tab cycles inside it instead of escaping, and a
 /// key nothing inside handles is absorbed by the layer rather than reaching the
@@ -417,13 +417,13 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     /// Draw the main content area yourself, instead of using
     /// [`description`](Dialog::description).
     ///
-    /// The callback gets an ordinary [`RenderCtx`] whose
-    /// [`area`](RenderCtx::area) is the content strip; paint into it and declare
-    /// children with [`RenderCtx::render_component`] as usual. Those children
-    /// belong to the dialog's scope, sharing one sibling namespace with the
-    /// footer's children and any [`action`](Dialog::action) ids. Focusable
-    /// children just work: the runtime discovers them as they declare, so
-    /// there is nothing to announce.
+    /// The callback gets an ordinary [`DeclareCtx`] whose
+    /// [`area`](DeclareCtx::area) is the content strip; paint into it and
+    /// declare children with [`DeclareCtx::component`] as usual. Those
+    /// children belong to the dialog's scope, sharing one sibling namespace
+    /// with the footer's children and any [`action`](Dialog::action) ids.
+    /// Focusable children just work: the runtime discovers them as they
+    /// declare, so there is nothing to announce.
     ///
     /// The dialog cannot measure an arbitrary closure, so `height` states the
     /// content strip's exact height in terminal rows.
@@ -434,7 +434,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     pub fn content(
         mut self,
         height: u16,
-        f: impl FnOnce(&mut RenderCtx<'_, S, M>) + 'static,
+        f: impl FnOnce(&mut DeclareCtx<'_, S, M>) + 'static,
     ) -> Self {
         self.body = DialogBody::Content {
             height,
@@ -474,7 +474,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
         let slot = ActionSlot {
             size: component.measure(),
             declare: Some(Box::new(move |ctx, area| {
-                ctx.render_component(id, component, area);
+                ctx.component(id, component, area);
             })),
         };
         match &mut self.footer {
@@ -490,7 +490,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     /// Reach for this when the row needs something the standard layout does not
     /// do — a checkbox on the left, a status message beside the buttons. The
     /// callback follows the same rules as [`content`](Dialog::content): an
-    /// ordinary [`RenderCtx`] over the footer strip, children in the dialog's
+    /// ordinary [`DeclareCtx`] over the footer strip, children in the dialog's
     /// sibling namespace, `'static` captures.
     ///
     /// # Panics
@@ -501,7 +501,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     pub fn footer(
         mut self,
         height: u16,
-        f: impl FnOnce(&mut RenderCtx<'_, S, M>) + 'static,
+        f: impl FnOnce(&mut DeclareCtx<'_, S, M>) + 'static,
     ) -> Self {
         assert!(
             !matches!(self.footer, DialogFooter::Actions(_)),
@@ -659,7 +659,7 @@ impl<S: 'static, M: 'static> Default for Dialog<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let area = ctx.area();
         self.paint_area = area;
         let layout = dialog_layout(area, self.offset, &self.dims());
@@ -722,7 +722,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
                 .into_iter()
                 .map(Line::from)
                 .collect::<Vec<_>>();
-            ctx.render_widget(
+            ctx.widget(
                 Paragraph::new(lines).style(Style::default().fg(style.description_foreground)),
                 layout.main_area,
             );
@@ -860,7 +860,7 @@ mod tests {
     }
 
     impl Component<State, Msg> for MeasuredProbe {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, State, Msg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>) {
             self.rendered
                 .lock()
                 .expect("render record lock")
@@ -1025,12 +1025,12 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("outside"),
                         crate::Button::new("Outside").on_press(|| Msg::Activated),
                         Rect::new(0, 0, 11, 1),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("dialog"),
                         Dialog::new().title("Confirm"),
                         area,
@@ -1209,7 +1209,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("dialog"),
                         Dialog::new()
                             .title("Confirm")
@@ -1383,9 +1383,9 @@ mod tests {
             self.resolves.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn render(&mut self, ctx: &mut RenderCtx<'_, State, Msg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>) {
             let area = ctx.area();
-            ctx.render_component(
+            ctx.component(
                 ChildId::Static("inner"),
                 crate::Button::new("Inner").on_press(|| Msg::Activated),
                 area,
@@ -1421,7 +1421,7 @@ mod tests {
                         ChildId::Static("dialog"),
                         Dialog::new().footer(1, move |ctx| {
                             let area = ctx.area();
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("composite"),
                                 PreparedComposite {
                                     resolves: Arc::clone(&child_resolves),
@@ -1447,7 +1447,7 @@ mod tests {
     struct OptionFocusable;
 
     impl Component<State, Msg> for OptionFocusable {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, State, Msg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
         fn scope_options(&self) -> ScopeOptions {
             ScopeOptions::default().focusable()
@@ -1487,7 +1487,7 @@ mod tests {
                         ChildId::Static("dialog"),
                         Dialog::new().footer(1, |ctx| {
                             let area = ctx.area();
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("option-focusable"),
                                 OptionFocusable,
                                 area,
@@ -1521,7 +1521,7 @@ mod tests {
                         let dialog = Dialog::<State, Msg>::new().content(2, |ctx| {
                             if ctx.state().custom_enabled {
                                 let area = ctx.area();
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("conditional"),
                                     OptionFocusable,
                                     area,
@@ -1573,7 +1573,7 @@ mod tests {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
                         let observed = Arc::clone(&content_area);
-                        let content = move |ctx: &mut RenderCtx<'_, State, Msg>| {
+                        let content = move |ctx: &mut DeclareCtx<'_, State, Msg>| {
                             *observed.lock().expect("content area lock") = Some(ctx.area());
                         };
                         let dialog = if description_first {
@@ -1662,7 +1662,7 @@ mod tests {
                             Dialog::new().footer(1, |ctx| {
                                 let area = ctx.area();
                                 for _ in 0..2 {
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("duplicate"),
                                         OptionFocusable,
                                         area,
@@ -1696,7 +1696,7 @@ mod tests {
                             ChildId::Static("dialog"),
                             Dialog::new()
                                 .content(2, |ctx| {
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("duplicate"),
                                         OptionFocusable,
                                         ctx.area(),
@@ -1933,7 +1933,7 @@ mod tests {
                             .content(2, |_| {})
                             .footer(1, |ctx| {
                                 let area = ctx.area();
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("ok"),
                                     crate::Button::new("OK").on_press(|| Msg::Activated),
                                     area,

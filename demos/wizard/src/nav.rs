@@ -7,7 +7,7 @@ use ratatui::{
     style::Style,
     text::{Line, Span},
 };
-use ratcn::{Button, ButtonSize, ButtonWidget, Theme, runtime::RenderCtx};
+use ratcn::{Button, ButtonSize, ButtonWidget, Theme, runtime::DeclareCtx};
 
 use crate::app::{AppState, Msg};
 
@@ -105,7 +105,7 @@ pub fn stepper(step: Step, theme: &Theme) -> Line<'static> {
 
 /// The Back/Next row. Both buttons keep their ids across steps, so focus stays
 /// on Next and Enter walks the whole wizard.
-pub fn render(ctx: &mut RenderCtx<'_, AppState, Msg>, area: Rect, step: Step) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, area: Rect, step: Step) {
     let back = Button::new("Back")
         .outline()
         .size(ButtonSize::Large)
@@ -117,7 +117,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, Msg>, area: Rect, step: Step) {
         let [back_area] = Layout::horizontal([Constraint::Length(back_width)])
             .flex(Flex::Center)
             .areas(area);
-        ctx.render_component(BACK_ID, back, back_area);
+        ctx.component(BACK_ID, back, back_area);
         return;
     }
 
@@ -132,8 +132,8 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, Msg>, area: Rect, step: Step) {
     .flex(Flex::Center)
     .areas(area);
 
-    ctx.render_component(BACK_ID, back, back_area);
-    ctx.render_component(NEXT_ID, next, next_area);
+    ctx.component(BACK_ID, back, back_area);
+    ctx.component(NEXT_ID, next, next_area);
 }
 
 const fn next_label(step: Step) -> &'static str {

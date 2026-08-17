@@ -107,7 +107,7 @@ fn explained((id, label, tip, side): Explained) -> Tooltip<AppState, Msg> {
         })
         .trigger(move |ctx| {
             let area = ctx.area();
-            ctx.render_component(TRIGGER, button(label), area);
+            ctx.component(TRIGGER, button(label), area);
         })
 }
 
@@ -172,7 +172,7 @@ impl demo_shared::Demo for App {
                 Layout::horizontal([Constraint::Length(button(EDGE.1).width())])
                     .flex(Flex::Center)
                     .areas(edge_area);
-            ctx.render_component(EDGE.0, explained(EDGE), edge_button_area);
+            ctx.component(EDGE.0, explained(EDGE), edge_button_area);
 
             let areas: [_; ROW.len()] = Layout::horizontal(
                 ROW.map(|(_, label, _, _)| Constraint::Length(button(label).width())),
@@ -181,7 +181,7 @@ impl demo_shared::Demo for App {
             .spacing(2)
             .areas(row_area);
             for (entry, button_area) in ROW.into_iter().zip(areas) {
-                ctx.render_component(entry.0, explained(entry), button_area);
+                ctx.component(entry.0, explained(entry), button_area);
             }
         });
     }

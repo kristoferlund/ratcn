@@ -4,7 +4,7 @@ description: "Writing your own ratcn component: the Component trait, the four ki
 
 # Custom components
 
-Ratcn's built-ins are not special. `RenderCtx::render_component` accepts any
+Ratcn's built-ins are not special. `DeclareCtx::component` accepts any
 implementation of the `Component` trait, and the runtime gives a custom
 component the same identity, focus, hover, hit-testing, and event routing it
 gives `Button`. The kanban demo's `KanbanCard` — a draggable card with
@@ -20,7 +20,7 @@ declared as a component costs identity, traversal, and hit-testing for nothing.
 
 ```rust
 impl Component<AppState, Msg> for MyComponent {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, AppState, Msg>) { ... }
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, AppState, Msg>) { ... }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) { ... }
 
@@ -38,19 +38,19 @@ impl Component<AppState, Msg> for MyComponent {
 ```
 
 Declaring and drawing are two methods because they happen in two walks.
-`render` lays the component out and declares its descendants, and paints
+`declare` lays the component out and declares its descendants, and paints
 nothing. `paint` draws, after the whole tree is declared and focus has
 resolved — which is why the interaction flags (`ctx.focused`,
 `ctx.contains_focus`, `ctx.hovered`, `ctx.contains_hover`) live on `PaintCtx`
-and not on `RenderCtx`: while `render` runs, focus has nothing complete to
+and not on `DeclareCtx`: while `declare` runs, focus has nothing complete to
 resolve against yet. Hover is the exception, because it predates the frame
-rather than following from it: `RenderCtx::pointer_within()` reports whether
+rather than following from it: `DeclareCtx::pointer_within()` reports whether
 the pointer is inside this declaration, for the rare component whose
 *structure* depends on it. Both methods run once per frame, so anything
-`handle_event` reads back must be recorded in `render`, and must therefore not
+`handle_event` reads back must be recorded in `declare`, and must therefore not
 depend on those flags.
 
-Every method except `render` has a default. `paint` defaults to drawing
+Every method except `declare` has a default. `paint` defaults to drawing
 nothing, which is right for a composite that is only a container.
 `is_focusable` defaults to `false`;
 override it for anything that should take part in Tab traversal.
@@ -67,7 +67,7 @@ answers are read, so all of them may be computed from what it pins: `Tooltip`
 and `Select` resolve their open flag there, and `List`, `Select`, and `Tabs` use
 it to fail loud when two items carry the same value.
 `MeasuredComponent` adds a `measure` method so containers such as the Dialog
-action row can size a component before rendering it.
+action row can size a component before declaring it.
 
 A reusable component is worth splitting into the library's two halves: a
 stateless paint widget that only draws, and the `Component` that owns behavior
@@ -104,9 +104,9 @@ Had the value been copied in at declaration time, key `b` would also have
 started from `""` and the first keystroke would be lost. An edit acts on the
 state left by the previous *edit*, not the previous *render*.
 
-**Render-derived caches** — anything a later pointer event needs in order to be
-interpreted, such as a scroll offset used for hit-testing. Set them in `render`,
-read them in `handle_event`. They are safe because they live in the same
+**Declaration-derived caches** — anything a later pointer event needs in order
+to be interpreted, such as a scroll offset used for hit-testing. Set them in
+`declare`, read them in `handle_event`. They are safe because they live in the same
 retained instance the event routes to. They must never become a second copy of
 app state. The declared area needs no cache: `EventCtx::area` hands
 `handle_event` the same rect the event was hit-tested against.
@@ -117,7 +117,7 @@ instance itself, such as a drag anchor. A field would reset every frame, so
 long as that path keeps being declared. See [Dragging](./dragging) for the
 standard use.
 
-`render` can read the same value back with `RenderCtx::transient::<T>()` — that
+`declare` can read the same value back with `DeclareCtx::transient::<T>()` — that
 is how a wheel scroll survives a redraw. Prefer writing from the event side,
 where a single event carries the change.
 
@@ -141,14 +141,14 @@ rather than becoming unfocusable-but-reactive.
 
 ## Composites
 
-A component may declare descendants from its own `render` through the same
-`RenderCtx` methods the root uses — `ctx.render_component` for a child with
+A component may declare descendants from its own `declare` through the same
+`DeclareCtx` methods the root uses — `ctx.component` for a child with
 behavior, `ctx.scope` for a region that only needs its own Tab boundary and
 path segment. Children nest under the component's identity, and their
 focusability is discovered as they declare — there is nothing to announce.
 
 Container pixels need no care about order. Every component's `paint` is queued
-where `render` declared it and replayed in that order, and a component is
+where `declare` declared it and replayed in that order, and a component is
 queued at the point it opens — so a container's background and border land
 beneath everything it declares inside itself, whatever order the two methods
 are written in. The same holds for `ctx.paint` closures: each is queued where
@@ -169,9 +169,9 @@ its own area.
 
 That is the whole contract. A composite is an ordinary `Component`; there is no
 composite trait to implement and no lifecycle to opt into. What a composite does
-need is somewhere to keep what its builders were handed until `render` uses it,
-and a way to keep answering geometry questions once that is gone. In practice
-that is four pieces:
+need is somewhere to keep what its builders were handed until `declare` uses
+it, and a way to keep answering geometry questions once that is gone. In
+practice that is four pieces:
 
 **Deferred drawing.** A `paint` closure runs after declaration has ended, so it
 owns what it draws with: it is `'static` and receives a `PaintCtx` carrying the
@@ -183,8 +183,8 @@ borders and padding) and build the styled one inside the closure.
 
 **Caller-supplied bodies.** A region the caller fills is a closure, and it
 should be `FnOnce` so the caller can move owned values into it. Store it as
-`Option<Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>>` and `take()` it in
-`render`, then hand it the area you chose for it with
+`Option<Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>>` and `take()` it in
+`declare`, then hand it the area you chose for it with
 `ctx.in_area(area, body)`. The body's children land in the composite's own
 sibling namespace, so ids must be unique across every body it declares.
 
@@ -192,16 +192,16 @@ sibling namespace, so ids must be unique across every body it declares.
 before it is declared. Accept it as `impl MeasuredComponent<S, M> + 'static`,
 call `measure()` in the builder, and keep the `Size` beside a closure that
 declares it — the closure is what gets boxed, not the child, because
-`Box<dyn Component>` does not itself implement `Component`. `render` computes
+`Box<dyn Component>` does not itself implement `Component`. `declare` computes
 each area from the stored sizes and runs the closures in insertion order, which
 is also Tab order.
 
 **Geometry that outlives the closures.** `handle_event` runs on the retained
-instance, after `render` has taken every closure, and it still has to recompute
+instance, after `declare` has taken every closure, and it still has to recompute
 the box the pointer landed in. So keep the layout *facts* — heights, measured
 sizes, the fact that a body was configured at all — in fields that taking a
 closure does not empty, and derive the rects from them in one function that
-`render`, `paint`, `interaction_area`, and `handle_event` all call. Anything
+`declare`, `paint`, `interaction_area`, and `handle_event` all call. Anything
 derived twice from two places will eventually disagree, and hit-testing is where
 that shows up.
 
@@ -228,7 +228,7 @@ same from the other direction: it lives outside the crate to begin with.
 - State that events compose against: reader closures, read in `handle_event`.
 - Geometry needed to interpret events: `EventCtx::area` is the rect the event
   was hit-tested against — the interaction area, narrowed if
-  `interaction_area` returned one. Retain the paint allocation in `render` when
+  `interaction_area` returned one. Retain the paint allocation in `declare` when
   the geometry has to come from that instead, and cache anything else there
   too, never in `paint`.
 - Everything that draws: `paint`, styled from its interaction flags.

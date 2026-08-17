@@ -14,7 +14,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
 };
-use ratcn::runtime::{RenderCtx, ScopeOptions};
+use ratcn::runtime::{DeclareCtx, ScopeOptions};
 
 use crate::{AppMsg, AppState};
 
@@ -44,7 +44,7 @@ impl State {
 /// the runtime dims the base layer when the layer opens. Snow is deferred from
 /// the root so it paints onto that dimmed frame instead of an opaque layer
 /// canvas, preserving the app beneath it.
-pub fn declare(ctx: &mut RenderCtx<'_, AppState, AppMsg>, area: Rect, now: Duration) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>, area: Rect, now: Duration) {
     ctx.modal_scope(ID, area, ScopeOptions::default().focusable(), |_| {});
     ctx.defer_paint(move |painter, state| {
         let elapsed = now.saturating_sub(state.screensaver.started);
@@ -148,7 +148,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.paint(move |ctx| ctx.render_widget(Line::from("A"), area));
+                    ctx.paint(move |ctx| ctx.widget(Line::from("A"), area));
                     declare(ctx, area, Duration::ZERO);
                 });
             })

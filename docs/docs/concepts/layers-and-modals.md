@@ -14,8 +14,8 @@ that does the job:
 
 | Mechanism | Paint time and purpose | Interaction |
 | --- | --- | --- |
-| `paint` | Declaration order; ordinary Ratatui decoration or paint-only widgets | None |
-| `render_component` | Declaration order, the component before its descendants | Identity, geometry, focus, hover, events |
+| `paint` / `paint_widget` | Declaration order; ordinary Ratatui decoration or paint-only widgets | None |
+| `component` | Declaration order, the component before its descendants | Identity, geometry, focus, hover, events |
 | `defer_paint` | After the ordinary declarations in the current layer | Passive paint only |
 | `hint` | A layer that explains: tooltips | Paints only; not a pointer or focus target |
 | `popup` | A layer that offers a choice: dropdowns, menus | Own events; no dim, no capture, no focus stealing |
@@ -81,10 +81,10 @@ state.modals.close(&mut state.focus);
 the stack and the focus bookkeeping; *when* and *which* modal opens stays your
 decision.
 
-The modal root does not have to be a component. `RenderCtx::modal_scope` opens
+The modal root does not have to be a component. `DeclareCtx::modal_scope` opens
 the same layer around a plain scope closure — paint your own chrome and declare
-children with `render_component`, exactly like a base-layer panel. Reach for it
-to hand-roll a dialog-like layer that stays entirely app-owned; `Dialog` is the
+children with `component`, exactly like a base-layer panel. Reach for it to
+hand-roll a dialog-like layer that stays entirely app-owned; `Dialog` is the
 packaged alternative with chrome, dragging, and dismiss keys built in.
 
 ## Binding the stack

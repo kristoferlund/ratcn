@@ -209,10 +209,10 @@ impl demo_shared::Demo for App {
         let state = &self.state;
         self.ratcn.render(frame, state, &theme, |ctx| {
             ctx.paint(move |ctx| {
-                ctx.render_widget(header_bar(ctx.theme), header_area(frame_area));
+                ctx.widget(header_bar(ctx.theme), header_area(frame_area));
             });
             for (index, tile_area) in tile_areas(frame_area).into_iter().enumerate() {
-                tiles::render(index, ctx, tile_area);
+                tiles::declare(index, ctx, tile_area);
             }
             if state.modals_state.is_open(tiles::release::DIALOG_ID) {
                 ctx.modal(
@@ -225,7 +225,7 @@ impl demo_shared::Demo for App {
                 screensaver::declare(ctx, frame_area, now);
             }
             ctx.defer_paint(move |painter, state| {
-                painter.render_widget(
+                painter.widget(
                     ToasterWidget::new(&state.toasts, now).themed(&state.theme()),
                     frame_area,
                 );

@@ -99,7 +99,7 @@ impl App {
             let save = Button::new("Save")
                 .disabled(saved)
                 .on_press(|| Msg::Save);
-            ctx.render_component("save", save, area);
+            ctx.component("save", save, area);
         });
     }
 }

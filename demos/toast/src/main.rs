@@ -163,8 +163,8 @@ impl demo_shared::Demo for App {
             ])
             .spacing(1)
             .areas(buttons_area);
-            ctx.render_component(ids::BUTTON, random_button, random_area);
-            ctx.render_component(ids::SAVE, save_button, save_area);
+            ctx.component(ids::BUTTON, random_button, random_area);
+            ctx.component(ids::SAVE, save_button, save_area);
         });
 
         // Toasts are decoration over the whole frame, painted after the

@@ -129,14 +129,14 @@ impl demo_shared::Demo for App {
                 Layout::vertical([Constraint::Length(tabs.height()), Constraint::Min(0)])
                     .areas(demo);
 
-            ctx.render_component(ids::TABS, tabs, tabs_area);
+            ctx.component(ids::TABS, tabs, tabs_area);
 
             let content = state.selected.content();
             ctx.paint(move |ctx| {
                 ctx.with_buffer(|buf| {
                     buf.set_style(content_area, Style::default().bg(THEME.surface));
                 });
-                ctx.render_widget(
+                ctx.widget(
                     Paragraph::new(content).wrap(Wrap { trim: true }),
                     content_area.inner(CONTENT_PADDING),
                 );

@@ -164,7 +164,7 @@ impl demo_shared::Demo for App {
                 Constraint::Length(open_button.width()),
                 Constraint::Length(ratcn::ButtonSize::Small.height()),
             );
-            ctx.render_component(ids::OPEN, open_button, button_area);
+            ctx.component(ids::OPEN, open_button, button_area);
             if self.state.modals.is_open(ids::DIALOG) {
                 ctx.modal(
                     ids::DIALOG,
@@ -204,7 +204,7 @@ impl App {
                 let [text_area, list_area] = ctx.area().layout(&content_layout);
 
                 ctx.paint(move |ctx| {
-                    ctx.render_widget(
+                    ctx.widget(
                         Paragraph::new(
                             "Select your favourite sci-fi writers. Use Up/Down to move and Enter to toggle a writer.",
                         )
@@ -214,7 +214,7 @@ impl App {
                     );
                 });
 
-                ctx.render_component(
+                ctx.component(
                     ids::WRITERS,
                     List::new(WRITERS.map(|writer| ListItem::new(writer, writer)))
                         .item_focus(|s: &AppState| s.focused_writer, Msg::WriterFocusChanged)

@@ -22,7 +22,7 @@ ctx.scope(
     pane_area,
     ScopeOptions::default().tab_wrap(TabWrap::Wrap),
     |ctx| {
-        ctx.render_component(
+        ctx.component(
             "save",
             Button::new("Save").on_press(|| Msg::Save),
             save_area,
@@ -108,7 +108,7 @@ Two places read it:
 
 - `PaintCtx::hovered` and `PaintCtx::contains_hover`, for styling under the
   pointer.
-- `RenderCtx::pointer_within()`, while declaring, for the rarer case where
+- `DeclareCtx::pointer_within()`, while declaring, for the rarer case where
   *structure* depends on the pointer — a tooltip deciding whether to declare
   its bubble. It reports whether the pointer is on the current declaration or
   anything inside it.

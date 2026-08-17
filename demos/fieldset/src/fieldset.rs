@@ -16,8 +16,8 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph},
 };
 use ratcn::runtime::{
-    ChildId, Component, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton,
-    MouseKind, PaintCtx, RenderCtx, ScopeOptions,
+    ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MeasuredComponent,
+    MouseButton, MouseKind, PaintCtx, ScopeOptions,
 };
 
 /// Cells of chrome on each side of the box: the one-cell border plus one cell
@@ -32,10 +32,10 @@ const LABEL_GAP: u16 = 2;
 const COLLAPSED_MARKER: &str = "\u{25b8} ";
 const EXPANDED_MARKER: &str = "\u{25be} ";
 
-/// A body region the caller fills, boxed until `render` hands it its strip.
-type BodyFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>;
+/// A body region the caller fills, boxed until `declare` hands it its strip.
+type BodyFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
 /// The action's declaration, boxed with the component and the id it carries.
-type ActionFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>, Rect)>;
+type ActionFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>, Rect)>;
 /// Reads the collapsed flag out of app state, at the moment it is asked.
 type CollapsedFn<S> = Box<dyn Fn(&S) -> bool>;
 /// Builds the message that asks the app to collapse or expand.
@@ -45,7 +45,7 @@ type OnToggleFn<M> = Box<dyn Fn(bool) -> M>;
 /// Everything the fieldset's geometry is made of.
 ///
 /// These are the layout *facts*, kept apart from the closures they describe,
-/// because `render` takes those closures and `handle_event` still has to
+/// because `declare` takes those closures and `handle_event` still has to
 /// re-derive the same rects a frame later.
 struct Facts {
     /// Pinned in [`Component::prepare`], because `interaction_area` is asked
@@ -67,7 +67,7 @@ struct FieldsetLayout {
     body_area: Rect,
 }
 
-/// The one geometry function. `render`, `paint`, `interaction_area`, and
+/// The one geometry function. `declare`, `paint`, `interaction_area`, and
 /// `handle_event` all derive their rects here, from the same facts, and `height`
 /// answers from the same two helpers below — so no two of them can disagree
 /// about where the header is or how tall the box gets.
@@ -177,17 +177,17 @@ impl<S: 'static, M: 'static> Fieldset<S, M> {
     // #region body
     /// Fill the body yourself: `height` rows, declared by `body`.
     ///
-    /// The callback gets an ordinary [`RenderCtx`] over the body strip — paint
+    /// The callback gets an ordinary [`DeclareCtx`] over the body strip — paint
     /// into it, declare components into it. Those components are the
     /// fieldset's own children, in the same sibling namespace as the
     /// [`action`](Self::action), so their ids must not collide with it.
     ///
     /// The closure is `FnOnce` so it can consume what the caller moves in, and
-    /// it is stored until `render`, so it may only capture `'static` values.
+    /// it is stored until `declare`, so it may only capture `'static` values.
     pub fn body(
         mut self,
         height: u16,
-        body: impl FnOnce(&mut RenderCtx<'_, S, M>) + 'static,
+        body: impl FnOnce(&mut DeclareCtx<'_, S, M>) + 'static,
     ) -> Self {
         self.body_height = height;
         self.body = Some(Box::new(body));
@@ -199,7 +199,7 @@ impl<S: 'static, M: 'static> Fieldset<S, M> {
     /// Put one measured component in the header row, end-aligned beside the
     /// label.
     ///
-    /// The size is taken here, while the component is still in hand: `render`
+    /// The size is taken here, while the component is still in hand: `declare`
     /// has to know how wide the action is *before* it declares it, and by then
     /// the component is inside the closure below.
     pub fn action(
@@ -210,7 +210,7 @@ impl<S: 'static, M: 'static> Fieldset<S, M> {
         let id = id.into();
         self.action_size = action.measure();
         self.action = Some(Box::new(move |ctx, area| {
-            ctx.render_component(id, action, area);
+            ctx.component(id, action, area);
         }));
         self
     }
@@ -296,16 +296,16 @@ impl<S: 'static, M: 'static> Fieldset<S, M> {
     }
 }
 
-// #region impl-render
+// #region impl-declare
 impl<S: 'static, M: 'static> Component<S, M> for Fieldset<S, M> {
     /// Pin the collapsed flag for this declaration: `interaction_area` is asked
     /// for the box with no state in hand, and `paint` has to agree with the box
-    /// `render` laid out even if the app has moved on since.
+    /// `declare` laid out even if the app has moved on since.
     fn prepare(&mut self, state: &S) {
         self.collapsed_now = self.is_collapsed(state);
     }
 
-    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let area = ctx.area();
         // Retained for `handle_event`: the runtime narrows this component's
         // event area to the box, and the geometry function wants the whole
@@ -337,7 +337,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Fieldset<S, M> {
             });
         }
     }
-    // #endregion impl-render
+    // #endregion impl-declare
 
     // #region impl-paint
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
@@ -354,7 +354,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Fieldset<S, M> {
         } else {
             ctx.theme.border
         };
-        ctx.render_widget(
+        ctx.widget(
             Block::bordered()
                 .border_set(border::ROUNDED)
                 .border_style(Style::default().fg(border_color)),
@@ -382,7 +382,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Fieldset<S, M> {
                     .add_modifier(Modifier::BOLD),
             ),
         ]);
-        ctx.render_widget(Paragraph::new(label), layout.label_area);
+        ctx.widget(Paragraph::new(label), layout.label_area);
     }
     // #endregion impl-paint
 
@@ -499,7 +499,7 @@ mod tests {
             )
             .body(BODY_HEIGHT, |ctx| {
                 let area = ctx.area();
-                ctx.render_component(
+                ctx.component(
                     "email",
                     Button::new("Email").on_press(|| Msg::BodyPressed),
                     Rect { height: 1, ..area },
@@ -519,7 +519,7 @@ mod tests {
             .on_toggle(Msg::Collapse)
             .body(BODY_HEIGHT, |ctx| {
                 let area = ctx.area();
-                ctx.paint(move |ctx| ctx.render_widget(Paragraph::new("email, push"), area));
+                ctx.paint(move |ctx| ctx.widget(Paragraph::new("email, push"), area));
             })
     }
 
@@ -533,7 +533,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, state, &theme, |ctx| {
-                    ctx.render_component("group", group, AREA);
+                    ctx.component("group", group, AREA);
                 });
             })
             .expect("draw");

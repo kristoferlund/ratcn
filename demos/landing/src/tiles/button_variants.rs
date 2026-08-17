@@ -2,11 +2,11 @@ use ratatui::{
     layout::{Constraint, Flex, Layout, Rect},
     widgets::Padding,
 };
-use ratcn::{Button, ButtonSize::Large, ButtonVariant, Toast, ToastKind, runtime::RenderCtx};
+use ratcn::{Button, ButtonSize::Large, ButtonVariant, Toast, ToastKind, runtime::DeclareCtx};
 
 use crate::{AppMsg, AppState};
 
-use super::shared::render_tile_panel_with_padding;
+use super::shared::declare_tile_panel_with_padding;
 
 const BUTTONS: [(&str, &str, ButtonVariant, ToastKind); 5] = [
     (
@@ -38,7 +38,7 @@ const BUTTONS: [(&str, &str, ButtonVariant, ToastKind); 5] = [
 
 pub const ID: &str = "button_variants";
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
     let buttons = BUTTONS
@@ -49,11 +49,12 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         .max()
         .unwrap_or(0);
     let button_layout = Layout::horizontal([Constraint::Length(button_width)]).flex(Flex::Center);
-    let inner_area = render_tile_panel_with_padding(ctx, area, " alt+3 ", Padding::new(2, 2, 0, 0));
+    let inner_area =
+        declare_tile_panel_with_padding(ctx, area, " alt+3 ", Padding::new(2, 2, 0, 0));
     let rows = button_rows(inner_area);
 
     for ((id, button), row) in buttons.into_iter().zip(rows) {
-        render_button(ctx, id, button, row, &button_layout, inner_area);
+        declare_button(ctx, id, button, row, &button_layout, inner_area);
     }
 }
 
@@ -83,8 +84,8 @@ fn button_rows(area: Rect) -> [Rect; BUTTONS.len()] {
     })
 }
 
-fn render_button(
-    ctx: &mut RenderCtx<'_, AppState, AppMsg>,
+fn declare_button(
+    ctx: &mut DeclareCtx<'_, AppState, AppMsg>,
     id: &'static str,
     button: Button<AppMsg>,
     row: Rect,
@@ -99,5 +100,5 @@ fn render_button(
     } else {
         Rect::ZERO
     };
-    ctx.render_component(id, button, button_area);
+    ctx.component(id, button, button_area);
 }

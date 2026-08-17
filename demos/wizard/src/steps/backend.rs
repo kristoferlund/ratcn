@@ -8,7 +8,7 @@ use ratatui::{
     style::Style,
     widgets::{Paragraph, Wrap},
 };
-use ratcn::{ListItem, Select, runtime::RenderCtx};
+use ratcn::{ListItem, Select, runtime::DeclareCtx};
 
 use crate::app::{AppState, Msg as AppMsg};
 use crate::shared::{Backend, ChoiceMsg};
@@ -53,7 +53,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let state = ctx.state();
     let theme = ctx.theme;
@@ -78,7 +78,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         .iter()
         .map(|command| steps::command(theme, *command))
         .collect::<Vec<_>>();
-    let inner = steps::render_panel(ctx, area, Some("Pick a backend"));
+    let inner = steps::declare_panel(ctx, area, Some("Pick a backend"));
 
     let [intro, select_area, commands_area] = inner.layout(
         &Layout::vertical([
@@ -90,20 +90,18 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     );
 
     ctx.paint(move |ctx| {
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new("One feature per host, none on by default.")
                 .style(Style::default().fg(ctx.theme.muted_foreground))
                 .wrap(Wrap { trim: true }),
             intro,
         );
     });
-    ctx.render_component(SELECT_ID, backend, select_area);
-    ctx.paint(move |ctx| {
-        ctx.render_widget(
-            Paragraph::new(commands).wrap(Wrap { trim: false }),
-            commands_area,
-        );
-    });
+    ctx.component(SELECT_ID, backend, select_area);
+    ctx.paint_widget(
+        Paragraph::new(commands).wrap(Wrap { trim: false }),
+        commands_area,
+    );
 }
 
 #[cfg(test)]

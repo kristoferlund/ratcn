@@ -30,12 +30,12 @@ let tabs = Tabs::new([
 .tab_focus(|s: &AppState| Some(s.focused), Msg::ScreenFocusChanged)
 .selection(|s: &AppState| Some(s.selected), Msg::ScreenSelected);
 
-ctx.render_component("tabs", tabs, tabs_area);
+ctx.component("tabs", tabs, tabs_area);
 
 match state.selected {
-    Screen::Overview => render_overview(ctx, content_area),
-    Screen::Analytics => render_analytics(ctx, content_area),
-    Screen::Reports => render_reports(ctx, content_area),
+    Screen::Overview => declare_overview(ctx, content_area),
+    Screen::Analytics => declare_analytics(ctx, content_area),
+    Screen::Reports => declare_reports(ctx, content_area),
 }
 ```
 

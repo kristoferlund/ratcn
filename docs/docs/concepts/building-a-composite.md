@@ -62,7 +62,7 @@ they exist only inside a closure it will hand an area to.
 <<< ../../../demos/fieldset/src/fieldset.rs#struct{rust}
 
 Two pairs of fields carry what would naively be one thing each.
-`body_height`/`body` and `action_size`/`action` are split because `render`
+`body_height`/`body` and `action_size`/`action` are split because `declare`
 *takes* the closures — they are `FnOnce`, they run once, and afterwards the
 `Option` is empty — while the sizes are still needed a frame later, when a click
 arrives and the box has to be re-derived. The rule from the contract, made
@@ -70,9 +70,9 @@ concrete: **keep the layout facts in fields that taking a closure does not
 empty.**
 
 `collapsed_now` and `paint_area` are the other half of the same idea. They are
-render-derived caches, written while declaring and read afterwards, and neither
-is a second copy of app state: one is a pinned reading of it, the other is
-geometry.
+declaration-derived caches, written while declaring and read afterwards, and
+neither is a second copy of app state: one is a pinned reading of it, the other
+is geometry.
 
 One method is the hinge the whole pattern turns on — it names, in one place,
 exactly which fields the geometry is allowed to depend on:
@@ -89,7 +89,7 @@ Everything about where the fieldset's parts are lives in one place:
 
 <<< ../../../demos/fieldset/src/fieldset.rs#facts{rust}
 
-`layout` is called from four places — `render` to place the body and the action,
+`layout` is called from four places — `declare` to place the body and the action,
 `paint` to draw the border and label, `interaction_area` to report the box, and
 `handle_event` to hit-test the header — and `height`, below, answers from the
 same two helpers. None of them re-derives anything itself. That is the whole
@@ -110,7 +110,7 @@ rather than assuming one row, which is what measuring the child is *for*.
 A region the caller fills is a closure, and it should be `FnOnce` so the caller
 can move owned values into it — the demo moves two `bool`s in, and a real app
 moves owned rows, strings, and handles. It is stored on the component until
-`render`, which is why it may only capture `'static` values.
+`declare`, which is why it may only capture `'static` values.
 
 `ctx.in_area(area, body)` is what runs it: the callback sees the strip as its
 own `ctx.area()`, while the identity scope stays the fieldset's. So the body's
@@ -123,21 +123,21 @@ caller opens a `ctx.scope` inside it.
 
 <<< ../../../demos/fieldset/src/fieldset.rs#action{rust}
 
-`measure()` is called **here, at push time**, not in `render`. By the time
-`render` runs, the component has been moved into the closure and is out of
+`measure()` is called **here, at push time**, not in `declare`. By the time
+`declare` runs, the component has been moved into the closure and is out of
 reach, and the header cannot be laid out without its width. So the size is taken
 while the component is still in hand and kept beside the closure.
 
 What gets boxed is the *declaration*, not the child: `Box<dyn Component>` does
 not itself implement `Component`, so the id and the component are captured
-inside a closure that calls `ctx.render_component`. Everything that implements
+inside a closure that calls `ctx.component`. Everything that implements
 [`MeasuredComponent`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.MeasuredComponent.html)
 can go in the slot; anything else has no size to place, and belongs in the body
 where the caller does the placing.
 
 ## Declaring
 
-<<< ../../../demos/fieldset/src/fieldset.rs#impl-render{rust}
+<<< ../../../demos/fieldset/src/fieldset.rs#impl-declare{rust}
 
 `prepare` runs first, before the runtime reads `scope_options`,
 `is_focusable`, or `interaction_area`, and that is the only place the collapsed
@@ -147,7 +147,7 @@ the pin — `Component::is_focusable(&self, state)` takes state, so a leaf whose
 focusability follows a `disabled` prop just reads it — but `scope_options` and
 `interaction_area` do not, and whatever they depend on has to be settled here.
 
-`render` paints nothing. It records `paint_area`, computes the layout once,
+`declare` paints nothing. It records `paint_area`, computes the layout once,
 declares the action, then the body — declaration order is Tab order, and here it
 is also reading order — and each closure is `take`n so it can never run twice.
 A collapsed fieldset simply does not declare its body: there is no hiding
@@ -163,7 +163,7 @@ everything the composite declares inside itself. That is exactly what a
 background and a border want, and exactly wrong for a wash: the body's
 components are queued after it and would paint straight over it.
 
-**`ctx.paint` is queued where it is reached.** Called at the end of `render`,
+**`ctx.paint` is queued where it is reached.** Called at the end of `declare`,
 after the action and the body have been declared, it lands after *their* paint in
 the same queue and on the same layer, and its `PaintCtx` still reports this
 declaration's area and interaction flags. That is what the fieldset uses, and it
@@ -183,7 +183,7 @@ it. Use it to outrank siblings; use `ctx.paint` to outrank your own children.
 <<< ../../../demos/fieldset/src/fieldset.rs#impl-paint{rust}
 
 `paint` runs after the whole tree is declared and focus has resolved, which is
-why the four interaction flags live on `PaintCtx` and not on `RenderCtx`. The
+why the four interaction flags live on `PaintCtx` and not on `DeclareCtx`. The
 fieldset uses three of them, and the distinctions matter:
 
 - `contains_focus` for the border, because a group with a focused control inside
@@ -196,8 +196,8 @@ fieldset uses three of them, and the distinctions matter:
   what a click would toggle, so the header is what the marker reports on.
 
 This is also the answer to a question worth asking once:
-`RenderCtx::pointer_within()` reads hover while declaring, so why not style from
-it? Because it answers with the *last resolved* hover — the previous frame's,
+`DeclareCtx::pointer_within()` reads hover while declaring, so why not style
+from it? Because it answers with the *last resolved* hover — the previous frame's,
 against the previous surface — while the paint flags are this frame's. Where the
 two disagree, structure lags by one frame. Appearance is never a good enough
 reason to accept that; keep `pointer_within` for the rare case where hover
@@ -300,10 +300,10 @@ own `draw` and `handle_event`.
 ## Checklist
 
 - Layout facts get fields of their own; the closures they describe are `Option`s
-  that `render` takes.
-- Every rect comes from one function, called from `render`, `paint`,
+  that `declare` takes.
+- Every rect comes from one function, called from `declare`, `paint`,
   `interaction_area`, and `handle_event`.
-- A caller's body is `FnOnce`, stored, `take`n in `render`, and run with
+- A caller's body is `FnOnce`, stored, `take`n in `declare`, and run with
   `ctx.in_area`.
 - A placed child is measured in the builder; the *declaration* is what gets
   boxed, and declaration order is Tab order.

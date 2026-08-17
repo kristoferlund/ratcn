@@ -1,14 +1,14 @@
 //! Step 4: the end. Nothing to choose — just what the choices added up to.
 
 use ratatui::widgets::{Paragraph, Wrap};
-use ratcn::runtime::RenderCtx;
+use ratcn::runtime::DeclareCtx;
 
 use crate::app::{AppState, Msg as AppMsg};
 use crate::steps;
 
 pub const SCREEN_ID: &str = "step_done";
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let state = ctx.state();
     let theme = ctx.theme;
@@ -26,8 +26,6 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     );
     commands.push(steps::code(theme, state.choices.theme_line()));
 
-    let inner = steps::render_panel(ctx, area, Some("Happy development!"));
-    ctx.paint(move |ctx| {
-        ctx.render_widget(Paragraph::new(commands).wrap(Wrap { trim: false }), inner);
-    });
+    let inner = steps::declare_panel(ctx, area, Some("Happy development!"));
+    ctx.paint_widget(Paragraph::new(commands).wrap(Wrap { trim: false }), inner);
 }

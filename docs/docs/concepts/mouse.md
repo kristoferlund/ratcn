@@ -112,7 +112,7 @@ The normalized `MouseKind` is `Down`, `Up`, `Click`, `Drag`, `DragEnd`,
   state: there is nothing to bind. `PaintCtx::hovered` and `contains_hover`
   let a component highlight under the pointer **without stealing focus**, so
   keyboard use of the focused component keeps working while the mouse drifts
-  over a button, and `RenderCtx::pointer_within()` answers the same question
+  over a button, and `DeclareCtx::pointer_within()` answers the same question
   while declaring, for structure that depends on it. Every pointer event —
   `Down` and `Up` and `Scroll`, not only `Moved` — records where the pointer
   is; each committed frame then resolves hover from that position against the

@@ -2,8 +2,8 @@
 
 use ratatui::{Terminal, backend::TestBackend};
 use ratcn::runtime::{
-    ChildId, Component, Event, EventResult, FocusState, KeyCode, KeyEvent, PaintCtx, Ratcn,
-    RenderCtx, ScopeOptions,
+    ChildId, Component, DeclareCtx, Event, EventResult, FocusState, KeyCode, KeyEvent, PaintCtx,
+    Ratcn, ScopeOptions,
 };
 use ratcn::{Dialog, Theme};
 
@@ -22,7 +22,7 @@ enum Msg {
 struct Probe;
 
 impl Component<State, Msg> for Probe {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, State, Msg>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>) {
         assert_eq!(ctx.state().marker, 7);
     }
 
@@ -68,12 +68,12 @@ fn unified_render_apis_are_usable_from_an_external_crate() {
                     ChildId::Static("view"),
                     area,
                     ScopeOptions::default(),
-                    |ctx| ctx.render_component(ChildId::Static("probe"), Probe, ctx.area()),
+                    |ctx| ctx.component(ChildId::Static("probe"), Probe, ctx.area()),
                 );
                 ctx.modal(
                     ChildId::Static("dialog"),
                     Dialog::<State, Msg>::new().content(1, |ctx| {
-                        ctx.render_component(ChildId::Static("probe"), Probe, ctx.area());
+                        ctx.component(ChildId::Static("probe"), Probe, ctx.area());
                     }),
                     area,
                 );

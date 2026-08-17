@@ -128,7 +128,7 @@ impl demo_shared::Demo for App {
             let step = state.nav.step;
 
             ctx.paint(move |ctx| {
-                ctx.render_widget(nav::stepper(step, ctx.theme), stepper);
+                ctx.widget(nav::stepper(step, ctx.theme), stepper);
             });
 
             ctx.scope(
@@ -136,14 +136,14 @@ impl demo_shared::Demo for App {
                 panel,
                 ScopeOptions::default(),
                 |ctx| match step {
-                    Step::Project => steps::project::render(ctx),
-                    Step::Backend => steps::backend::render(ctx),
-                    Step::Theme => steps::theme::render(ctx),
-                    Step::Done => steps::done::render(ctx),
+                    Step::Project => steps::project::declare(ctx),
+                    Step::Backend => steps::backend::declare(ctx),
+                    Step::Theme => steps::theme::declare(ctx),
+                    Step::Done => steps::done::declare(ctx),
                 },
             );
 
-            nav::render(ctx, buttons, step);
+            nav::declare(ctx, buttons, step);
         });
     }
 }

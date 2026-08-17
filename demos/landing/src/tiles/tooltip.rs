@@ -6,12 +6,12 @@
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratcn::{
     Button, ButtonSize::Large, ButtonVariant, Toast, ToastKind, Tooltip, TooltipSide,
-    runtime::RenderCtx,
+    runtime::DeclareCtx,
 };
 
 use crate::{AppMsg, AppState};
 
-use super::shared::render_tile_panel;
+use super::shared::declare_tile_panel;
 
 pub const ID: &str = "tooltip";
 
@@ -23,9 +23,9 @@ const LABEL: &str = "What's this?";
 const TOOLTIP_TEXT: &str = "Just a tooltip.";
 const TOAST_TEXT: &str = "Just a toast.";
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
-    let inner = render_tile_panel(ctx, area, " alt+6 ");
+    let inner = declare_tile_panel(ctx, area, " alt+6 ");
     let button_area = centered(inner, button(false).width());
 
     let disabled = ctx.state().controls_disabled;
@@ -36,10 +36,10 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         .open_when(move |state: &AppState, hovered| hovered && !state.controls_disabled)
         .trigger(move |ctx| {
             let area = ctx.area();
-            ctx.render_component(TRIGGER, button(disabled), area);
+            ctx.component(TRIGGER, button(disabled), area);
         });
 
-    ctx.render_component(TIP, tooltip, button_area);
+    ctx.component(TIP, tooltip, button_area);
 }
 
 /// Built twice per frame — once to measure, once to declare — so the width the

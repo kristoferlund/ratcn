@@ -10,7 +10,7 @@
 //!
 //! The structure is the point. `AppState` is subdivided by ownership
 //! (orchestration, shared choices, one struct per step); each step module owns
-//! its own `State`/`Msg`/`update`/`render`, and steps that choose nothing own
+//! its own `State`/`Msg`/`update`/`declare`, and steps that choose nothing own
 //! nothing; and the shell's top-level `update` only routes messages to their
 //! owner. See `app.rs`, `nav.rs`, `shared.rs`, and `steps/`.
 //!

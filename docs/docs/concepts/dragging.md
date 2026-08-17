@@ -88,8 +88,8 @@ A component becomes draggable with the same parts. The essentials, from the
 demo's `DragPanel`:
 
 ```rust
-use ratcn::runtime::{CellOffset, Component, DragOptions, DragPhase, Event,
-    EventCtx, EventResult, RenderCtx, clamp_offset};
+use ratcn::runtime::{CellOffset, Component, DeclareCtx, DragOptions, DragPhase,
+    Event, EventCtx, EventResult, clamp_offset};
 
 struct DragPanel {
     read_offset: Box<dyn Fn(&AppState) -> CellOffset>,
@@ -98,9 +98,9 @@ struct DragPanel {
 }
 
 impl Component<AppState, Msg> for DragPanel {
-    fn render(
+    fn declare(
         &mut self,
-        ctx: &mut RenderCtx<'_, AppState, Msg>,
+        ctx: &mut DeclareCtx<'_, AppState, Msg>,
     ) {
         let area = ctx.area();
         // `area` is the panel box already computed by the declaration.
@@ -204,9 +204,9 @@ its displayed label and its dynamic id (`number.to_string().into()` builds the
 declaration, so identity follows the card when it moves between columns.
 
 The floating dragged card is passive paint scheduled with
-`RenderCtx::defer_paint`. Deferred paint runs after ordinary declarations in the
-current layer and has no identity, geometry, focus, hover, or hit target; the
-card's declared slot remains the interaction source. The dragged card clears
+`DeclareCtx::defer_paint`. Deferred paint runs after ordinary declarations in
+the current layer and has no identity, geometry, focus, hover, or hit target;
+the card's declared slot remains the interaction source. The dragged card clears
 its area before painting so border and separator glyphs underneath cannot show
 through. See
 [Layers and modals](./layers-and-modals) for paint ordering.

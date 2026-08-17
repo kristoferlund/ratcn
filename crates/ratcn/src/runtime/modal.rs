@@ -17,7 +17,7 @@ use super::{ChildId, FocusState};
 ///
 /// # Why bind it to the runtime
 ///
-/// Declaring a modal with [`RenderCtx::modal`](super::RenderCtx::modal) is
+/// Declaring a modal with [`DeclareCtx::modal`](super::DeclareCtx::modal) is
 /// enough to draw and route one. Binding this state with
 /// [`Ratcn::modals`](super::Ratcn::modals) additionally closes a timing gap:
 /// between the message that opens or closes a modal and the redraw that

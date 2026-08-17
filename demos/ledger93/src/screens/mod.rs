@@ -6,7 +6,7 @@ use ratatui::{
     style::Style,
     widgets::{Block, Padding},
 };
-use ratcn::runtime::RenderCtx;
+use ratcn::runtime::DeclareCtx;
 
 pub const PANEL_PADDING: Padding = Padding::new(2, 2, 1, 1);
 
@@ -16,7 +16,11 @@ pub const PANEL_PADDING: Padding = Padding::new(2, 2, 1, 1);
 /// Keeping it here rather than at each call site is what makes the panes agree
 /// on what "focused" looks like — the accent choice is an app-level convention,
 /// so the app owns it.
-pub fn render_panel<S, M>(ctx: &mut RenderCtx<'_, S, M>, area: Rect, title: Option<&str>) -> Rect {
+pub fn declare_panel<S, M>(
+    ctx: &mut DeclareCtx<'_, S, M>,
+    area: Rect,
+    title: Option<&str>,
+) -> Rect {
     // Borders and padding fix the inner rect; the border color does not, so
     // the block is rebuilt where focus and hover are known.
     let inner = Block::bordered().padding(PANEL_PADDING).inner(area);
@@ -42,7 +46,7 @@ pub fn render_panel<S, M>(ctx: &mut RenderCtx<'_, S, M>, area: Rect, title: Opti
             inner,
             "the painted block's inner rect must match the one the layout used"
         );
-        ctx.render_widget(block, area);
+        ctx.widget(block, area);
     });
     inner
 }

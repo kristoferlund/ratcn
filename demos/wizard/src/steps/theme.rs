@@ -8,7 +8,7 @@ use ratatui::{
     style::Style,
     widgets::{Paragraph, Wrap},
 };
-use ratcn::{List, ListItem, Theme, runtime::RenderCtx};
+use ratcn::{List, ListItem, Theme, runtime::DeclareCtx};
 
 use crate::app::{AppState, Msg as AppMsg};
 use crate::shared::ChoiceMsg;
@@ -43,7 +43,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let state = ctx.state();
     let theme = ctx.theme;
@@ -63,7 +63,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     );
 
     let line = steps::code(theme, state.choices.theme_line());
-    let inner = steps::render_panel(ctx, area, Some("Pick a theme"));
+    let inner = steps::declare_panel(ctx, area, Some("Pick a theme"));
 
     let [intro, list_area, code_area] = inner.layout(
         &Layout::vertical([
@@ -75,13 +75,13 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     );
 
     ctx.paint(move |ctx| {
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new("Seven presets ship with ratcn.")
                 .style(Style::default().fg(ctx.theme.muted_foreground))
                 .wrap(Wrap { trim: true }),
             intro,
         );
     });
-    ctx.render_component(LIST_ID, presets, list_area);
-    ctx.paint(move |ctx| ctx.render_widget(Paragraph::new(line), code_area));
+    ctx.component(LIST_ID, presets, list_area);
+    ctx.paint_widget(Paragraph::new(line), code_area);
 }

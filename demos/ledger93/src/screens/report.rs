@@ -8,7 +8,7 @@ use ratatui::{
     text::Line,
     widgets::Bar,
 };
-use ratcn::{BarChartWidget, Button, ButtonSize, ButtonWidget, runtime::RenderCtx};
+use ratcn::{BarChartWidget, Button, ButtonSize, ButtonWidget, runtime::DeclareCtx};
 
 use crate::app::{AppState, Msg as AppMsg};
 use crate::shared::{self, Category};
@@ -46,7 +46,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let state = ctx.state();
     // Constrain layout to the widest label so the button keeps its width as the
@@ -62,7 +62,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         .on_press(|| AppMsg::Report(Msg::ToggleSort));
     let button_height = sort.height();
 
-    let inner = crate::screens::render_panel(ctx, area, None);
+    let inner = crate::screens::declare_panel(ctx, area, None);
 
     let [chart_area, _gap, footer_area] = inner.layout(&Layout::vertical([
         Constraint::Min(0),
@@ -87,7 +87,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         })
         .collect();
     ctx.paint(move |ctx| {
-        ctx.render_widget(
+        ctx.widget(
             BarChartWidget::new(chart_bars)
                 .themed(ctx.theme)
                 .max_value(max)
@@ -100,7 +100,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     let [button_area] = Layout::horizontal([Constraint::Length(button_width)])
         .flex(Flex::Center)
         .areas(footer_area);
-    ctx.render_component(SORT_ID, sort, button_area);
+    ctx.component(SORT_ID, sort, button_area);
 }
 
 fn bars(state: &AppState) -> Vec<(Category, u64, String)> {

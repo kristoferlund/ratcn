@@ -94,7 +94,7 @@ impl demo_shared::Demo for App {
             .flex(Flex::Center)
             .areas(column);
         self.ratcn.render(frame, &self.state, &THEME, |ctx| {
-            ctx.render_component(
+            ctx.component(
                 "fruit",
                 Select::new(FRUITS.map(|fruit| ListItem::new(fruit, fruit)))
                     .placeholder("Pick a fruit...")
