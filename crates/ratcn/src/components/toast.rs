@@ -298,23 +298,22 @@ impl<'a, 'toast: 'a> Widget for ToasterWidget<'a, 'toast> {
             return;
         }
 
-        // Measure newest-first at the stack width. Skip an individually
+        // Wrap newest-first at the stack width. Skip an individually
         // unmeasurable toast, and stop once the remaining height cannot hold
         // the next measurable toast whole.
-        let mut fitting: Vec<(&Toast<'_>, u16)> = Vec::new();
+        let mut fitting: Vec<PaintedToast<'_, '_>> = Vec::new();
         let mut height = 0u16;
         for toast in self.visible() {
-            let toast_height = toast_height(toast, &self.style, width);
-            if toast_height == 0 {
+            let Some(painted) = PaintedToast::prepare(toast, &self.style, width) else {
                 continue;
-            }
+            };
             let gap = if fitting.is_empty() { 0 } else { self.gap };
-            let stacked = height.saturating_add(gap).saturating_add(toast_height);
+            let stacked = height.saturating_add(gap).saturating_add(painted.height);
             if stacked > area.height {
                 break;
             }
             height = stacked;
-            fitting.push((toast, toast_height));
+            fitting.push(painted);
         }
         if height == 0 {
             return;
@@ -338,7 +337,8 @@ impl<'a, 'toast: 'a> Widget for ToasterWidget<'a, 'toast> {
             column.y + column.height
         };
 
-        for (toast, toast_height) in fitting {
+        for painted in fitting {
+            let toast_height = painted.height;
             let toast_y = if self.position.is_top() {
                 let current = y;
                 y = y.saturating_add(toast_height).saturating_add(self.gap);
@@ -350,47 +350,76 @@ impl<'a, 'toast: 'a> Widget for ToasterWidget<'a, 'toast> {
                 current
             };
             let toast_area = Rect::new(column.x, toast_y, column.width, toast_height);
-            render_toast(toast, &self.style, toast_area, buf);
+            painted.render(&self.style, toast_area, buf);
         }
     }
 }
 
-fn render_toast(toast: &Toast<'_>, style: &ToasterStyle, area: Rect, buf: &mut Buffer) {
-    if area.is_empty() || area.width < minimum_toast_width(toast) {
-        return;
-    }
-    Clear.render(area, buf);
-
-    let (accent, _) = style.resolve(toast.toast_kind());
-    let content_area = if toast.is_bordered() {
-        // A plain ratatui border, themed inline. Components draw their own
-        // border rather than depending on the `Border` component.
-        let block = Block::bordered()
-            .border_set(style.border_style.to_border_set())
-            .border_style(Style::default().fg(accent))
-            .style(Style::default().fg(style.foreground).bg(style.background))
-            .padding(Padding::symmetric(1, 0));
-        let inner = block.inner(area);
-        block.render(area, buf);
-        inner
-    } else {
-        buf.set_style(
-            area,
-            Style::default().fg(style.foreground).bg(style.background),
-        );
-        area
-    };
-
-    Paragraph::new(toast_lines(toast, style, content_area.width))
-        .alignment(Alignment::Left)
-        .render(content_area, buf);
+/// One toast wrapped for the stack width: the lines to paint and the rows they
+/// occupy. Each toast wraps once per frame, so the height that decides the
+/// stack and the content that fills it are the same measurement rather than two
+/// that agree.
+struct PaintedToast<'a, 'toast> {
+    toast: &'a Toast<'toast>,
+    lines: Vec<Line<'a>>,
+    height: u16,
 }
 
-/// The wrapped content lines for one toast at `content_width` — the single
-/// code path both measurement ([`toast_height`]) and paint use, so the stack
-/// allocation can never disagree with what renders. The title wraps with a
-/// hanging indent under its icon; the description wraps at the full content
-/// width.
+impl<'a, 'toast> PaintedToast<'a, 'toast> {
+    /// Wrap `toast` at stack width `width`, or `None` when that width cannot
+    /// render it at all. The height is the [`toast_lines`] count plus, when
+    /// bordered, the two border rows. The horizontal chrome (one border and one
+    /// padding column per side) mirrors the block [`Self::render`] builds, so
+    /// the content width wrapped at is the width painted at.
+    fn prepare(toast: &'a Toast<'toast>, style: &ToasterStyle, width: u16) -> Option<Self> {
+        if width < minimum_toast_width(toast) {
+            return None;
+        }
+        let (chrome_x, chrome_y) = if toast.is_bordered() { (4, 2) } else { (0, 0) };
+        let lines = toast_lines(toast, style, width.saturating_sub(chrome_x));
+        let height = u16::try_from(lines.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(chrome_y);
+        Some(Self {
+            toast,
+            lines,
+            height,
+        })
+    }
+
+    /// Paint the wrapped toast into `area`, whose height is [`Self::height`].
+    fn render(self, style: &ToasterStyle, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
+
+        let (accent, _) = style.resolve(self.toast.toast_kind());
+        let content_area = if self.toast.is_bordered() {
+            // A plain ratatui border, themed inline. Components draw their own
+            // border rather than depending on the `Border` component.
+            let block = Block::bordered()
+                .border_set(style.border_style.to_border_set())
+                .border_style(Style::default().fg(accent))
+                .style(Style::default().fg(style.foreground).bg(style.background))
+                .padding(Padding::symmetric(1, 0));
+            let inner = block.inner(area);
+            block.render(area, buf);
+            inner
+        } else {
+            buf.set_style(
+                area,
+                Style::default().fg(style.foreground).bg(style.background),
+            );
+            area
+        };
+
+        Paragraph::new(self.lines)
+            .alignment(Alignment::Left)
+            .render(content_area, buf);
+    }
+}
+
+/// The wrapped content lines for one toast at `content_width`. The title wraps
+/// with a hanging indent under its icon; the description wraps at the full
+/// content width.
 fn toast_lines<'a>(
     toast: &'a Toast<'_>,
     style: &ToasterStyle,
@@ -423,21 +452,6 @@ fn toast_lines<'a>(
         }
     }
     lines
-}
-
-/// The rows one toast occupies at stack width `width`: its [`toast_lines`]
-/// count plus, when bordered, the two border rows. The horizontal chrome
-/// (one border and one padding column per side) mirrors the block
-/// [`render_toast`] builds, so the content width measured here is the width
-/// painted at.
-fn toast_height(toast: &Toast<'_>, style: &ToasterStyle, width: u16) -> u16 {
-    if width < minimum_toast_width(toast) {
-        return 0;
-    }
-    let (chrome_x, chrome_y) = if toast.is_bordered() { (4, 2) } else { (0, 0) };
-    let content_width = width.saturating_sub(chrome_x);
-    let lines = u16::try_from(toast_lines(toast, style, content_width).len()).unwrap_or(u16::MAX);
-    lines.saturating_add(chrome_y)
 }
 
 /// Minimum width that can render the icon, its separator, and a whole terminal
@@ -475,6 +489,23 @@ mod tests {
 
     const DEFAULT_DURATION: Duration = Duration::from_secs(4);
     const LONG_DESCRIPTION: &str = "a rather long description that wraps onto several rows";
+
+    /// The rows one toast occupies at stack width `width`, zero when the width
+    /// cannot render it — what the stack asks of [`PaintedToast::prepare`].
+    fn toast_height(toast: &Toast<'_>, style: &ToasterStyle, width: u16) -> u16 {
+        PaintedToast::prepare(toast, style, width).map_or(0, |painted| painted.height)
+    }
+
+    /// Paint one toast into `area`, wrapped at that area's width, so a test
+    /// paints through the path the stack paints through.
+    fn render_toast(toast: &Toast<'_>, style: &ToasterStyle, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+        if let Some(painted) = PaintedToast::prepare(toast, style, area.width) {
+            painted.render(style, area, buf);
+        }
+    }
 
     /// Every buffer row joined into a string, wide-glyph placeholders and all.
     fn painted_rows(buf: &Buffer) -> Vec<String> {

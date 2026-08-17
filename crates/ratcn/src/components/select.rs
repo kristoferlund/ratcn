@@ -624,7 +624,7 @@ fn emit_item<T: Clone, M>(
     reason = "on_select matches the public selection binding vocabulary"
 )]
 pub struct Select<T, S, M> {
-    items: Vec<ListItem<T>>,
+    items: Rc<[ListItem<T>]>,
     placeholder: String,
     open: Option<OpenBinding<S, M>>,
     focused_item: Option<ReadFn<S, T>>,
@@ -1019,7 +1019,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             return;
         };
         let panel = SelectPanel {
-            items: self.items.clone(),
+            items: Rc::clone(&self.items),
             open: Rc::clone(open),
             focused_item: self.focused_item.clone(),
             on_focus_change: self.on_focus_change.clone(),
@@ -1098,7 +1098,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
 }
 
 struct SelectPanel<T, S, M> {
-    items: Vec<ListItem<T>>,
+    items: Rc<[ListItem<T>]>,
     open: ReadOpenFn<S>,
     focused_item: Option<ReadFn<S, T>>,
     on_focus_change: Option<OnChangeFn<T, M>>,

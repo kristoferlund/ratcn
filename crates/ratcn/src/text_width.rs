@@ -29,6 +29,43 @@ pub fn truncate_to_width(text: &str, width: usize) -> &str {
     if display_width(text) <= width {
         return text;
     }
+    // A prefix is usually as wide as its clusters measured apart, so walk the
+    // clusters and measure the prefix itself only where the running total
+    // crosses `width`. Ligatures spanning a cluster boundary break the sum both
+    // ways — Arabic lam-alef makes a prefix narrower than its clusters, a
+    // variation selector can make one wider — so the walk is a guess, and its
+    // cut stands only if that cut fits: the boundary past the cut is one the
+    // walk measured over `width`, and no earlier boundary can have overflowed
+    // because prefix width never falls as a prefix grows.
+    //
+    // That last property is how `unicode-width` happens to fold a string, not
+    // something Unicode or the crate's API promises. It holds for every text
+    // 0.2 measures; if a later version breaks it, an overflowing prefix fails
+    // the fit check below and [`measured_truncate`] — which measures every
+    // candidate and is the authority here — answers instead.
+    let mut end = 0;
+    let mut measured = 0;
+    for (idx, grapheme) in text.grapheme_indices(true) {
+        let next = idx + grapheme.len();
+        measured += display_width(grapheme);
+        if measured > width {
+            measured = display_width(&text[..next]);
+            if measured > width {
+                break;
+            }
+        }
+        end = next;
+    }
+    if display_width(&text[..end]) <= width {
+        return &text[..end];
+    }
+    measured_truncate(text, width)
+}
+
+/// The longest prefix of `text` fitting in `width` cells, found by measuring
+/// every candidate prefix: quadratic in the length of `text`, and correct
+/// whatever the surrounding text does to a cluster's width.
+fn measured_truncate(text: &str, width: usize) -> &str {
     let mut end = 0;
     for (idx, grapheme) in text.grapheme_indices(true) {
         let next = idx + grapheme.len();
@@ -144,6 +181,20 @@ mod tests {
             "",
             "no split variation-selector sequence"
         );
+    }
+
+    #[test]
+    fn truncate_to_width_measures_ligatures_across_cluster_boundaries() {
+        // Arabic lam-alef ligates although lam and alef are separate clusters:
+        // two 1-cell clusters render in one cell, so both fit in a 1-cell cut.
+        assert_eq!(truncate_to_width("لالا", 1), "لا");
+        assert_eq!(truncate_to_width("لالا", 2), "لالا");
+        // The other direction: a variation-selector sequence followed by a
+        // Khmer letter is wider than its two clusters apart (3 cells, not 2),
+        // so a 2-cell cut keeps only the first cluster.
+        let widened = "‘\u{fe0f}\u{fe01}ឯ";
+        assert_eq!(display_width(widened), 3);
+        assert_eq!(truncate_to_width(widened, 2), "‘\u{fe0f}\u{fe01}");
     }
 
     #[test]

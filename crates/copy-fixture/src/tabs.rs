@@ -1065,17 +1065,30 @@ struct TabWindow {
     width: u16,
 }
 
-/// The width a run of tabs `lo..=hi` occupies: their widths plus the gaps
-/// between them.
-fn window_width(widths: &[u16], lo: usize, hi: usize) -> u16 {
-    let mut width: u16 = 0;
-    for (offset, tab_width) in widths[lo..=hi].iter().enumerate() {
-        if offset > 0 {
-            width = width.saturating_add(SPACING);
-        }
-        width = width.saturating_add(*tab_width);
+/// Prefix sums of each tab's width plus the gap that follows it, one entry
+/// longer than `widths`, so the width of a run of tabs is one subtraction.
+/// Summed wider than `u16` so the sums themselves cannot wrap; a run is clamped
+/// back to `u16` where it is read.
+fn width_prefix_sums(widths: &[u16]) -> Vec<u64> {
+    let mut sums = Vec::with_capacity(widths.len() + 1);
+    let mut total = 0;
+    sums.push(total);
+    for &tab_width in widths {
+        total += u64::from(tab_width) + u64::from(SPACING);
+        sums.push(total);
     }
-    width
+    sums
+}
+
+/// The width a run of tabs `lo..=hi` occupies: their widths plus the gaps
+/// between them, from the prefix sums of [`width_prefix_sums`]. Saturates like
+/// the rest of the row arithmetic: no term is negative, so clamping the exact
+/// sum lands on the same width as adding the run up saturatingly.
+fn window_width(sums: &[u64], lo: usize, hi: usize) -> u16 {
+    // The run carries the gap after its last tab; the gaps *between* tabs are
+    // one fewer.
+    let run = sums[hi + 1] - sums[lo] - u64::from(SPACING);
+    u16::try_from(run).unwrap_or(u16::MAX)
 }
 
 /// Choose the first and last visible tab indexes. The chosen group always
@@ -1083,8 +1096,9 @@ fn window_width(widths: &[u16], lo: usize, hi: usize) -> u16 {
 /// tabs while they fit, leaving room for `‹` or `›` markers when tabs are hidden.
 fn tab_window(widths: &[u16], must_show: usize, avail: u16) -> TabWindow {
     let n = widths.len();
+    let sums = width_prefix_sums(widths);
     let fits = |lo: usize, hi: usize| {
-        let mut width = window_width(widths, lo, hi);
+        let mut width = window_width(&sums, lo, hi);
         if lo > 0 {
             width = width.saturating_add(SPACING + MARKER_WIDTH);
         }
@@ -1117,7 +1131,7 @@ fn tab_window(widths: &[u16], must_show: usize, avail: u16) -> TabWindow {
     TabWindow {
         lo,
         hi,
-        width: window_width(widths, lo, hi),
+        width: window_width(&sums, lo, hi),
     }
 }
 
