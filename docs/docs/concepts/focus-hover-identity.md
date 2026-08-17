@@ -1,5 +1,5 @@
 ---
-description: "How components get stable identities from ID paths, how Tab traversal and focus keys work, and how focus and hover snapshots are stored in your app state."
+description: "How components get stable identities from ID paths, how Tab traversal and focus keys work, why focus lives in your app state, and why hover does not."
 ---
 
 # Focus, hover, and identity
@@ -89,15 +89,59 @@ The declare-then-draw mechanics behind this live in
 
 ## Hover
 
-Hover is a second app-owned path, bound with `Ratcn::hover`, tracking what the
-pointer is over. It is deliberately independent of focus: typing keeps going to
-the focused field while the mouse drifts across other controls. A component can
-still highlight under the pointer through `PaintCtx::hovered`.
+Hover is the runtime's, not yours. It is a path like focus — what the pointer
+is on, root-first — but nothing in your app stores it, no message carries it,
+and no `update` arm applies it. Ratcn writes it itself: every pointer event
+records where the pointer is, and every frame it commits resolves hover from
+that position against the surface it just declared — because a redraw can move
+a component out from under a pointer that never moved.
 
-A stored hover path can go stale — its target removed, moved, or covered.
-Ratcn resolves the path against the latest frame and simply renders nothing
-hovered until the next pointer motion catches app state up, so don't treat a
-hover path as proof a component exists.
+The two paths are deliberately independent: typing keeps going to the focused
+field while the mouse drifts across other controls.
+
+Why the split? Focus is a decision your app can make on its own — open a
+dialog, focus its first field — so it lives in your state and moves by
+message. Hover is a fact about where the mouse physically is, which no app
+decides, so the runtime keeps it and answers for it.
+
+Two places read it:
+
+- `PaintCtx::hovered` and `PaintCtx::contains_hover`, for styling under the
+  pointer.
+- `RenderCtx::pointer_within()`, while declaring, for the rarer case where
+  *structure* depends on the pointer — a tooltip deciding whether to declare
+  its bubble. It reports whether the pointer is on the current declaration or
+  anything inside it.
+
+A motion always comes back as at least `Consumed`, whether or not it moved
+hover and whether or not a component handled it. That is your redraw signal:
+the frame on screen may no longer show what the pointer is on, or where it is.
+
+### Where paint and structure disagree
+
+The two readers answer from different moments, and it is worth knowing which.
+Paint flags are *this* frame's, resolved against the tree the declaration just
+finished building. `pointer_within()` is read while that tree is still being
+built, so it answers with the hover the **previous** frame resolved.
+
+Motion does not expose the gap: a motion returns non-`Ignored`, the host
+redraws, and that redraw declares with the new hover. What lags by one frame is
+hover changing *without* the pointer moving — a modal opening over the hovered
+node, a redraw sliding geometry out from under it. Such a frame paints the new
+answer and declares from the old one, so a tooltip whose trigger has just been
+covered keeps its bubble for exactly one frame.
+
+### Gestures freeze it
+
+While a mouse button is held, hover stops following the pointer and stays on
+whatever the gesture started on — otherwise the geometry a drag moves would
+chase the pointer dragging it. Releasing hands it back.
+
+The freeze holds the *path*, not the geometry: a frozen target that is
+redeclared somewhere else paints hovered where it now is. And it lasts only
+while that target could still be under the pointer at all — a modal that covers
+it, or a redraw that drops it, ends the freeze on the frame that does so, even
+though the gesture itself runs on.
 
 ### Focus following the mouse
 
@@ -124,24 +168,22 @@ ctx.scope(id, area, ScopeOptions::default().hover_focus(), declare)
 ```
 
 Focus follows the mouse *in*, but never out. Moving the pointer off a scope
-onto empty space clears hover and leaves focus where it was, because there is
+onto empty space empties hover and leaves focus where it was, because there is
 nowhere better to put it.
 
 ### One event, one message
 
-`Ratcn::handle_event` returns at most one message per event, and that has a
-visible consequence when `hover_focus` is on: a single pointer motion cannot
-change both focus and hover. Entering a new scope emits the focus change and
-leaves the hover snapshot for the following motion.
+`Ratcn::handle_event` returns at most one message per event. That limit binds
+focus, not hover: the motion that enters a scope emits the focus change *and*
+moves hover, because hover needs no message — the runtime writes its own. The
+frame that first paints the new scope focused already paints the new target
+hovered.
 
-So for one frame the newly focused control can paint focused while whatever
-the pointer left still paints hovered. Any continued motion corrects it
-immediately — the case you can actually observe is entering a scope and
-stopping dead on the first cell.
-
-This is a deliberate trade. The alternative is letting one event produce
-several messages, which would make every `update` call a batch and cost far
-more than a one-frame highlight is worth.
+A motion that changes hover is not swallowed by having done so: it goes on to
+the components under the pointer, so a list whose cursor follows the mouse
+moves it on the entering motion rather than the one after. The `hover_focus`
+case is the exception — the focus change *is* the event's one message, so that
+motion returns before the components under it are offered anything.
 
 ## Gesture state
 

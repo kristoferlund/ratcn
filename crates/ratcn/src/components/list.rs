@@ -1063,7 +1063,6 @@ mod tests {
         Toggled(Task),
         Scrolled(usize),
         ComponentFocus(crate::runtime::FocusState),
-        Hover(crate::runtime::HoverState),
         Pressed,
     }
 
@@ -1074,7 +1073,6 @@ mod tests {
         toggled: Vec<Task>,
         scroll: usize,
         component_focus: crate::runtime::FocusState,
-        hover: crate::runtime::HoverState,
     }
 
     /// Drives a retained `Ratcn` surface through a `TestBackend`.
@@ -2067,9 +2065,8 @@ mod tests {
             component_focus: crate::runtime::FocusState::intent(["other"]),
             ..State::default()
         };
-        let mut ratcn = Ratcn::new()
-            .focus(|state: &State| &state.component_focus, Msg::ComponentFocus)
-            .hover(|state: &State| &state.hover, Msg::Hover);
+        let mut ratcn =
+            Ratcn::new().focus(|state: &State| &state.component_focus, Msg::ComponentFocus);
         let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
         let render =
             |terminal: &mut Terminal<TestBackend>, ratcn: &mut Ratcn<State, Msg>, state: &State| {
@@ -2101,13 +2098,9 @@ mod tests {
             };
 
         render(&mut terminal, &mut ratcn, &state);
-        let EventResult::Emit(Msg::Hover(hover)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 2, 2), &state)
-        else {
-            panic!("entering the list should update hover first");
-        };
-        state.hover = hover;
-        render(&mut terminal, &mut ratcn, &state);
+        // One motion does both halves: the runtime writes its own hover as the
+        // pointer enters, and the same event still reaches the List, whose
+        // cursor follows it.
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 2, 2), &state),
             EventResult::Emit(Msg::Focused(Task::B, 0))

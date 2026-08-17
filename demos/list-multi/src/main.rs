@@ -17,7 +17,7 @@ use ratatui::{
 };
 use ratcn::{
     List, ListItem, Theme,
-    runtime::{self, EventResult, FocusState, HoverState, Ratcn, TabWrap},
+    runtime::{self, EventResult, FocusState, Ratcn, TabWrap},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -50,7 +50,6 @@ mod ids {
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
-    hover: HoverState,
     focused_topic: Option<&'static str>,
     subscribed: HashSet<&'static str>,
     scroll: usize,
@@ -60,7 +59,6 @@ impl AppState {
     fn update(&mut self, msg: Msg) {
         match msg {
             Msg::FocusChanged(focus) => self.focus = focus,
-            Msg::HoverChanged(hover) => self.hover = hover,
             Msg::TopicFocusChanged(topic, offset) => {
                 self.focused_topic = Some(topic);
                 self.scroll = offset;
@@ -80,7 +78,6 @@ impl AppState {
 
 enum Msg {
     FocusChanged(FocusState),
-    HoverChanged(HoverState),
     TopicFocusChanged(&'static str, usize),
     TopicToggled(&'static str),
     TopicScrollChanged(usize),
@@ -97,7 +94,6 @@ impl App {
             state: AppState::default(),
             ratcn: Ratcn::new()
                 .focus(|s: &AppState| &s.focus, Msg::FocusChanged)
-                .hover(|s: &AppState| &s.hover, Msg::HoverChanged)
                 .tab_wrap(TabWrap::Wrap),
         }
     }

@@ -17,7 +17,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, ButtonSize, Theme,
-    runtime::{self, EventResult, FocusState, HoverState, Ratcn, TabWrap},
+    runtime::{self, EventResult, FocusState, Ratcn, TabWrap},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -39,13 +39,11 @@ const BUTTONS: [(&str, &str); 4] = [
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
-    hover: HoverState,
 }
 
 #[derive(Clone)]
 enum Msg {
     Focus(FocusState),
-    Hover(HoverState),
     Pressed,
 }
 
@@ -60,7 +58,6 @@ impl App {
             state: AppState::default(),
             ratcn: Ratcn::new()
                 .focus(|s: &AppState| &s.focus, Msg::Focus)
-                .hover(|s: &AppState| &s.hover, Msg::Hover)
                 .tab_wrap(TabWrap::Wrap),
         }
     }
@@ -69,7 +66,6 @@ impl App {
         if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
             match msg {
                 Msg::Focus(focus) => self.state.focus = focus,
-                Msg::Hover(hover) => self.state.hover = hover,
                 Msg::Pressed => {}
             }
         }

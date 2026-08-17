@@ -43,11 +43,21 @@
 //!
 //! # Who owns what
 //!
-//! The app owns semantic state: domain data, component values, focus, hover, and
-//! the optional [`ModalState`]. The runtime owns only what a render derives —
-//! the retained surface above, mouse-gesture bookkeeping, and short-lived
-//! per-component values stashed via [`EventCtx::transient`]. Neither of those
-//! may become a second source of truth for anything the app owns.
+//! The app owns semantic state: domain data, component values, focus, and the
+//! optional [`ModalState`]. The runtime owns what a render derives and what
+//! the pointer does — the retained surface above, hover, mouse-gesture
+//! bookkeeping, and short-lived per-component values stashed via
+//! [`EventCtx::transient`]. Neither side may become a second source of truth
+//! for what the other owns.
+//!
+//! Focus and hover fall on opposite sides of that line, and whose question
+//! each answers is the reason. Focus is a decision an app can make on its
+//! own — open a dialog, focus its first field — so it lives in app state and
+//! moves by message. Hover is a fact about where the mouse physically is,
+//! which no app decides, so the runtime keeps it and rewrites it whenever the
+//! pointer or the surface moves. Apps read it structurally through
+//! [`RenderCtx::pointer_within`] and paint from [`PaintCtx::hovered`] and
+//! [`PaintCtx::contains_hover`].
 //!
 //! This module is the public namespace for both using the runtime and writing
 //! components against it.
@@ -60,7 +70,6 @@ mod engine;
 mod event;
 mod focus;
 pub mod geometry;
-mod hover;
 mod modal;
 
 /// The name a component is declared under, and half of how it is identified.
@@ -196,5 +205,4 @@ pub use event::{
 };
 pub use focus::{FocusState, TabWrap};
 pub use geometry::{is_border, wrapped_height};
-pub use hover::HoverState;
 pub use modal::{ModalOpenError, ModalState};

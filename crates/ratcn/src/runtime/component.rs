@@ -51,8 +51,9 @@ pub enum EventResult<Msg> {
 /// which the runtime replays in declaration order once the whole tree is
 /// known. The interaction flags a paint call styles from live on
 /// [`PaintCtx`] for the same reason — focus resolves against the tree this
-/// context is still building, so while it exists there are no flags to
-/// report.
+/// context is still building, so while it exists there is nothing to report.
+/// Hover is the exception, because it predates the pass rather than following
+/// from it: [`pointer_within`](Self::pointer_within) is readable here.
 pub struct RenderCtx<'a, 'frame, State, Msg> {
     pub(crate) frame: &'a mut Frame<'frame>,
     pub(crate) area: Rect,
@@ -69,8 +70,8 @@ pub struct RenderCtx<'a, 'frame, State, Msg> {
 /// the four flags paint styles from.
 ///
 /// They travel as a unit because they are answered as one, from the same node
-/// against the same resolved focus and effective hover, at the one moment
-/// they can be answered at all: after declaring has ended.
+/// against the focus and the hover this frame resolved, at the one moment they
+/// can be answered at all: after declaring has ended.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -151,12 +152,52 @@ impl<'a, 'frame, State, Msg> RenderCtx<'a, 'frame, State, Msg> {
     /// The pointer position from the most recent mouse event, if it is still
     /// inside the terminal.
     ///
-    /// This is paint-only runtime information. It does not change the app-owned
-    /// [`HoverState`](super::HoverState), which continues to describe the
-    /// hovered declaration path.
+    /// Raw geometry, for a declaration that has to know *where* in itself the
+    /// pointer is rather than merely whether it is inside — which
+    /// [`pointer_within`](Self::pointer_within) answers with identity instead.
     #[must_use]
     pub const fn hover_position(&self) -> Option<Position> {
         self.hover_position
+    }
+
+    /// Whether the pointer rests on this declaration or on something inside
+    /// it.
+    ///
+    /// Hover belongs to the runtime, and unlike focus it is known *before* the
+    /// pass: a declaration may read it, and structure may depend on it — this
+    /// is how a tooltip decides to declare its bubble. The paint-time twin is
+    /// [`PaintCtx::contains_hover`].
+    ///
+    /// The subtree is the current declaration's: called from a component's
+    /// [`render`](Component::render) it means that component and its children,
+    /// inside a [`scope`](Self::scope) it means the scope, and from the root
+    /// closure it means "the pointer is on something declared at all".
+    ///
+    /// # It answers with the last resolved hover
+    ///
+    /// This is the value the *previous* frame resolved, against the previous
+    /// surface. The paint flags are this frame's, resolved against the tree
+    /// this declaration is building, so the two can disagree for one frame —
+    /// and where they disagree, structure lags. Pointer motion is not the
+    /// case that shows it: a motion returns a non-`Ignored` result, the host
+    /// redraws, and the frame that redraws sees the new hover. What lags is
+    /// hover changing without the pointer moving — a modal opening over the
+    /// hovered node, geometry sliding out from under it — where this frame
+    /// paints the new answer and structure follows on the next one. A tooltip
+    /// whose trigger a modal has just covered keeps its bubble for that one
+    /// frame.
+    ///
+    /// It also reports what a gesture froze: while a button is held, hover
+    /// stays on whatever the gesture started on rather than following the
+    /// pointer.
+    ///
+    /// `false` in a context built outside a [`Ratcn`](super::Ratcn)
+    /// declaration pass.
+    #[must_use]
+    pub fn pointer_within(&self) -> bool {
+        self.pass
+            .as_deref()
+            .is_some_and(RenderPass::pointer_within_current)
     }
 
     /// Read the transient stored at the current declaration's identity path,
@@ -800,9 +841,10 @@ impl<'a, State> PaintCtx<'a, '_, State> {
     /// The pointer position from the most recent mouse event, if it is still
     /// inside the terminal.
     ///
-    /// This is paint-only runtime information. It does not change the
-    /// app-owned [`HoverState`](super::HoverState), which continues to
-    /// describe the hovered declaration path.
+    /// Raw geometry, for paint that has to know *where* in the declaration the
+    /// pointer is — which row of a list, which tab of a row — rather than
+    /// merely whether it is inside, which [`hovered`](Self::hovered) and
+    /// [`contains_hover`](Self::contains_hover) already answer.
     #[must_use]
     pub const fn hover_position(&self) -> Option<Position> {
         self.hover_position

@@ -15,20 +15,15 @@ use crate::Theme;
 use crate::backdrop::dim_background;
 
 use super::{
-    ChildId, Component, Event, EventCtx, EventResult, FocusState, HoverState, KeyCode, KeyEvent,
-    ModalState, MouseButton, MouseEvent, MouseKind, MouseTracker, PaintCtx, Painter, RenderCtx,
-    ScopeOptions, Step, TabWrap,
+    ChildId, Component, Event, EventCtx, EventResult, FocusState, KeyCode, KeyEvent, ModalState,
+    MouseButton, MouseEvent, MouseKind, MouseTracker, PaintCtx, Painter, RenderCtx, ScopeOptions,
+    Step, TabWrap,
     component::{InteractionFlags, PaintTarget, TransientMap},
 };
 
 struct FocusBinding<State, Msg> {
     read: Box<dyn Fn(&State) -> &FocusState>,
     on_change: Box<dyn Fn(FocusState) -> Msg>,
-}
-
-struct HoverBinding<State, Msg> {
-    read: Box<dyn Fn(&State) -> &HoverState>,
-    on_change: Box<dyn Fn(HoverState) -> Msg>,
 }
 
 struct ModalBinding<State> {
@@ -215,8 +210,8 @@ impl<State, Msg> Surface<State, Msg> {
     /// The identity path of `index`, outermost first.
     ///
     /// Building it allocates, so it belongs to the consumers that need a path
-    /// as a value — panic messages, the paths handed to components and to
-    /// app-held focus and hover state. Structural questions have
+    /// as a value — panic messages, the paths handed to components, the
+    /// runtime's own hover path and app-held focus. Structural questions have
     /// non-allocating answers instead: [`Self::is_ancestor_or_self`] for
     /// containment, [`Self::path_is_prefix_of`] for testing a node against a
     /// stored path.
@@ -283,10 +278,10 @@ impl<State, Msg> Surface<State, Msg> {
         &self,
         index: usize,
         focus: &FocusState,
-        hover: &HoverState,
+        hover: &[ChildId],
     ) -> InteractionFlags {
         let (focused, contains_focus) = self.path_match(index, focus.path());
-        let (hovered, contains_hover) = self.path_match(index, hover.path());
+        let (hovered, contains_hover) = self.path_match(index, hover);
         InteractionFlags {
             focused,
             contains_focus,
@@ -450,6 +445,9 @@ impl<State, Msg> Surface<State, Msg> {
         matched
     }
 
+    /// Whether `path` names something the pointer could be on: declared,
+    /// participating, with hit geometry, and not shut out by an exclusive
+    /// layer. The question [`Ratcn::resolve_hover`] asks of a frozen path.
     fn contains_hit_path(&self, path: &[ChildId]) -> bool {
         let matched = self.nodes_along_path(path);
         matched.len() == path.len()
@@ -1004,9 +1002,14 @@ pub(crate) struct RenderPass<State, Msg> {
     /// Every paint this frame owes, in the order the declaration walk reached
     /// it, replayed by [`Self::replay_paint`] once the walk is over.
     paint_queue: Vec<QueuedPaint<State>>,
-    /// Pointer position available during declaration without changing app-owned
-    /// hover state.
+    /// Where the pointer is, and what it rests on, as the runtime knew both
+    /// when this pass started. Hover is pre-frame data — it was resolved
+    /// against the last committed surface — so unlike focus it can be read
+    /// while declaring, by [`RenderCtx::pointer_within`] and by
+    /// [`RenderCtx::hover_position`]. [`Self::replay_paint`] derives the paint
+    /// flags from the same path.
     hover_position: Option<Position>,
+    hover_path: Vec<ChildId>,
     /// Set when any declaration region unwinds — see [`Self::guarded`]. A
     /// poisoned pass can keep declaring (a component may have caught the
     /// panic) but can never commit.
@@ -1049,6 +1052,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             deferred: Vec::new(),
             paint_queue: Vec::new(),
             hover_position: None,
+            hover_path: Vec::new(),
             failed: Rc::new(Cell::new(false)),
             layers_declared: 0,
             layer_stack: Vec::new(),
@@ -1066,6 +1070,16 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// the key [`RenderCtx::transient`] reads the transient store with.
     pub(crate) fn current_path(&self) -> Option<&[ChildId]> {
         (!self.path_cursor.is_empty()).then_some(self.path_cursor.as_slice())
+    }
+
+    /// Whether the hovered path runs through the declaration currently open.
+    /// Empty at the root declaration, which owns no path: the question is then
+    /// whether anything at all is hovered.
+    pub(crate) fn pointer_within_current(&self) -> bool {
+        !self.hover_path.is_empty()
+            && self
+                .hover_path
+                .starts_with(self.current_path().unwrap_or_default())
     }
 
     /// Open `index` as the parent of everything declared until the matching
@@ -1438,7 +1452,8 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// paint read the finished tree and the focus resolved over it — `focus`
     /// here is that resolved path, not the app's stored one, and the flags
     /// each op paints with are derived from it now because there was nothing
-    /// to derive them from earlier.
+    /// to derive them from earlier. The hover half needs no resolving: it is
+    /// the runtime's own path, fixed for the whole frame.
     ///
     /// Only a pass that has already passed every check gets here, so the
     /// queue is either run whole or not at all: an already-poisoned pass draws
@@ -1452,7 +1467,6 @@ impl<State, Msg> RenderPass<State, Msg> {
         state: &State,
         theme: &Theme,
         focus: &FocusState,
-        hover: &HoverState,
     ) {
         // Dead as things stand — `assert_valid` rejects a poisoned pass before
         // this is reached — and kept as the second half of the guarantee: it
@@ -1469,7 +1483,8 @@ impl<State, Msg> RenderPass<State, Msg> {
                 // surface mutably. The root declaration has no node, and so
                 // no flags.
                 let flags = op.node().map_or_else(InteractionFlags::default, |index| {
-                    pass.surface.interaction_flags(index, focus, hover)
+                    pass.surface
+                        .interaction_flags(index, focus, &pass.hover_path)
                 });
                 let (area, paint) = match op {
                     PaintOp::FlushDeferred { layer } => {
@@ -1586,7 +1601,7 @@ impl<State, Msg> RenderPass<State, Msg> {
 /// # Using it
 ///
 /// Build one with [`new`](Ratcn::new) and the builder methods, which wire it to
-/// the parts of app state it needs to read (focus, hover, modals) and set root
+/// the parts of app state it needs to read (focus, modals) and set root
 /// traversal policy. Then, per frame:
 ///
 /// - [`render`](Ratcn::render) declares and paints the components that exist
@@ -1622,7 +1637,6 @@ pub struct Ratcn<State, Msg> {
     surface: Surface<State, Msg>,
     has_rendered: bool,
     focus_binding: Option<FocusBinding<State, Msg>>,
-    hover_binding: Option<HoverBinding<State, Msg>>,
     modal_binding: Option<ModalBinding<State>>,
     root_options: ScopeOptions,
     mouse_tracker: MouseTracker,
@@ -1630,64 +1644,13 @@ pub struct Ratcn<State, Msg> {
     press_targets: HashMap<MouseButton, Option<Vec<ChildId>>>,
     suppressed: HashSet<MouseButton>,
     transients: TransientMap,
-    hover_validity: HoverValidity,
-}
-
-/// Runtime-side memo reconciling app-owned hover with pointer reality.
-///
-/// The runtime never writes app state and can only emit messages while
-/// handling an event, but only the runtime can see that a redraw moved
-/// geometry out from under the pointer, or that a modal now covers the hovered
-/// path. So it remembers where the pointer physically is, and — when the
-/// stored hover path stops matching that reality — marks the stored path
-/// stale: [`effective_hover`](Ratcn::effective_hover) then paints as if
-/// unhovered, and the next pointer event [`flush`](Self::flush)es the memo by
-/// emitting a correction. One type owns that lifecycle so every invalidation
-/// source goes through the same mark/clear/flush protocol.
-#[derive(Debug, Default)]
-struct HoverValidity {
-    /// The app-held hover path known to be stale, if any.
-    stale: Option<Vec<ChildId>>,
     /// Where the pointer physically is, from the last mouse event. `None`
-    /// until the first event and after the pointer leaves the terminal.
-    last_pointer: Option<Position>,
-    /// The pointer has left the terminal; nothing is hovered no matter what
-    /// the app state says.
-    pointer_exited: bool,
-}
-
-impl HoverValidity {
-    fn mark_stale(&mut self, path: &[ChildId]) {
-        self.stale = Some(path.to_vec());
-    }
-
-    fn clear_stale(&mut self) {
-        self.stale = None;
-    }
-
-    fn is_stale(&self, stored: &HoverState) -> bool {
-        self.stale.as_deref() == Some(stored.path())
-    }
-
-    /// Consume the memo when it matches `stored`: the caller is about to emit
-    /// the correcting message, so the stale mark has done its job.
-    fn flush(&mut self, stored: &HoverState) -> bool {
-        let stale = self.is_stale(stored);
-        if stale {
-            self.stale = None;
-        }
-        stale
-    }
-
-    fn pointer_at(&mut self, position: Position) {
-        self.pointer_exited = false;
-        self.last_pointer = Some(position);
-    }
-
-    fn pointer_gone(&mut self) {
-        self.pointer_exited = true;
-        self.last_pointer = None;
-    }
+    /// until the first one, and again once the pointer leaves the terminal.
+    pointer: Option<Position>,
+    /// The identity path of whatever the pointer rests on, empty over empty
+    /// space. Derived from `pointer` and the retained surface, and rewritten
+    /// wherever either changes — pointer motion, and every commit.
+    hover: Vec<ChildId>,
 }
 
 impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
@@ -1696,7 +1659,6 @@ impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
             .field("surface", &self.surface)
             .field("has_rendered", &self.has_rendered)
             .field("focus_binding", &self.focus_binding.is_some())
-            .field("hover_binding", &self.hover_binding.is_some())
             .field("modal_binding", &self.modal_binding.is_some())
             .field("root_options", &self.root_options)
             .field("mouse_tracker", &self.mouse_tracker)
@@ -1704,7 +1666,8 @@ impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
             .field("press_targets", &self.press_targets)
             .field("suppressed", &self.suppressed)
             .field("transients", &self.transients.len())
-            .field("hover_validity", &self.hover_validity)
+            .field("pointer", &self.pointer)
+            .field("hover", &self.hover)
             .finish()
     }
 }
@@ -1715,7 +1678,6 @@ impl<State, Msg> Default for Ratcn<State, Msg> {
             surface: Surface::default(),
             has_rendered: false,
             focus_binding: None,
-            hover_binding: None,
             modal_binding: None,
             root_options: ScopeOptions::default(),
             mouse_tracker: MouseTracker::new(),
@@ -1723,7 +1685,8 @@ impl<State, Msg> Default for Ratcn<State, Msg> {
             press_targets: HashMap::new(),
             suppressed: HashSet::new(),
             transients: HashMap::new(),
-            hover_validity: HoverValidity::default(),
+            pointer: None,
+            hover: Vec::new(),
         }
     }
 }
@@ -1741,8 +1704,8 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// arriving before that frame's render is ignored.
     ///
     /// A fresh runtime is unwired. The builder methods connect it to your
-    /// state — [`focus`](Ratcn::focus), [`hover`](Ratcn::hover),
-    /// [`modals`](Ratcn::modals) — and set root traversal policy through
+    /// state — [`focus`](Ratcn::focus), [`modals`](Ratcn::modals) — and set
+    /// root traversal policy through
     /// [`tab_wrap`](Ratcn::tab_wrap), [`hover_focus`](Ratcn::hover_focus), and
     /// [`focus_key`](Ratcn::focus_key). Skip [`focus`](Ratcn::focus) and there
     /// is nowhere to store a focus change, so focus resolves to the first
@@ -1799,32 +1762,9 @@ impl<State, Msg> Ratcn<State, Msg> {
         self
     }
 
-    /// Tell the runtime where hover lives in app state, and how to ask for a
-    /// change to it.
-    ///
-    /// The pointer twin of [`focus`](Ratcn::focus), with the same reader plus
-    /// message-constructor shape and the same reason for bundling them. Pointer
-    /// motion emits a replacement [`HoverState`] through `on_change`.
-    ///
-    /// Leaving it unbound is a reasonable choice for an app with no hover
-    /// styling: clicks and drags still route by geometry, there is simply never
-    /// a hovered path to read or paint.
-    #[must_use]
-    pub fn hover(
-        mut self,
-        read: impl Fn(&State) -> &HoverState + 'static,
-        on_change: impl Fn(HoverState) -> Msg + 'static,
-    ) -> Self {
-        self.hover_binding = Some(HoverBinding {
-            read: Box::new(read),
-            on_change: Box::new(on_change),
-        });
-        self
-    }
-
     /// Tell the runtime which modals the app considers open.
     ///
-    /// Read-only, unlike [`focus`](Ratcn::focus) and [`hover`](Ratcn::hover):
+    /// Read-only, unlike [`focus`](Ratcn::focus):
     /// opening and closing modals is entirely the app's decision, made through
     /// [`ModalState::open`] and [`ModalState::close`]. The runtime only needs to
     /// know the answer.
@@ -1881,12 +1821,10 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// boundaries. Putting it on the pane instead makes every drift between
     /// two controls inside that pane move focus.
     ///
-    /// One motion cannot change both focus and hover, since
-    /// [`handle_event`](Self::handle_event) returns at most one message. The
-    /// motion that enters a pane emits the focus change and leaves hover to
-    /// the next one, so a single frame can show the new pane focused while the
-    /// old target still reads as hovered. Continued motion corrects it at
-    /// once; stopping dead on the entering cell is the only way to hold it.
+    /// The motion that enters a pane does both things at once: hover is the
+    /// runtime's own, written before the focus change is emitted, so the frame
+    /// that first paints the new pane focused already paints the new target
+    /// hovered. Only the focus half needs a message.
     #[must_use]
     pub fn hover_focus(mut self) -> Self {
         self.root_options.hover_focus = true;
@@ -1948,15 +1886,17 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// The closure runs once, and nothing draws while it does. Declaration
     /// records what exists and where; [`Component::paint`] and the closures
     /// [`RenderCtx::paint`] queues are replayed afterwards, in the order the
-    /// declaration reached them. Focus resolves in between, against the
-    /// finished tree, so every interaction flag a paint reads is derived from
-    /// a tree that is already complete — which is the whole reason the two
-    /// walks are separate, and why [`RenderCtx`] has no flags to offer.
+    /// declaration reached them. Focus and hover resolve in between, against
+    /// the finished tree, so every interaction flag a paint reads is derived
+    /// from a tree that is already complete — which is the whole reason the
+    /// two walks are separate, and why [`RenderCtx`] has no flags to offer.
     ///
     /// One consequence is worth stating plainly: **structure may not depend
     /// on the interaction flags**, because there are none to depend on while
     /// declaring. Which components exist, their ids, and their areas may
-    /// depend on anything in `state`, app-held focus included.
+    /// depend on anything in `state`, app-held focus included — and on
+    /// [`RenderCtx::pointer_within`], which reports hover as it stood when
+    /// the pass began rather than as this frame will resolve it.
     ///
     /// # Ordering within the pass
     ///
@@ -1986,16 +1926,14 @@ impl<State, Msg> Ratcn<State, Msg> {
         declare: impl FnOnce(&mut RenderCtx<'_, 'frame, State, Msg>),
     ) {
         let focus_snapshot = self.stored_focus(state);
-        let stored_hover = self
-            .hover_binding
-            .as_ref()
-            .map_or_else(HoverState::default, |binding| (binding.read)(state).clone());
-        let hover = self.effective_hover(&stored_hover);
 
-        // Declare. Nothing is drawn and no interaction flag is read: the walk
-        // builds the tree and queues the paint it owes.
+        // Declare. Nothing is drawn and no *focus* flag is read: the walk
+        // builds the tree and queues the paint it owes. Hover is the one
+        // interaction fact that predates the pass, so the declaration may ask
+        // for it — see [`RenderCtx::pointer_within`].
         let mut pass = RenderPass::new();
-        pass.hover_position = self.hover_validity.last_pointer;
+        pass.hover_position = self.pointer;
+        pass.hover_path.clone_from(&self.hover);
         pass.declare(
             DeclarationEnv::root(frame, state, theme, &mut self.transients),
             declare,
@@ -2007,12 +1945,52 @@ impl<State, Msg> Ratcn<State, Msg> {
         pass.assert_valid();
         self.assert_modal_stack(&pass.surface, state);
         // Focus resolves once, over that tree, and only then does anything
-        // learn where it landed.
+        // learn where it landed. Hover re-answers its own question against the
+        // same tree — the pointer has not moved, but what is under it may
+        // have — so paint reports this frame's hover rather than the one the
+        // declaration was built from.
         let resolved_focus = pass.surface.resolve_focus(&focus_snapshot);
-        pass.replay_paint(frame, state, theme, &resolved_focus, &hover);
+        let resolved_hover = self.resolve_hover(&pass.surface);
+        pass.hover_path.clone_from(&resolved_hover);
+        pass.replay_paint(frame, state, theme, &resolved_focus);
         pass.finish_frame(frame, state, theme);
         let next = pass.finish();
-        self.commit_surface(next, &stored_hover);
+        self.commit_surface(next, resolved_hover);
+    }
+
+    /// What the pointer is on, answered against `surface`.
+    ///
+    /// Every way a redraw can strand hover is this one question: a modal that
+    /// now covers the old target, geometry that moved out from under the
+    /// pointer, a node that stopped being declared — each changes the answer,
+    /// and nothing else needs saying. The pointer has not moved, so no event
+    /// is involved and nothing is emitted.
+    ///
+    /// The exception is a gesture in flight, which owns the pointer: hover
+    /// stays on whatever the gesture started on, so the geometry a drag moves
+    /// does not chase the pointer that is dragging it. The freeze holds the
+    /// *path*, not the geometry — a frozen target that is redeclared
+    /// elsewhere paints hovered wherever it now is — and it lasts only while
+    /// that path is still something the pointer could be on at all. A modal
+    /// that covers it or a redraw that drops it ends the freeze on the frame
+    /// that does it, even though the gesture itself may run on.
+    fn resolve_hover(&self, surface: &Surface<State, Msg>) -> Vec<ChildId> {
+        if self.gesture_in_flight() && surface.contains_hit_path(&self.hover) {
+            return self.hover.clone();
+        }
+        self.pointer
+            .and_then(|position| surface.hit_path(position))
+            .unwrap_or_default()
+    }
+
+    /// Whether a pointer gesture is under way: a claimed capture, or any
+    /// button still held. Both freeze hover, and they have to agree — the
+    /// event path stops writing hover the moment a button goes down, because
+    /// motion under a held button normalizes to `Drag` rather than `Moved`,
+    /// so a redraw path that kept following the pointer would be the only
+    /// thing moving hover mid-gesture.
+    fn gesture_in_flight(&self) -> bool {
+        !self.captures.is_empty() || self.mouse_tracker.has_pressed_button()
     }
 
     /// Every declared modal root must match the app-owned [`ModalState`], in
@@ -2040,31 +2018,24 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// cross-frame pointer and transient bookkeeping onto it.
     ///
     /// Everything here outlives a single frame and so has to be reconciled
-    /// when the ground moves: hover may now rest on something that is gone, a
-    /// captured gesture's component may no longer be declared, and transients
-    /// are keyed by paths this surface may not contain. A modal opening or
+    /// when the ground moves: a captured gesture's component may no longer be
+    /// declared, transients are keyed by paths this surface may not contain,
+    /// and the pointer may now rest on something else entirely — see
+    /// [`resolve_hover`](Self::resolve_hover). A modal opening or
     /// closing is the disruptive case and gets its own treatment — every
     /// tracked gesture is abandoned rather than re-checked, because the layer
     /// that appeared or vanished changes what the pointer was ever over.
-    fn commit_surface(&mut self, next: Surface<State, Msg>, stored_hover: &HoverState) {
+    fn commit_surface(&mut self, next: Surface<State, Msg>, hover: Vec<ChildId>) {
         let active_modal_changed = self
             .surface
             .modal_roots()
             .last()
             .map(|index| &self.surface.nodes[index].id)
             != next.modal_roots().last().map(|index| &next.nodes[index].id);
-        let previous_had_modal = self.surface.modal_roots().next().is_some();
-        let next_has_modal = next.modal_roots().next().is_some();
-        let final_modal_closed = previous_had_modal && !next_has_modal;
 
         let previous = std::mem::replace(&mut self.surface, next);
         self.has_rendered = true;
 
-        self.reconcile_hover_validity(
-            stored_hover,
-            active_modal_changed && next_has_modal,
-            final_modal_closed,
-        );
         if active_modal_changed {
             self.cancel_pointer_gestures();
         } else {
@@ -2081,41 +2052,14 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         self.transients
             .retain(|path, _| self.surface.contains_declared_path(path));
+        // The hover this frame painted, published with the surface it was
+        // resolved against — a pass that never got here leaves the previous
+        // one in charge, exactly as it leaves the previous surface.
+        self.hover = hover;
         // Explicit: dropping the previous surface drops the component
         // instances it retained, and that must happen after everything above
         // has finished reading the new one.
         drop(previous);
-    }
-
-    /// Re-check the app-owned hover path against the surface just committed.
-    /// Every way a redraw can strand the stored hover is decided here, in one
-    /// place; event-time code only reads the resulting memo.
-    fn reconcile_hover_validity(
-        &mut self,
-        stored_hover: &HoverState,
-        new_modal_covers: bool,
-        final_modal_closed: bool,
-    ) {
-        // A modal just opened over the hovered path: hover is stale until the
-        // pointer says otherwise. Otherwise drop a memo for a path the app no
-        // longer holds (or for anything, once the last modal closed).
-        if new_modal_covers && !stored_hover.path().is_empty() {
-            self.hover_validity.mark_stale(stored_hover.path());
-        } else if final_modal_closed || !self.hover_validity.is_stale(stored_hover) {
-            self.hover_validity.clear_stale();
-        }
-        // The stored path is no longer hit-testable on this surface.
-        if !stored_hover.path().is_empty() && !self.surface.contains_hit_path(stored_hover.path()) {
-            self.hover_validity.mark_stale(stored_hover.path());
-        }
-        // The redraw moved geometry out from under the physical pointer.
-        if !stored_hover.path().is_empty()
-            && self.hover_validity.last_pointer.is_some_and(|position| {
-                self.surface.hit_path(position).as_deref() != Some(stored_hover.path())
-            })
-        {
-            self.hover_validity.mark_stale(stored_hover.path());
-        }
     }
 
     /// Route one event through the last successful retained surface.
@@ -2360,7 +2304,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// between a press and its release.
     fn handle_mouse(&mut self, raw: MouseEvent, state: &State) -> EventResult<Msg> {
         if raw.kind == MouseKind::Exited {
-            return self.handle_pointer_exit(state);
+            return self.handle_pointer_exit();
         }
         let (pressed, released) = self.observe_pointer(raw);
         // Motion the tracker swallowed because the press has not left its cell
@@ -2403,14 +2347,16 @@ impl<State, Msg> Ratcn<State, Msg> {
 
     /// The pointer left the backend's grid: abandon every tracked gesture and
     /// clear hover. Nothing routes, so this always counts as handled.
-    fn handle_pointer_exit(&mut self, state: &State) -> EventResult<Msg> {
+    fn handle_pointer_exit(&mut self) -> EventResult<Msg> {
         self.reset_pointer_gestures();
-        let result = self.hover_result(None, state);
-        self.hover_validity.pointer_gone();
-        match result {
-            result @ EventResult::Emit(_) => result,
-            EventResult::Consumed | EventResult::Ignored => EventResult::Consumed,
-        }
+        self.pointer_gone();
+        EventResult::Consumed
+    }
+
+    /// The pointer is no longer anywhere on the grid, so it is on nothing.
+    fn pointer_gone(&mut self) {
+        self.pointer = None;
+        self.hover.clear();
     }
 
     /// Deliver one normalized event, unless its gesture is suppressed, and give
@@ -2503,7 +2449,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// inside the gap are suppressed until their release.
     fn consume_mouse_without_routing(&mut self, raw: MouseEvent) {
         if raw.kind == MouseKind::Exited {
-            self.hover_validity.pointer_gone();
+            self.pointer_gone();
             self.reset_pointer_gestures();
             return;
         }
@@ -2526,8 +2472,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// cannot drift: where the pointer is, and which button this event
     /// presses or releases.
     fn observe_pointer(&mut self, raw: MouseEvent) -> (Option<MouseButton>, Option<MouseButton>) {
-        self.hover_validity
-            .pointer_at(Position::new(raw.column, raw.row));
+        self.pointer = Some(Position::new(raw.column, raw.row));
         let pressed = match raw.kind {
             MouseKind::Down(button) => Some(button),
             _ => None,
@@ -2578,30 +2523,41 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// answer for it when nothing in the surface does.
     ///
     /// This is a cascade, and its order is the policy. The pointer's target
-    /// resolves first. Motion then gets its chance to change hover or
-    /// hover-focus *before* anything else sees it, because that is a runtime
-    /// concern rather than a component one. What is left goes to the component
-    /// under the pointer and bubbles to its ancestors.
+    /// resolves first, and motion writes hover from it before anything else
+    /// sees the event: hover is the runtime's own value, so there is nothing
+    /// to route and nobody to ask. Hover-focus, which does need a message,
+    /// takes the motion next. What is left goes to the component under the
+    /// pointer and bubbles to its ancestors.
     ///
-    /// Only when none of them handled it do the fallbacks run, in order:
-    /// motion updates hover, a primary press moves focus, and an event confined
-    /// to a layer is consumed at that layer's boundary instead of escaping to
-    /// what lies beneath. An event that survives the whole cascade is genuinely
-    /// unhandled.
+    /// Only when none of them handled it do the fallbacks run: a primary press
+    /// moves focus, and an event confined to a layer is consumed at that
+    /// layer's boundary instead of escaping to what lies beneath. An event that
+    /// survives the whole cascade is unhandled — except a motion, which is
+    /// always at least [`Consumed`](EventResult::Consumed) once a surface
+    /// exists. Motion changes what the next frame should look like whether or
+    /// not it changed hover: paint may read the pointer position itself
+    /// through [`PaintCtx::hover_position`], and a host that redraws on any
+    /// result but [`Ignored`](EventResult::Ignored) needs that signal for
+    /// motion *within* one component as much as for crossing between two.
     fn route_mouse(&mut self, mouse: MouseEvent, state: &State) -> EventResult<Msg> {
         let path = self.pointer_target(mouse);
+        let moved = mouse.kind == MouseKind::Moved;
+        if moved {
+            self.set_hover(path.as_deref().unwrap_or_default());
+        }
 
-        if mouse.kind == MouseKind::Moved
-            && let Some(staged) = self.stage_motion(path.as_deref(), state)
+        if moved
+            && let Some(path) = path.as_deref()
+            && let Some(staged) = self.stage_hover_focus(path, state)
         {
             return staged;
         }
 
         let Some(path) = path else {
-            // Nothing under the pointer. Only motion still has an answer, and
-            // it is that hover now rests on nothing.
-            return if mouse.kind == MouseKind::Moved {
-                self.hover_result(None, state)
+            // Nothing under the pointer. Motion is still this frame's news;
+            // anything else lands on nobody.
+            return if moved {
+                EventResult::Consumed
             } else {
                 EventResult::Ignored
             };
@@ -2612,9 +2568,8 @@ impl<State, Msg> Ratcn<State, Msg> {
         if !matches!(routed, EventResult::Ignored) {
             return routed;
         }
-
-        if mouse.kind == MouseKind::Moved {
-            return self.hover_result(Some(path), state);
+        if moved {
+            return EventResult::Consumed;
         }
         if let Some(focused) = self.focus_on_press(&chain, mouse, state) {
             return focused;
@@ -2745,51 +2700,24 @@ impl<State, Msg> Ratcn<State, Msg> {
         self.surface.nodes[top].on_dismiss.as_ref().map(|f| f())
     }
 
-    fn stage_motion(
-        &mut self,
-        path: Option<&[ChildId]>,
-        state: &State,
-    ) -> Option<EventResult<Msg>> {
-        if let Some(path) = path {
-            let stored = self.stored_focus(state);
-            let focus = self.surface.resolve_focus(&stored);
-            if let Some(next) = self.surface.hover_focus(path, &focus, &self.root_options) {
-                return Some(self.focus_result(next));
-            }
-        }
-        let hover = self.hover_result(path.map(<[ChildId]>::to_vec), state);
-        matches!(hover, EventResult::Emit(_)).then_some(hover)
+    /// The focus change a motion onto `path` produces when it crosses a
+    /// [`hover_focus`](ScopeOptions::hover_focus) boundary, and `None`
+    /// otherwise. Hover itself is already written by the time this runs, so
+    /// the one message a motion can carry is this one.
+    fn stage_hover_focus(&mut self, path: &[ChildId], state: &State) -> Option<EventResult<Msg>> {
+        let stored = self.stored_focus(state);
+        let focus = self.surface.resolve_focus(&stored);
+        let next = self.surface.hover_focus(path, &focus, &self.root_options)?;
+        Some(self.focus_result(next))
     }
 
-    fn hover_result(&mut self, path: Option<Vec<ChildId>>, state: &State) -> EventResult<Msg> {
-        let Some(binding) = self.hover_binding.as_ref() else {
-            return EventResult::Ignored;
-        };
-        let stored = (binding.read)(state).clone();
-        let next = HoverState::intent(path.unwrap_or_default());
-        // A stale stored path must be corrected even when the computed hover
-        // equals it — flushing the memo is the point of the message. `flush`
-        // consumes the memo only when it returns true, which is what lets a
-        // `Moved` event ask twice (once through `stage_motion`, once after
-        // dispatch) without the second answer differing from the first.
-        let was_stale = self.hover_validity.flush(&stored);
-        if !was_stale && next == self.effective_hover(&stored) {
-            return EventResult::Consumed;
-        }
-        EventResult::Emit((self
-            .hover_binding
-            .as_ref()
-            .expect("hover binding was read at the top of this function")
-            .on_change)(next))
-    }
-
-    fn effective_hover(&self, stored: &HoverState) -> HoverState {
-        if self.hover_validity.pointer_exited || self.hover_validity.is_stale(stored) {
-            HoverState::default()
-        } else if !self.has_rendered || self.surface.contains_hit_path(stored.path()) {
-            stored.clone()
-        } else {
-            HoverState::default()
+    /// Point hover at `path`. The event-time writer; a commit writes it from
+    /// [`resolve_hover`](Self::resolve_hover) instead. Only motion reaches
+    /// here — every other pointer event records the position and leaves the
+    /// next resolution to answer with it.
+    fn set_hover(&mut self, path: &[ChildId]) {
+        if self.hover != path {
+            self.hover = path.to_vec();
         }
     }
 
@@ -2799,6 +2727,11 @@ impl<State, Msg> Ratcn<State, Msg> {
             .map_or(EventResult::Consumed, |binding| {
                 EventResult::Emit((binding.on_change)(focus))
             })
+    }
+
+    #[cfg(test)]
+    fn hover_path(&self) -> &[ChildId] {
+        &self.hover
     }
 
     #[cfg(test)]
@@ -5015,21 +4948,18 @@ mod tests {
         );
     }
 
+    /// The pointer tests need no app state at all: hover is the runtime's.
     #[derive(Debug, Default)]
-    struct PointerState {
-        hover: HoverState,
-    }
+    struct PointerState;
 
     #[derive(Default)]
     struct ModalPointerState {
         focus: FocusState,
-        hover: HoverState,
         modals: ModalState,
     }
 
     #[derive(Debug, Clone, PartialEq)]
     enum PointerMsg {
-        Hover(HoverState),
         Routed(&'static str, MouseKind, usize),
         Transient(usize),
         Drag(DragPhase),
@@ -5039,13 +4969,11 @@ mod tests {
     #[derive(Debug, Default)]
     struct HoverFocusState {
         focus: FocusState,
-        hover: HoverState,
     }
 
     #[derive(Debug, Clone, PartialEq)]
     enum HoverFocusMsg {
         Focus(FocusState),
-        Hover(HoverState),
     }
 
     struct HoverFocusLeaf {
@@ -5234,6 +5162,39 @@ mod tests {
                 EventResult::Emit(PointerMsg::Routed("move", MouseKind::Moved, 1))
             } else {
                 EventResult::Ignored
+            }
+        }
+    }
+
+    /// Claims the pointer on its press and reports the hover flags it paints
+    /// with, so a test can watch what a frame does to a capturing node's
+    /// hover.
+    struct CapturingHoverLeaf {
+        rendered: HoverRenderLog,
+    }
+
+    impl Component<PointerState, PointerMsg> for CapturingHoverLeaf {
+        fn render(&mut self, _ctx: &mut RenderCtx<'_, '_, PointerState, PointerMsg>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
+            self.rendered
+                .lock()
+                .expect("capturing hover log")
+                .push((ctx.hovered, ctx.contains_hover));
+        }
+
+        fn handle_event(
+            &mut self,
+            event: &Event,
+            _state: &PointerState,
+            ctx: &mut EventCtx<'_>,
+        ) -> EventResult<PointerMsg> {
+            match event {
+                Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left) => {
+                    ctx.capture_pointer(MouseButton::Left);
+                    EventResult::Consumed
+                }
+                _ => EventResult::Ignored,
             }
         }
     }
@@ -5455,7 +5416,7 @@ mod tests {
 
     #[test]
     fn drag_helper_stays_captured_across_rebuild_and_ends_outside() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
         render_lifecycle_drag(
@@ -5507,7 +5468,7 @@ mod tests {
 
     #[test]
     fn drag_helper_path_removal_cleans_transient_and_suppresses_capture() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
         render_lifecycle_drag(
@@ -5539,7 +5500,7 @@ mod tests {
 
     #[test]
     fn capture_and_transient_follow_identity_through_replacement_and_reorder() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
         render_drag_surface(
@@ -5577,7 +5538,7 @@ mod tests {
 
     #[test]
     fn raw_release_returns_its_first_emitted_normalized_event() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
         render_drag_surface(
@@ -5605,7 +5566,7 @@ mod tests {
 
     #[test]
     fn pointer_exit_cancels_capture_and_stale_press_before_reentry() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
         render_drag_surface(
@@ -5627,15 +5588,18 @@ mod tests {
         assert!(ratcn.press_targets.is_empty());
         assert!(ratcn.suppressed.is_empty());
 
+        // Re-entry is plain motion: it moves hover (which the exit emptied)
+        // and nothing else — a surviving press would have made it a drag, and
+        // the component would have emitted.
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 1, 1), &state),
-            EventResult::Ignored
+            EventResult::Consumed
         );
     }
 
     #[test]
     fn disappearing_capture_is_suppressed_through_reappearance_until_release() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
         render_drag_surface(
@@ -5669,7 +5633,7 @@ mod tests {
 
     #[test]
     fn deferred_paint_failure_preserves_capture_transient_and_previous_component() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
         render_drag_surface(
@@ -5711,7 +5675,7 @@ mod tests {
 
     #[test]
     fn incompatible_transient_reuse_reports_path_and_types() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -5749,7 +5713,7 @@ mod tests {
 
     #[test]
     fn successful_path_removal_drops_its_transient_state() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -5787,7 +5751,7 @@ mod tests {
 
     #[test]
     fn capture_and_transient_cleanup_finish_before_previous_component_drop() {
-        let state = PointerState::default();
+        let state = PointerState;
         let transient_dropped = Arc::new(AtomicBool::new(false));
         let component_dropped = Arc::new(AtomicBool::new(false));
         let mut ratcn = Ratcn::new();
@@ -5827,7 +5791,7 @@ mod tests {
 
     #[test]
     fn reverse_paint_order_routes_overlap_to_the_topmost_component() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -5853,7 +5817,7 @@ mod tests {
 
     #[test]
     fn successful_redraw_removes_click_target_without_retargeting_its_old_geometry() {
-        let state = PointerState::default();
+        let state = PointerState;
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
@@ -5913,7 +5877,7 @@ mod tests {
 
     #[test]
     fn uncaptured_click_does_not_retarget_after_successful_redraw() {
-        let state = PointerState::default();
+        let state = PointerState;
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
@@ -5970,7 +5934,7 @@ mod tests {
 
     #[test]
     fn release_after_successful_rebuild_clicks_the_same_stable_identity_once() {
-        let state = PointerState::default();
+        let state = PointerState;
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
@@ -6034,7 +5998,7 @@ mod tests {
         events: &Arc<Mutex<Vec<(&'static str, MouseKind)>>>,
         capture: bool,
     ) {
-        let state = PointerState::default();
+        let state = PointerState;
         let theme = Theme::default_dark();
         terminal
             .draw(|frame| {
@@ -6069,7 +6033,7 @@ mod tests {
         // nobody claimed the gesture, so the click stands. A cell-exact rule
         // would silently drop this press, which is the ordinary way a real
         // mouse behaves.
-        let state = PointerState::default();
+        let state = PointerState;
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
@@ -6092,7 +6056,7 @@ mod tests {
 
     #[test]
     fn a_press_released_on_another_component_clicks_neither() {
-        let state = PointerState::default();
+        let state = PointerState;
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
@@ -6119,7 +6083,7 @@ mod tests {
         // Same drift as `a_press_that_drifts_inside_one_component_still_clicks_it`,
         // but the component claimed the pointer on `Down`. Claiming declares
         // the movement meaningful, so this is a drag.
-        let state = PointerState::default();
+        let state = PointerState;
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
@@ -6145,7 +6109,7 @@ mod tests {
         // The other half of the capture rule: claiming the pointer must not
         // cost a component its plain clicks, or nothing can both drag and be
         // clicked.
-        let state = PointerState::default();
+        let state = PointerState;
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
@@ -6166,9 +6130,8 @@ mod tests {
 
     #[test]
     fn area_scope_hit_prefers_descendant_then_falls_back_to_scope() {
-        let mut state = HoverFocusState::default();
-        let mut ratcn =
-            Ratcn::new().hover(|state: &HoverFocusState| &state.hover, HoverFocusMsg::Hover);
+        let state = HoverFocusState::default();
+        let mut ratcn = Ratcn::<HoverFocusState, HoverFocusMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(8, 2)).expect("terminal");
         let theme = Theme::default_dark();
         terminal
@@ -6190,34 +6153,34 @@ mod tests {
             })
             .expect("draw");
 
-        let EventResult::Emit(HoverFocusMsg::Hover(child)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state)
-        else {
-            panic!("descendant did not win the enclosing scope hit");
-        };
         assert_eq!(
-            child.path(),
-            &[ChildId::Static("scope"), ChildId::Static("child")]
+            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
+            EventResult::Consumed
         );
-        state.hover = child;
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("scope"), ChildId::Static("child")],
+            "the descendant wins the enclosing scope hit"
+        );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 6, 0), &state),
-            EventResult::Emit(HoverFocusMsg::Hover(HoverState::intent([ChildId::Static(
-                "scope"
-            )])))
+            EventResult::Consumed
+        );
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("scope")],
+            "off the child, the scope answers for its own area"
         );
     }
 
     #[test]
     fn focusable_decorative_scope_receives_mouse_focus_and_hover_context() {
         let rendered = Arc::new(Mutex::new(Vec::new()));
-        let mut state = HoverFocusState {
+        let state = HoverFocusState {
             focus: FocusState::intent([ChildId::Static("other")]),
-            ..HoverFocusState::default()
         };
-        let mut ratcn = Ratcn::new()
-            .focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus)
-            .hover(|state: &HoverFocusState| &state.hover, HoverFocusMsg::Hover);
+        let mut ratcn =
+            Ratcn::new().focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus);
         let mut terminal = Terminal::new(TestBackend::new(8, 2)).expect("terminal");
         let theme = Theme::default_dark();
         let render = |ratcn: &mut Ratcn<HoverFocusState, HoverFocusMsg>,
@@ -6251,15 +6214,14 @@ mod tests {
         };
 
         render(&mut ratcn, &mut terminal, &state);
-        let EventResult::Emit(HoverFocusMsg::Hover(hover)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 4, 0), &state)
-        else {
-            panic!("decorative scope did not receive hover");
-        };
-        state.hover = hover;
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 4, 0), &state),
+            EventResult::Consumed,
+            "the decorative scope is a hover target, and the frame is now stale"
+        );
         render(&mut ratcn, &mut terminal, &state);
         // Frame one: not hovered. Frame two: the pointer rests on the scope,
-        // and paint — which runs once, after hover has resolved — sees it.
+        // and paint sees it.
         assert_eq!(
             *rendered.lock().expect("scope render log"),
             [(false, false), (true, true)]
@@ -6354,11 +6316,9 @@ mod tests {
     fn root_then_nested_hover_focus_attract_on_successive_moves() {
         let mut state = HoverFocusState {
             focus: FocusState::intent([ChildId::Static("left"), ChildId::Static("first")]),
-            ..HoverFocusState::default()
         };
         let mut ratcn = Ratcn::new()
             .focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus)
-            .hover(|state: &HoverFocusState| &state.hover, HoverFocusMsg::Hover)
             .hover_focus();
         let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -6397,6 +6357,12 @@ mod tests {
             root_focus.path(),
             &[ChildId::Static("right"), ChildId::Static("first")]
         );
+        // The same motion did both: hover is the runtime's own, so it lands
+        // whole while the one message the event may carry is the focus change.
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("right"), ChildId::Static("second")]
+        );
         state.focus = root_focus;
 
         let EventResult::Emit(HoverFocusMsg::Focus(nested_focus)) =
@@ -6410,27 +6376,23 @@ mod tests {
         );
         state.focus = nested_focus;
 
+        // Both boundaries satisfied and hover already there: the motion still
+        // reports the redraw signal, but it asks for nothing.
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 10, 0), &state),
-            EventResult::Emit(HoverFocusMsg::Hover(HoverState::intent([
-                ChildId::Static("right"),
-                ChildId::Static("second"),
-            ])))
+            EventResult::Consumed
         );
     }
 
     #[test]
     fn hover_focus_is_off_by_default_and_skips_disabled_targets_and_empty_space() {
-        let mut state = HoverFocusState {
+        let state = HoverFocusState {
             focus: FocusState::intent([ChildId::Static("enabled")]),
-            ..HoverFocusState::default()
         };
-        let mut default = Ratcn::new()
-            .focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus)
-            .hover(|state: &HoverFocusState| &state.hover, HoverFocusMsg::Hover);
+        let mut default =
+            Ratcn::new().focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus);
         let mut hover_focus = Ratcn::new()
             .focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus)
-            .hover(|state: &HoverFocusState| &state.hover, HoverFocusMsg::Hover)
             .hover_focus();
         let mut terminal = Terminal::new(TestBackend::new(12, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -6457,21 +6419,26 @@ mod tests {
         render(&mut default, &mut terminal);
         assert_eq!(
             default.handle_event(mouse(MouseKind::Moved, 5, 0), &state),
-            EventResult::Emit(HoverFocusMsg::Hover(HoverState::intent([ChildId::Static(
-                "disabled"
-            )])))
+            EventResult::Consumed,
+            "without `hover_focus` a motion moves nothing but hover"
         );
+        assert_eq!(default.hover_path(), [ChildId::Static("disabled")]);
 
         render(&mut hover_focus, &mut terminal);
-        let EventResult::Emit(HoverFocusMsg::Hover(disabled)) =
-            hover_focus.handle_event(mouse(MouseKind::Moved, 5, 0), &state)
-        else {
-            panic!("disabled target should hover without attracting focus");
-        };
-        state.hover = disabled;
+        assert_eq!(
+            hover_focus.handle_event(mouse(MouseKind::Moved, 5, 0), &state),
+            EventResult::Consumed,
+            "a disabled target hovers without attracting focus"
+        );
+        assert_eq!(hover_focus.hover_path(), [ChildId::Static("disabled")]);
         assert_eq!(
             hover_focus.handle_event(mouse(MouseKind::Moved, 10, 0), &state),
-            EventResult::Emit(HoverFocusMsg::Hover(HoverState::default()))
+            EventResult::Consumed,
+            "empty space attracts no focus either"
+        );
+        assert!(
+            hover_focus.hover_path().is_empty(),
+            "and hover returns to nothing over empty space"
         );
     }
 
@@ -6978,10 +6945,15 @@ mod tests {
         );
     }
 
+    /// The motion contract: with a surface to route against, a motion is
+    /// never `Ignored`. Crossing into a component, drifting within one, and
+    /// leaving for empty space all report `Consumed` — the host redraws on
+    /// anything but `Ignored`, and every motion is news to a frame that may
+    /// paint from the pointer position itself.
     #[test]
     fn hover_crosses_consumes_same_target_and_clears_over_empty_space() {
-        let mut state = PointerState::default();
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
         terminal
@@ -7001,33 +6973,254 @@ mod tests {
             })
             .expect("draw");
 
-        let EventResult::Emit(PointerMsg::Hover(left)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state)
-        else {
-            panic!("first crossing did not emit hover");
-        };
-        state.hover = left;
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
+            EventResult::Consumed,
+            "the first crossing moved hover"
+        );
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("left")],
+            "the crossing put hover on the target it entered"
+        );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 2, 1), &state),
-            EventResult::Consumed
+            EventResult::Consumed,
+            "motion within one target moves no hover, and is still the redraw signal"
         );
-        let EventResult::Emit(PointerMsg::Hover(right)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 6, 0), &state)
-        else {
-            panic!("target crossing did not emit hover");
-        };
-        assert_eq!(right.path(), &[ChildId::Static("right")]);
-        state.hover = right;
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("left")],
+            "drifting inside `left` leaves hover where it was"
+        );
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 6, 0), &state),
+            EventResult::Consumed,
+            "crossing to the other target"
+        );
+        assert_eq!(ratcn.hover_path(), [ChildId::Static("right")]);
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 4, 0), &state),
-            EventResult::Emit(PointerMsg::Hover(HoverState::default()))
+            EventResult::Consumed,
+            "leaving for empty space is a change like any other"
+        );
+        assert!(
+            ratcn.hover_path().is_empty(),
+            "over empty space the pointer is on nothing"
         );
     }
 
+    /// `pointer_within` answers for the declaration that asks, not for the
+    /// pointer in general: true on what the pointer is on and on everything
+    /// enclosing it, false on a sibling. The root closure has no declaration
+    /// of its own, so it asks whether anything is hovered at all.
     #[test]
-    fn pointer_exit_clears_bound_hover() {
-        let mut state = PointerState::default();
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+    fn pointer_within_answers_for_the_asking_declaration() {
+        let state = PointerState;
+        let log: Arc<Mutex<Vec<(&'static str, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        let theme = Theme::default_dark();
+        let mut render = |ratcn: &mut Ratcn<PointerState, PointerMsg>| {
+            terminal
+                .draw(|frame| {
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        log.lock()
+                            .expect("log")
+                            .push(("root", ctx.pointer_within()));
+                        for (id, x) in [("left", 0), ("right", 5)] {
+                            let log = Arc::clone(&log);
+                            let area = Rect::new(x, 0, 5, 2);
+                            ctx.scope(
+                                ChildId::Static(id),
+                                area,
+                                ScopeOptions::default(),
+                                move |ctx| {
+                                    log.lock().expect("log").push((id, ctx.pointer_within()));
+                                    ctx.render_component(
+                                        ChildId::Static("leaf"),
+                                        HoverLeaf {
+                                            consume_move: false,
+                                            rendered: None,
+                                        },
+                                        area,
+                                    );
+                                },
+                            );
+                        }
+                    });
+                })
+                .expect("draw");
+        };
+
+        render(&mut ratcn);
+        assert_eq!(
+            *log.lock().expect("log"),
+            [("root", false), ("left", false), ("right", false)],
+            "nothing is hovered before the pointer has been anywhere"
+        );
+
+        ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state);
+        log.lock().expect("log").clear();
+        render(&mut ratcn);
+        assert_eq!(
+            *log.lock().expect("log"),
+            [("root", true), ("left", true), ("right", false)],
+            "the pointer is on `left`'s leaf, so only that subtree contains it"
+        );
+    }
+
+    /// Hover freezes for the length of a claimed gesture. A component that
+    /// captured the pointer owns it, and the geometry it drags moves under a
+    /// pointer that is by definition on it, so neither the drag events nor the
+    /// frames they produce may retarget hover. The release hands it back.
+    #[test]
+    fn a_captured_gesture_freezes_hover_until_it_ends() {
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
+        let surface = [
+            ("left", "left", Rect::new(0, 0, 4, 2)),
+            ("right", "right", Rect::new(10, 0, 4, 2)),
+        ];
+
+        render_drag_surface(&mut ratcn, &mut terminal, &state, &surface);
+        ratcn.handle_event(mouse(MouseKind::Moved, 1, 1), &state);
+        assert_eq!(ratcn.hover_path(), [ChildId::Static("left")]);
+
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        assert!(ratcn.captures.contains_key(&MouseButton::Left));
+        ratcn.handle_event(mouse(MouseKind::Moved, 11, 1), &state);
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("left")],
+            "the drag belongs to the component that claimed it"
+        );
+        render_drag_surface(&mut ratcn, &mut terminal, &state, &surface);
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("left")],
+            "and a redraw mid-gesture does not retarget it either"
+        );
+
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 11, 1), &state);
+        render_drag_surface(&mut ratcn, &mut terminal, &state, &surface);
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("right")],
+            "the release ends the claim, and the next frame answers for the pointer again"
+        );
+    }
+
+    /// The freeze is one rule for every gesture, not just claimed ones. A
+    /// press that captured nothing still owns the pointer until it is
+    /// released — motion under a held button normalizes to `Drag` and never
+    /// writes hover — so a redraw that moves geometry out from under that
+    /// pointer must not retarget hover either. The release hands it back.
+    #[test]
+    fn a_held_press_freezes_hover_against_a_moving_redraw() {
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        let theme = Theme::default_dark();
+        let render = |ratcn: &mut Ratcn<PointerState, PointerMsg>,
+                      terminal: &mut Terminal<TestBackend>,
+                      x| {
+            terminal
+                .draw(|frame| {
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        ctx.render_component(
+                            ChildId::Static("target"),
+                            HoverLeaf {
+                                consume_move: false,
+                                rendered: None,
+                            },
+                            Rect::new(x, 0, 2, 1),
+                        );
+                    });
+                })
+                .expect("draw");
+        };
+
+        render(&mut ratcn, &mut terminal, 0);
+        ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state);
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
+        assert!(
+            ratcn.captures.is_empty(),
+            "nothing claimed this gesture — the freeze is not about captures"
+        );
+
+        render(&mut ratcn, &mut terminal, 5);
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("target")],
+            "the press owns the pointer, so the redraw does not retarget hover"
+        );
+
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 1, 0), &state);
+        render(&mut ratcn, &mut terminal, 5);
+        assert!(
+            ratcn.hover_path().is_empty(),
+            "the release ends the gesture, and the pointer is over empty space"
+        );
+    }
+
+    /// A freeze lasts only as long as its target could still be under the
+    /// pointer. The frame that opens a modal cancels the gesture beneath it,
+    /// and that same frame must paint the captured node unhovered — a
+    /// gesture whose target is covered has no claim on hover left.
+    #[test]
+    fn a_frame_that_cancels_a_gesture_unhovers_its_target() {
+        let rendered = Arc::new(Mutex::new(Vec::new()));
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        let theme = Theme::default_dark();
+        let mut render = |ratcn: &mut Ratcn<PointerState, PointerMsg>, modal| {
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        ctx.render_component(
+                            ChildId::Static("grip"),
+                            CapturingHoverLeaf {
+                                rendered: Arc::clone(&rendered),
+                            },
+                            Rect::new(0, 0, 4, 2),
+                        );
+                        if modal {
+                            ctx.modal(ChildId::Static("modal"), RouteLeaf("modal"), area);
+                        }
+                    });
+                })
+                .expect("draw");
+        };
+
+        render(&mut ratcn, false);
+        ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state);
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
+        assert!(ratcn.captures.contains_key(&MouseButton::Left));
+        ratcn.handle_event(mouse(MouseKind::Drag(MouseButton::Left), 8, 1), &state);
+        render(&mut ratcn, false);
+        assert_eq!(
+            rendered.lock().expect("capturing hover log").last(),
+            Some(&(true, true)),
+            "the drag keeps hover on the node that claimed it"
+        );
+
+        render(&mut ratcn, true);
+        assert_eq!(
+            rendered.lock().expect("capturing hover log").last(),
+            Some(&(false, false)),
+            "the modal cancels the gesture and covers its target, on this frame"
+        );
+        assert_ne!(ratcn.hover_path(), [ChildId::Static("grip")]);
+    }
+
+    #[test]
+    fn pointer_exit_clears_hover() {
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(4, 2)).expect("terminal");
         let theme = Theme::default_dark();
         terminal
@@ -7046,28 +7239,29 @@ mod tests {
             })
             .expect("draw");
 
-        let EventResult::Emit(PointerMsg::Hover(hover)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state)
-        else {
-            panic!("pointer entry did not emit hover");
-        };
-        state.hover = hover;
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
+            EventResult::Consumed
+        );
+        assert_eq!(ratcn.hover_path(), [ChildId::Static("target")]);
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Exited, 1, 0), &state),
-            EventResult::Emit(PointerMsg::Hover(HoverState::default()))
+            EventResult::Consumed
+        );
+        assert!(
+            ratcn.hover_path().is_empty(),
+            "a pointer that left the grid is on nothing"
         );
     }
 
+    /// An exit that arrives while the modal stacks disagree still empties
+    /// hover, and no later commit brings it back: the pointer is gone, so
+    /// there is nothing for the recompute to find it on.
     #[test]
-    fn pointer_exit_during_modal_mismatch_keeps_effective_hover_empty() {
+    fn pointer_exit_during_modal_mismatch_keeps_hover_empty() {
         let rendered = Arc::new(Mutex::new(Vec::new()));
-        let mut state = ModalPointerState {
-            hover: HoverState::intent([ChildId::Static("base")]),
-            ..ModalPointerState::default()
-        };
-        let mut ratcn = Ratcn::new()
-            .hover(|state: &ModalPointerState| &state.hover, PointerMsg::Hover)
-            .modals(|state: &ModalPointerState| &state.modals);
+        let mut state = ModalPointerState::default();
+        let mut ratcn = Ratcn::new().modals(|state: &ModalPointerState| &state.modals);
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
         let render = |ratcn: &mut Ratcn<ModalPointerState, PointerMsg>,
@@ -7093,6 +7287,17 @@ mod tests {
         };
 
         render(&mut ratcn, &mut terminal, &state);
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
+            EventResult::Consumed
+        );
+        render(&mut ratcn, &mut terminal, &state);
+        assert_eq!(
+            rendered.lock().expect("hover render log").last(),
+            Some(&(true, true)),
+            "the pointer is on the base"
+        );
+
         state
             .modals
             .open("modal", &mut state.focus)
@@ -7107,7 +7312,8 @@ mod tests {
         render(&mut ratcn, &mut terminal, &state);
         assert_eq!(
             rendered.lock().expect("hover render log").last(),
-            Some(&(false, false))
+            Some(&(false, false)),
+            "the pointer left, and closing the modal does not put it back"
         );
 
         assert_eq!(
@@ -7117,15 +7323,19 @@ mod tests {
         render(&mut ratcn, &mut terminal, &state);
         assert_eq!(
             rendered.lock().expect("hover render log").last(),
-            Some(&(true, true))
+            Some(&(true, true)),
+            "the pointer coming back is what restores hover"
         );
     }
 
+    /// A redraw that slides the target out from under a pointer that never
+    /// moved: the commit re-answers the hit test, so the very next frame
+    /// paints unhovered without any event being involved.
     #[test]
-    fn redraw_invalidates_hover_when_the_target_moves_away_from_the_pointer() {
+    fn redraw_moves_hover_when_the_target_moves_away_from_the_pointer() {
         let rendered = Arc::new(Mutex::new(Vec::new()));
-        let mut state = PointerState::default();
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
         let render = |ratcn: &mut Ratcn<PointerState, PointerMsg>,
@@ -7149,30 +7359,37 @@ mod tests {
         };
 
         render(&mut ratcn, &mut terminal, &state, 0);
-        let EventResult::Emit(PointerMsg::Hover(hover)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state)
-        else {
-            panic!("entering the target did not emit hover");
-        };
-        state.hover = hover;
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
+            EventResult::Consumed,
+            "entering the target"
+        );
         render(&mut ratcn, &mut terminal, &state, 0);
-        render(&mut ratcn, &mut terminal, &state, 5);
         render(&mut ratcn, &mut terminal, &state, 5);
 
         assert_eq!(
             *rendered.lock().expect("hover render log"),
-            [(false, false), (true, true), (true, true), (false, false)]
+            [(false, false), (true, true), (false, false)],
+            "the frame that moves the target is already the frame that unhovers it"
+        );
+        assert!(
+            ratcn.hover_path().is_empty(),
+            "the correction needed no motion"
         );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
-            EventResult::Emit(PointerMsg::Hover(HoverState::default()))
+            EventResult::Consumed,
+            "a later motion is still the redraw signal, with nothing left to correct"
         );
+        assert!(ratcn.hover_path().is_empty());
     }
 
+    /// The hover change a crossing causes does not swallow the motion: the
+    /// same event moves hover *and* goes on to the component under it.
     #[test]
-    fn crossing_stages_hover_before_a_consuming_component_receives_same_path_motion() {
-        let mut state = PointerState::default();
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+    fn crossing_motion_moves_hover_and_still_reaches_a_consuming_component() {
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
         terminal
@@ -7191,12 +7408,16 @@ mod tests {
             })
             .expect("draw");
 
-        let EventResult::Emit(PointerMsg::Hover(hover)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 0, 0), &state)
-        else {
-            panic!("crossing motion did not stage hover");
-        };
-        state.hover = hover;
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 0, 0), &state),
+            EventResult::Consumed,
+            "the crossing motion reached the consuming component"
+        );
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("consumer")],
+            "the crossing motion moved hover"
+        );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
             EventResult::Consumed,
@@ -7205,9 +7426,9 @@ mod tests {
     }
 
     #[test]
-    fn crossing_stages_enclosing_scope_hover_before_an_emitting_component() {
-        let mut state = PointerState::default();
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+    fn crossing_motion_moves_hover_and_still_reaches_an_emitting_component() {
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
         terminal
@@ -7230,29 +7451,31 @@ mod tests {
             })
             .expect("draw");
 
-        let EventResult::Emit(PointerMsg::Hover(hover)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 0, 0), &state)
-        else {
-            panic!("crossing motion did not stage panel hover");
-        };
+        // The message the component returns is the event's answer; hover
+        // landing alongside it costs nothing, because it needs no message.
         assert_eq!(
-            hover.path(),
-            &[ChildId::Static("panel"), ChildId::Static("emitter")]
+            ratcn.handle_event(mouse(MouseKind::Moved, 0, 0), &state),
+            EventResult::Emit(PointerMsg::Routed("move", MouseKind::Moved, 1))
         );
-        state.hover = hover;
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("panel"), ChildId::Static("emitter")]
+        );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
             EventResult::Emit(PointerMsg::Routed("move", MouseKind::Moved, 1))
         );
     }
 
+    /// What a redraw does to hover with the pointer sitting still: a failed
+    /// pass changes nothing (the previous surface is still what the pointer is
+    /// on), a pass that drops the target unhovers, and one that declares it
+    /// again under the same pointer hovers it again — all without an event.
     #[test]
-    fn removed_hover_stays_invalid_until_pointer_reenters_reappeared_path() {
+    fn removed_target_unhovers_and_a_redeclared_one_hovers_again_under_the_pointer() {
         let rendered = Arc::new(Mutex::new(Vec::new()));
-        let state = PointerState {
-            hover: HoverState::intent([ChildId::Static("target")]),
-        };
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
         let render_target = |ratcn: &mut Ratcn<PointerState, PointerMsg>,
@@ -7275,6 +7498,12 @@ mod tests {
         };
 
         render_target(&mut ratcn, &mut terminal);
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 4, 1), &state),
+            EventResult::Consumed
+        );
+        render_target(&mut ratcn, &mut terminal);
+
         let failed_removal = catch_unwind(AssertUnwindSafe(|| {
             terminal
                 .draw(|frame| {
@@ -7283,39 +7512,38 @@ mod tests {
                 .expect("draw");
         }));
         assert!(failed_removal.is_err());
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("target")],
+            "a rejected pass leaves the surface the pointer is on in place"
+        );
         render_target(&mut ratcn, &mut terminal);
 
         terminal
             .draw(|frame| ratcn.render(frame, &state, &theme, |_| {}))
             .expect("draw");
-        render_target(&mut ratcn, &mut terminal);
+        assert!(
+            ratcn.hover_path().is_empty(),
+            "the target is gone, so the pointer is on nothing"
+        );
         render_target(&mut ratcn, &mut terminal);
 
-        // One entry per successful render; the failed pass painted nothing
-        // and so recorded nothing.
+        // One entry per successful render; the failed pass painted nothing and
+        // so recorded nothing. The last is the redeclared target, hovered
+        // again by the commit that declared it — no event was involved.
         assert_eq!(
             *rendered.lock().expect("hover render log"),
-            vec![(true, true), (true, true), (false, false), (false, false)]
+            vec![(false, false), (true, true), (true, true), (true, true)]
         );
-        assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Moved, 4, 1), &state),
-            EventResult::Emit(PointerMsg::Hover(HoverState::intent([ChildId::Static(
-                "target"
-            )])))
-        );
-        render_target(&mut ratcn, &mut terminal);
-        assert_eq!(
-            rendered.lock().expect("hover render log").last(),
-            Some(&(true, true))
-        );
+        assert_eq!(ratcn.hover_path(), [ChildId::Static("target")]);
     }
 
+    /// Removal settles at the commit, so no later event carries a correction:
+    /// the first motion after it has nothing to change and says so.
     #[test]
-    fn removed_hover_reconciles_to_empty_before_a_later_reentry() {
-        let mut state = PointerState {
-            hover: HoverState::intent([ChildId::Static("target")]),
-        };
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+    fn motion_after_a_removal_has_nothing_left_to_correct() {
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
 
@@ -7339,29 +7567,39 @@ mod tests {
         };
 
         render_target(&mut ratcn, &mut terminal, &state);
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
+            EventResult::Consumed,
+            "entering the target"
+        );
         terminal
             .draw(|frame| ratcn.render(frame, &state, &theme, |_| {}))
             .expect("draw");
-        render_target(&mut ratcn, &mut terminal, &state);
+        assert!(
+            ratcn.hover_path().is_empty(),
+            "the removal emptied hover at the commit"
+        );
 
-        let EventResult::Emit(PointerMsg::Hover(hover)) =
-            ratcn.handle_event(mouse(MouseKind::Moved, 4, 1), &state)
-        else {
-            panic!("first motion after removal did not reconcile hover to empty");
-        };
-        assert!(hover.path().is_empty());
-        state.hover = hover;
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 4, 1), &state),
+            EventResult::Consumed,
+            "the motion is the redraw signal, but it carries no correction"
+        );
+        render_target(&mut ratcn, &mut terminal, &state);
+        assert!(
+            ratcn.hover_path().is_empty(),
+            "and the pointer is no longer over the redeclared target"
+        );
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state),
-            EventResult::Emit(PointerMsg::Hover(HoverState::intent([ChildId::Static(
-                "target"
-            )])))
+            EventResult::Consumed
         );
+        assert_eq!(ratcn.hover_path(), [ChildId::Static("target")]);
     }
 
     #[test]
     fn mouse_before_the_first_render_is_ignored_without_arming_the_tracker() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 0, 0), &state),
@@ -7374,9 +7612,11 @@ mod tests {
             &state,
             &[("drag", "drag", Rect::new(0, 0, 5, 2))],
         );
+        // Plain motion, not a drag: the press before the first render armed
+        // nothing, so this only moves hover, which is what `Consumed` reports.
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Moved, 0, 0), &state),
-            EventResult::Ignored
+            EventResult::Consumed
         );
     }
 
@@ -7543,7 +7783,7 @@ mod tests {
     /// covered by it.
     #[test]
     fn overlay_deferred_inside_a_layer_covers_that_layers_content() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(2, 1)).expect("terminal");
         let theme = Theme::default_dark();
@@ -7758,45 +7998,50 @@ mod tests {
     /// collapsing into the other is invisible from the leaf alone.
     #[test]
     fn hovered_and_contains_hover_are_distinct_at_the_leaf_and_its_ancestor() {
-        let state = PointerState {
-            hover: HoverState::intent([ChildId::Static("pane"), ChildId::Static("leaf")]),
-        };
+        let state = PointerState;
         let scope_flags = Arc::new(Mutex::new(Vec::new()));
         let leaf_flags = Arc::new(Mutex::new(Vec::new()));
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(6, 1)).expect("terminal");
         let theme = Theme::default_dark();
+        let mut render = |ratcn: &mut Ratcn<PointerState, PointerMsg>| {
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        let scope_flags = Arc::clone(&scope_flags);
+                        let leaf_flags = Arc::clone(&leaf_flags);
+                        ctx.scope(
+                            ChildId::Static("pane"),
+                            area,
+                            ScopeOptions::default(),
+                            move |ctx| {
+                                ctx.paint(move |ctx| {
+                                    scope_flags
+                                        .lock()
+                                        .expect("scope hover log")
+                                        .push((ctx.hovered, ctx.contains_hover));
+                                });
+                                ctx.render_component(
+                                    ChildId::Static("leaf"),
+                                    HoverLeaf {
+                                        consume_move: false,
+                                        rendered: Some(leaf_flags),
+                                    },
+                                    area,
+                                );
+                            },
+                        );
+                    });
+                })
+                .expect("draw");
+        };
 
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    let scope_flags = Arc::clone(&scope_flags);
-                    let leaf_flags = Arc::clone(&leaf_flags);
-                    ctx.scope(
-                        ChildId::Static("pane"),
-                        area,
-                        ScopeOptions::default(),
-                        move |ctx| {
-                            ctx.paint(move |ctx| {
-                                scope_flags
-                                    .lock()
-                                    .expect("scope hover log")
-                                    .push((ctx.hovered, ctx.contains_hover));
-                            });
-                            ctx.render_component(
-                                ChildId::Static("leaf"),
-                                HoverLeaf {
-                                    consume_move: false,
-                                    rendered: Some(leaf_flags),
-                                },
-                                area,
-                            );
-                        },
-                    );
-                });
-            })
-            .expect("draw");
+        render(&mut ratcn);
+        ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state);
+        leaf_flags.lock().expect("leaf hover log").clear();
+        scope_flags.lock().expect("scope hover log").clear();
+        render(&mut ratcn);
 
         assert_eq!(
             *leaf_flags.lock().expect("leaf hover log"),
@@ -7816,7 +8061,7 @@ mod tests {
     /// reaches the frame.
     #[test]
     fn layer_paint_written_through_with_buffer_composites_onto_the_frame() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(2, 1)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8387,7 +8632,7 @@ mod tests {
 
     #[test]
     fn popup_occludes_its_footprint_and_leaves_the_rest_clickable() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         render_popup_over_leaf(&mut ratcn, &mut terminal, &state, false);
@@ -8415,7 +8660,7 @@ mod tests {
     /// covered, so presses on it are consumed rather than routed.
     #[test]
     fn a_popup_declared_after_a_modal_is_still_covered_by_it() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8469,7 +8714,7 @@ mod tests {
             }
         }
 
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 3)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8519,7 +8764,7 @@ mod tests {
     /// question, not a comparison of layer numbers.
     #[test]
     fn a_press_inside_one_popup_dismisses_its_sibling() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(12, 4)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8555,7 +8800,7 @@ mod tests {
     /// innermost — the one on top — not the one it is nested in.
     #[test]
     fn an_outside_press_dismisses_the_innermost_nested_popup() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8591,7 +8836,7 @@ mod tests {
 
     #[test]
     fn outside_press_emits_the_dismiss_hook_only_when_routing_stayed_silent() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 4)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8708,7 +8953,7 @@ mod tests {
 
     #[test]
     fn popup_inside_a_modal_sits_above_it_and_routes() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8768,7 +9013,7 @@ mod tests {
 
     #[test]
     fn popup_paint_composites_above_later_declared_base_siblings() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(4, 1)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8946,7 +9191,7 @@ mod tests {
         // app closes the popup and redraws, and the release's Click still
         // presses the control the press landed on — the press target
         // survives the popup-closing redraw.
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -8955,7 +9200,7 @@ mod tests {
                       popup_open: bool| {
             terminal
                 .draw(|frame| {
-                    ratcn.render(frame, &PointerState::default(), &theme, |ctx| {
+                    ratcn.render(frame, &PointerState, &theme, |ctx| {
                         ctx.render_component(
                             ChildId::Static("button"),
                             ClickLeaf("button"),
@@ -9316,7 +9561,7 @@ mod tests {
 
     #[test]
     fn caught_lower_modal_overlay_flush_failure_preserves_retained_interaction() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -9377,7 +9622,7 @@ mod tests {
 
     #[test]
     fn modal_transition_cancels_base_capture_through_release() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         render_drag_surface(
@@ -9418,13 +9663,15 @@ mod tests {
         );
     }
 
+    /// A modal opening and closing over a pointer that never moves. Covering
+    /// takes hover off what is beneath and uncovering gives it back, both on
+    /// the frame that does it — the commit re-answers the hit test, and a
+    /// modal is just another thing that changes the answer.
     #[test]
-    fn covered_hover_becomes_eligible_after_close_without_motion() {
+    fn a_modal_covering_and_uncovering_moves_hover_without_motion() {
         let rendered = Arc::new(Mutex::new(Vec::new()));
-        let state = PointerState {
-            hover: HoverState::intent([ChildId::Static("base")]),
-        };
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
         let mut render = |ratcn: &mut Ratcn<PointerState, PointerMsg>, modal| {
@@ -9448,27 +9695,37 @@ mod tests {
                 .expect("draw");
         };
 
-        render(&mut ratcn, true);
-        render(&mut ratcn, true);
         render(&mut ratcn, false);
         assert_eq!(
-            rendered.lock().expect("hover log").last(),
-            Some(&(false, false))
+            ratcn.handle_event(mouse(MouseKind::Moved, 1, 1), &state),
+            EventResult::Consumed
         );
         render(&mut ratcn, false);
         assert_eq!(
             rendered.lock().expect("hover log").last(),
             Some(&(true, true))
         );
+
+        render(&mut ratcn, true);
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Moved, 1, 1), &state),
-            EventResult::Consumed
+            rendered.lock().expect("hover log").last(),
+            Some(&(false, false)),
+            "the modal is what the pointer is on now"
         );
+        assert_eq!(ratcn.hover_path(), [ChildId::Static("modal")]);
+
+        render(&mut ratcn, false);
+        assert_eq!(
+            rendered.lock().expect("hover log").last(),
+            Some(&(true, true)),
+            "and closing it hands the pointer back, on the same frame"
+        );
+        assert_eq!(ratcn.hover_path(), [ChildId::Static("base")]);
     }
 
     #[test]
     fn passive_overlay_never_becomes_a_hit_target() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(5, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -9947,7 +10204,7 @@ mod tests {
 
     #[test]
     fn top_modal_push_and_pop_cancel_capture_through_release() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -9988,7 +10245,7 @@ mod tests {
 
     #[test]
     fn same_top_modal_identity_retains_capture_when_lower_stack_changes() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -10020,8 +10277,8 @@ mod tests {
     #[test]
     fn same_top_modal_identity_retains_hover_when_lower_stack_changes() {
         let rendered = Arc::new(Mutex::new(Vec::new()));
-        let mut state = PointerState::default();
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+        let state = PointerState;
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
         let mut render =
@@ -10045,20 +10302,22 @@ mod tests {
             };
 
         render(&mut ratcn, &state, "lower-a");
-        state.hover = HoverState::intent([ChildId::Static("top")]);
+        ratcn.handle_event(mouse(MouseKind::Moved, 1, 1), &state);
         render(&mut ratcn, &state, "lower-a");
         render(&mut ratcn, &state, "lower-b");
-        render(&mut ratcn, &state, "lower-b");
 
+        // The pointer never left the top modal, and swapping the stack beneath
+        // it does not move what the pointer is on.
         assert_eq!(
             rendered.lock().expect("hover log").last(),
             Some(&(true, true))
         );
+        assert_eq!(ratcn.hover_path(), [ChildId::Static("top")]);
     }
 
     #[test]
     fn modal_transition_cancels_uncaptured_click_through_release() {
-        let state = PointerState::default();
+        let state = PointerState;
         let mut ratcn = Ratcn::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
@@ -10152,43 +10411,56 @@ mod tests {
 
     #[test]
     fn repeated_descendant_ids_render_hover_only_on_the_complete_path() {
-        let state = PointerState {
-            hover: HoverState::intent([ChildId::Static("left"), ChildId::Static("shared")]),
-        };
+        let state = PointerState;
         let left = Arc::new(Mutex::new(Vec::new()));
         let right = Arc::new(Mutex::new(Vec::new()));
-        let mut ratcn = Ratcn::new().hover(|state: &PointerState| &state.hover, PointerMsg::Hover);
+        let mut ratcn = Ratcn::<PointerState, PointerMsg>::new();
         let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
         let theme = Theme::default_dark();
+        let mut render = |ratcn: &mut Ratcn<PointerState, PointerMsg>| {
+            terminal
+                .draw(|frame| {
+                    ratcn.render(frame, &state, &theme, |ctx| {
+                        for (id, x, rendered) in [("left", 0, &left), ("right", 5, &right)] {
+                            let rendered = Arc::clone(rendered);
+                            let area = Rect::new(x, 0, 5, 2);
+                            ctx.scope(
+                                ChildId::Static(id),
+                                area,
+                                ScopeOptions::default(),
+                                move |ctx| {
+                                    ctx.render_component(
+                                        ChildId::Static("shared"),
+                                        HoverLeaf {
+                                            consume_move: false,
+                                            rendered: Some(rendered),
+                                        },
+                                        area,
+                                    );
+                                },
+                            );
+                        }
+                    });
+                })
+                .expect("draw");
+        };
 
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    for (id, rendered) in [("left", &left), ("right", &right)] {
-                        let rendered = Arc::clone(rendered);
-                        ctx.scope(
-                            ChildId::Static(id),
-                            area,
-                            ScopeOptions::default(),
-                            move |ctx| {
-                                ctx.render_component(
-                                    ChildId::Static("shared"),
-                                    HoverLeaf {
-                                        consume_move: false,
-                                        rendered: Some(rendered),
-                                    },
-                                    area,
-                                );
-                            },
-                        );
-                    }
-                });
-            })
-            .expect("draw");
+        render(&mut ratcn);
+        ratcn.handle_event(mouse(MouseKind::Moved, 1, 0), &state);
+        left.lock().expect("left log").clear();
+        right.lock().expect("right log").clear();
+        render(&mut ratcn);
 
+        assert_eq!(
+            ratcn.hover_path(),
+            [ChildId::Static("left"), ChildId::Static("shared")]
+        );
         assert_eq!(*left.lock().expect("left log"), [(true, true)]);
-        assert_eq!(*right.lock().expect("right log"), [(false, false)]);
+        assert_eq!(
+            *right.lock().expect("right log"),
+            [(false, false)],
+            "the same leaf id under another parent is a different component"
+        );
     }
 
     #[test]

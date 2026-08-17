@@ -10,6 +10,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `RenderCtx::pointer_within`, asking whether the pointer rests on the current
+  declaration or anything inside it. Hover is known before a pass starts — it
+  was resolved against the last committed frame — so unlike focus it is
+  readable while declaring, and structure may depend on it. `Tooltip` is the
+  reference consumer.
 - `Component::paint`, where a component draws. It is queued where
   `Component::render` declared the component and replayed once the whole tree
   is declared and focus has resolved, so it runs once per frame and a
@@ -23,6 +28,24 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking:** `Ratcn::hover` and `runtime::HoverState`. Hover is the
+  runtime's own state now: every pointer event records where the pointer is,
+  every committed frame resolves hover from that position against the surface
+  it just declared, and a motion resolves it immediately. A gesture freezes
+  it — from press to release hover stays on what the gesture started on,
+  unless that target is covered or stops being declared. Apps drop the field, the message
+  variant, the `update` arm, and the binding; `PaintCtx::hovered` /
+  `contains_hover` and the new `RenderCtx::pointer_within` are how it is read.
+  A stored path could go stale, so the reconciliation that resolved it — and
+  the corrections it emitted on the next pointer event — are gone with the
+  type.
+- **Breaking:** the hover message class. Pointer motion never returns a hover
+  message. `EventResult::Consumed` is the redraw signal that replaces it: with
+  a surface to route against, a motion is never `Ignored` — whether or not it
+  moved hover, and whether or not a component handled it — because paint may
+  read the pointer position itself through `PaintCtx::hover_position`, so
+  motion within one component is as much news to the next frame as motion
+  between two.
 - **Breaking:** the two-pass declaration and its idempotency contract. The
   declaration closure runs **once** per frame. It may have side effects, and
   the divergence panics that policed the contract (`declaration closure is not
@@ -47,6 +70,17 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** a `Tooltip` with no `open_when`/`open` binding shows while the
+  pointer is inside it, where before it never showed at all. Both readers take
+  `Fn(&S, bool) -> bool`, the second argument being that same hover answer, so
+  an app rule can gate it (`|s, hovered| hovered && !s.disabled`) or widen it
+  (`|s, hovered| hovered || s.focus.contains_path([id])`).
+- **Breaking:** pointer motion is no longer swallowed by the hover change it
+  causes. `Moved` reaches the component under the pointer on the crossing
+  event, so a `List` or `Select` cursor follows the mouse from the motion that
+  enters it rather than the one after, and a `Tooltip` bound with `open` asks
+  to open on that same motion. With `hover_focus` on, one motion both moves
+  hover and emits the focus change.
 - **Breaking:** `Ratcn::render`'s declaration closure is `FnOnce` rather than
   `FnMut`. Values may be moved into the components it declares instead of
   cloned per run.
