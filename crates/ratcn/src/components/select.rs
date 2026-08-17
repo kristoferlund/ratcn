@@ -18,7 +18,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span, Text},
+    text::Text,
     widgets::{Block, BorderType, Borders, Widget},
 };
 
@@ -26,13 +26,14 @@ use crate::Theme;
 use crate::color::{DISABLED_DIM, FIELD_FOCUS_LIGHTEN, FIELD_HOVER_LIGHTEN, dim, lighten};
 use crate::linear_nav::{self, NavOutcome, ScrollStep};
 use crate::list_core::{
-    self, ListItem, ListItemState, RowViewport, SCROLL_STEP, WheelPark, fit_to_height,
+    self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelPark,
 };
 use crate::runtime::{
     Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind,
     PaintCtx, PopupOptions, RenderCtx, ScrollDirection,
 };
 use crate::selection_indicator;
+use crate::theme::resolve_style;
 
 const ROW_FOCUS_LIGHTEN: u16 = 15;
 const INDICATOR_CLOSED: &str = "∨";
@@ -510,22 +511,18 @@ fn render_panel(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
             }
             continue;
         }
-        let marker = selection_indicator::marker(selected, false);
-        let marker_color = selection_indicator::color(
-            disabled,
+        selection_indicator::marker_line(
+            widget.options[index],
             selected,
+            false,
+            disabled,
             selection_indicator::MarkerColors {
                 disabled: widget.style.disabled_foreground,
                 selected: widget.style.selected_marker,
                 unselected: widget.style.unselected_marker,
             },
-        );
-        let line = Line::from(vec![
-            Span::styled(format!(" {marker}"), Style::new().fg(marker_color)),
-            Span::raw(" "),
-            Span::raw(widget.options[index].to_owned()),
-        ]);
-        line.render(row_area, buf);
+        )
+        .render(row_area, buf);
     }
 }
 
@@ -611,11 +608,6 @@ fn emit_item<T: Clone, M>(
 /// may scroll out of sight until the cursor or the options move — the same
 /// wheel behavior as [`List`](crate::List), held under the rule
 /// [`WheelPark`](crate::list_core::WheelPark) states.
-/// While open, typing a printable character jumps item focus to
-/// the next enabled option whose label starts with it, case-insensitively,
-/// cycling past the end — the same single-character typeahead as
-/// [`List`](crate::List) (clock-free, so no multi-character buffer); a
-/// character matching no label bubbles through the popup as an app hotkey.
 /// Other modified keys are ignored so app shortcuts can handle
 /// them after they bubble through the popup. Paste events bubble for the same
 /// reason; Select has no text-editing behavior.
@@ -771,7 +763,7 @@ impl<T, S, M> Select<T, S, M> {
     /// unstyled text inherits option-state colors while explicit `Text`, `Line`,
     /// and `Span` colors remain intact.
     ///
-    /// Return a [`Line`] for the usual one-row option, or a [`Text`] for a
+    /// Return a [`Line`](ratatui::text::Line) for the usual one-row option, or a [`Text`] for a
     /// taller one — a name above a subtitle, say. A multi-line option also
     /// needs [`row_height`](Self::row_height) set to match, since every option
     /// must be the same height for clicks to land on the right one.
@@ -837,6 +829,22 @@ impl<T, S, M> Select<T, S, M> {
     }
 }
 
+/// The one row of `area` the trigger occupies.
+///
+/// A Select is one row tall whether it is open or closed — the panel floats in a
+/// popup layer — so declaration, paint, and hit-testing all read the same top
+/// row of whatever area the layout gave, and the rows below belong to whatever
+/// else is declared there. Not [`fixed_height`](crate::runtime::fixed_height):
+/// this crops to at most a row rather than requiring one, so a zero-height
+/// allocation stays a zero-height trigger instead of becoming an empty rect at
+/// the origin.
+const fn trigger_area(area: Rect) -> Rect {
+    Rect {
+        height: min_u16(area.height, SelectWidget::TRIGGER_HEIGHT),
+        ..area
+    }
+}
+
 /// Tab or `BackTab`: the keys that move focus out of the Select entirely. Ctrl
 /// and Alt variants belong to the app, so they are not traversal here.
 fn is_traversal(key: KeyEvent) -> bool {
@@ -892,7 +900,7 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
     /// Is there any option a cursor could land on? A panel of nothing but
     /// disabled options is not worth opening and cannot be navigated.
     fn has_enabled_item(&self) -> bool {
-        linear_nav::first_enabled(self.items.len(), |i| self.disabled_at(i)).is_some()
+        linear_nav::has_enabled(self.items.len(), |i| self.disabled_at(i))
     }
 
     /// Route a key to whichever of the two key maps is in force. A closed
@@ -939,7 +947,7 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
         }
     }
 
-    /// The keys an open panel answers: dismiss, navigation, commit, typeahead.
+    /// The keys an open panel answers: dismiss, navigation, commit.
     fn handle_open_key(&self, key: KeyEvent, state: &S, page_size: usize) -> EventResult<M> {
         // Closing comes before the emptiness check: a panel with nothing to
         // operate must still be dismissable.
@@ -990,14 +998,8 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
     }
 
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
-        let area = Rect {
-            height: ctx.area().height.min(1),
-            ..ctx.area()
-        };
-        let style = self.style.as_ref().map_or_else(
-            || SelectStyle::from_theme(ctx.theme),
-            |style| style(ctx.theme),
-        );
+        let area = trigger_area(ctx.area());
+        let style = resolve_style(self.style.as_deref(), ctx.theme, SelectStyle::from_theme);
         let Some((panel_area, viewport)) = self
             .resolved_open
             .then(|| {
@@ -1028,6 +1030,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             render_item: self.render_item.clone(),
             style,
             panel_area,
+            inner,
             viewport,
         };
         let on_open_change = Rc::clone(on_open_change);
@@ -1040,15 +1043,9 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
-        let area = Rect {
-            height: ctx.area().height.min(1),
-            ..ctx.area()
-        };
+        let area = trigger_area(ctx.area());
         let state = ctx.state();
-        let style = self.style.as_ref().map_or_else(
-            || SelectStyle::from_theme(ctx.theme),
-            |style| style(ctx.theme),
-        );
+        let style = resolve_style(self.style.as_deref(), ctx.theme, SelectStyle::from_theme);
         let selected = self.selected_index(state);
         let value = selected.map(|index| self.items[index].label());
         let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
@@ -1084,16 +1081,11 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
     }
 
     fn is_focusable(&self, _state: &S) -> bool {
-        self.keyboard_enabled()
-            && !self.disabled
-            && linear_nav::first_enabled(self.items.len(), |i| self.disabled_at(i)).is_some()
+        self.keyboard_enabled() && !self.disabled && self.has_enabled_item()
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
-        Rect {
-            height: area.height.min(1),
-            ..area
-        }
+        trigger_area(area)
     }
 }
 
@@ -1107,6 +1099,10 @@ struct SelectPanel<T, S, M> {
     render_item: Option<RenderItemFn<S, T>>,
     style: SelectStyle,
     panel_area: Rect,
+    /// `panel_area` inside its border: the rows the options themselves occupy.
+    /// Carried rather than re-derived so declaration, paint, hit-testing, and
+    /// wheel arithmetic all measure the panel's capacity against one rect.
+    inner: Rect,
     viewport: RowViewport,
 }
 
@@ -1121,9 +1117,8 @@ impl<T: Clone + PartialEq, S, M> SelectPanel<T, S, M> {
     }
 
     fn option_at(&self, mouse: &MouseEvent) -> Option<usize> {
-        let inner = Block::new().borders(Borders::ALL).inner(self.panel_area);
         self.viewport
-            .row_at(inner, self.items.len(), mouse.column, mouse.row)
+            .row_at(self.inner, self.items.len(), mouse.column, mouse.row)
     }
 }
 
@@ -1131,13 +1126,17 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
     fn render(&mut self, ctx: &mut RenderCtx<'_, '_, S, M>) {
         let state = ctx.state();
         let cursor = self.cursor(state);
-        let inner = Block::new().borders(Borders::ALL).inner(self.panel_area);
         // The panel owns its scrolling, so the park supplies the offset: the
         // view stays where the wheel left it — cursor visible or not — until
         // the cursor or the options move, and the park dies with the popup.
-        let mut unparked = WheelPark::default();
-        let park = ctx.transient_mut::<WheelPark<T>>().unwrap_or(&mut unparked);
-        park.settle(&self.items, cursor, None, &mut self.viewport, inner);
+        WheelPark::settle_transient(
+            ctx,
+            &self.items,
+            cursor,
+            None,
+            &mut self.viewport,
+            self.inner,
+        );
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
@@ -1151,17 +1150,16 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         // The panel is laid out to a whole number of rows, so there is no
         // clipped trailing option to account for. Indices stay global, as a
         // custom `render_item` and the panel's hit-testing both read them.
-        let inner = Block::new().borders(Borders::ALL).inner(self.panel_area);
         let first_option = self.viewport.painted_offset().min(self.items.len());
         let last_option = first_option
-            .saturating_add(self.viewport.visible_items(inner))
+            .saturating_add(self.viewport.visible_items(self.inner))
             .min(self.items.len());
         let rows: Option<Vec<Text<'static>>> = self.render_item.as_ref().map(|render_item| {
-            self.items[first_option..last_option]
-                .iter()
-                .enumerate()
-                .map(|(position, item)| {
-                    let index = first_option + position;
+            list_core::windowed_rows(
+                &self.items,
+                first_option..last_option,
+                rows_per_item,
+                |index, item| {
                     let row = ListItemState {
                         index,
                         value: item.value(),
@@ -1170,9 +1168,9 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                         selected: selected == Some(index),
                         disabled: item.is_disabled(),
                     };
-                    fit_to_height(render_item(state, row), rows_per_item)
-                })
-                .collect()
+                    render_item(state, row)
+                },
+            )
         });
         let mut widget = SelectWidget::new(None)
             .open(&labels)
@@ -1198,32 +1196,6 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         let cursor = self.cursor(state);
         let option = self.option_at(mouse);
         match mouse.kind {
-            MouseKind::Down(MouseButton::Left)
-                if option.is_some_and(|i| list_core::disabled_at(&self.items, i)) =>
-            {
-                EventResult::Consumed
-            }
-            MouseKind::Click(MouseButton::Left) => match option {
-                Some(index) if list_core::disabled_at(&self.items, index) => EventResult::Ignored,
-                // With nothing to commit to, the click still moves the
-                // cursor, as it does over a `List`.
-                Some(index) if self.on_select.is_none() => {
-                    emit_item(self.on_focus_change.as_ref(), &self.items, index)
-                }
-                Some(index) => emit_item(self.on_select.as_ref(), &self.items, index),
-                None => EventResult::Consumed,
-            },
-            // Hover moves the cursor, as in `List`: one highlight, moved by
-            // keys and pointer alike, and Enter commits what it shows.
-            MouseKind::Moved => match option {
-                _ if self.focused_item.is_none() => EventResult::Ignored,
-                Some(index) if list_core::disabled_at(&self.items, index) => EventResult::Ignored,
-                Some(index) if Some(index) != cursor => {
-                    emit_item(self.on_focus_change.as_ref(), &self.items, index)
-                }
-                Some(_) => EventResult::Consumed,
-                None => EventResult::Ignored,
-            },
             MouseKind::Scroll(direction) => {
                 let step = match direction {
                     ScrollDirection::Up => ScrollStep::Up,
@@ -1232,10 +1204,9 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                         return EventResult::Ignored;
                     }
                 };
-                let inner = Block::new().borders(Borders::ALL).inner(self.panel_area);
                 let offset = linear_nav::wheel_offset(
                     self.items.len(),
-                    self.viewport.visible_items(inner),
+                    self.viewport.visible_items(self.inner),
                     self.viewport.painted_offset(),
                     step,
                     SCROLL_STEP,
@@ -1252,7 +1223,32 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                 self.viewport.record_painted_offset(offset);
                 EventResult::Consumed
             }
-            _ => EventResult::Ignored,
+            kind => match list_core::row_intent(
+                kind,
+                &self.items,
+                option,
+                cursor,
+                self.on_select.is_some(),
+            ) {
+                RowIntent::BlockPress => EventResult::Consumed,
+                RowIntent::Commit(index) => emit_item(self.on_select.as_ref(), &self.items, index),
+                // Motion means nothing without a cursor to move: a panel bound
+                // for pointer selection alone lets it through to whatever is
+                // under it, rather than swallowing every drift over an option.
+                RowIntent::Focus(index) if self.focused_item.is_some() => {
+                    emit_item(self.on_focus_change.as_ref(), &self.items, index)
+                }
+                RowIntent::Stay if self.focused_item.is_some() => EventResult::Consumed,
+                // The popup occludes exactly its own footprint, so a click
+                // inside it that landed on no option is swallowed here rather
+                // than reaching the control the panel covers.
+                RowIntent::Bubble
+                    if option.is_none() && kind == MouseKind::Click(MouseButton::Left) =>
+                {
+                    EventResult::Consumed
+                }
+                RowIntent::Focus(_) | RowIntent::Stay | RowIntent::Bubble => EventResult::Ignored,
+            },
         }
     }
 }
@@ -1300,7 +1296,11 @@ const fn frame_area() -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        text::{Line, Span},
+    };
 
     use super::*;
     use crate::{

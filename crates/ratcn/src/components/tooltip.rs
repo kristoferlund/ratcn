@@ -27,6 +27,7 @@ use crate::runtime::{
     wrapped_height,
 };
 use crate::text_width::{display_width_u16, wrap_to_width};
+use crate::theme::resolve_style;
 
 /// Cells of padding between the border and the text, left and right.
 const PADDING: u16 = 1;
@@ -493,10 +494,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
         if !open {
             return;
         }
-        let style = self.style.as_ref().map_or_else(
-            || TooltipStyle::from_theme(ctx.theme),
-            |style| style(ctx.theme),
-        );
+        let style = resolve_style(self.style.as_deref(), ctx.theme, TooltipStyle::from_theme);
         let widget = TooltipWidget::new(&self.text).style(style);
         let bounds = ctx.frame_area();
         let width = widget.width().min(self.max_width).min(bounds.width);

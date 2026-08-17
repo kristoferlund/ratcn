@@ -14,6 +14,7 @@ use ratcn::runtime::{
     is_border, offset_rect, wrapped_height,
 };
 use ratcn::text_width::{display_width_u16, wrap_to_width};
+use ratcn::theme::resolve_style;
 
 type OnOffsetChangeFn<M> = Box<dyn Fn(CellOffset) -> M>;
 type OnDismissFn<M> = Box<dyn Fn() -> M>;
@@ -709,10 +710,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
         let layout = dialog_layout(ctx.area(), self.offset, &self.dims());
-        let style = self.style.as_ref().map_or_else(
-            || DialogStyle::from_theme(ctx.theme),
-            |style| style(ctx.theme),
-        );
+        let style = resolve_style(self.style.as_deref(), ctx.theme, DialogStyle::from_theme);
         // Queued where the dialog was declared, so the box lands beneath
         // everything declared inside it without being painted first here.
         paint_dialog_box(ctx, layout.box_area, &self.title, style);

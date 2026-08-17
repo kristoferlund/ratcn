@@ -1,6 +1,6 @@
-//! Generic rect geometry components share: border hit-testing and wrapped-text
-//! height. None of it is specific to any one component — see
-//! [`drag`](super::drag) for dragging-specific geometry.
+//! Generic rect geometry components share: border hit-testing, the fixed-height
+//! interaction crop, and wrapped-text height. None of it is specific to any one
+//! component — see [`drag`](super::drag) for dragging-specific geometry.
 //!
 //! Anything ratatui already answers stays with ratatui: shrinking an area by a
 //! margin is `Rect::inner(Margin::new(x, y))`, not a helper here.
@@ -21,6 +21,26 @@ pub fn is_border(area: Rect, column: u16, row: u16) -> bool {
     let right = area.x.saturating_add(area.width.saturating_sub(1));
     let bottom = area.y.saturating_add(area.height.saturating_sub(1));
     column == area.x || column == right || row == area.y || row == bottom
+}
+
+/// `area` cropped to exactly `height` rows, or empty when it cannot hold them.
+///
+/// The interaction area of a control painted as one fixed-height shape — a
+/// button, a tab row. Such a shape draws nothing at all in an area shorter than
+/// its height, so there is nothing there to click: too short, or zero-width, is
+/// not interactive rather than partly interactive. A taller area crops to the
+/// rows the shape occupies, leaving the ones below it to whatever is declared
+/// there.
+///
+/// Pair it with the same `height` the paint uses, so what responds is exactly
+/// what is drawn.
+#[must_use]
+pub const fn fixed_height(area: Rect, height: u16) -> Rect {
+    if area.width == 0 || area.height < height {
+        Rect::ZERO
+    } else {
+        Rect { height, ..area }
+    }
 }
 
 /// Number of lines `text` needs when word-wrapped to `width` terminal cells.
@@ -56,6 +76,22 @@ mod tests {
 
         let overflowing_area = Rect::new(u16::MAX, u16::MAX, 1, 1);
         assert!(!is_border(overflowing_area, u16::MAX, u16::MAX));
+    }
+
+    /// The crop is all-or-nothing on height: a shape that cannot draw must not
+    /// leave a partial strip of itself clickable.
+    #[test]
+    fn fixed_height_crops_taller_areas_and_rejects_shorter_ones() {
+        assert_eq!(
+            fixed_height(Rect::new(2, 3, 8, 5), 3),
+            Rect::new(2, 3, 8, 3)
+        );
+        assert_eq!(
+            fixed_height(Rect::new(2, 3, 8, 3), 3),
+            Rect::new(2, 3, 8, 3)
+        );
+        assert_eq!(fixed_height(Rect::new(2, 3, 8, 2), 3), Rect::ZERO);
+        assert_eq!(fixed_height(Rect::new(2, 3, 0, 9), 3), Rect::ZERO);
     }
 
     #[test]

@@ -25,6 +25,34 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   flags.
 - `RenderCtx::paint`, the app-level counterpart for chrome with no component
   of its own. It queues a `'static` closure at the point it is reached.
+- `theme` is a public module, holding `theme::resolve_style` — the one fork
+  between a declared `style(...)` override and a component's own `from_theme`
+  derivation. Every styled component resolves through it, so a theme switch
+  cannot reach some of them and miss others. `Theme` and `BorderStyle` keep
+  their root re-exports.
+- `list_core::row_intent` and `list_core::RowIntent`: what a pointer gesture
+  over a column of value-keyed rows asks for — block a press on a disabled row,
+  move the cursor, commit, rest, or bubble. `List` and a `Select` panel decide
+  from this one answer and map it to their own bindings, so the two cannot drift
+  on what a hover or a click over a row means.
+- `list_core::windowed_rows`, which maps a window of items to the rows a widget
+  paints, handing the row closure each item's index in the *whole* list and
+  forcing every row to the declared height.
+- `list_core::WheelPark::settle_transient`, settling the park stored at the
+  current declaration's identity — or an unparked view when a wheel has never
+  stored one.
+- `selection_indicator::marker_line`, the default row of a selection control:
+  the marker, colored, then the label, uncolored. `List` and `Select` drew the
+  identical line separately.
+- `runtime::geometry::fixed_height` (also `runtime::fixed_height`): an area
+  cropped to exactly the rows a fixed-height shape occupies, or empty when it
+  cannot hold them. `Button` and `Tabs` derive their interaction area from it.
+- `linear_nav::has_enabled`, the focusability question every item control asks:
+  is there any index a cursor could land on?
+- `TabLayout`, `tab_layout`, and `TabsWidget::layout`. A tab row's geometry is a
+  value now, so `Tabs` can hand the layout it hit-tests clicks against to the
+  paint that draws them. A standalone `TabsWidget` given no layout still
+  measures its own row, so nothing about that use changes.
 
 ### Removed
 
@@ -70,6 +98,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `Tab<T>` is a type alias for `ListItem<T>`. A tab and a list row
+  carried the same three things — a value, a label, a disabled flag — behind two
+  identical structs. `Tab::new`, `.disabled(true)`, `value()`, `label()`,
+  `is_disabled()`, and the `&str`/`String` conversions all read as before, and
+  `Tabs` still takes `Tab`s. What changes: the two are now one type, so a trait
+  implemented for both no longer compiles, and `Debug` on a `Tab` (or on a
+  `Tabs`' items) prints `ListItem { .. }`.
+- **Breaking:** the `List` and `Select` rustdoc no longer describes a
+  single-character typeahead. Neither component ever implemented one — a plain
+  letter has always bubbled as an app hotkey, which is what
+  [Keyboard](https://ratcn.kristoferlund.se/docs/concepts/keyboard) says. Only
+  the promise is gone; no behavior changed.
 - **Breaking:** `ListWidget` takes the rows on screen rather than the whole
   list. `ListWidget::scroll_offset` is replaced by `ListWidget::first_item`,
   the index `items[0]` has in the whole list; `focused_row`, `selected_rows`,

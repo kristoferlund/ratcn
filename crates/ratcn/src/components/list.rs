@@ -4,7 +4,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span, Text},
+    text::{Span, Text},
     widgets::Widget,
 };
 
@@ -12,14 +12,15 @@ use crate::Theme;
 use crate::color::{DISABLED_DIM, FIELD_FOCUS_LIGHTEN, FIELD_HOVER_LIGHTEN, dim, lighten};
 use crate::linear_nav::{self, NavOutcome, ScrollStep};
 use crate::list_core::{
-    self, ListItem, ListItemState, RowViewport, SCROLL_STEP, WheelPark, fit_to_height,
+    self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelPark,
 };
 use crate::runtime::{
-    Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton, MouseKind, PaintCtx,
-    RenderCtx, ScrollDirection,
+    Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseKind, PaintCtx, RenderCtx,
+    ScrollDirection,
 };
 use crate::selection_indicator;
 use crate::text_width::display_width;
+use crate::theme::resolve_style;
 
 const ROW_FOCUS_LIGHTEN: u16 = 15;
 
@@ -465,13 +466,6 @@ type StyleFn = Box<dyn Fn(&Theme) -> ListStyle>;
 ///
 /// Disabled items are dimmed and skipped by both keyboard and mouse.
 ///
-/// While the list has keyboard focus, typing a printable character jumps the
-/// cursor to the next enabled item whose label starts with it,
-/// case-insensitively, cycling past the end — the native-select typeahead
-/// convention. Matching is single-character only: a multi-character buffer
-/// would need a timeout to reset, and this library never reads a clock. A
-/// character matching no label is ignored, so it can bubble as an app hotkey.
-///
 /// ```
 /// use ratcn::{List, ListItem};
 ///
@@ -674,7 +668,7 @@ impl<T, S, M> List<T, S, M> {
     /// is painted beneath the returned text, so unstyled text inherits row-state
     /// colors while explicit `Text`, `Line`, and `Span` colors are preserved.
     ///
-    /// Return a [`Line`] for the usual one-line row, or a [`Text`] for a taller
+    /// Return a [`Line`](ratatui::text::Line) for the usual one-line row, or a [`Text`] for a taller
     /// one — a name above a subtitle, say. A multi-line row also needs
     /// [`row_height`](Self::row_height) set to match, since every item must be
     /// the same height for clicks to land on the right one.
@@ -875,9 +869,8 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         // may leave the cursor off-screen. Once the cursor moves, or the items
         // do, it is scrolled back into view. A bound scroll offset always wins
         // over the park: the app owns it.
-        let mut unparked = WheelPark::default();
-        let park = ctx.transient_mut::<WheelPark<T>>().unwrap_or(&mut unparked);
-        park.settle(
+        WheelPark::settle_transient(
+            ctx,
             &self.items,
             focused_row,
             requested,
@@ -892,10 +885,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         let focused_row = self.focused_index(state);
         let selected_row = self.selected_index(state);
         let disabled_rows: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
-        let style = self.style.as_ref().map_or_else(
-            || ListStyle::from_theme(ctx.theme),
-            |style| style(ctx.theme),
-        );
+        let style = resolve_style(self.style.as_deref(), ctx.theme, ListStyle::from_theme);
         // One cursor, shown while the list is either focused or under the
         // pointer; where it sits was decided during declaration.
         let cursor_visible = ctx.focused || ctx.hovered;
@@ -917,11 +907,11 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
             .saturating_add(usize::from(area.height.div_ceil(rows_per_item)))
             .min(self.items.len());
         let mut selected_rows: Vec<usize> = Vec::new();
-        let items: Vec<Text<'static>> = self.items[first_item..last_item]
-            .iter()
-            .enumerate()
-            .map(|(position, item)| {
-                let index = first_item + position;
+        let items = list_core::windowed_rows(
+            &self.items,
+            first_item..last_item,
+            rows_per_item,
+            |index, item| {
                 // Asked per painted row rather than looked up in a list of every
                 // selected index, which would make painting quadratic.
                 let selected = match &self.selected_many {
@@ -939,13 +929,12 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                     selected,
                     disabled: self.disabled || item.is_disabled(),
                 };
-                let text = match &self.render_item {
+                match &self.render_item {
                     Some(render_item) => render_item(state, row),
                     None => default_item_line(&row, selection_mode, &style),
-                };
-                fit_to_height(text, rows_per_item)
-            })
-            .collect();
+                }
+            },
+        );
         ctx.render_widget(
             ListWidget::new(&items)
                 .first_item(first_item)
@@ -968,50 +957,29 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         let area = ctx.area();
         match event {
             Event::Mouse(mouse) => match mouse.kind {
-                // The runtime focuses an unhandled primary down on the hit
-                // component. Consume disabled rows so that fallback cannot
-                // focus the list when its disabled content was clicked.
-                MouseKind::Down(MouseButton::Left) => {
-                    match self
-                        .viewport
-                        .row_at(area, self.items.len(), mouse.column, mouse.row)
-                    {
-                        Some(index) if self.disabled_at(index) => EventResult::Consumed,
-                        _ => EventResult::Ignored,
-                    }
-                }
-                // Hover moves the cursor from the first motion over a row, as
-                // in `Select`. `row_at` already rejects anything outside the
-                // list, so no paint-state gate is needed here; whether the
-                // cursor is *shown* stays a paint decision.
-                MouseKind::Moved => {
-                    match self
-                        .viewport
-                        .row_at(area, self.items.len(), mouse.column, mouse.row)
-                    {
-                        Some(index) if self.disabled_at(index) => EventResult::Ignored,
-                        Some(index) if Some(index) != self.focused_index(state) => {
-                            self.move_focus(index, state, area)
-                        }
-                        Some(_) => EventResult::Consumed,
-                        None => EventResult::Ignored,
-                    }
-                }
-                MouseKind::Click(MouseButton::Left) => {
-                    match self
-                        .viewport
-                        .row_at(area, self.items.len(), mouse.column, mouse.row)
-                    {
-                        Some(index) if self.disabled_at(index) => EventResult::Ignored,
-                        Some(index) if self.selected.is_some() || self.selected_many.is_some() => {
-                            self.select(index)
-                        }
-                        Some(index) => self.move_focus(index, state, area),
-                        None => EventResult::Ignored,
-                    }
-                }
+                // The wheel addresses the view rather than a row, so it is
+                // answered before the row decision is asked for.
                 MouseKind::Scroll(direction) => self.scroll_view(direction, state, area, ctx),
-                _ => EventResult::Ignored,
+                // `row_at` already rejects anything outside the list, so no
+                // paint-state gate is needed here; whether the cursor is *shown*
+                // stays a paint decision.
+                kind => {
+                    let row = self
+                        .viewport
+                        .row_at(area, self.items.len(), mouse.column, mouse.row);
+                    match list_core::row_intent(
+                        kind,
+                        &self.items,
+                        row,
+                        self.focused_index(state),
+                        self.selected.is_some() || self.selected_many.is_some(),
+                    ) {
+                        RowIntent::BlockPress | RowIntent::Stay => EventResult::Consumed,
+                        RowIntent::Focus(index) => self.move_focus(index, state, area),
+                        RowIntent::Commit(index) => self.select(index),
+                        RowIntent::Bubble => EventResult::Ignored,
+                    }
+                }
             },
             Event::Key(key) => self.handle_key(*key, state, area),
             _ => EventResult::Ignored,
@@ -1021,7 +989,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
     fn is_focusable(&self, _state: &S) -> bool {
         self.focused_item.is_some()
             && !self.disabled
-            && linear_nav::first_enabled(self.items.len(), |i| self.disabled_at(i)).is_some()
+            && linear_nav::has_enabled(self.items.len(), |i| self.disabled_at(i))
     }
 }
 
@@ -1033,31 +1001,28 @@ fn default_item_line<T>(
     let Some(multiple) = selection_mode else {
         return Text::from(row.label.to_string());
     };
-    let marker = selection_indicator::marker(row.selected, multiple);
-    let marker_color = selection_indicator::color(
-        row.disabled,
+    Text::from(selection_indicator::marker_line(
+        row.label,
         row.selected,
+        multiple,
+        row.disabled,
         selection_indicator::MarkerColors {
             disabled: style.disabled_foreground,
             selected: style.selected_marker,
             unselected: style.unselected_marker,
         },
-    );
-    Text::from(Line::from(vec![
-        Span::styled(format!(" {marker}"), Style::default().fg(marker_color)),
-        Span::raw(" "),
-        Span::raw(row.label.to_string()),
-    ]))
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier, text::Line};
 
     use super::*;
-    use crate::runtime::{ChildId, MouseEvent, Ratcn};
+    use crate::list_core::fit_to_height;
+    use crate::runtime::{ChildId, MouseButton, MouseEvent, Ratcn};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Task {
@@ -2478,7 +2443,7 @@ mod tests {
     }
 
     #[test]
-    fn space_commits_single_selection_before_typeahead() {
+    fn space_commits_the_single_selection_cursor() {
         let mut list = List::new([item(Task::A, "Alpha"), item(Task::B, " Bravo")])
             .item_focus(|state: &State| state.focused, Msg::Focused)
             .selection(|state: &State| state.selected, Msg::Selected);
@@ -2494,12 +2459,12 @@ mod tests {
                 &mut EventCtx::default().with_area(Rect::new(0, 0, 20, 2)),
             ),
             EventResult::Emit(Msg::Selected(Task::A)),
-            "Space commits the cursor instead of typeahead-moving to the space-prefixed label"
+            "Space is a commit key on a list, not text: it commits the cursor row"
         );
     }
 
     #[test]
-    fn space_commits_multi_selection_before_typeahead() {
+    fn space_toggles_the_multi_selection_cursor() {
         let mut list = List::new([item(Task::A, "Alpha"), item(Task::B, " Bravo")])
             .item_focus(|state: &State| state.focused, Msg::Focused)
             .multi_selection(
@@ -2518,7 +2483,7 @@ mod tests {
                 &mut EventCtx::default().with_area(Rect::new(0, 0, 20, 2)),
             ),
             EventResult::Emit(Msg::Toggled(Task::A)),
-            "Space toggles the cursor instead of typeahead-moving to the space-prefixed label"
+            "Space is a commit key on a list, not text: it toggles the cursor row"
         );
     }
 
