@@ -10,8 +10,8 @@ use crate::Theme;
 use crate::backdrop::dim_background;
 
 use super::{
-    ChildId, Component, Event, EventCtx, EventResult, FocusState, KeyCode, KeyEvent, ModalState,
-    MouseButton, MouseEvent, MouseKind, MouseTracker, PaintCtx, Painter, RenderCtx, ScopeOptions,
+    ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyCode, KeyEvent,
+    ModalState, MouseButton, MouseEvent, MouseKind, MouseTracker, PaintCtx, Painter, ScopeOptions,
     Step, TabWrap,
     component::{InteractionFlags, PaintTarget, TransientMap},
 };
@@ -814,7 +814,7 @@ struct QueuedPaint<State> {
 enum PaintOp<State> {
     /// Call [`Component::paint`] on the component installed at this node.
     Node { index: usize, area: Rect },
-    /// Run a closure queued through [`RenderCtx::paint`]. `node` is the
+    /// Run a closure queued through [`DeclareCtx::paint`]. `node` is the
     /// declaration it was reached from, or `None` at the root, which has no
     /// identity and therefore no flags.
     Thunk {
@@ -823,7 +823,7 @@ enum PaintOp<State> {
         paint: PaintThunk<State>,
     },
     /// Run the deferred thunks registered in `layer`, at the point that
-    /// layer's declaration closed — which is what keeps [`RenderCtx::defer_paint`]
+    /// layer's declaration closed — which is what keeps [`DeclareCtx::defer_paint`]
     /// above its layer's content.
     FlushDeferred { layer: usize },
 }
@@ -1003,8 +1003,8 @@ pub(crate) struct RenderPass<State, Msg> {
     /// Where the pointer is, and what it rests on, as the runtime knew both
     /// when this pass started. Hover is pre-frame data — it was resolved
     /// against the last committed surface — so unlike focus it can be read
-    /// while declaring, by [`RenderCtx::pointer_within`] and by
-    /// [`RenderCtx::hover_position`]. [`Self::replay_paint`] derives the paint
+    /// while declaring, by [`DeclareCtx::pointer_within`] and by
+    /// [`DeclareCtx::hover_position`]. [`Self::replay_paint`] derives the paint
     /// flags from the same path.
     hover_position: Option<Position>,
     hover_path: Vec<ChildId>,
@@ -1065,7 +1065,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     }
 
     /// The identity path of the declaration currently being declared into —
-    /// the key [`RenderCtx::transient`] reads the transient store with.
+    /// the key [`DeclareCtx::transient`] reads the transient store with.
     pub(crate) fn current_path(&self) -> Option<&[ChildId]> {
         (!self.path_cursor.is_empty()).then_some(self.path_cursor.as_slice())
     }
@@ -1111,7 +1111,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         self.paint_queue.push(QueuedPaint { canvas, op });
     }
 
-    /// Queue a closure registered through [`RenderCtx::paint`], tagged with
+    /// Queue a closure registered through [`DeclareCtx::paint`], tagged with
     /// the declaration it was reached from so replay can read that node's
     /// flags.
     pub(crate) fn queue_thunk(
@@ -1268,7 +1268,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         index
     }
 
-    pub(crate) fn render_component(
+    pub(crate) fn component(
         &mut self,
         id: ChildId,
         component: impl Component<State, Msg> + 'static,
@@ -1306,7 +1306,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             // children contract, kept by position in the queue rather than by
             // each component's care.
             pass.queue_node(index, area);
-            pass.declare(env.nested(area), |ctx| component.render(ctx));
+            pass.with_declare_ctx(env.nested(area), |ctx| component.declare(ctx));
             pass.leave_node();
             pass.surface.nodes[index].component = Some(component);
         });
@@ -1335,7 +1335,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             pass.assert_unique_modal_id(&id);
             let area = env.area;
             pass.layer(LayerKind::Modal, area, |pass, _| {
-                pass.render_component(id, component, env);
+                pass.component(id, component, env);
             });
         });
     }
@@ -1347,7 +1347,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         id: ChildId,
         options: ScopeOptions,
         env: DeclarationEnv<'_, State>,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         self.guarded(|pass| {
             pass.assert_unique_modal_id(&id);
@@ -1371,7 +1371,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         options: ScopeOptions,
         on_dismiss: Option<Box<dyn Fn() -> Msg>>,
         env: DeclarationEnv<'_, State>,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         debug_assert!(
             on_dismiss.is_none() || kind.policy().dismiss_on_outside_press,
@@ -1391,25 +1391,25 @@ impl<State, Msg> RenderPass<State, Msg> {
         id: ChildId,
         options: ScopeOptions,
         mut env: DeclarationEnv<'_, State>,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         self.guarded(|pass| {
             let role = NodeRole::scope(options.focusable);
             let area = env.area;
             let index = pass.begin_node(id, area, options, role);
             pass.enter_node(index);
-            pass.declare(env.nested(area), declare);
+            pass.with_declare_ctx(env.nested(area), declare);
             pass.leave_node();
         });
     }
 
     /// Run one declaration closure over the current parent node. The single
-    /// construction site for declaration [`RenderCtx`]s: root, scope, modal, and
-    /// component render all pass through here.
-    fn declare(
+    /// construction site for declaration [`DeclareCtx`]s: root, scope, modal, and
+    /// [`Component::declare`] all pass through here.
+    fn with_declare_ctx(
         &mut self,
         env: DeclarationEnv<'_, State>,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let DeclarationEnv {
             frame_area,
@@ -1421,7 +1421,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         } = env;
         let hover_position = self.hover_position;
         self.guarded(|pass| {
-            let mut ctx = RenderCtx {
+            let mut ctx = DeclareCtx {
                 frame_area,
                 area,
                 theme,
@@ -1527,7 +1527,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Finish the frame's painting: composite every layer canvas over
     /// the frame in discovery order — a modal dims what is beneath it first —
     /// then flush the base declaration's deferred thunks on top of the
-    /// result, making root-level [`RenderCtx::defer_paint`] the topmost
+    /// result, making root-level [`DeclareCtx::defer_paint`] the topmost
     /// decoration slot (toast stacks, drag ghosts).
     fn finish_frame(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
         for canvas in &self.canvases {
@@ -1865,10 +1865,10 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///   exactly as it is, parked or not.
     ///
     /// In exchange, every successful render must declare exactly these ids, in
-    /// stack order, with [`RenderCtx::modal`] — a mismatch panics rather than
+    /// stack order, with [`DeclareCtx::modal`] — a mismatch panics rather than
     /// silently diverging.
     ///
-    /// Apps using modals should bind this. Without it, [`RenderCtx::modal`]
+    /// Apps using modals should bind this. Without it, [`DeclareCtx::modal`]
     /// still layers and routes correctly, but neither guarantee above applies.
     #[must_use]
     pub fn modals(mut self, read: impl Fn(&State) -> &ModalState + 'static) -> Self {
@@ -1945,10 +1945,10 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// Call this once per frame, from inside ratatui's `Terminal::draw`. The
     /// `declare` closure is the whole UI for this frame: build components from
-    /// `state`, place them with
-    /// [`render_component`](RenderCtx::render_component), group them with
-    /// [`scope`](RenderCtx::scope), queue whatever else you want drawn with
-    /// [`paint`](RenderCtx::paint). Nothing is retained between frames, so
+    /// `state`, place them with [`component`](DeclareCtx::component), group
+    /// them with [`scope`](DeclareCtx::scope), queue whatever else you want
+    /// drawn with [`paint_widget`](DeclareCtx::paint_widget) or
+    /// [`paint`](DeclareCtx::paint). Nothing is retained between frames, so
     /// there is no widget tree to keep in sync — what you declare is what
     /// exists.
     ///
@@ -1967,17 +1967,17 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// The closure runs once, and nothing draws while it does. Declaration
     /// records what exists and where; [`Component::paint`] and the closures
-    /// [`RenderCtx::paint`] queues are replayed afterwards, in the order the
+    /// [`DeclareCtx::paint`] queues are replayed afterwards, in the order the
     /// declaration reached them. Focus and hover resolve in between, against
     /// the finished tree, so every interaction flag a paint reads is derived
     /// from a tree that is already complete — which is the whole reason the
-    /// two walks are separate, and why [`RenderCtx`] has no flags to offer.
+    /// two walks are separate, and why [`DeclareCtx`] has no flags to offer.
     ///
     /// One consequence is worth stating plainly: **structure may not depend
     /// on the interaction flags**, because there are none to depend on while
     /// declaring. Which components exist, their ids, and their areas may
     /// depend on anything in `state`, app-held focus included — and on
-    /// [`RenderCtx::pointer_within`], which reports hover as it stood when
+    /// [`DeclareCtx::pointer_within`], which reports hover as it stood when
     /// the pass began rather than as this frame will resolve it.
     ///
     /// # Ordering within the pass
@@ -1985,8 +1985,8 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// Declaration order is meaningful. It sets Tab order, it sets paint
     /// order — a component draws before its own descendants — and it sets
     /// hit-testing order, with later declarations on top — within one layer.
-    /// [`modal`](RenderCtx::modal), [`popup`](RenderCtx::popup), and
-    /// [`hint`](RenderCtx::hint) layers are exempt from paint order: each
+    /// [`modal`](DeclareCtx::modal), [`popup`](DeclareCtx::popup), and
+    /// [`hint`](DeclareCtx::hint) layers are exempt from paint order: each
     /// paints into its own canvas, and canvases composite over the frame in
     /// the order the layers were declared, so base content declared *after* a
     /// layer still paints beneath it. Layers may therefore be declared from
@@ -2005,18 +2005,18 @@ impl<State, Msg> Ratcn<State, Msg> {
         frame: &mut Frame,
         state: &State,
         theme: &Theme,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let focus_snapshot = self.stored_focus(state);
 
         // Declare. Nothing is drawn and no *focus* flag is read: the walk
         // builds the tree and queues the paint it owes. Hover is the one
         // interaction fact that predates the pass, so the declaration may ask
-        // for it — see [`RenderCtx::pointer_within`].
+        // for it — see [`DeclareCtx::pointer_within`].
         let mut pass = RenderPass::new();
         pass.hover_position = self.pointer;
         pass.hover_path.clone_from(&self.hover);
-        pass.declare(
+        pass.with_declare_ctx(
             DeclarationEnv::root(frame.area(), state, theme, &mut self.transients),
             declare,
         );
@@ -2932,7 +2932,7 @@ mod tests {
     struct Leaf;
 
     impl Component<(), ()> for Leaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
         fn handle_event(
             &mut self,
@@ -2949,7 +2949,7 @@ mod tests {
     }
 
     impl Component<u8, ()> for ContextProbe {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, u8, ()>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, u8, ()>) {
             assert_eq!(ctx.area(), self.area);
             assert_eq!(*ctx.state(), 7);
         }
@@ -2962,9 +2962,9 @@ mod tests {
     struct Composite;
 
     impl Component<(), ()> for Composite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, (), ()>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), ()>) {
             let area = ctx.area();
-            ctx.render_component(ChildId::Static("leaf"), Leaf, area);
+            ctx.component(ChildId::Static("leaf"), Leaf, area);
         }
 
         fn scope_options(&self) -> ScopeOptions {
@@ -2975,7 +2975,7 @@ mod tests {
     struct PanickingLeaf;
 
     impl Component<(), ()> for PanickingLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {
             panic!("leaf render failed");
         }
     }
@@ -2983,7 +2983,7 @@ mod tests {
     struct PanickingScopeOptions;
 
     impl Component<(), ()> for PanickingScopeOptions {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
         fn scope_options(&self) -> ScopeOptions {
             panic!("scope options failed");
@@ -2997,13 +2997,13 @@ mod tests {
             panic!("declaration prop resolution failed");
         }
 
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
     }
 
     struct PanickingFocusable;
 
     impl Component<(), ()> for PanickingFocusable {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
         fn is_focusable(&self, _state: &()) -> bool {
             panic!("focusability failed");
@@ -3013,7 +3013,7 @@ mod tests {
     struct PanickingInteractionArea;
 
     impl Component<(), ()> for PanickingInteractionArea {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
         fn interaction_area(&self, _area: Rect) -> Rect {
             panic!("interaction area failed");
@@ -3023,7 +3023,7 @@ mod tests {
     struct EscapingInteractionArea;
 
     impl Component<(), ()> for EscapingInteractionArea {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, (), ()>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
         fn interaction_area(&self, area: Rect) -> Rect {
             Rect::new(area.x, area.y, area.width.saturating_add(1), area.height)
@@ -3033,13 +3033,13 @@ mod tests {
     struct CatchingComposite;
 
     impl Component<(), ()> for CatchingComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, (), ()>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), ()>) {
             let area = ctx.area();
             let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.render_component(ChildId::Static("panicking-child"), PanickingLeaf, area);
+                ctx.component(ChildId::Static("panicking-child"), PanickingLeaf, area);
             }));
             assert!(caught.is_err());
-            ctx.render_component(ChildId::Static("later-child"), Leaf, area);
+            ctx.component(ChildId::Static("later-child"), Leaf, area);
         }
     }
 
@@ -3063,7 +3063,7 @@ mod tests {
     struct ModalRoute(&'static str);
 
     impl Component<ModalTestState, ModalTestMsg> for ModalRoute {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalTestState, ModalTestMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, ModalTestState, ModalTestMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -3084,7 +3084,7 @@ mod tests {
     }
 
     impl Component<ModalTestState, ModalTestMsg> for ModalFocusRoute {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalTestState, ModalTestMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, ModalTestState, ModalTestMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
             self.rendered
@@ -3186,7 +3186,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for FocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             if let Some(rendered) = &self.rendered {
@@ -3225,7 +3225,7 @@ mod tests {
     struct ClickFocusLeaf;
 
     impl Component<FocusTestState, FocusTestMsg> for ClickFocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn is_focusable(&self, _state: &FocusTestState) -> bool {
             true
@@ -3239,7 +3239,7 @@ mod tests {
     type PathLog = Arc<Mutex<Vec<Vec<ChildId>>>>;
 
     /// Record the identity path the declaration pass currently has open.
-    fn record_declared_path(ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>, log: &PathLog) {
+    fn record_declared_path(ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>, log: &PathLog) {
         if let Some(path) = ctx.pass.current_path() {
             log.lock().expect("path log").push(path.to_vec());
         }
@@ -3251,7 +3251,7 @@ mod tests {
     struct PathProbe(PathLog);
 
     impl Component<FocusTestState, FocusTestMsg> for PathProbe {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             record_declared_path(ctx, &self.0);
         }
 
@@ -3263,13 +3263,13 @@ mod tests {
     /// The two leaves at the bottom of a depth-four branch, plus the record
     /// for the scope they were declared into.
     fn declare_probe_cells(
-        ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>,
+        ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>,
         top: u16,
         log: &PathLog,
     ) {
         record_declared_path(ctx, log);
         for (row, id) in [(top, "cell-1"), (top + 1, "cell-2")] {
-            ctx.render_component(
+            ctx.component(
                 ChildId::from(id.to_owned()),
                 PathProbe(Arc::clone(log)),
                 Rect::new(0, row, 20, 1),
@@ -3287,7 +3287,7 @@ mod tests {
     struct DownFocusLeaf(DownBehavior);
 
     impl Component<FocusTestState, FocusTestMsg> for DownFocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -3328,10 +3328,10 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for AreaAwareComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             assert_eq!(ctx.area(), self.expected_area);
             self.rendered.store(true, Ordering::SeqCst);
-            ctx.render_component(ChildId::Static("child"), FocusLeaf::enabled(), ctx.area());
+            ctx.component(ChildId::Static("child"), FocusLeaf::enabled(), ctx.area());
         }
 
         fn scope_options(&self) -> ScopeOptions {
@@ -3359,7 +3359,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             self.rendered
@@ -3379,9 +3379,9 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for FocusComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
-            ctx.render_component(
+            ctx.component(
                 ChildId::Static("child"),
                 FocusLeaf::recording(Arc::clone(&self.child_rendered)),
                 area,
@@ -3420,7 +3420,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &(), &theme, |ctx| {
-                    ctx.render_component(id.clone(), Leaf, area);
+                    ctx.component(id.clone(), Leaf, area);
                 });
             })
             .expect("draw");
@@ -3439,7 +3439,7 @@ mod tests {
                 let area = frame.area();
                 ratcn.render(frame, state, theme, |ctx| {
                     let message = Rc::clone(&message);
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("save"),
                         Button::new("Save")
                             .disabled(state.saving)
@@ -3506,7 +3506,7 @@ mod tests {
                                     .expect("scope flag log")
                                     .push(ctx.contains_focus);
                             });
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("probe"),
                                 ContextProbe {
                                     area: component_area,
@@ -3541,7 +3541,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &(), &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("composite"), Composite, area);
+                    ctx.component(ChildId::Static("composite"), Composite, area);
                 });
             })
             .expect("draw");
@@ -3578,8 +3578,8 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("duplicate"), Leaf, area);
-                        ctx.render_component(ChildId::Static("duplicate"), Leaf, area);
+                        ctx.component(ChildId::Static("duplicate"), Leaf, area);
+                        ctx.component(ChildId::Static("duplicate"), Leaf, area);
                     });
                 })
                 .expect("draw");
@@ -3612,7 +3612,7 @@ mod tests {
                             Rect::ZERO,
                             ScopeOptions::default(),
                             |ctx| {
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("shared"),
                                     FocusLeaf::enabled(),
                                     area,
@@ -3747,7 +3747,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("staged"), Leaf, area);
+                        ctx.component(ChildId::Static("staged"), Leaf, area);
                         panic!("declaration failed");
                     });
                 })
@@ -3773,7 +3773,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("panicking"), PanickingLeaf, area);
+                        ctx.component(ChildId::Static("panicking"), PanickingLeaf, area);
                     });
                 })
                 .expect("draw");
@@ -3809,7 +3809,7 @@ mod tests {
                             buf.cell_mut((0, 0)).expect("probe cell").set_symbol("X");
                         });
                     });
-                    ctx.render_component(ChildId::Static("leaf"), Leaf, area);
+                    ctx.component(ChildId::Static("leaf"), Leaf, area);
                 });
             })
             .expect("draw");
@@ -3834,7 +3834,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("catching"), CatchingComposite, area);
+                        ctx.component(ChildId::Static("catching"), CatchingComposite, area);
                     });
                 })
                 .expect("draw");
@@ -3859,9 +3859,9 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("duplicate"), Leaf, area);
+                        ctx.component(ChildId::Static("duplicate"), Leaf, area);
                         let caught = catch_unwind(AssertUnwindSafe(|| {
-                            ctx.render_component(ChildId::Static("duplicate"), Leaf, area);
+                            ctx.component(ChildId::Static("duplicate"), Leaf, area);
                         }));
                         assert!(caught.is_err());
                     });
@@ -3889,7 +3889,7 @@ mod tests {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
                         let caught = catch_unwind(AssertUnwindSafe(|| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("panicking-options"),
                                 PanickingScopeOptions,
                                 area,
@@ -3921,7 +3921,7 @@ mod tests {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
                         let caught = catch_unwind(AssertUnwindSafe(|| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("panicking-resolve"),
                                 PanickingResolve,
                                 area,
@@ -3953,7 +3953,7 @@ mod tests {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
                         let caught = catch_unwind(AssertUnwindSafe(|| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("panicking-focusable"),
                                 PanickingFocusable,
                                 area,
@@ -3985,7 +3985,7 @@ mod tests {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
                         let caught = catch_unwind(AssertUnwindSafe(|| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("panicking-area"),
                                 PanickingInteractionArea,
                                 area,
@@ -4015,7 +4015,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("escaping-area"),
                             EscapingInteractionArea,
                             Rect::new(2, 1, 4, 1),
@@ -4044,7 +4044,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &(), &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("next"), Leaf, area);
+                    ctx.component(ChildId::Static("next"), Leaf, area);
                     let deferred_painted = Arc::clone(&deferred_painted);
                     ctx.defer_paint(move |_, ()| {
                         deferred_painted.store(true, Ordering::SeqCst);
@@ -4069,7 +4069,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("next"), Leaf, area);
+                        ctx.component(ChildId::Static("next"), Leaf, area);
                         ctx.defer_paint(|_, ()| panic!("deferred paint failed"));
                     });
                 })
@@ -4104,12 +4104,12 @@ mod tests {
                         Rect::ZERO,
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("first"),
                                 FocusLeaf::recording(Arc::clone(&first_rendered)),
                                 area,
                             );
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("second"),
                                 FocusLeaf::recording(Arc::clone(&second_rendered)),
                                 area,
@@ -4160,14 +4160,14 @@ mod tests {
                         Rect::new(0, 0, 4, 1),
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("collapsed"),
                                 FocusLeaf::recording(Arc::clone(&collapsed)),
                                 Rect::new(0, 0, 0, 1),
                             );
                         },
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("visible"),
                         FocusLeaf::recording(Arc::clone(&visible)),
                         Rect::new(5, 0, 4, 1),
@@ -4206,7 +4206,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("base"),
                         FocusLeaf::recording(Arc::clone(&base)),
                         area,
@@ -4245,7 +4245,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("composite"),
                         FocusComposite {
                             parent_rendered: Arc::clone(&parent_rendered),
@@ -4284,7 +4284,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("empty"),
                         EmptyComposite {
                             rendered: Arc::clone(&empty_rendered),
@@ -4292,7 +4292,7 @@ mod tests {
                         },
                         area,
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("leaf"),
                         FocusLeaf::recording(Arc::clone(&leaf_rendered)),
                         area,
@@ -4318,7 +4318,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("empty"),
                         EmptyComposite {
                             rendered: Arc::clone(&empty_rendered),
@@ -4354,22 +4354,14 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("before"), FocusLeaf::enabled(), area);
+                        ctx.component(ChildId::Static("before"), FocusLeaf::enabled(), area);
                         ctx.scope(
                             ChildId::Static("left"),
                             Rect::ZERO,
                             ScopeOptions::default().tab_wrap(left_wrap),
                             |ctx| {
-                                ctx.render_component(
-                                    ChildId::Static("a1"),
-                                    FocusLeaf::enabled(),
-                                    area,
-                                );
-                                ctx.render_component(
-                                    ChildId::Static("a2"),
-                                    FocusLeaf::enabled(),
-                                    area,
-                                );
+                                ctx.component(ChildId::Static("a1"), FocusLeaf::enabled(), area);
+                                ctx.component(ChildId::Static("a2"), FocusLeaf::enabled(), area);
                             },
                         );
                         ctx.scope(
@@ -4377,11 +4369,7 @@ mod tests {
                             Rect::ZERO,
                             ScopeOptions::default(),
                             |ctx| {
-                                ctx.render_component(
-                                    ChildId::Static("b1"),
-                                    FocusLeaf::enabled(),
-                                    area,
-                                );
+                                ctx.component(ChildId::Static("b1"), FocusLeaf::enabled(), area);
                             },
                         );
                     });
@@ -4444,8 +4432,8 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component("first", FocusLeaf::enabled(), area);
-                    ctx.render_component("second", FocusLeaf::enabled(), area);
+                    ctx.component("first", FocusLeaf::enabled(), area);
+                    ctx.component("second", FocusLeaf::enabled(), area);
                 });
             })
             .expect("draw");
@@ -4513,7 +4501,7 @@ mod tests {
                             ScopeOptions::default(),
                             |ctx| {
                                 for id in &ids {
-                                    ctx.render_component(id.clone(), FocusLeaf::enabled(), area);
+                                    ctx.component(id.clone(), FocusLeaf::enabled(), area);
                                 }
                             },
                         );
@@ -4584,16 +4572,8 @@ mod tests {
                         Rect::ZERO,
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
-                                ChildId::Static("first"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
-                            ctx.render_component(
-                                ChildId::Static("last"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
+                            ctx.component(ChildId::Static("first"), FocusLeaf::enabled(), area);
+                            ctx.component(ChildId::Static("last"), FocusLeaf::enabled(), area);
                         },
                     );
                 });
@@ -4656,11 +4636,7 @@ mod tests {
                         Rect::ZERO,
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
-                                ChildId::Static("target"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
+                            ctx.component(ChildId::Static("target"), FocusLeaf::enabled(), area);
                         },
                     );
                 });
@@ -4704,11 +4680,7 @@ mod tests {
                             Rect::ZERO,
                             ScopeOptions::default(),
                             |ctx| {
-                                ctx.render_component(
-                                    ChildId::Static("b1"),
-                                    FocusLeaf::enabled(),
-                                    area,
-                                );
+                                ctx.component(ChildId::Static("b1"), FocusLeaf::enabled(), area);
                             },
                         );
                     });
@@ -4752,16 +4724,8 @@ mod tests {
                         Rect::ZERO,
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
-                                ChildId::Static("disabled"),
-                                FocusLeaf::disabled(),
-                                area,
-                            );
-                            ctx.render_component(
-                                ChildId::Static("enabled"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
+                            ctx.component(ChildId::Static("disabled"), FocusLeaf::disabled(), area);
+                            ctx.component(ChildId::Static("enabled"), FocusLeaf::enabled(), area);
                         },
                     );
                 });
@@ -4810,16 +4774,8 @@ mod tests {
                         Rect::ZERO,
                         ScopeOptions::default().focus_key('x', [ChildId::Static("second")]),
                         |ctx| {
-                            ctx.render_component(
-                                ChildId::Static("first"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
-                            ctx.render_component(
-                                ChildId::Static("second"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
+                            ctx.component(ChildId::Static("first"), FocusLeaf::enabled(), area);
+                            ctx.component(ChildId::Static("second"), FocusLeaf::enabled(), area);
                         },
                     );
                 });
@@ -4843,16 +4799,12 @@ mod tests {
                         Rect::ZERO,
                         ScopeOptions::default().focus_key('x', [ChildId::Static("second")]),
                         |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("first"),
                                 FocusLeaf::consuming_focus_key(),
                                 area,
                             );
-                            ctx.render_component(
-                                ChildId::Static("second"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
+                            ctx.component(ChildId::Static("second"), FocusLeaf::enabled(), area);
                         },
                     );
                 });
@@ -4882,8 +4834,8 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("first"), FocusLeaf::enabled(), area);
-                    ctx.render_component(ChildId::Static("second"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("first"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("second"), FocusLeaf::enabled(), area);
                 });
             })
             .expect("draw");
@@ -4942,14 +4894,10 @@ mod tests {
                         Rect::ZERO,
                         ScopeOptions::default().focus_key('x', [ChildId::Static("missing")]),
                         |ctx| {
-                            ctx.render_component(
-                                ChildId::Static("first"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
+                            ctx.component(ChildId::Static("first"), FocusLeaf::enabled(), area);
                         },
                     );
-                    ctx.render_component(ChildId::Static("outside"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("outside"), FocusLeaf::enabled(), area);
                 });
             })
             .expect("draw");
@@ -5066,7 +5014,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("save"),
                             Button::new("Replacement")
                                 .disabled(true)
@@ -5129,7 +5077,7 @@ mod tests {
     }
 
     impl Component<HoverFocusState, HoverFocusMsg> for HoverFocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, HoverFocusState, HoverFocusMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, HoverFocusState, HoverFocusMsg>) {}
 
         fn is_focusable(&self, _state: &HoverFocusState) -> bool {
             self.enabled
@@ -5139,9 +5087,9 @@ mod tests {
     struct HoverFocusComposite;
 
     impl Component<HoverFocusState, HoverFocusMsg> for HoverFocusComposite {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, HoverFocusState, HoverFocusMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, HoverFocusState, HoverFocusMsg>) {
             let area = ctx.area();
-            ctx.render_component(ChildId::Static("leaf"), HoverFocusLeaf::enabled(), area);
+            ctx.component(ChildId::Static("leaf"), HoverFocusLeaf::enabled(), area);
         }
 
         fn scope_options(&self) -> ScopeOptions {
@@ -5165,7 +5113,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for LifecycleDrag {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5187,7 +5135,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for Draggable {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5229,7 +5177,7 @@ mod tests {
     }
 
     impl Component<ModalPointerState, PointerMsg> for ModalHoverLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalPointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, ModalPointerState, PointerMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalPointerState>) {
             self.rendered
@@ -5242,11 +5190,11 @@ mod tests {
     struct ModalPointerLeaf;
 
     impl Component<ModalPointerState, PointerMsg> for ModalPointerLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalPointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, ModalPointerState, PointerMsg>) {}
     }
 
     impl Component<PointerState, PointerMsg> for HoverLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
             if let Some(rendered) = &self.rendered {
@@ -5282,7 +5230,7 @@ mod tests {
     struct EmittingHoverLeaf;
 
     impl Component<PointerState, PointerMsg> for EmittingHoverLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5312,7 +5260,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for CapturingHoverLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
             self.rendered
@@ -5340,7 +5288,7 @@ mod tests {
     struct StringTransient;
 
     impl Component<PointerState, PointerMsg> for StringTransient {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5356,7 +5304,7 @@ mod tests {
     struct NumberTransient;
 
     impl Component<PointerState, PointerMsg> for NumberTransient {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5372,7 +5320,7 @@ mod tests {
     struct TransientProbe;
 
     impl Component<PointerState, PointerMsg> for TransientProbe {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5431,7 +5379,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for CleanupComponent {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5460,7 +5408,7 @@ mod tests {
     struct RouteLeaf(&'static str);
 
     impl Component<PointerState, PointerMsg> for RouteLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5482,7 +5430,7 @@ mod tests {
     }
 
     impl Component<PointerState, PointerMsg> for RecordingPointer {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -5526,7 +5474,7 @@ mod tests {
             .draw(|frame| {
                 ratcn.render(frame, state, &theme, |ctx| {
                     for &(id, name, area) in ids {
-                        ctx.render_component(ChildId::Static(id), Draggable { name }, area);
+                        ctx.component(ChildId::Static(id), Draggable { name }, area);
                     }
                 });
             })
@@ -5545,7 +5493,7 @@ mod tests {
             .draw(|frame| {
                 ratcn.render(frame, state, &theme, |ctx| {
                     if let Some(component) = component {
-                        ctx.render_component(ChildId::Static("drag"), component, area);
+                        ctx.component(ChildId::Static("drag"), component, area);
                     }
                 });
             })
@@ -5652,7 +5600,7 @@ mod tests {
                 .draw(|frame| {
                     ratcn.render(frame, &state, &theme, |ctx| {
                         if grabber {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("grabber"),
                                 RecordingPointer {
                                     name: "grabber",
@@ -5662,7 +5610,7 @@ mod tests {
                                 Rect::new(0, 0, 5, 2),
                             );
                         }
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("other"),
                             RecordingPointer {
                                 name: "other",
@@ -5877,7 +5825,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("drag"),
                             Draggable {
                                 name: "replacement",
@@ -5911,7 +5859,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("typed"), StringTransient, area);
+                    ctx.component(ChildId::Static("typed"), StringTransient, area);
                 });
             })
             .expect("draw");
@@ -5920,7 +5868,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("typed"), NumberTransient, area);
+                    ctx.component(ChildId::Static("typed"), NumberTransient, area);
                 });
             })
             .expect("draw");
@@ -5953,7 +5901,7 @@ mod tests {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
                         if present {
-                            ctx.render_component(ChildId::Static("probe"), TransientProbe, area);
+                            ctx.component(ChildId::Static("probe"), TransientProbe, area);
                         }
                     });
                 })
@@ -5990,7 +5938,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("cleanup"),
                         CleanupComponent {
                             transient_dropped: Arc::clone(&transient_dropped),
@@ -6027,8 +5975,8 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("bottom"), RouteLeaf("bottom"), area);
-                    ctx.render_component(ChildId::Static("top"), RouteLeaf("top"), area);
+                    ctx.component(ChildId::Static("bottom"), RouteLeaf("bottom"), area);
+                    ctx.component(ChildId::Static("top"), RouteLeaf("top"), area);
                 });
             })
             .expect("draw");
@@ -6053,7 +6001,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("removed"),
                         RecordingPointer {
                             name: "removed",
@@ -6068,7 +6016,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("other"),
                         RecordingPointer {
                             name: "other",
@@ -6118,7 +6066,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static(id),
                             RecordingPointer {
                                 name,
@@ -6175,7 +6123,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static(id),
                             RecordingPointer {
                                 name,
@@ -6231,7 +6179,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("left"),
                         RecordingPointer {
                             name: "left",
@@ -6240,7 +6188,7 @@ mod tests {
                         },
                         Rect::new(0, 0, 4, 2),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("right"),
                         RecordingPointer {
                             name: "right",
@@ -6392,7 +6340,7 @@ mod tests {
                         Rect::new(0, 0, 8, 2),
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("child"),
                                 HoverFocusLeaf::enabled(),
                                 Rect::new(0, 0, 3, 2),
@@ -6439,7 +6387,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("other"),
                             HoverFocusLeaf::enabled(),
                             Rect::new(0, 0, 2, 2),
@@ -6489,7 +6437,7 @@ mod tests {
     struct ThunkProbe(FocusRenderLog);
 
     impl Component<FocusTestState, FocusTestMsg> for ThunkProbe {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             let log = Arc::clone(&self.0);
             ctx.paint(move |ctx| {
                 log.lock()
@@ -6539,11 +6487,7 @@ mod tests {
                                     .expect("scope flag log")
                                     .push((ctx.focused, ctx.contains_focus));
                             });
-                            ctx.render_component(
-                                ChildId::Static("leaf"),
-                                ThunkProbe(leaf_flags),
-                                area,
-                            );
+                            ctx.component(ChildId::Static("leaf"), ThunkProbe(leaf_flags), area);
                         },
                     );
                 });
@@ -6581,12 +6525,12 @@ mod tests {
                             Rect::new(x, 0, 6, 2),
                             ScopeOptions::default().hover_focus(),
                             |ctx| {
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("first"),
                                     HoverFocusLeaf::enabled(),
                                     Rect::new(x, 0, 3, 2),
                                 );
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("second"),
                                     HoverFocusLeaf::enabled(),
                                     Rect::new(x + 3, 0, 3, 2),
@@ -6651,12 +6595,12 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("enabled"),
                             HoverFocusLeaf::enabled(),
                             Rect::new(0, 0, 3, 2),
                         );
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("disabled"),
                             HoverFocusLeaf::disabled(),
                             Rect::new(4, 0, 3, 2),
@@ -6709,19 +6653,19 @@ mod tests {
                         Rect::ZERO,
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("disabled"),
                                 HoverFocusLeaf::disabled(),
                                 area,
                             );
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("enabled"),
                                 HoverFocusLeaf::enabled(),
                                 area,
                             );
                         },
                     );
-                    ctx.render_component(dynamic.clone(), HoverFocusLeaf::enabled(), area);
+                    ctx.component(dynamic.clone(), HoverFocusLeaf::enabled(), area);
                 });
             })
             .expect("draw");
@@ -6765,7 +6709,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("width-zero"),
                             FocusLeaf::enabled(),
                             if recovered {
@@ -6774,12 +6718,12 @@ mod tests {
                                 Rect::new(0, 0, 0, 1)
                             },
                         );
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("height-zero"),
                             FocusLeaf::enabled(),
                             Rect::new(1, 0, 1, 0),
                         );
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("visible"),
                             FocusLeaf::enabled(),
                             Rect::new(2, 0, 1, 1),
@@ -6789,7 +6733,7 @@ mod tests {
                             Rect::ZERO,
                             ScopeOptions::default(),
                             |ctx| {
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("child"),
                                     FocusLeaf::enabled(),
                                     Rect::new(4, 0, 1, 1),
@@ -6860,7 +6804,7 @@ mod tests {
             self.open = *state;
         }
 
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, bool, ()>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, bool, ()>) {}
 
         fn scope_options(&self) -> ScopeOptions {
             let options = ScopeOptions::default();
@@ -6900,7 +6844,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &true, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("claims"),
                         PreparedClaims { open: false },
                         area,
@@ -6937,7 +6881,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("area-aware"),
                             AreaAwareComposite {
                                 expected_area: area,
@@ -6946,7 +6890,7 @@ mod tests {
                             },
                             area,
                         );
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("visible"),
                             FocusLeaf::enabled(),
                             Rect::new(4, 0, 2, 1),
@@ -7004,7 +6948,7 @@ mod tests {
                         ScopeOptions::default().focusable(),
                         |_| {},
                     );
-                    ctx.render_component(ChildId::Static("visible"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("visible"), FocusLeaf::enabled(), area);
                 });
             })
             .expect("draw");
@@ -7026,7 +6970,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("base"), HoverFocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("base"), HoverFocusLeaf::enabled(), area);
                     ctx.modal(ChildId::Static("lower"), HoverFocusComposite, area);
                     ctx.modal(ChildId::Static("top"), HoverFocusComposite, area);
                 });
@@ -7060,12 +7004,12 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("first"),
                         Button::new("First").on_press(|| ButtonTimingMsg::Replacement),
                         Rect::new(0, 0, 8, 2),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("second"),
                         Button::new("Second").on_press(|| ButtonTimingMsg::Save),
                         Rect::new(10, 0, 8, 2),
@@ -7115,7 +7059,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("first"),
                         FocusLeaf::enabled(),
                         Rect::new(0, 0, 3, 1),
@@ -7125,7 +7069,7 @@ mod tests {
                         ("consumed", 8, DownBehavior::Consume),
                         ("emitted", 12, DownBehavior::Emit),
                     ] {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static(id),
                             DownFocusLeaf(behavior),
                             Rect::new(x, 0, 3, 1),
@@ -7169,12 +7113,12 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("first"),
                         FocusLeaf::enabled(),
                         Rect::new(0, 0, 3, 2),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("click"),
                         ClickFocusLeaf,
                         Rect::new(4, 0, 3, 2),
@@ -7210,7 +7154,7 @@ mod tests {
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     for (id, x) in [("left", 0), ("right", 5)] {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static(id),
                             HoverLeaf {
                                 consume_move: false,
@@ -7287,7 +7231,7 @@ mod tests {
                                 ScopeOptions::default(),
                                 move |ctx| {
                                     log.lock().expect("log").push((id, ctx.pointer_within()));
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("leaf"),
                                         HoverLeaf {
                                             consume_move: false,
@@ -7379,7 +7323,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("target"),
                             HoverLeaf {
                                 consume_move: false,
@@ -7431,7 +7375,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("grip"),
                             CapturingHoverLeaf {
                                 rendered: Arc::clone(&rendered),
@@ -7477,7 +7421,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("target"),
                         HoverLeaf {
                             consume_move: false,
@@ -7521,7 +7465,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("base"),
                             ModalHoverLeaf {
                                 rendered: Arc::clone(&rendered),
@@ -7595,7 +7539,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("target"),
                             HoverLeaf {
                                 consume_move: false,
@@ -7646,7 +7590,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("consumer"),
                         HoverLeaf {
                             consume_move: true,
@@ -7690,11 +7634,7 @@ mod tests {
                         area,
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
-                                ChildId::Static("emitter"),
-                                EmittingHoverLeaf,
-                                area,
-                            );
+                            ctx.component(ChildId::Static("emitter"), EmittingHoverLeaf, area);
                         },
                     );
                 });
@@ -7734,7 +7674,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("target"),
                             HoverLeaf {
                                 consume_move: false,
@@ -7803,7 +7743,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("target"),
                             HoverLeaf {
                                 consume_move: false,
@@ -7877,7 +7817,7 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for LoggingComponent {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
 
         fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
             self.log.lock().expect("paint log").push(self.name);
@@ -7904,9 +7844,9 @@ mod tests {
     struct FocusModal;
 
     impl Component<FocusTestState, FocusTestMsg> for FocusModal {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
-            ctx.render_component(ChildId::Static("leaf"), FocusLeaf::enabled(), area);
+            ctx.component(ChildId::Static("leaf"), FocusLeaf::enabled(), area);
         }
 
         fn scope_options(&self) -> ScopeOptions {
@@ -7917,10 +7857,10 @@ mod tests {
     struct EscapeFocusModal;
 
     impl Component<FocusTestState, FocusTestMsg> for EscapeFocusModal {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
-            ctx.render_component(ChildId::Static("first"), FocusLeaf::enabled(), area);
-            ctx.render_component(ChildId::Static("second"), FocusLeaf::enabled(), area);
+            ctx.component(ChildId::Static("first"), FocusLeaf::enabled(), area);
+            ctx.component(ChildId::Static("second"), FocusLeaf::enabled(), area);
         }
 
         fn scope_options(&self) -> ScopeOptions {
@@ -7931,7 +7871,7 @@ mod tests {
     struct PanickingFocusComponent;
 
     impl Component<FocusTestState, FocusTestMsg> for PanickingFocusComponent {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             panic!("modal render failed");
         }
     }
@@ -7941,9 +7881,9 @@ mod tests {
     }
 
     impl Component<FocusTestState, FocusTestMsg> for RecordingFocusModal {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
-            ctx.render_component(
+            ctx.component(
                 ChildId::Static("leaf"),
                 FocusLeaf::recording(Arc::clone(&self.rendered)),
                 area,
@@ -7966,7 +7906,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("base"),
                         LoggingComponent {
                             name: "base",
@@ -8046,16 +7986,11 @@ mod tests {
                         Rect::new(0, 0, 2, 1),
                         |ctx| {
                             ctx.paint(|ctx| {
-                                ctx.render_widget(
-                                    ratatui::text::Line::from("PP"),
-                                    Rect::new(0, 0, 2, 1),
-                                );
+                                ctx.widget(ratatui::text::Line::from("PP"), Rect::new(0, 0, 2, 1));
                             });
                             ctx.defer_paint(|painter, _| {
-                                painter.render_widget(
-                                    ratatui::text::Line::from("O"),
-                                    Rect::new(0, 0, 1, 1),
-                                );
+                                painter
+                                    .widget(ratatui::text::Line::from("O"), Rect::new(0, 0, 1, 1));
                             });
                         },
                     );
@@ -8073,14 +8008,14 @@ mod tests {
     struct BackdropParent;
 
     impl Component<(), ()> for BackdropParent {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, (), ()>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), ()>) {
             let area = ctx.area();
-            ctx.render_component(ChildId::Static("glyph"), GlyphLeaf("C"), area);
+            ctx.component(ChildId::Static("glyph"), GlyphLeaf("C"), area);
         }
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ()>) {
             let area = ctx.area();
-            ctx.render_widget(
+            ctx.widget(
                 ratatui::text::Line::from("#".repeat(area.width as usize)),
                 area,
             );
@@ -8092,11 +8027,11 @@ mod tests {
     struct GlyphLeaf(&'static str);
 
     impl<S, M> Component<S, M> for GlyphLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, S, M>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
             let area = ctx.area();
-            ctx.render_widget(
+            ctx.widget(
                 ratatui::text::Line::from(self.0),
                 Rect {
                     width: 1,
@@ -8120,7 +8055,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &(), &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("parent"), BackdropParent, area);
+                    ctx.component(ChildId::Static("parent"), BackdropParent, area);
                 });
             })
             .expect("draw");
@@ -8128,6 +8063,58 @@ mod tests {
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer.cell((0, 0)).expect("cell").symbol(), "C");
         assert_eq!(buffer.cell((1, 0)).expect("cell").symbol(), "#");
+    }
+
+    /// A leaf that fills its whole area with one glyph, so a test can read
+    /// which writes landed under it and which over it.
+    struct FillLeaf(&'static str);
+
+    impl<S, M> Component<S, M> for FillLeaf {
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+            let area = ctx.area();
+            ctx.widget(
+                ratatui::text::Line::from(self.0.repeat(area.width as usize)),
+                area,
+            );
+        }
+    }
+
+    /// [`DeclareCtx::paint_widget`] is one op queued where it is called, the
+    /// same position [`DeclareCtx::paint`] takes: a component declared between
+    /// two of them paints over the first and under the second, so the
+    /// shorthand carries the declaration-order z-order rather than collapsing
+    /// to the ends of the frame.
+    #[test]
+    fn paint_widget_queues_at_the_position_it_is_called_from() {
+        let mut ratcn = Ratcn::<(), ()>::new();
+        let mut terminal = Terminal::new(TestBackend::new(5, 1)).expect("terminal");
+        let theme = Theme::default_dark();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ratcn.render(frame, &(), &theme, |ctx| {
+                    ctx.paint_widget(ratatui::text::Line::from("aaaaa"), area);
+                    ctx.component(
+                        ChildId::Static("leaf"),
+                        FillLeaf("#"),
+                        Rect::new(1, 0, 3, 1),
+                    );
+                    ctx.paint_widget(ratatui::text::Line::from("zz"), Rect::new(2, 0, 2, 1));
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let row: Vec<&str> = (0..5)
+            .map(|x| buffer.cell((x, 0)).expect("cell").symbol())
+            .collect();
+        assert_eq!(
+            row,
+            ["a", "#", "z", "z", "a"],
+            "the component covers the paint_widget declared before it and is covered by the one declared after it"
+        );
     }
 
     /// A pass the runtime rejects is rejected before it draws: declaration
@@ -8151,7 +8138,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("first"), GlyphLeaf("A"), area);
+                    ctx.component(ChildId::Static("first"), GlyphLeaf("A"), area);
                 });
             })
             .expect("draw");
@@ -8204,7 +8191,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("first"), GlyphLeaf("A"), area);
+                    ctx.component(ChildId::Static("first"), GlyphLeaf("A"), area);
                 });
             })
             .expect("draw");
@@ -8218,7 +8205,7 @@ mod tests {
                         // Base-layer content, which paints straight onto the
                         // frame, declared alongside the modal root the app's
                         // empty stack refuses.
-                        ctx.render_component(ChildId::Static("base"), GlyphLeaf("B"), area);
+                        ctx.component(ChildId::Static("base"), GlyphLeaf("B"), area);
                         ctx.modal(ChildId::Static("sheet"), GlyphLeaf("C"), area);
                     });
                 }));
@@ -8272,7 +8259,7 @@ mod tests {
                                         .expect("scope hover log")
                                         .push((ctx.hovered, ctx.contains_hover));
                                 });
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("leaf"),
                                     HoverLeaf {
                                         consume_move: false,
@@ -8425,7 +8412,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("base"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("base"), FocusLeaf::enabled(), area);
                     ctx.modal(ChildId::Static("dialog"), FocusModal, area);
                 });
             })
@@ -8457,7 +8444,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("base"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("base"), FocusLeaf::enabled(), area);
                     ctx.modal(ChildId::Static("dialog"), FocusModal, area);
                 });
             })
@@ -8468,7 +8455,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("base"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("base"), FocusLeaf::enabled(), area);
                 });
             })
             .expect("draw");
@@ -8561,7 +8548,7 @@ mod tests {
                             Rect::ZERO,
                             ScopeOptions::default(),
                             |ctx| {
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("base-child"),
                                     FocusLeaf::enabled(),
                                     area,
@@ -8672,7 +8659,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("base"), ModalRoute("base"), area);
+                        ctx.component(ChildId::Static("base"), ModalRoute("base"), area);
                         if state.modals.is_open("dialog") {
                             ctx.modal(ChildId::Static("dialog"), ModalRoute("dialog"), area);
                         }
@@ -8742,7 +8729,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("base"), ModalRoute("base"), area);
+                    ctx.component(ChildId::Static("base"), ModalRoute("base"), area);
                 });
             })
             .expect("initial draw");
@@ -8798,7 +8785,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("base"),
                         crate::Button::new("Base").on_press(|| Msg::Base),
                         Rect::new(0, 0, 10, 1),
@@ -8808,7 +8795,7 @@ mod tests {
                         area,
                         ScopeOptions::default(),
                         |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("ok"),
                                 crate::Button::new("OK").on_press(|| Msg::Ok),
                                 Rect::new(2, 3, 6, 1),
@@ -8861,7 +8848,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("under"), RouteLeaf("under"), area);
+                    ctx.component(ChildId::Static("under"), RouteLeaf("under"), area);
                     let options = if with_dismiss {
                         PopupOptions::default().on_dismiss(|| PointerMsg::Dismissed)
                     } else {
@@ -8929,7 +8916,7 @@ mod tests {
                         PopupOptions::default(),
                         Rect::new(0, 0, 5, 1),
                         |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("pi"),
                                 RouteLeaf("pi"),
                                 Rect::new(0, 0, 5, 1),
@@ -8957,7 +8944,7 @@ mod tests {
         struct FocusableLeaf;
 
         impl Component<PointerState, PointerMsg> for FocusableLeaf {
-            fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+            fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
             fn is_focusable(&self, _state: &PointerState) -> bool {
                 true
@@ -8971,7 +8958,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("button"),
                         RouteLeaf("button"),
                         Rect::new(0, 0, 6, 1),
@@ -8982,7 +8969,7 @@ mod tests {
                         ScopeOptions::default(),
                         Rect::new(0, 0, 6, 1),
                         |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("text"),
                                 FocusableLeaf,
                                 Rect::new(0, 0, 6, 1),
@@ -9093,7 +9080,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("button"),
                         RouteLeaf("button"),
                         Rect::new(6, 0, 4, 1),
@@ -9135,7 +9122,7 @@ mod tests {
     struct PopupHost;
 
     impl Component<FocusTestState, FocusTestMsg> for PopupHost {
-        fn render(&mut self, ctx: &mut RenderCtx<'_, FocusTestState, FocusTestMsg>) {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
             let area = ctx.area();
             ctx.popup(
                 ChildId::Static("panel"),
@@ -9143,7 +9130,7 @@ mod tests {
                 area,
                 |ctx| {
                     let area = ctx.area();
-                    ctx.render_component(ChildId::Static("item"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("item"), FocusLeaf::enabled(), area);
                 },
             );
         }
@@ -9182,7 +9169,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("host"), PopupHost, area);
+                    ctx.component(ChildId::Static("host"), PopupHost, area);
                 });
             })
             .expect("draw");
@@ -9211,13 +9198,13 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("base"), RouteLeaf("base"), area);
+                    ctx.component(ChildId::Static("base"), RouteLeaf("base"), area);
                     ctx.modal_scope(
                         ChildId::Static("sheet"),
                         area,
                         ScopeOptions::default(),
                         move |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("field"),
                                 RouteLeaf("field"),
                                 Rect::new(5, 0, 5, 2),
@@ -9227,7 +9214,7 @@ mod tests {
                                 PopupOptions::default(),
                                 Rect::new(0, 0, 5, 2),
                                 |ctx| {
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("option"),
                                         RouteLeaf("option"),
                                         Rect::new(0, 0, 5, 2),
@@ -9278,17 +9265,14 @@ mod tests {
                         Rect::new(0, 0, 2, 1),
                         |ctx| {
                             ctx.paint(|ctx| {
-                                ctx.render_widget(
-                                    ratatui::text::Line::from("PP"),
-                                    Rect::new(0, 0, 2, 1),
-                                );
+                                ctx.widget(ratatui::text::Line::from("PP"), Rect::new(0, 0, 2, 1));
                             });
                         },
                     );
                     // …and a base sibling paints over the same cells after —
                     // yet the popup composites on top.
                     ctx.paint(move |ctx| {
-                        ctx.render_widget(ratatui::text::Line::from("BBBB"), area);
+                        ctx.widget(ratatui::text::Line::from("BBBB"), area);
                     });
                 });
             })
@@ -9323,7 +9307,7 @@ mod tests {
                                 ScopeOptions::default(),
                                 move |ctx| {
                                     let area = ctx.area();
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("inner"),
                                         ModalFocusLeaf {
                                             rendered: Arc::clone(&rendered),
@@ -9388,7 +9372,7 @@ mod tests {
     }
 
     impl Component<ModalTestState, ModalTestMsg> for ModalFocusLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, ModalTestState, ModalTestMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, ModalTestState, ModalTestMsg>) {}
 
         fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
             self.rendered
@@ -9418,7 +9402,7 @@ mod tests {
     struct ClickLeaf(&'static str);
 
     impl Component<PointerState, PointerMsg> for ClickLeaf {
-        fn render(&mut self, _ctx: &mut RenderCtx<'_, PointerState, PointerMsg>) {}
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
         fn handle_event(
             &mut self,
@@ -9451,7 +9435,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, &PointerState, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("button"),
                             ClickLeaf("button"),
                             Rect::new(6, 0, 4, 1),
@@ -9506,7 +9490,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("base"), FocusLeaf::enabled(), area);
+                    ctx.component(ChildId::Static("base"), FocusLeaf::enabled(), area);
                     let rendered = Arc::clone(&rendered);
                     ctx.scope(
                         ChildId::Static("pane"),
@@ -9519,7 +9503,7 @@ mod tests {
                                 ScopeOptions::default(),
                                 move |ctx| {
                                     let area = ctx.area();
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("inner"),
                                         FocusLeaf::recording(rendered),
                                         area,
@@ -9586,7 +9570,7 @@ mod tests {
                                 area,
                                 ScopeOptions::default(),
                                 move |ctx| {
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("item"),
                                         FocusLeaf::recording(left),
                                         area,
@@ -9607,7 +9591,7 @@ mod tests {
                                 area,
                                 ScopeOptions::default(),
                                 move |ctx| {
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("item"),
                                         FocusLeaf::recording(right),
                                         area,
@@ -9887,7 +9871,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("drag"), Draggable { name: "base" }, area);
+                    ctx.component(ChildId::Static("drag"), Draggable { name: "base" }, area);
                     ctx.modal(ChildId::Static("modal"), RouteLeaf("modal"), area);
                 });
             })
@@ -9929,7 +9913,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("base"),
                             HoverLeaf {
                                 consume_move: false,
@@ -9983,7 +9967,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("base"), RouteLeaf("base"), area);
+                    ctx.component(ChildId::Static("base"), RouteLeaf("base"), area);
                     ctx.defer_paint(|painter, _| {
                         painter.with_buffer(|buf| {
                             buf[(0, 0)].set_symbol("overlay");
@@ -10051,7 +10035,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("same"), Leaf, area);
+                        ctx.component(ChildId::Static("same"), Leaf, area);
                         let deferred = Arc::clone(&painted);
                         ctx.defer_paint(move |_, ()| deferred.store(true, Ordering::SeqCst));
                         ctx.modal(ChildId::Static("same"), Leaf, area);
@@ -10137,11 +10121,7 @@ mod tests {
                         area,
                         ScopeOptions::default().tab_wrap(TabWrap::Wrap),
                         |ctx| {
-                            ctx.render_component(
-                                ChildId::Static("outerleaf"),
-                                FocusLeaf::enabled(),
-                                area,
-                            );
+                            ctx.component(ChildId::Static("outerleaf"), FocusLeaf::enabled(), area);
                             // `Escape` on purpose: the modal boundary, not the
                             // scope's own wrap, must be what traps Tab.
                             ctx.modal_scope(
@@ -10149,7 +10129,7 @@ mod tests {
                                 area,
                                 ScopeOptions::default(),
                                 |ctx| {
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("leaf"),
                                         FocusLeaf::enabled(),
                                         area,
@@ -10243,7 +10223,7 @@ mod tests {
                             Rect::new(0, 0, 20, 2),
                             ScopeOptions::default().tab_wrap(wrap),
                             |ctx| {
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("inside"),
                                     FocusLeaf::enabled(),
                                     Rect::new(0, 0, 10, 1),
@@ -10278,7 +10258,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("outside"),
                         Button::new("Outside")
                             .on_press(|| FocusTestMsg::Activated(vec![ChildId::Static("outside")])),
@@ -10314,7 +10294,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("outside"),
                         Button::new("Outside")
                             .on_press(|| FocusTestMsg::Activated(vec![ChildId::Static("outside")])),
@@ -10358,7 +10338,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("outside"),
                         Button::new("Outside")
                             .on_press(|| FocusTestMsg::Activated(vec![ChildId::Static("outside")])),
@@ -10576,7 +10556,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("base"),
                             Button::new("Base").on_press(|| {
                                 PointerMsg::Routed("base", MouseKind::Click(MouseButton::Left), 0)
@@ -10643,7 +10623,7 @@ mod tests {
                             area,
                             ScopeOptions::default(),
                             move |ctx| {
-                                ctx.render_component(
+                                ctx.component(
                                     ChildId::Static("shared"),
                                     FocusLeaf::recording(rendered),
                                     area,
@@ -10679,7 +10659,7 @@ mod tests {
                                 area,
                                 ScopeOptions::default(),
                                 move |ctx| {
-                                    ctx.render_component(
+                                    ctx.component(
                                         ChildId::Static("shared"),
                                         HoverLeaf {
                                             consume_move: false,
@@ -10727,7 +10707,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("base"),
                             Button::new("Base").on_press(|| ModalTestMsg::Routed("base")),
                             area,

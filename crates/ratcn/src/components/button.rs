@@ -14,8 +14,8 @@ use crate::color::{
     DISABLED_DIM, FOCUS_DARKEN, FOCUS_LIGHTEN, HOVER_DARKEN, HOVER_LIGHTEN, darken, dim, lighten,
 };
 use crate::runtime::{
-    Component, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton, MouseKind,
-    PaintCtx, RenderCtx, fixed_height,
+    Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton,
+    MouseKind, PaintCtx, fixed_height,
 };
 use crate::theme::resolve_style;
 
@@ -553,7 +553,7 @@ type StyleFn = Box<dyn Fn(&Theme) -> ButtonStyle>;
 type OnPressFn<M> = Box<dyn Fn() -> M>;
 
 /// A button that can be focused and pressed, declared with
-/// [`render_component`](crate::runtime::RenderCtx::render_component).
+/// [`component`](crate::runtime::DeclareCtx::component).
 ///
 /// After [`on_press`](Self::on_press) is set, pressing it — Enter, Space, or a
 /// left click — returns the message built by that handler. Without a handler the
@@ -727,7 +727,7 @@ impl<M> Button<M> {
 }
 
 impl<S, M> Component<S, M> for Button<M> {
-    fn render(&mut self, _ctx: &mut RenderCtx<'_, S, M>) {}
+    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {}
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
         let area = ctx.area();
@@ -740,7 +740,7 @@ impl<S, M> Component<S, M> for Button<M> {
             .focused(ctx.focused)
             .hovered(ctx.hovered)
             .disabled(self.disabled);
-        ctx.render_widget(widget, area);
+        ctx.widget(widget, area);
     }
 
     fn handle_event(
@@ -1327,7 +1327,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &(), &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("button"), button(), area);
+                    ctx.component(ChildId::Static("button"), button(), area);
                 });
             })
             .expect("draw");
@@ -1367,12 +1367,12 @@ mod tests {
                     .draw(|frame| {
                         let area = frame.area();
                         ratcn.render(frame, state, &theme, |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("other"),
                                 Button::<Msg>::new("Other").on_press(|| Msg::Pressed),
                                 Rect::new(0, 0, 10, 1),
                             );
-                            ctx.render_component(
+                            ctx.component(
                                 ChildId::Static("button"),
                                 Button::new("Save")
                                     .disabled(state.disabled)
@@ -1440,12 +1440,12 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("other"),
                         Button::<Msg>::new("Other").on_press(|| Msg::Pressed),
                         Rect::new(0, 0, 8, 1),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("button"),
                         Button::new("Save").on_press(|| Msg::Pressed),
                         Rect::new(10, 0, 10, 4),

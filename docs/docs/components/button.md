@@ -31,7 +31,7 @@ ratcn.render(frame, state, &state.theme, |ctx| {
         .disabled(state.saving)
         .on_press(|| Msg::Save);
 
-    ctx.render_component("save", save, save_area);
+    ctx.component("save", save, save_area);
 });
 ```
 

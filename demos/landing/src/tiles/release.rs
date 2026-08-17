@@ -7,12 +7,12 @@ use ratatui::{
 };
 use ratcn::{
     Button, Dialog, ListItem, Select, Toast,
-    runtime::{CellOffset, FocusState, ModalState, RenderCtx},
+    runtime::{CellOffset, DeclareCtx, FocusState, ModalState},
 };
 
 use crate::{AppMsg, AppState};
 
-use super::shared::render_tile_panel;
+use super::shared::declare_tile_panel;
 
 pub const ID: &str = "release";
 pub const DIALOG_ID: &str = "create_release";
@@ -98,7 +98,7 @@ impl State {
     }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
     let create_release = Button::new("Create release")
@@ -113,11 +113,11 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
     .flex(Flex::Center)
     .spacing(1);
     let button_layout = Layout::horizontal([Constraint::Length(button_width)]).flex(Flex::Center);
-    let inner_area = render_tile_panel(ctx, area, " alt+2 ");
+    let inner_area = declare_tile_panel(ctx, area, " alt+2 ");
     let [header_area, body_area, button_row] = inner_area.layout(&content_layout);
     ctx.paint(move |ctx| {
         let theme = ctx.theme;
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new("Distribute track")
                 .style(
                     Style::default()
@@ -127,7 +127,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
                 .centered(),
             header_area,
         );
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new(
                 "Upload your first master to start reaching listeners on Spotify, Apple Music and more.",
             )
@@ -138,7 +138,7 @@ pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
         );
     });
     let [button_area] = button_row.layout(&button_layout);
-    ctx.render_component("create_release", create_release, button_area);
+    ctx.component("create_release", create_release, button_area);
 }
 
 pub fn dialog(offset: CellOffset) -> Dialog<AppState, AppMsg> {
@@ -156,14 +156,14 @@ pub fn dialog(offset: CellOffset) -> Dialog<AppState, AppMsg> {
             ])
             .areas(ctx.area());
             ctx.paint(move |ctx| {
-                ctx.render_widget(
+                ctx.widget(
                     Paragraph::new("Set up artwork, metadata, territories, and release date before sending your track to stores.")
                         .style(Style::default().fg(ctx.theme.muted_foreground))
                         .wrap(Wrap { trim: true }),
                     description_area,
                 );
             });
-            ctx.render_component(
+            ctx.component(
                 "release_media",
                 Select::new(RELEASE_MEDIA.map(|(media, label)| ListItem::new(media, label)))
                     .placeholder("Select release media...")

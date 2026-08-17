@@ -27,7 +27,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, ButtonSize, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, RenderCtx},
+    runtime::{DeclareCtx, Event, EventResult, FocusState, Ratcn},
 };
 
 mod fieldset;
@@ -155,7 +155,7 @@ impl demo_shared::Demo for App {
             .areas(panel);
 
             ctx.paint(move |ctx| {
-                ctx.render_widget(
+                ctx.widget(
                     Paragraph::new("Project settings").style(
                         Style::default()
                             .fg(ctx.theme.foreground)
@@ -178,8 +178,8 @@ impl demo_shared::Demo for App {
             .spacing(GROUP_SPACING)
             .areas(groups_area);
 
-            ctx.render_component("notifications", notifications, notifications_area);
-            ctx.render_component("billing", billing, billing_area);
+            ctx.component("notifications", notifications, notifications_area);
+            ctx.component("billing", billing, billing_area);
             // #endregion stacking
 
             footer(ctx, state, footer_area);
@@ -208,12 +208,12 @@ fn notifications(state: &AppState) -> Fieldset<AppState, Msg> {
                 Constraint::Min(0),
             ])
             .areas(ctx.area());
-            ctx.render_component(
+            ctx.component(
                 "email",
                 switch("Email", email, || Msg::ToggleEmail),
                 email_area,
             );
-            ctx.render_component("push", switch("Push", push, || Msg::TogglePush), push_area);
+            ctx.component("push", switch("Push", push, || Msg::TogglePush), push_area);
         })
 }
 // #endregion caller
@@ -243,7 +243,7 @@ fn billing(state: &AppState) -> Fieldset<AppState, Msg> {
                 ..ctx.area()
             };
             ctx.paint(move |ctx| {
-                ctx.render_widget(
+                ctx.widget(
                     Paragraph::new(format!("{seats} seats \u{b7} billed monthly"))
                         .style(Style::default().fg(ctx.theme.muted_foreground)),
                     area,
@@ -257,10 +257,10 @@ fn switch(label: &str, on: bool, msg: fn() -> Msg) -> Button<Msg> {
     Button::new(format!("{mark} {label}")).ghost().on_press(msg)
 }
 
-fn footer(ctx: &mut RenderCtx<'_, AppState, Msg>, state: &AppState, area: Rect) {
+fn footer(ctx: &mut DeclareCtx<'_, AppState, Msg>, state: &AppState, area: Rect) {
     let [plan_area, hint_area] =
         Layout::horizontal([Constraint::Length(16), Constraint::Min(0)]).areas(area);
-    ctx.render_component(
+    ctx.component(
         "plan",
         Button::new(if state.pro {
             "Downgrade"
@@ -273,7 +273,7 @@ fn footer(ctx: &mut RenderCtx<'_, AppState, Msg>, state: &AppState, area: Rect) 
     );
     let plan = if state.pro { "pro" } else { "free" };
     ctx.paint(move |ctx| {
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new(Line::from(vec![Span::raw(format!("  plan: {plan}"))]))
                 .style(Style::default().fg(ctx.theme.muted_foreground)),
             hint_area,

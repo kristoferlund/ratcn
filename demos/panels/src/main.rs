@@ -19,7 +19,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, RenderCtx, ScopeOptions, TabWrap},
+    runtime::{DeclareCtx, Event, EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
 };
 
 const THEME: Theme = Theme::default_dark();
@@ -156,7 +156,7 @@ impl App {
     /// and the rest secondary. Both panels render through here, so they can
     /// only differ by the data passed in.
     fn panel(
-        ctx: &mut RenderCtx<'_, AppState, Msg>,
+        ctx: &mut DeclareCtx<'_, AppState, Msg>,
         panel: PanelId,
         button_ids: &'static [&'static str],
     ) {
@@ -191,7 +191,7 @@ impl App {
                 inner_area,
                 "the painted block's inner rect must match the one the layout used"
             );
-            ctx.render_widget(border, panel_area);
+            ctx.widget(border, panel_area);
         });
 
         let [buttons_area] = inner_area.layout(
@@ -208,7 +208,7 @@ impl App {
             .spacing(2),
         );
         for ((id, button), button_area) in button_ids.iter().zip(buttons).zip(button_areas) {
-            ctx.render_component(*id, button, button_area);
+            ctx.component(*id, button, button_area);
         }
     }
 

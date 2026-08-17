@@ -29,8 +29,8 @@ use crate::list_core::{
     self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelPark,
 };
 use crate::runtime::{
-    Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind,
-    PaintCtx, PopupOptions, RenderCtx, ScrollDirection,
+    Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
+    MouseEvent, MouseKind, PaintCtx, PopupOptions, ScrollDirection,
 };
 use crate::selection_indicator;
 use crate::theme::resolve_style;
@@ -997,7 +997,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         self.resolved_open = !self.disabled && self.is_open(state);
     }
 
-    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let area = trigger_area(ctx.area());
         let style = resolve_style(self.style.as_deref(), ctx.theme, SelectStyle::from_theme);
         let Some((panel_area, viewport)) = self
@@ -1038,7 +1038,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             "panel",
             PopupOptions::default().on_dismiss(move || on_open_change(false)),
             panel_area,
-            move |ctx| ctx.render_component("options", panel, panel_area),
+            move |ctx| ctx.component("options", panel, panel_area),
         );
     }
 
@@ -1058,7 +1058,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         if self.resolved_open {
             trigger = trigger.open(&labels);
         }
-        ctx.render_widget(trigger, area);
+        ctx.widget(trigger, area);
     }
 
     fn handle_event(
@@ -1123,7 +1123,7 @@ impl<T: Clone + PartialEq, S, M> SelectPanel<T, S, M> {
 }
 
 impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S, M> {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let state = ctx.state();
         let cursor = self.cursor(state);
         // The panel owns its scrolling, so the park supplies the offset: the
@@ -1183,7 +1183,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         if let Some(rows) = &rows {
             widget = widget.visible_option_rows(rows);
         }
-        ctx.render_widget(SelectPanelWidget(widget), self.panel_area);
+        ctx.widget(SelectPanelWidget(widget), self.panel_area);
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
@@ -1496,9 +1496,9 @@ mod tests {
             self.terminal
                 .draw(|frame| {
                     self.ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component("fruit", select(items.to_vec()), area);
+                        ctx.component("fruit", select(items.to_vec()), area);
                         ctx.paint(|ctx| {
-                            ctx.render_widget(Line::from("later sibling"), Rect::new(0, 4, 20, 1));
+                            ctx.widget(Line::from("later sibling"), Rect::new(0, 4, 20, 1));
                         });
                     });
                 })
@@ -1553,9 +1553,9 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component("fruit", select(items()), Rect::new(0, 0, 20, 1));
+                    ctx.component("fruit", select(items()), Rect::new(0, 0, 20, 1));
                     ctx.paint(|ctx| {
-                        ctx.render_widget(Line::from("outside panel"), Rect::new(0, 7, 20, 1));
+                        ctx.widget(Line::from("outside panel"), Rect::new(0, 7, 20, 1));
                     });
                 });
             })
@@ -1808,7 +1808,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         "fruit",
                         select(items())
                             .render_item(|_: &State, row| {
@@ -1861,7 +1861,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             "fruit",
                             select(items()).render_item(
                                 move |_: &State, row: ListItemState<'_, Fruit>| {
@@ -2070,7 +2070,7 @@ mod tests {
             .terminal
             .draw(|frame| {
                 driver.ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         "fruit",
                         Select::new(items())
                             .open(|state: &State| state.open, Msg::Open)
@@ -2197,9 +2197,9 @@ mod tests {
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     ctx.modal_scope("modal", frame_area(), ScopeOptions::default(), |ctx| {
-                        ctx.render_component("fruit", select(items()), Rect::new(0, 0, 20, 1));
+                        ctx.component("fruit", select(items()), Rect::new(0, 0, 20, 1));
                         ctx.paint(|ctx| {
-                            ctx.render_widget(Line::from("modal sibling"), Rect::new(0, 2, 20, 1));
+                            ctx.widget(Line::from("modal sibling"), Rect::new(0, 2, 20, 1));
                         });
                     });
                 });
@@ -2346,7 +2346,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component("fruit", tall_select(items()), Rect::new(0, 4, 20, 1));
+                    ctx.component("fruit", tall_select(items()), Rect::new(0, 4, 20, 1));
                 });
             })
             .expect("draw");
@@ -2377,7 +2377,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component("fruit", tall_select(items()), Rect::new(0, 4, 20, 1));
+                    ctx.component("fruit", tall_select(items()), Rect::new(0, 4, 20, 1));
                 });
             })
             .expect("draw");

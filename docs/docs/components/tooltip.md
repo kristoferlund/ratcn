@@ -25,10 +25,10 @@ use ratcn::{Button, Tooltip};
 
 let tooltip = Tooltip::new("Write the ledger to disk").trigger(|ctx| {
     let area = ctx.area();
-    ctx.render_component("save", Button::new("Save").on_press(|| Msg::Save), area);
+    ctx.component("save", Button::new("Save").on_press(|| Msg::Save), area);
 });
 
-ctx.render_component("save_tip", tooltip, area);
+ctx.component("save_tip", tooltip, area);
 ```
 
 A Tooltip wraps rather than replaces: the area you declare it with is the

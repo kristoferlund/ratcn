@@ -122,28 +122,26 @@ impl demo_shared::Demo for App {
         self.ratcn.render(frame, state, &THEME, |ctx| {
             let [title, _gap, tabs, content, status] = area.layout(&shell_layout());
 
-            ctx.paint(move |ctx| {
-                ctx.render_widget(
-                    Line::from(Span::styled(
-                        "LEDGER 1993 · Modern Double-Entry Bookkeeping",
-                        Style::default()
-                            .fg(THEME.accent)
-                            .add_modifier(Modifier::BOLD),
-                    )),
-                    title,
-                );
-            });
+            ctx.paint_widget(
+                Line::from(Span::styled(
+                    "LEDGER 1993 · Modern Double-Entry Bookkeeping",
+                    Style::default()
+                        .fg(THEME.accent)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                title,
+            );
 
-            ctx.render_component(ids::TABS, nav::tabs(), tabs);
+            ctx.component(ids::TABS, nav::tabs(), tabs);
 
             ctx.scope(
                 screen_id(state.nav.selected),
                 content,
                 ScopeOptions::default(),
                 |ctx| match state.nav.selected {
-                    Screen::Ledger => screens::ledger::render(ctx),
-                    Screen::Report => screens::report::render(ctx),
-                    Screen::Settings => screens::settings::render(ctx),
+                    Screen::Ledger => screens::ledger::declare(ctx),
+                    Screen::Report => screens::report::declare(ctx),
+                    Screen::Settings => screens::settings::declare(ctx),
                 },
             );
 
@@ -151,16 +149,14 @@ impl demo_shared::Demo for App {
                 " {} · Tab/←→ to navigate ",
                 state.shared.prefs.currency.code()
             );
-            ctx.paint(move |ctx| {
-                ctx.render_widget(
-                    Paragraph::new(Line::from(Span::styled(
-                        status_line,
-                        Style::default().fg(THEME.muted_foreground),
-                    )))
-                    .centered(),
-                    status,
-                );
-            });
+            ctx.paint_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    status_line,
+                    Style::default().fg(THEME.muted_foreground),
+                )))
+                .centered(),
+                status,
+            );
         });
     }
 }

@@ -115,7 +115,7 @@ impl demo_shared::Demo for App {
             .areas(row_area);
 
             for ((id, button), button_area) in buttons.into_iter().zip(areas) {
-                ctx.render_component(id, button, button_area);
+                ctx.component(id, button, button_area);
             }
         });
     }

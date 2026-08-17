@@ -22,8 +22,8 @@ use ratatui::symbols::border;
 /// component's own derivation — answers instead.
 ///
 /// Every built-in resolves in `paint`, where the colors are actually needed, bar
-/// [`Select`](crate::Select), which also resolves in `render` because the style
-/// is a prop of the panel it declares there.
+/// [`Select`](crate::Select), which also resolves in `declare` because the
+/// style is a prop of the panel it declares there.
 #[must_use]
 pub fn resolve_style<S>(
     custom: Option<&dyn Fn(&Theme) -> S>,

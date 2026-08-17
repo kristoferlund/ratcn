@@ -33,7 +33,7 @@ let list = List::new([
 )
 .selection(|s: &AppState| s.selected_folder, Msg::FolderSelected);
 
-ctx.render_component("folders", list, area);
+ctx.component("folders", list, area);
 ```
 
 Items are identified by your own values, not by row index, so sorting or

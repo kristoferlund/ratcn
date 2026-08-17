@@ -95,7 +95,7 @@ gives you the body area and the normal declaration API:
 
 ```rust
 Dialog::new().content(6, move |ctx| {
-        ctx.render_component("options", List::new(options), ctx.area());
+        ctx.component("options", List::new(options), ctx.area());
     })
 ```
 

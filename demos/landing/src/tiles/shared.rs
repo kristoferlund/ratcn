@@ -3,20 +3,20 @@ use ratatui::{
     style::Style,
     widgets::{Block, Padding},
 };
-use ratcn::runtime::RenderCtx;
+use ratcn::runtime::DeclareCtx;
 
 use crate::{AppMsg, AppState};
 
-pub fn render_tile_panel(
-    ctx: &mut RenderCtx<'_, AppState, AppMsg>,
+pub fn declare_tile_panel(
+    ctx: &mut DeclareCtx<'_, AppState, AppMsg>,
     area: Rect,
     title: &'static str,
 ) -> Rect {
-    render_tile_panel_with_padding(ctx, area, title, Padding::uniform(2))
+    declare_tile_panel_with_padding(ctx, area, title, Padding::uniform(2))
 }
 
-pub fn render_tile_panel_with_padding(
-    ctx: &mut RenderCtx<'_, AppState, AppMsg>,
+pub fn declare_tile_panel_with_padding(
+    ctx: &mut DeclareCtx<'_, AppState, AppMsg>,
     area: Rect,
     title: &'static str,
     padding: Padding,
@@ -52,7 +52,7 @@ pub fn render_tile_panel_with_padding(
             inner,
             "the painted block's inner rect must match the one the layout used"
         );
-        ctx.render_widget(block, area);
+        ctx.widget(block, area);
     });
     inner
 }

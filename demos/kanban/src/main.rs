@@ -27,8 +27,8 @@ use ratatui::{
 use ratcn::{
     Theme,
     runtime::{
-        CellOffset, ChildId, Component, DragOptions, DragPhase, Event, EventCtx, EventResult,
-        PaintCtx, Ratcn, RenderCtx, offset_rect,
+        CellOffset, ChildId, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx,
+        EventResult, PaintCtx, Ratcn, offset_rect,
     },
 };
 
@@ -126,7 +126,7 @@ impl demo_shared::Demo for App {
             ctx.paint(move |ctx| {
                 for (column_index, column_area) in column_areas.iter().enumerate() {
                     if column_index > 0 {
-                        ctx.render_widget(
+                        ctx.widget(
                             Block::new()
                                 .borders(Borders::LEFT)
                                 .border_set(border::ROUNDED)
@@ -134,7 +134,7 @@ impl demo_shared::Demo for App {
                             *column_area,
                         );
                     }
-                    ctx.render_widget(
+                    ctx.widget(
                         Paragraph::new(COLUMN_TITLES[column_index])
                             .alignment(Alignment::Center)
                             .style(Style::default().fg(ctx.theme.muted_foreground)),
@@ -148,7 +148,7 @@ impl demo_shared::Demo for App {
 
             for (column_index, cards_in_column) in state.cards_by_column.iter().enumerate() {
                 for (card_index, card_id) in cards_in_column.iter().enumerate() {
-                    ctx.render_component(
+                    ctx.component(
                         card_id,
                         KanbanCard {
                             card_id: card_id.clone(),
@@ -240,7 +240,7 @@ struct KanbanCard {
 }
 
 impl Component<AppState, Msg> for KanbanCard {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, AppState, Msg>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, AppState, Msg>) {
         // The ghost follows the pointer over every card declared after this
         // one, so it is deferred to the top of the frame rather than painted
         // in place.
@@ -272,7 +272,7 @@ impl Component<AppState, Msg> for KanbanCard {
             .is_some_and(|active_drag| active_drag.card_id == self.card_id);
         if dragging {
             // The card left an empty slot behind: only its outline stays.
-            ctx.render_widget(
+            ctx.widget(
                 Block::bordered()
                     .border_set(border::ROUNDED)
                     .border_style(Style::default().fg(theme.border)),

@@ -163,7 +163,7 @@ impl demo_shared::Demo for App {
             .areas(content_area);
             let joke = joke.clone().into_owned();
             ctx.paint(move |ctx| {
-                ctx.render_widget(
+                ctx.widget(
                     Paragraph::new(joke)
                         .alignment(Alignment::Center)
                         .wrap(Wrap { trim: true })
@@ -184,7 +184,7 @@ impl demo_shared::Demo for App {
             let [button_area] = Layout::horizontal([Constraint::Length(refresh.width())])
                 .flex(Flex::Center)
                 .areas(button_area);
-            ctx.render_component(ids::REFRESH, refresh, button_area);
+            ctx.component(ids::REFRESH, refresh, button_area);
         });
     }
 }

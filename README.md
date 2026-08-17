@@ -69,7 +69,7 @@ today; there is no registry or install command.
 
 A copied module still depends on:
 
-- the `ratcn` runtime — the `Component` trait, `RenderCtx`/`EventCtx`,
+- the `ratcn` runtime — the `Component` trait, `DeclareCtx`/`EventCtx`,
   `EventResult`, and the normalized event types;
 - the theme types (`Theme`, and `BorderStyle` where a border is drawn), plus
   the crate's small helper modules the component uses (such as color math, text

@@ -12,7 +12,7 @@ mod frame {
     use ratcn::{
         Button, Dialog, List, ListItem, Theme,
         runtime::{
-            Event, FocusState, Modifiers, MouseButton, MouseEvent, MouseKind, Ratcn, RenderCtx,
+            DeclareCtx, Event, FocusState, Modifiers, MouseButton, MouseEvent, MouseKind, Ratcn,
             ScopeOptions,
         },
     };
@@ -66,7 +66,7 @@ mod frame {
         Press,
     }
 
-    fn declare(ctx: &mut RenderCtx<'_, State, Msg>) {
+    fn declare(ctx: &mut DeclareCtx<'_, State, Msg>) {
         for (index, scope_id) in (0u16..).zip(SCOPE_IDS) {
             let x = index * SCOPE_WIDTH;
             ctx.scope(
@@ -75,7 +75,7 @@ mod frame {
                 ScopeOptions::default(),
                 |ctx| {
                     for (row, button_id) in (0u16..).zip(BUTTON_IDS) {
-                        ctx.render_component(
+                        ctx.component(
                             button_id,
                             Button::new("Go").on_press(|| Msg::Press),
                             Rect::new(x, row, SCOPE_WIDTH, 1),
@@ -147,7 +147,7 @@ mod frame {
                     .draw(|frame| {
                         let area = frame.area();
                         ratcn.render(frame, &state, &theme, |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 "list",
                                 List::new(items.clone())
                                     .item_focus(|state: &State| state.cursor, Msg::Cursor),
@@ -169,7 +169,7 @@ mod frame {
                     .draw(|frame| {
                         let area = frame.area();
                         ratcn.render(frame, &state, &theme, |ctx| {
-                            ctx.render_component(
+                            ctx.component(
                                 "dialog",
                                 Dialog::new()
                                     .title("Delete workspace")

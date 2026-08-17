@@ -29,7 +29,7 @@ use ratatui::{
 };
 
 use crate::linear_nav::{self};
-use crate::runtime::{MouseButton, MouseKind, RenderCtx};
+use crate::runtime::{DeclareCtx, MouseButton, MouseKind};
 
 /// Items a wheel notch moves the view by, shared so two list-shaped
 /// components can never scroll at different speeds.
@@ -69,7 +69,7 @@ pub const SCROLL_STEP: usize = 3;
 /// The declaration settles it rather than event handling because only the
 /// declaration sees every cursor change: a select's options are scrolled by
 /// the panel but moved by the keys its trigger handles. The park is stored
-/// through [`RenderCtx::transient_mut`](crate::runtime::RenderCtx::transient_mut),
+/// through [`DeclareCtx::transient_mut`](crate::runtime::DeclareCtx::transient_mut),
 /// so it survives between frames and the wheel's own event handler writes it
 /// from the other side.
 ///
@@ -172,7 +172,7 @@ impl<T: Clone + PartialEq + 'static> WheelPark<T> {
     /// makes the absent park mean "unparked" rather than "no offset", in the one
     /// place both list-shaped components reach for it.
     pub fn settle_transient<S, M>(
-        ctx: &mut RenderCtx<'_, S, M>,
+        ctx: &mut DeclareCtx<'_, S, M>,
         items: &[ListItem<T>],
         cursor: Option<usize>,
         requested: Option<usize>,

@@ -16,8 +16,8 @@ use crate::color::{
 use crate::linear_nav;
 use crate::list_core;
 use crate::runtime::{
-    Component, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent, MouseButton,
-    MouseKind, PaintCtx, RenderCtx, Step, fixed_height,
+    Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
+    MouseButton, MouseKind, PaintCtx, Step, fixed_height,
 };
 use crate::theme::resolve_style;
 
@@ -495,7 +495,7 @@ type OnChangeFn<T, M> = Box<dyn Fn(T) -> M>;
 type StyleFn = Box<dyn Fn(&Theme) -> TabsStyle>;
 
 /// A focusable row of tabs, declared with
-/// [`render_component`](crate::runtime::RenderCtx::render_component).
+/// [`component`](crate::runtime::DeclareCtx::component).
 ///
 /// The horizontal counterpart of [`List`](crate::List), and it works the same
 /// way: a cursor that moves and a selection that commits, both keyed by your own
@@ -886,7 +886,7 @@ where
         }
     }
 
-    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let state = ctx.state();
         let selected = self.selected_index(state);
         let cursor = self.cursor_index(state);
@@ -922,7 +922,7 @@ where
             .size(self.size)
             .style(style)
             .layout(&self.hits);
-        ctx.render_widget(widget, area);
+        ctx.widget(widget, area);
     }
 
     fn handle_event(
@@ -1313,7 +1313,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("tabs"),
                         Tabs::new([
                             Tab::new(Screen::A, "A"),
@@ -1664,7 +1664,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("tabs"),
                         Tabs::new([
                             Tab::new(Screen::A, "A"),
@@ -1754,7 +1754,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("tabs"),
                         Tabs::new([
                             Tab::new(Screen::A, "A"),
@@ -1834,13 +1834,13 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("other"),
                         crate::Button::<RoutedMsg>::new("Other")
                             .on_press(|| RoutedMsg::Selected(Screen::A)),
                         Rect::new(0, 0, 20, 1),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("tabs"),
                         Tabs::new([
                             Tab::new(Screen::A, "A"),
@@ -1906,7 +1906,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("tabs"),
                         Tabs::new([Tab::new(Screen::A, "A"), Tab::new(Screen::B, "B")])
                             .selection(
@@ -1916,7 +1916,7 @@ mod tests {
                             .activation(TabsActivation::Automatic),
                         Rect::new(0, 0, 20, 4),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("other"),
                         crate::Button::<RoutedMsg>::new("Other")
                             .on_press(|| RoutedMsg::Selected(Screen::A)),
@@ -2160,7 +2160,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("tabs"),
                         Tabs::new([
                             Tab::new(Screen::A, "A"),
@@ -2203,7 +2203,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             ChildId::Static("tabs"),
                             Tabs::new([
                                 Tab::new(Screen::A, "A"),
@@ -2300,7 +2300,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(ChildId::Static("tabs"), automatic_with_tab_focus(), area);
+                    ctx.component(ChildId::Static("tabs"), automatic_with_tab_focus(), area);
                 });
             })
             .expect("draw");
@@ -2406,7 +2406,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(ChildId::Static("tabs"), manual(), tabs_area);
+                        ctx.component(ChildId::Static("tabs"), manual(), tabs_area);
                     });
                 })
                 .expect("draw");
@@ -2478,7 +2478,7 @@ mod tests {
                             ScopeOptions::default().focusable(),
                             |_| {},
                         );
-                        ctx.render_component(ChildId::Static("tabs"), manual(), tabs_area);
+                        ctx.component(ChildId::Static("tabs"), manual(), tabs_area);
                     });
                 })
                 .expect("draw");
@@ -2966,7 +2966,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("tabs"),
                         Tabs::new([Tab::new(Screen::A, "A"), Tab::new(Screen::B, "B")])
                             .selection(
@@ -2977,7 +2977,7 @@ mod tests {
                             .disabled(true),
                         Rect::new(0, 0, 20, 1),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         ChildId::Static("button"),
                         crate::Button::new("Next").on_press(|| RoutedMsg::Pressed),
                         Rect::new(0, 1, 20, 1),

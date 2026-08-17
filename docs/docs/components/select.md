@@ -32,7 +32,7 @@ let select = Select::new([
 .item_focus(|s: &AppState| s.cursor, Msg::Focused)
 .selection(|s: &AppState| s.selected, Msg::Selected);
 
-ctx.render_component("fruit", select, area);
+ctx.component("fruit", select, area);
 ```
 
 Options use the same value-keyed `ListItem` as `List`, so reordering them does

@@ -134,7 +134,7 @@ impl demo_shared::Demo for App {
                 .into_iter()
                 .zip(top_areas.into_iter().chain(bottom_areas))
             {
-                ctx.render_component(id, button, button_area);
+                ctx.component(id, button, button_area);
             }
         });
     }

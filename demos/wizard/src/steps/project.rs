@@ -5,29 +5,29 @@ use ratatui::{
     style::Style,
     widgets::{Paragraph, Wrap},
 };
-use ratcn::runtime::RenderCtx;
+use ratcn::runtime::DeclareCtx;
 
 use crate::app::{AppState, Msg as AppMsg};
 use crate::steps;
 
 pub const SCREEN_ID: &str = "step_project";
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
-    let inner = steps::render_panel(ctx, area, Some("Create a project"));
+    let inner = steps::declare_panel(ctx, area, Some("Create a project"));
 
     let [intro, commands] =
         inner.layout(&Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).spacing(1));
 
     ctx.paint(move |ctx| {
         let theme = ctx.theme;
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new("A plain binary crate is all ratcn needs.")
                 .style(Style::default().fg(theme.muted_foreground))
                 .wrap(Wrap { trim: true }),
             intro,
         );
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new(vec![
                 steps::command(theme, "cargo new my-app"),
                 steps::command(theme, "cd my-app"),

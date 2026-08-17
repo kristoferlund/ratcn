@@ -99,7 +99,7 @@
 //! terminal.draw(|frame| {
 //!     let area = frame.area();
 //!     ratcn.render(frame, &state, &theme, |ctx| {
-//!         ctx.render_component(
+//!         ctx.component(
 //!             "save",
 //!             Button::new("Save")
 //!                 .disabled(state.saving)

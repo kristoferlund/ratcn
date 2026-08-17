@@ -22,8 +22,8 @@ use ratcn::{
     Theme,
     color::darken,
     runtime::{
-        CellOffset, Component, DragOptions, DragPhase, Event, EventCtx, EventResult, PaintCtx,
-        Ratcn, RenderCtx, clamp_offset, offset_rect,
+        CellOffset, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx, EventResult,
+        PaintCtx, Ratcn, clamp_offset, offset_rect,
     },
 };
 
@@ -95,7 +95,7 @@ impl demo_shared::Demo for App {
             self.state.block_offset,
         );
         self.ratcn.render(frame, &self.state, &THEME, |ctx| {
-            ctx.render_component(
+            ctx.component(
                 ids::BLOCK,
                 DraggableBlock {
                     area,
@@ -115,7 +115,7 @@ struct DraggableBlock {
 }
 
 impl Component<AppState, Msg> for DraggableBlock {
-    fn render(&mut self, _ctx: &mut RenderCtx<'_, AppState, Msg>) {}
+    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, AppState, Msg>) {}
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) {
         let area = ctx.area();
@@ -125,7 +125,7 @@ impl Component<AppState, Msg> for DraggableBlock {
         } else {
             theme.surface
         };
-        ctx.render_widget(
+        ctx.widget(
             Block::default().style(Style::default().bg(background_color)),
             area,
         );
@@ -133,7 +133,7 @@ impl Component<AppState, Msg> for DraggableBlock {
             Constraint::Length(self.text.len() as u16),
             Constraint::Length(1),
         );
-        ctx.render_widget(
+        ctx.widget(
             Paragraph::new(self.text)
                 .style(Style::default().fg(theme.foreground).bg(background_color)),
             text_area,

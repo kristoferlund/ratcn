@@ -8,7 +8,7 @@
 //!   through the tooltip on their way up.
 //! - The **bubble** is the bordered box holding the tooltip text. It is
 //!   declared as a *hint layer* — a subtree painted above everything else that
-//!   takes no input at all (see [`RenderCtx::hint`]), which is what keeps a
+//!   takes no input at all (see [`DeclareCtx::hint`]), which is what keeps a
 //!   tooltip from swallowing the click on the control it describes.
 
 use std::rc::Rc;
@@ -23,7 +23,7 @@ use ratatui::{
 
 use crate::Theme;
 use crate::runtime::{
-    Component, Event, EventCtx, EventResult, KeyCode, MouseKind, RenderCtx, ScopeOptions,
+    Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MouseKind, ScopeOptions,
     wrapped_height,
 };
 use crate::text_width::{display_width_u16, wrap_to_width};
@@ -231,7 +231,7 @@ type OnOpenChangeFn<M> = Rc<dyn Fn(bool) -> M>;
 type OpenBinding<S, M> = (ReadOpenFn<S>, Option<OnOpenChangeFn<M>>);
 type StyleFn = Rc<dyn Fn(&Theme) -> TooltipStyle>;
 /// The trigger closure, boxed for storage until the declaration runs it.
-type TriggerFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>;
+type TriggerFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
 
 /// A wrapper that floats an explanation beside the content it describes.
 ///
@@ -244,7 +244,7 @@ type TriggerFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>;
 ///
 /// When [`open`](Self::open) reads `true`, the bubble is declared as a *hint
 /// layer*: a subtree painted above everything else that takes no input at all
-/// (see [`RenderCtx::hint`]). A press over the bubble reaches whatever the
+/// (see [`DeclareCtx::hint`]). A press over the bubble reaches whatever the
 /// bubble covers, focus never moves into it, and it dims nothing. That is the
 /// whole reason a tooltip can safely float over the control it explains.
 ///
@@ -253,7 +253,7 @@ type TriggerFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>;
 /// Hover, unless the app says otherwise. Bound to nothing, a Tooltip shows its
 /// bubble while the pointer rests anywhere inside the trigger and hides it
 /// again when the pointer leaves — the runtime owns hover, and
-/// [`RenderCtx::pointer_within`] answers for this declaration while it is
+/// [`DeclareCtx::pointer_within`] answers for this declaration while it is
 /// being declared, so nothing is stored and no message is routed.
 ///
 /// [`open_when`](Self::open_when) replaces that rule with one of the app's
@@ -287,7 +287,7 @@ type TriggerFn<S, M> = Box<dyn FnOnce(&mut RenderCtx<'_, S, M>)>;
 /// [`side`](Self::side) picks the preferred side and defaults to
 /// [`TooltipSide::Top`]. The bubble is centered on the trigger's other axis,
 /// and if the preferred side has no room inside
-/// [`frame_area`](RenderCtx::frame_area) it flips to the opposite side; if
+/// [`frame_area`](DeclareCtx::frame_area) it flips to the opposite side; if
 /// neither side fits it stays on the preferred one. Either way the bubble is
 /// finally clamped inside the frame, so it is always fully visible.
 ///
@@ -307,9 +307,9 @@ pub struct Tooltip<S, M> {
     /// afterwards.
     trigger: Option<TriggerFn<S, M>>,
     style: Option<StyleFn>,
-    /// Whether the pointer was inside this declaration, as the last render
+    /// Whether the pointer was inside this declaration, as the last pass
     /// read it. Kept so event handling — which has no declaration context —
-    /// resolves openness the same way that render did.
+    /// resolves openness the same way the declaration did.
     pointer_within: bool,
 }
 
@@ -416,18 +416,18 @@ impl<S, M> Tooltip<S, M> {
 
     /// Declare the content the tooltip describes.
     ///
-    /// The closure runs during the Tooltip's own render, once per declaration
-    /// pass, with a [`RenderCtx`] whose [`area`](RenderCtx::area) is the
-    /// Tooltip's area — paint into it with the standard paint methods and
-    /// declare children with
-    /// [`render_component`](RenderCtx::render_component). Those children belong
+    /// The closure runs during the Tooltip's own `declare`, once per
+    /// declaration pass, with a [`DeclareCtx`] whose
+    /// [`area`](DeclareCtx::area) is the Tooltip's area — paint into it with
+    /// the standard paint methods and declare children with
+    /// [`component`](DeclareCtx::component). Those children belong
     /// to the Tooltip's identity and take part in focus traversal normally; the
     /// Tooltip itself never competes with them for focus.
     ///
     /// Without a trigger the Tooltip paints nothing in its area and is only a
     /// hover target.
     #[must_use]
-    pub fn trigger(mut self, f: impl FnOnce(&mut RenderCtx<'_, S, M>) + 'static) -> Self {
+    pub fn trigger(mut self, f: impl FnOnce(&mut DeclareCtx<'_, S, M>) + 'static) -> Self {
         self.trigger = Some(Box::new(f));
         self
     }
@@ -483,7 +483,7 @@ impl<S, M> Tooltip<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
-    fn render(&mut self, ctx: &mut RenderCtx<'_, S, M>) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         // Read before the trigger declares: `pointer_within` asks about the
         // declaration that is open right now, which is this Tooltip's.
         self.pointer_within = ctx.pointer_within();
@@ -509,7 +509,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
         // floats over still reaches the trigger underneath.
         ctx.hint(BUBBLE_ID, ScopeOptions::default(), area, move |ctx| {
             ctx.paint(move |ctx| {
-                ctx.render_widget(TooltipWidget::new(&text).style(style), area);
+                ctx.widget(TooltipWidget::new(&text).style(style), area);
             });
         });
     }
@@ -638,7 +638,7 @@ mod tests {
             .open(|state: &State, _| state.open, Msg::Open)
             .trigger(|ctx| {
                 let area = ctx.area();
-                ctx.render_component("save", Button::new("Save").on_press(|| Msg::Pressed), area);
+                ctx.component("save", Button::new("Save").on_press(|| Msg::Pressed), area);
             })
     }
 
@@ -662,12 +662,12 @@ mod tests {
                     self.ratcn.render(frame, state, &theme, |ctx| {
                         // A focusable sibling declared first, so startup focus
                         // has somewhere to land that is not the tooltip.
-                        ctx.render_component(
+                        ctx.component(
                             "before",
                             Button::new("Open").on_press(|| Msg::Pressed),
                             Rect::new(0, 0, 6, 1),
                         );
-                        ctx.render_component("tip", tooltip(side), area);
+                        ctx.component("tip", tooltip(side), area);
                     });
                 })
                 .expect("draw");
@@ -708,18 +708,18 @@ mod tests {
             .terminal
             .draw(|frame| {
                 driver.ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.render_component(
+                    ctx.component(
                         "before",
                         Button::new("Open").on_press(|| Msg::Pressed),
                         Rect::new(0, 0, 6, 1),
                     );
-                    ctx.render_component(
+                    ctx.component(
                         "tip",
                         Tooltip::new(TIP)
                             .open_when(|state: &State, _| state.open)
                             .trigger(|ctx| {
                                 let area = ctx.area();
-                                ctx.render_component(
+                                ctx.component(
                                     "save",
                                     Button::new("Save").on_press(|| Msg::Pressed),
                                     area,
@@ -761,13 +761,13 @@ mod tests {
                 .terminal
                 .draw(|frame| {
                     driver.ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             "tip",
                             Tooltip::new(TIP)
                                 .open_when(|_: &State, _| false)
                                 .trigger(|ctx| {
                                     let area = ctx.area();
-                                    ctx.render_component(
+                                    ctx.component(
                                         "save",
                                         Button::new("Save").on_press(|| Msg::Pressed),
                                         area,
@@ -825,11 +825,11 @@ mod tests {
                 .terminal
                 .draw(|frame| {
                     driver.ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.render_component(
+                        ctx.component(
                             "tip",
                             Tooltip::new(TIP).trigger(|ctx| {
                                 let area = ctx.area();
-                                ctx.render_component(
+                                ctx.component(
                                     "save",
                                     Button::new("Save").on_press(|| Msg::Pressed),
                                     area,

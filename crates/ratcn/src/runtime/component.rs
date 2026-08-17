@@ -44,7 +44,7 @@ pub enum EventResult<Msg> {
 ///
 /// [`Ratcn`](super::Ratcn) creates this and threads it through the declaration
 /// pass — the root closure gets one, and so does every component's
-/// [`render`](Component::render). Only the library constructs it, and only
+/// [`declare`](Component::declare). Only the library constructs it, and only
 /// inside a pass, so everything here is always available.
 ///
 /// Declaring does not paint. Nothing here writes to a cell — the context does
@@ -57,7 +57,7 @@ pub enum EventResult<Msg> {
 /// context is still building, so while it exists there is nothing to report.
 /// Hover is the exception, because it predates the pass rather than following
 /// from it: [`pointer_within`](Self::pointer_within) is readable here.
-pub struct RenderCtx<'a, State, Msg> {
+pub struct DeclareCtx<'a, State, Msg> {
     pub(crate) frame_area: Rect,
     pub(crate) area: Rect,
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
@@ -87,9 +87,9 @@ pub(crate) struct InteractionFlags {
     pub(crate) contains_hover: bool,
 }
 
-impl<State, Msg> fmt::Debug for RenderCtx<'_, State, Msg> {
+impl<State, Msg> fmt::Debug for DeclareCtx<'_, State, Msg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RenderCtx")
+        f.debug_struct("DeclareCtx")
             .field("area", &self.area)
             .field("frame_area", &self.frame_area)
             .field("theme", self.theme)
@@ -99,7 +99,7 @@ impl<State, Msg> fmt::Debug for RenderCtx<'_, State, Msg> {
     }
 }
 
-impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
+impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Queue paint for the position this declaration occupies.
     ///
     /// The app-level counterpart of [`Component::paint`], for chrome that has
@@ -126,6 +126,31 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     pub fn paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static) {
         let area = self.area;
         self.pass.queue_thunk(area, paint);
+    }
+
+    /// Queue one widget, drawn at `area`.
+    ///
+    /// The shorthand for the common single-write case: exactly
+    /// `self.paint(move |ctx| ctx.widget(widget, area))`, queued at the same
+    /// point and painted under the same rules — declaration order against the
+    /// components around it, onto the enclosing layer's canvas when there is
+    /// one.
+    ///
+    /// Reach for it when a write is independent: one widget, one area, nothing
+    /// else in the op. Use [`paint`](Self::paint) when several writes share
+    /// data the closure captures once, when a write reads the interaction
+    /// flags, or when the writes belong together as one op — a background and
+    /// the border over it must not be split into two, since anything declared
+    /// between them would paint in the gap.
+    ///
+    /// The widget is owned: `'static` is what lets it outlive the declaration
+    /// and travel to the replay. Widgets built from owned content qualify —
+    /// `Paragraph::new(String)`, a `Block` with an owned title. One borrowing
+    /// from app state or from a local does not, and wants
+    /// [`paint`](Self::paint) with the borrowed parts turned into owned
+    /// captures before the closure is built.
+    pub fn paint_widget<W: Widget + 'static>(&mut self, widget: W, area: Rect) {
+        self.paint(move |ctx| ctx.widget(widget, area));
     }
 
     /// The area supplied for the current declaration.
@@ -165,7 +190,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// [`PaintCtx::contains_hover`].
     ///
     /// The subtree is the current declaration's: called from a component's
-    /// [`render`](Component::render) it means that component and its children,
+    /// [`declare`](Component::declare) it means that component and its children,
     /// inside a [`scope`](Self::scope) it means the scope, and from the root
     /// closure it means "the pointer is on something declared at all".
     ///
@@ -194,10 +219,10 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// Read the transient stored at the current declaration's identity path,
     /// if an event handler stored one.
     ///
-    /// The render-time counterpart of [`EventCtx::transient`]: event handlers
-    /// write scratch values that mean nothing to the app — a wheel-scrolled
-    /// viewport offset, say — and the next render reads them here to lay out
-    /// accordingly.
+    /// The declaration-time counterpart of [`EventCtx::transient`]: event
+    /// handlers write scratch values that mean nothing to the app — a
+    /// wheel-scrolled viewport offset, say — and the next declaration reads
+    /// them here to lay out accordingly.
     ///
     /// `None` when no event handler has stored a value at this path. Like every
     /// transient, the value disappears as soon as its path stops being
@@ -224,7 +249,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// Some presentation state can only be resolved once the layout is known,
     /// because only the layout answers it: whether a wheel-scrolled viewport
     /// still holds, given where the cursor now is, is the built-in example —
-    /// [`List`](crate::List) settles it in its `render`, alongside the
+    /// [`List`](crate::List) settles it in its `declare`, alongside the
     /// arithmetic that produces the offset it stores.
     ///
     /// The write lands once per frame, where the declaration makes it, and is
@@ -269,8 +294,8 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// Not to be confused with [`EventCtx::with_area`], which is a builder
     /// setter: this one opens a sub-area for a callback and declares nothing of
     /// its own.
-    pub fn in_area(&mut self, area: Rect, render: impl FnOnce(&mut RenderCtx<'_, State, Msg>)) {
-        let mut ctx = RenderCtx {
+    pub fn in_area(&mut self, area: Rect, declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>)) {
+        let mut ctx = DeclareCtx {
             frame_area: self.frame_area,
             area,
             theme: self.theme,
@@ -280,7 +305,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
             pass: &mut *self.pass,
             state: self.state,
         };
-        render(&mut ctx);
+        declare(&mut ctx);
     }
 
     /// The pass and the declaration environment for a child covering `area`.
@@ -326,7 +351,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
         id: impl Into<ChildId>,
         area: Rect,
         options: ScopeOptions,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let (pass, env) = self.declaring(area);
         pass.scope(id.into(), options, env, declare);
@@ -341,26 +366,26 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// A component given zero width or height is still painted and still
     /// declared, but takes no part in focus traversal or mouse interaction on
     /// this surface — useful for a collapsed pane that should keep its identity.
-    /// Use [`scope`](RenderCtx::scope) instead when you only need to group
+    /// Use [`scope`](DeclareCtx::scope) instead when you only need to group
     /// descendants.
     ///
     /// # Panics
     ///
     /// Panics when `id` duplicates another child of the same parent.
-    pub fn render_component(
+    pub fn component(
         &mut self,
         id: impl Into<ChildId>,
         component: impl Component<State, Msg> + 'static,
         area: Rect,
     ) {
         let (pass, env) = self.declaring(area);
-        pass.render_component(id.into(), component, env);
+        pass.component(id.into(), component, env);
     }
 
     /// Declare a component as a modal layer, painted above everything
     /// declared outside it.
     ///
-    /// Callable from anywhere — the root closure or any component's render.
+    /// Callable from anywhere — the root closure or any component's `declare`.
     /// The modal becomes a child of whatever is currently declaring, so its
     /// identity path, focus scope, and event bubbling anchor there, and a
     /// component can own its own confirmation dialog with one declaration
@@ -423,7 +448,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
         id: impl Into<ChildId>,
         options: ScopeOptions,
         area: Rect,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let (pass, env) = self.declaring(area);
         pass.layer_scope(id.into(), LayerKind::Hint, options, None, env, declare);
@@ -435,7 +460,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// This is the layer for dropdown panels, menus, and completion lists.
     /// Like [`modal`](Self::modal) it is callable from anywhere and anchors
     /// its subtree at the current declaration, so `if open { ctx.popup(...) }`
-    /// inside a component's render is the entire ceremony. Unlike a modal:
+    /// inside a component's `declare` is the entire ceremony. Unlike a modal:
     ///
     /// - Nothing is dimmed, and nothing outside the popup is captured: a
     ///   press outside its footprint routes to whatever is visibly there — a
@@ -461,7 +486,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
         id: impl Into<ChildId>,
         options: PopupOptions<Msg>,
         area: Rect,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let (pass, env) = self.declaring(area);
         pass.layer_scope(
@@ -482,9 +507,8 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// behind is dimmed, the scope becomes the next modal root, and lower
     /// layers stop receiving events. What goes *inside* is yours, with the
     /// same context [`scope`](Self::scope) gives: paint chrome with the paint
-    /// methods, declare children with
-    /// [`render_component`](Self::render_component). Reach for this when a
-    /// dialog-like layer should stay entirely app-owned;
+    /// methods, declare children with [`component`](Self::component). Reach
+    /// for this when a dialog-like layer should stay entirely app-owned;
     /// [`Dialog`](crate::Dialog) is the packaged alternative with chrome,
     /// dragging, and dismiss keys built in.
     ///
@@ -505,7 +529,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
         id: impl Into<ChildId>,
         area: Rect,
         options: ScopeOptions,
-        declare: impl FnOnce(&mut RenderCtx<'_, State, Msg>),
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let (pass, env) = self.declaring(area);
         pass.modal_scope(id.into(), options, env, declare);
@@ -526,7 +550,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     /// hover, or hit target, and cannot be clicked.
     ///
     /// Because the closure runs after the declaration pass has ended, it does
-    /// not get a `RenderCtx`. It receives a [`Painter`] over the frame (which
+    /// not get a `DeclareCtx`. It receives a [`Painter`] over the frame (which
     /// carries the theme) and the app state the pass was declared with;
     /// anything else it needs must be moved into the closure here.
     pub fn defer_paint(&mut self, paint: impl FnOnce(&mut Painter<'_, '_>, &State) + 'static) {
@@ -534,7 +558,7 @@ impl<'a, State, Msg> RenderCtx<'a, State, Msg> {
     }
 }
 
-/// Options for a [`popup`](RenderCtx::popup) layer.
+/// Options for a [`popup`](DeclareCtx::popup) layer.
 ///
 /// A popup needs little configuration — its whole point is that it behaves
 /// like an ordinary subtree, just painted on top. The one popup-specific hook
@@ -601,7 +625,7 @@ pub(crate) enum PaintTarget<'a, 'frame> {
 }
 
 impl PaintTarget<'_, '_> {
-    fn render_widget(&mut self, widget: impl Widget, area: Rect) {
+    fn widget(&mut self, widget: impl Widget, area: Rect) {
         match self {
             Self::Frame(frame) => frame.render_widget(widget, area),
             Self::Canvas(canvas) => {
@@ -611,12 +635,7 @@ impl PaintTarget<'_, '_> {
         }
     }
 
-    fn render_stateful_widget<W: StatefulWidget>(
-        &mut self,
-        widget: W,
-        area: Rect,
-        state: &mut W::State,
-    ) {
+    fn stateful_widget<W: StatefulWidget>(&mut self, widget: W, area: Rect, state: &mut W::State) {
         match self {
             Self::Frame(frame) => frame.render_stateful_widget(widget, area, state),
             Self::Canvas(canvas) => {
@@ -663,18 +682,18 @@ impl fmt::Debug for Painter<'_, '_> {
 
 impl Painter<'_, '_> {
     /// Paint a ratatui widget onto the active paint surface.
-    pub fn render_widget(&mut self, widget: impl Widget, area: Rect) {
-        self.target.render_widget(widget, area);
+    pub fn widget(&mut self, widget: impl Widget, area: Rect) {
+        self.target.widget(widget, area);
     }
 
     /// Paint a ratatui stateful widget onto the active paint surface.
-    pub fn render_stateful_widget<W: StatefulWidget>(
+    pub fn stateful_widget<W: StatefulWidget>(
         &mut self,
         widget: W,
         area: Rect,
         state: &mut W::State,
     ) {
-        self.target.render_stateful_widget(widget, area, state);
+        self.target.stateful_widget(widget, area, state);
     }
 
     /// Run a paint closure over the active paint surface's raw cell buffer.
@@ -688,15 +707,15 @@ impl Painter<'_, '_> {
 /// with, and where that declaration sits in this frame's interaction.
 ///
 /// [`Component::paint`] gets one, and so does every closure queued with
-/// [`RenderCtx::paint`]. Both run during the replay that follows the
+/// [`DeclareCtx::paint`]. Both run during the replay that follows the
 /// declaration walk, which is why this context can declare nothing: by the
 /// time it exists the tree is closed and focus is resolved. That is also the
 /// only reason it can carry the four interaction flags at all — they are
 /// derived from that resolution, and there is nothing to derive them from
 /// while the tree is still being built.
 ///
-/// Painting goes through [`render_widget`](Self::render_widget),
-/// [`render_stateful_widget`](Self::render_stateful_widget), and
+/// Painting goes through [`widget`](Self::widget),
+/// [`stateful_widget`](Self::stateful_widget), and
 /// [`with_buffer`](Self::with_buffer). The context deliberately never lends
 /// out the ratatui `Frame`: keeping it private means a paint call can read
 /// `ctx.theme`, [`ctx.state()`](Self::state), and the interaction flags while
@@ -747,29 +766,29 @@ impl<'a, State> PaintCtx<'a, '_, State> {
     /// `ctx` freely (`ctx.theme`, [`state`](Self::state), interaction flags)
     /// in argument position.
     ///
-    /// Inside a [`modal`](RenderCtx::modal), [`popup`](RenderCtx::popup), or
-    /// [`hint`](RenderCtx::hint) layer the paint lands on that layer's canvas
+    /// Inside a [`modal`](DeclareCtx::modal), [`popup`](DeclareCtx::popup), or
+    /// [`hint`](DeclareCtx::hint) layer the paint lands on that layer's canvas
     /// and composites above everything declared outside it; otherwise it
     /// lands on the frame. A layer composites the widget's whole declared
     /// `area` opaquely — cells the widget left unwritten come through as
     /// empty rather than transparent, so paint a panel background first, as
     /// the built-in layers do.
-    pub fn render_widget(&mut self, widget: impl Widget, area: Rect) {
-        self.target.render_widget(widget, area);
+    pub fn widget(&mut self, widget: impl Widget, area: Rect) {
+        self.target.widget(widget, area);
     }
 
     /// Paint a ratatui stateful widget onto the active paint surface.
     ///
     /// The escape hatch for widgets that need a `&mut` widget state during
     /// paint (e.g. ratatui's `List` with `ListState`). Targets the same
-    /// surface as [`render_widget`](Self::render_widget).
-    pub fn render_stateful_widget<W: StatefulWidget>(
+    /// surface as [`widget`](Self::widget).
+    pub fn stateful_widget<W: StatefulWidget>(
         &mut self,
         widget: W,
         area: Rect,
         state: &mut W::State,
     ) {
-        self.target.render_stateful_widget(widget, area, state);
+        self.target.stateful_widget(widget, area, state);
     }
 
     /// Run a paint closure over the active paint surface's raw cell buffer.
@@ -784,7 +803,7 @@ impl<'a, State> PaintCtx<'a, '_, State> {
     }
 
     /// The area of the declaration this paint belongs to: a component's paint
-    /// allocation, or the [`RenderCtx::area`] a queued closure was reached
+    /// allocation, or the [`DeclareCtx::area`] a queued closure was reached
     /// with.
     #[must_use]
     pub const fn area(&self) -> Rect {
@@ -814,11 +833,11 @@ impl<'a, State> PaintCtx<'a, '_, State> {
 ///
 /// A *scope* is one level of the identity tree. It gives its children a shared
 /// parent path, and it is the boundary that Tab traversal, focus hotkeys, and
-/// mouse focus all work against. Every component and [`scope`](RenderCtx::scope)
+/// mouse focus all work against. Every component and [`scope`](DeclareCtx::scope)
 /// opens one; these options say how that scope should behave.
 ///
 /// The runtime reads these from [`Component::scope_options`] *before* the
-/// component renders, because it must know the shape of the scope before
+/// component declares, because it must know the shape of the scope before
 /// descendants are declared into it. They therefore cannot depend on anything
 /// computed during paint — use [`Component::prepare`] if a claim depends on
 /// app state.
@@ -920,11 +939,11 @@ pub(crate) struct TransientValue {
 }
 
 impl TransientValue {
-    /// Immutable typed access for render-time reads. The mutable accessors on
+    /// Immutable typed access for declaration-time reads. The mutable accessors on
     /// [`EventCtx`] own the write paths and the type-establishing insert, so a
     /// stored value always carries the type its writer declared.
     /// The mutable counterpart of [`expect_ref`](Self::expect_ref), for
-    /// [`RenderCtx::transient_mut`].
+    /// [`DeclareCtx::transient_mut`].
     pub(crate) fn expect_mut<T: 'static>(&mut self, path: &[ChildId]) -> &mut T {
         let requested = type_name::<T>();
         let stored = self.type_name;
@@ -1026,7 +1045,7 @@ impl<'a> EventCtx<'a> {
     /// so supplying a real area is usually what makes such a test meaningful.
     ///
     /// It is public for the same reason
-    /// [`RenderCtx::in_area`](RenderCtx::in_area) is: a component module
+    /// [`DeclareCtx::in_area`](DeclareCtx::in_area) is: a component module
     /// copied into your own project should be testable exactly as it is here.
     #[must_use]
     pub fn with_area(mut self, area: Rect) -> Self {
@@ -1045,7 +1064,7 @@ impl<'a> EventCtx<'a> {
     ///
     /// Components that need event-time geometry (a dialog hit-testing its own
     /// border for a drag, say) read it from here instead of caching the area
-    /// themselves during render. Zero outside a [`Ratcn`](super::Ratcn) event
+    /// themselves while declaring. Zero outside a [`Ratcn`](super::Ratcn) event
     /// dispatch, such as a unit test built from `EventCtx::default()`.
     #[must_use]
     pub const fn area(&self) -> Rect {
@@ -1068,9 +1087,9 @@ impl<'a> EventCtx<'a> {
     /// nothing warns you when that happens.
     ///
     /// The next declaration reads the same value back with
-    /// [`RenderCtx::transient`](RenderCtx::transient), which is how a wheel
+    /// [`DeclareCtx::transient`](DeclareCtx::transient), which is how a wheel
     /// scroll survives a redraw. Write from here whenever an event can carry
-    /// the change; [`RenderCtx::transient_mut`](RenderCtx::transient_mut) is
+    /// the change; [`DeclareCtx::transient_mut`](DeclareCtx::transient_mut) is
     /// the narrow exception, for a value only the layout can settle.
     ///
     /// In a context built without a dispatch — `EventCtx::default()` in a
@@ -1202,7 +1221,7 @@ pub enum Step {
 /// half of a ratcn component.
 ///
 /// A component is built fresh from app state on every declaration pass, so it
-/// must not own durable state. It reads `State`, keeps only render-derived
+/// must not own durable state. It reads `State`, keeps only declaration-derived
 /// caches (its last painted area, for instance) and the props it was declared
 /// with, and reports anything the app needs to know by returning a message.
 ///
@@ -1214,7 +1233,7 @@ pub enum Step {
 ///    because focus for the whole frame is decided in one pass.
 /// 3. [`interaction_area`](Self::interaction_area) — derive the geometry used
 ///    for focus, hit-testing, and events from the final paint area.
-/// 4. [`render`](Self::render) — lay out, and declare descendants if any.
+/// 4. [`declare`](Self::declare) — lay out, and declare descendants if any.
 /// 5. [`paint`](Self::paint) — draw, once the whole tree has been declared
 ///    and focus has resolved.
 ///
@@ -1257,12 +1276,12 @@ pub trait Component<State, Msg> {
     /// exist yet — focus resolves against the tree this is still building.
     ///
     /// Anything that draws belongs in [`paint`](Self::paint).
-    fn render(&mut self, ctx: &mut RenderCtx<'_, State, Msg>);
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>);
 
     /// Paint the component. `ctx` carries the paint surface, area, app state,
     /// theme, and interaction state.
     ///
-    /// Every component's paint is queued where [`render`](Self::render)
+    /// Every component's paint is queued where [`declare`](Self::declare)
     /// declared it and replayed once the whole tree is known, so this runs
     /// exactly once per frame, with focus resolved. Order is declaration
     /// order, and a component is queued at the point it opens — before its
@@ -1273,7 +1292,7 @@ pub trait Component<State, Msg> {
     fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, State>) {}
 
     /// The scope this component opens around its descendants. Read once, before
-    /// [`render`](Component::render), so it cannot depend on paint.
+    /// [`declare`](Component::declare), so it cannot depend on paint.
     fn scope_options(&self) -> ScopeOptions {
         ScopeOptions::default()
     }
@@ -1281,10 +1300,10 @@ pub trait Component<State, Msg> {
     /// Return the area used for focus, hit-testing, and event routing.
     ///
     /// The runtime calls this once with the final area passed to
-    /// [`RenderCtx::render_component`], after [`prepare`](Self::prepare) and
-    /// before [`render`](Self::render). Painting still receives the original
+    /// [`DeclareCtx::component`], after [`prepare`](Self::prepare) and
+    /// before [`declare`](Self::declare). Painting still receives the original
     /// area. Returning an area with zero width or height keeps the component's
-    /// identity and still calls `render`, but excludes its whole subtree from
+    /// identity and still calls `declare`, but excludes its whole subtree from
     /// focus traversal, hit-testing, pointer capture, and event routing for the
     /// retained surface.
     ///
@@ -1342,7 +1361,7 @@ pub trait Component<State, Msg> {
     }
 }
 
-/// A [`Component`] that can report its preferred size before rendering.
+/// A [`Component`] that can report its preferred size before it is declared.
 ///
 /// Layout containers use this small core contract without depending on a
 /// specific component module.

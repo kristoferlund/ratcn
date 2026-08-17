@@ -41,12 +41,12 @@ ratcn.render(frame, state, &state.theme, |ctx| {
         "panel_a",
         panel_a_area,
         ScopeOptions::default().tab_wrap(TabWrap::Wrap),
-        render_panel_a,
+        declare_panel_a,
     );
 });
 
-fn render_panel_a(ctx: &mut RenderCtx<'_, AppState, Msg>) {
-    ctx.render_component("save", Button::new("Save").on_press(|| Msg::Save), ctx.area());
+fn declare_panel_a(ctx: &mut DeclareCtx<'_, AppState, Msg>) {
+    ctx.component("save", Button::new("Save").on_press(|| Msg::Save), ctx.area());
 }
 ```
 
@@ -86,9 +86,9 @@ src/
   nav.rs          which screen is selected
   shared.rs       state more than one screen needs
   screens/
-    ledger.rs     State, Msg, update, render
-    report.rs     State, Msg, update, render
-    settings.rs   State, Msg, update, render
+    ledger.rs     State, Msg, update, declare
+    report.rs     State, Msg, update, declare
+    settings.rs   State, Msg, update, declare
 ```
 
 A screen module is self-contained and stays small:
@@ -103,7 +103,7 @@ impl State {
     pub fn update(&mut self, msg: Msg) { /* only this screen's concerns */ }
 }
 
-pub fn render(ctx: &mut RenderCtx<'_, AppState, AppMsg>) { /* ... */ }
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) { /* ... */ }
 ```
 
 The shell composes them by nesting rather than flattening:
@@ -146,8 +146,8 @@ makes no existing function longer.
 
 ## Reaching app state from a screen
 
-Component bindings are closures over the *whole* `AppState`, so a screen's render
-function reaches through the shell:
+Component bindings are closures over the *whole* `AppState`, so a screen's
+declaration function reaches through the shell:
 
 ```rust
 List::new(entries)
@@ -165,7 +165,7 @@ only its own types.
 ## Sharing state between screens
 
 Some state belongs to no single screen. LEDGER-93 keeps a currency preference in
-`shared.rs`: Settings changes it, Ledger and Report render with it.
+`shared.rs`: Settings changes it, Ledger and Report declare with it.
 
 Give it its own module, and let the shell keep dependent screens in step when a
 shared value changes. Resist reaching from one screen module into another — a
@@ -193,6 +193,6 @@ back starts at the top of the screen again.
 - [Focus, hover, and identity](./focus-hover-identity) — scopes, traversal, and
   the identity paths scopes create.
 - [Rendering and event routing](./rendering-and-events) — the per-frame contract.
-- [`RenderCtx::scope`](https://docs.rs/ratcn/latest/ratcn/runtime/struct.RenderCtx.html#method.scope)
+- [`DeclareCtx::scope`](https://docs.rs/ratcn/latest/ratcn/runtime/struct.DeclareCtx.html#method.scope)
   and [`ScopeOptions`](https://docs.rs/ratcn/latest/ratcn/runtime/struct.ScopeOptions.html)
   for every scope option.
