@@ -1,5 +1,3 @@
-import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { defineConfig, type HeadConfig } from 'vitepress'
 
 const siteUrl = 'https://ratcn.kristoferlund.se'
@@ -36,15 +34,16 @@ async function fetchStars(): Promise<number> {
 
 const stars = await fetchStars()
 
-/// The public URL of a page, from its source path. Mirrors `cleanUrls`: the
-/// `.md` extension goes, and an `index` segment collapses into its directory,
-/// so the sitemap and the canonical tag agree with the links VitePress emits.
+/// The public URL of a page, from its source path, for the canonical and
+/// Open Graph metadata. Mirrors `cleanUrls` and the `sitemap` option's own URL
+/// math: the `.md` extension goes, and an `index` segment collapses into its
+/// directory — leaving the home page at the bare `/` both emit.
 function pageUrl(relativePath: string): string {
   const clean = relativePath
     .replace(/\.md$/, '')
     .replace(/\/index$/, '')
     .replace(/^index$/, '')
-  return clean ? `${siteUrl}/${clean}` : siteUrl
+  return `${siteUrl}/${clean}`
 }
 
 function softwareSourceCodeSchema(): string {
@@ -109,16 +108,7 @@ export default defineConfig({
 
     return head
   },
-  async buildEnd(siteConfig) {
-    const urls = siteConfig.pages.map((page: string) => pageUrl(page)).sort()
-    const sitemap = [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-      ...urls.map((url: string) => `  <url><loc>${url}</loc></url>`),
-      '</urlset>'
-    ].join('\n')
-    writeFileSync(join(siteConfig.outDir, 'sitemap.xml'), sitemap)
-  },
+  sitemap: { hostname: siteUrl },
   head: [
     ['link', { rel: 'icon', type: 'image/png', href: '/icon.png' }],
     ['link', { rel: 'apple-touch-icon', href: '/icon.png' }],
