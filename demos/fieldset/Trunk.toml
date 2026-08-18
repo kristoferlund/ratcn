@@ -1,4 +1,0 @@
-[build]
-target = "index.html"
-dist = "../../docs/public/demos/fieldset-demo"
-public_url = "./"
