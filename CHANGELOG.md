@@ -1,7 +1,7 @@
 # Changelog
 
 Notable changes to `ratcn`. This project is a preview release, so the API is
-still moving — breaking changes are listed first for each version.
+still moving — within each section, breaking changes are listed first.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -10,6 +10,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `color::blendable`, picking the first of two colors that has channels to
+  blend — how disabled fills derive on a theme whose background is the
+  terminal's own.
 - `DeclareCtx::pointer_within`, asking whether the pointer rests on the current
   declaration or anything inside it. Hover is known before a pass starts — it
   was resolved against the last committed frame — so unlike focus it is
@@ -230,6 +233,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   draws moves to `Component::paint`.
 - **Breaking:** `Dialog` and `Tooltip` hold their bodies, footer, and actions in
   private types. Their builders are unchanged.
+- Every theme preset is retuned. Wells, dialogs, and text are re-derived from
+  each palette's official tones into one consistent model — `background` <
+  `surface` < `field`, with the focus, hover, and cursor fills stepping up from
+  there — and every painted text pair is held to contrast floors by permanent
+  tests. The tone-by-tone mapping and each judgment call are documented on the
+  presets themselves in `theme.rs`.
+- `Theme::terminal`'s `primary` is neutral white rather than `LightBlue`: a
+  named accent's derived focus and hover states resolved through a fixed VGA
+  table into pure blue regardless of the terminal's palette; a neutral one
+  adapts.
 - `List` and a `Select` panel build only the rows they paint. A thousand-item
   list showing fifteen rows builds fifteen, `render_item` still receives each
   row's index in the whole list, and a multi-selection predicate is asked once

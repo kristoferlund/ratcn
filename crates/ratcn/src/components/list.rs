@@ -9,7 +9,9 @@ use ratatui::{
 };
 
 use crate::Theme;
-use crate::color::{DISABLED_DIM, FIELD_FOCUS_LIGHTEN, FIELD_HOVER_LIGHTEN, dim, lighten};
+use crate::color::{
+    DISABLED_DIM, FIELD_FOCUS_LIGHTEN, FIELD_HOVER_LIGHTEN, blendable, dim, lighten,
+};
 use crate::linear_nav::{self, NavOutcome, ScrollStep};
 use crate::list_core::{
     self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelPark,
@@ -109,8 +111,23 @@ impl ListStyle {
     /// color rather than being separate theme entries, so a custom theme only
     /// supplies the base colors and the list stays consistent with the rest of
     /// the UI.
+    ///
+    /// The cursor row takes the theme's ordinary `foreground`, not its muted
+    /// one: it is the lightest fill in the list, so muted text is where the
+    /// list's contrast is thinnest, and the row the cursor is on is the row
+    /// least in need of de-emphasis. `Select` derives its focused option the
+    /// same way.
+    ///
+    /// Disabled dims toward the *background*, both the fill and the text. A
+    /// well sits one tone off the background by design, and the surface sits
+    /// between the two, so dimming a well toward the surface — which is what a
+    /// button does — would move it almost nowhere and leave a disabled list
+    /// looking enabled. A theme that leaves its background to the terminal
+    /// dims toward its surface instead: [`Color::Reset`] carries no channels to
+    /// blend, and blending toward it would leave the well where it was.
     #[must_use]
     pub const fn from_theme(theme: &Theme) -> Self {
+        let backdrop = blendable(theme.background, theme.surface);
         let focused_background = lighten(theme.field, FIELD_FOCUS_LIGHTEN);
         let hovered_background = lighten(theme.field, FIELD_HOVER_LIGHTEN);
         let focused_row_background = lighten(focused_background, ROW_FOCUS_LIGHTEN);
@@ -120,14 +137,14 @@ impl ListStyle {
             focused_background,
             hovered_background,
             selected_foreground: theme.foreground,
-            focused_foreground: theme.muted_foreground,
+            focused_foreground: theme.foreground,
             focused_row_background,
             selected_focused_foreground: theme.foreground,
             selected_focused_background: focused_row_background,
             selected_marker: theme.primary,
             unselected_marker: theme.muted_foreground,
-            disabled_foreground: theme.muted_foreground,
-            disabled_background: dim(theme.field, theme.surface, DISABLED_DIM),
+            disabled_foreground: dim(theme.muted_foreground, backdrop, DISABLED_DIM),
+            disabled_background: dim(theme.field, backdrop, DISABLED_DIM),
         }
     }
 
