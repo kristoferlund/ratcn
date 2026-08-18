@@ -205,21 +205,16 @@ closure does not empty, and derive the rects from them in one function that
 derived twice from two places will eventually disagree, and hit-testing is where
 that shows up.
 
-[Building a composite](./building-a-composite) works all four through one real
-component — a labeled, collapsible `Fieldset` with a caller-supplied body, a
-measured action, and a disabled state that dims the group and takes it out of
-interaction — quoting the code from a compiled, tested example and covering the
-sharp edge each piece has.
+`Dialog` is the library's own reference implementation of all four: a body that
+is either a description or a caller's closure, a footer that is either a
+caller's closure or a measured action row, a private `dims` every rect comes
+from, and border dragging that re-derives the box between frames.
 
-`Dialog` is the library's own reference implementation of the same pattern: a
-body that is either a description or a caller's closure, a footer that is either
-a caller's closure or a measured action row, a private `dims` every rect comes
-from, and border dragging that re-derives the box between frames. Copy
-`components/dialog.rs` into your own crate and edit it — the `copy-fixture`
-crate does exactly that with every copyable built-in and compiles them against
-`ratcn` as an ordinary external dependency, so nothing `Dialog` does is out of
-reach for a component of your own. The `Fieldset` on the linked page proves the
-same from the other direction: it lives outside the crate to begin with.
+Nothing it does is out of reach for a component of your own. Copy
+`components/dialog.rs` into your own crate and edit it: the `copy-fixture` crate
+does exactly that with every copyable built-in and compiles each one alone
+against `ratcn` as an ordinary external dependency, so a built-in can only use
+what you can use too.
 
 ## Checklist
 
