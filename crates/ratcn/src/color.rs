@@ -17,19 +17,24 @@ use ratatui::style::Color;
 // place; each names the kind of element it governs.
 
 /// A bright fill (a default or destructive button) darkens this much on focus.
-/// The designed themes reproduce their focused accent within ~1/255.
-pub const FOCUS_DARKEN: u16 = 10;
+///
+/// The shift is capped by the label that stays put on top of it. A fill moving
+/// away from the background is also moving toward its own label: past about
+/// this much, palettes with a mid-luminance accent (Solarized's blue, Nord's
+/// frost) drop their hovered button labels under 4.5:1, which the preset
+/// contrast test pins.
+pub const FOCUS_DARKEN: u16 = 6;
 
 /// A dark fill (a secondary or ghost button) lightens this much on focus — the
 /// mirror of [`FOCUS_DARKEN`], toward white instead of black.
-pub const FOCUS_LIGHTEN: u16 = 10;
+pub const FOCUS_LIGHTEN: u16 = 6;
 
 /// Hover is stronger than focus so moving the pointer over an already-focused
 /// control still produces a visible state change.
-pub const HOVER_DARKEN: u16 = 20;
+pub const HOVER_DARKEN: u16 = 12;
 
 /// The light-fill counterpart to [`HOVER_DARKEN`].
-pub const HOVER_LIGHTEN: u16 = 20;
+pub const HOVER_LIGHTEN: u16 = 12;
 
 /// An inset well (input, list) lightens this much on focus — gentler than a
 /// button, so a focused field brightens subtly rather than jumping.
@@ -40,8 +45,13 @@ pub const FIELD_FOCUS_LIGHTEN: u16 = 4;
 /// visible state change.
 pub const FIELD_HOVER_LIGHTEN: u16 = 8;
 
-/// A disabled fill blends this far toward the surface — low enough that the
-/// variant's hue still reads.
+/// A disabled control blends this far toward the layer behind it — low enough
+/// that the variant's hue still reads.
+///
+/// Which layer is the caller's: a button dims toward the surface, so a disabled
+/// destructive button stays red-ish, while a well and its text dim toward the
+/// background, because a well already sits one tone off the background and
+/// dimming it toward the surface would move it nowhere.
 pub const DISABLED_DIM: u16 = 50;
 
 /// Resolve a color to rgb channels: `Rgb` as-is, the 16 named colors via a
@@ -72,6 +82,21 @@ pub const fn resolve_rgb(color: Color) -> Option<(u8, u8, u8)> {
         Color::LightCyan => Some((0, 255, 255)),
         Color::White => Some((255, 255, 255)),
         Color::Indexed(_) | Color::Reset => None,
+    }
+}
+
+/// The first of these two that [`resolve_rgb`] can read channels from.
+///
+/// A blend *target* has to be a real color. [`Color::Reset`] is a real color on
+/// screen — it is the terminal's own — but nothing here can read it, and
+/// blending toward it returns the original unchanged, which is how a state
+/// silently stops being a state. Name the layer you mean and the layer to fall
+/// back to when the theme leaves that one to the terminal.
+#[must_use]
+pub const fn blendable(color: Color, fallback: Color) -> Color {
+    match resolve_rgb(color) {
+        Some(_) => color,
+        None => fallback,
     }
 }
 

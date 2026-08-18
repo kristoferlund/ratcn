@@ -23,7 +23,9 @@ use ratatui::{
 };
 
 use crate::Theme;
-use crate::color::{DISABLED_DIM, FIELD_FOCUS_LIGHTEN, FIELD_HOVER_LIGHTEN, dim, lighten};
+use crate::color::{
+    DISABLED_DIM, FIELD_FOCUS_LIGHTEN, FIELD_HOVER_LIGHTEN, blendable, dim, lighten,
+};
 use crate::linear_nav::{self, NavOutcome, ScrollStep};
 use crate::list_core::{
     self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelPark,
@@ -137,6 +139,10 @@ impl SelectStyle {
     /// Derive every select color from `theme`.
     #[must_use]
     pub const fn from_theme(theme: &Theme) -> Self {
+        // Disabled dims toward the background, or the surface when the theme
+        // leaves its background to the terminal — the same answer `ListStyle`
+        // gives, so a select and a list cannot disagree about disabled.
+        let backdrop = blendable(theme.background, theme.surface);
         let panel_background = lighten(theme.field, FIELD_FOCUS_LIGHTEN);
         Self {
             value_foreground: theme.foreground,
@@ -155,10 +161,10 @@ impl SelectStyle {
             selected_focused_background: lighten(panel_background, ROW_FOCUS_LIGHTEN),
             selected_marker: theme.primary,
             unselected_marker: theme.muted_foreground,
-            disabled_foreground: theme.muted_foreground,
-            disabled_background: dim(theme.field, theme.surface, DISABLED_DIM),
-            selected_disabled_foreground: theme.muted_foreground,
-            selected_disabled_background: dim(theme.field, theme.surface, DISABLED_DIM),
+            disabled_foreground: dim(theme.muted_foreground, backdrop, DISABLED_DIM),
+            disabled_background: dim(theme.field, backdrop, DISABLED_DIM),
+            selected_disabled_foreground: dim(theme.muted_foreground, backdrop, DISABLED_DIM),
+            selected_disabled_background: dim(theme.field, backdrop, DISABLED_DIM),
         }
     }
 
