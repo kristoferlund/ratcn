@@ -16,6 +16,7 @@ strip = "symbols"
 
 [workspace.dependencies]
 ratatui = { version = "0.30.2", default-features = false, features = ["layout-cache", "std"] }
+ratatui-termina = "0.1.0"
 ratzilla = "0.3.1"
 ratcn = { path = "crates/ratcn" }
 demo-shared = { package = "shared", path = "demos/shared" }

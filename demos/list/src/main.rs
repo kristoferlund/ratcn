@@ -15,7 +15,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 use ratcn::{
-    List, ListItem, Theme,
+    List, ListItem,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
 
@@ -40,7 +40,6 @@ const FOLDERS: [&str; 16] = [
 const LIST_WIDTH: u16 = 30;
 const LIST_HEIGHT: u16 = 8;
 const CONTENT_HEIGHT: u16 = LIST_HEIGHT + 3;
-const THEME: Theme = Theme::default_dark();
 
 /// Child ids, named once so declarations and retained identity can't drift.
 mod ids {
@@ -99,7 +98,7 @@ impl App {
 
 impl demo_shared::Demo for App {
     fn background(&self) -> Color {
-        THEME.background
+        demo_shared::theme().background
     }
 
     fn handle_event(&mut self, event: Event) -> bool {
@@ -115,11 +114,12 @@ impl demo_shared::Demo for App {
 
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
+        let theme = demo_shared::theme();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, state, &THEME, |ctx| {
+        self.ratcn.render(frame, state, theme, |ctx| {
             let muted = ctx.theme.muted_foreground;
             let list = List::new(FOLDERS.map(|label| ListItem::new(label, label)))
                 .item_focus(

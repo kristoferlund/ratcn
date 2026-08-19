@@ -98,7 +98,8 @@ jobs:
       - uses: actions/checkout@v7
       # Must match `rust-version` in the workspace Cargo.toml. The `ratzilla`
       # feature needs 1.90 (its beamterm dependencies), so this covers the
-      # default and crossterm builds — the ones a published consumer gets.
+      # default, crossterm, and termina builds — the ones a published consumer
+      # gets on a terminal.
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.88.0
@@ -114,7 +115,7 @@ jobs:
       - name: Tests on the minimum toolchain
         run: |
           cargo --version
-          cargo test -p ratcn --features crossterm --locked
+          cargo test -p ratcn --features crossterm,termina --locked
 
   docs:
     name: Docs site

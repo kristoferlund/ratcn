@@ -70,7 +70,7 @@ enum AppMsg {
 }
 
 fn main() -> io::Result<()> {
-    demo_shared::run(App::new())
+    demo_shared::run_lazy(App::new)
 }
 
 impl App {

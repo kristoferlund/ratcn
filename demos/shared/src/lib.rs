@@ -11,12 +11,49 @@
 //! resize. Nothing else. An idle demo costs one blocked read natively, and
 //! nothing at all in the browser.
 
-use std::{io, time::Duration};
+use std::{io, sync::OnceLock, time::Duration};
 
-#[cfg(not(target_arch = "wasm32"))]
-use ratatui::crossterm::event::Event as CrosstermEvent;
 use ratatui::{Frame, Terminal, backend::Backend, style::Color};
-use ratcn::runtime::Event;
+#[cfg(not(target_arch = "wasm32"))]
+use ratatui_termina::{
+    TerminaBackend,
+    termina::{
+        Event as TerminalEvent, EventReader, PlatformTerminal, Terminal as _,
+        escape::csi::{Csi, DecPrivateMode, DecPrivateModeCode, Mode},
+    },
+};
+use ratcn::{Theme, runtime::Event};
+
+/// The theme every demo paints with.
+///
+/// Natively it is solved from the colors this terminal reported about itself,
+/// so the demos sit in the user's own palette rather than next to it. In the
+/// browser, and on a terminal that could not be asked, it is a preset.
+///
+/// It is resolved once, natively, before the demo is built. A demo built by
+/// `main` and handed to [`run`] has therefore already been built by then, so it
+/// must read this per frame rather than at construction; a demo that has to
+/// read it while being built is built by [`run_lazy`] instead, after the
+/// terminal has answered.
+#[must_use]
+pub fn theme() -> &'static Theme {
+    THEME.get_or_init(fallback_theme)
+}
+
+/// Resolved by the native [`run_lazy`]; never set in the browser.
+static THEME: OnceLock<Theme> = OnceLock::new();
+
+/// The theme to paint with when the terminal's own colors are unknown.
+///
+/// A preset that names every color, rather than [`Theme::terminal`]: the
+/// fallback runs exactly when the polarity of the screen is unknown, and the
+/// `terminal` preset pairs [`Color::Reset`] text with concrete dark wells —
+/// which on a light terminal is near-black text on a near-black fill. A theme
+/// that names its colors is at least legible on every terminal, whichever way
+/// round that terminal is.
+fn fallback_theme() -> Theme {
+    Theme::default_dark()
+}
 
 /// The shortest wait worth honoring: a wake sooner than the display refreshes
 /// cannot show anything new. [`Demo::wake`] values this small or smaller mean
@@ -75,29 +112,173 @@ pub trait Demo {
 
 /// Run `demo` until it quits (natively) or forever (in the browser).
 ///
+/// The demo already exists, so it was built before the terminal was asked about
+/// its colors. That is fine for a demo whose theme is a constant, and wrong for
+/// one that reads [`theme`] while being built — which panics here rather than
+/// silently painting the fallback. Those demos use [`run_lazy`].
+///
 /// # Errors
 ///
 /// Returns an I/O error if the terminal or the browser canvas cannot be set up,
 /// and natively if drawing or reading input fails.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn run<D: Demo + 'static>(mut demo: D) -> io::Result<()> {
-    ratatui::run(|terminal| {
-        let modes = ratcn::crossterm::InputModes::new();
-        let modes = if D::INPUT {
-            modes.mouse_capture()
-        } else {
-            modes
-        };
-        let modes = if D::PASTE {
-            modes.bracketed_paste()
-        } else {
-            modes
-        };
-        // RAII: the modes are restored on every exit path, `?` and panic alike.
-        let _input_modes = modes.enable()?;
+pub fn run<D: Demo + 'static>(demo: D) -> io::Result<()> {
+    run_lazy(move || demo)
+}
 
-        drive(&mut demo, terminal, &mut TerminalEvents)
-    })
+/// Run the demo `build` returns, building it only once [`theme`] can answer.
+///
+/// The theme is resolved from the terminal inside this call, and a demo that
+/// reads it while being built has to be built after that — a picker seeding its
+/// selection from the theme list, a widget caching a color. `build` runs at the
+/// one moment where the terminal is open, the query has been answered, and no
+/// frame has been drawn.
+///
+/// # Errors
+///
+/// The same as [`run`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_lazy<D: Demo + 'static>(build: impl FnOnce() -> D) -> io::Result<()> {
+    let mut output = PlatformTerminal::new()?;
+    // Raw mode first: nothing below reads a reply that the line discipline
+    // would otherwise hold back until Enter.
+    output.enter_raw_mode()?;
+    // Termina restores raw mode after this hook runs, so the hook owes only the
+    // modes this host turns on below. It writes through a handle of its own,
+    // which is why it can run while the session is being unwound.
+    let modes = modes(D::INPUT, D::PASTE);
+    output.set_panic_hook({
+        let modes = modes.clone();
+        move |handle| {
+            let _ = restore_modes(handle, &modes);
+        }
+    });
+
+    // The one window the query has: raw mode is on and no event reader has
+    // taken a byte yet, so the terminal's answers are the only thing in the
+    // stream that is not the user typing. It happens before the alternate
+    // screen so a slow terminal is answered against the shell the user can
+    // still see, rather than behind a blank screen.
+    assert!(
+        THEME.set(queried_theme(&mut output)).is_ok(),
+        "the theme must be resolved before any demo code reads it: a demo that \
+         reads `theme()` while being built belongs in `run_lazy`, not `run`"
+    );
+
+    let events = output.event_reader();
+    // `Terminal::new` measures the grid and can fail. It runs while the modes
+    // are still off, so there is nothing to restore if it does — which is why
+    // the session takes them on afterwards and not before.
+    let session = Session {
+        terminal: Terminal::new(TerminaBackend::new(output))?,
+        modes,
+    };
+    let mut session = session.enable()?;
+
+    let mut demo = build();
+    drive(
+        &mut demo,
+        &mut session.terminal,
+        &mut TerminalEvents(events),
+    )
+}
+
+/// The native host's terminal, holding the modes it switched on.
+///
+/// Dropping it switches them back off. That is what covers every path out of
+/// [`run_lazy`] once the modes are on — a `?`, the quit key, or an unwinding
+/// panic — so the user never gets their shell back inside the alternate screen
+/// with the mouse still captured. Errors while restoring are dropped: `Drop`
+/// has nowhere to report them and the process is on its way out anyway.
+#[cfg(not(target_arch = "wasm32"))]
+struct Session {
+    terminal: Terminal<TerminaBackend<PlatformTerminal>>,
+    modes: Vec<DecPrivateModeCode>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Session {
+    /// Switch the modes on. A failure part-way through still restores, because
+    /// the guard already owns them: resetting a mode that never went on is
+    /// what the terminal does with any mode it does not know.
+    fn enable(mut self) -> io::Result<Self> {
+        set_modes(self.terminal.backend_mut(), &self.modes)?;
+        Ok(self)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = restore_modes(self.terminal.backend_mut(), &self.modes);
+    }
+}
+
+/// Solve a theme from the colors the terminal reports about itself.
+///
+/// A terminal that cannot be asked, will not answer, or answers only in part
+/// gets the [`fallback_theme`]. So does one whose reply could not be read: the
+/// same terminal is about to be drawn on, and if it is broken enough to fail
+/// here the frame will say so.
+#[cfg(not(target_arch = "wasm32"))]
+fn queried_theme(terminal: &mut PlatformTerminal) -> Theme {
+    match ratcn::terminal_query::query(terminal) {
+        Ok(Some(colors)) => Theme::adaptive(
+            colors.background,
+            colors.foreground,
+            colors.palette16.as_ref(),
+        ),
+        Ok(None) | Err(_) => fallback_theme(),
+    }
+}
+
+/// The terminal modes the host switches on, in the order it switches them on.
+///
+/// Termina deliberately manages none of these: they are protocol, and the
+/// application decides. Restoring walks the list back off in reverse.
+#[cfg(not(target_arch = "wasm32"))]
+fn modes(input: bool, paste: bool) -> Vec<DecPrivateModeCode> {
+    use DecPrivateModeCode as M;
+
+    let mut modes = vec![M::ClearAndEnableAlternateScreen];
+    if input {
+        // Presses, motion with a button held, motion without one, and SGR
+        // coordinates — without the last, a click past column 223 cannot be
+        // encoded at all.
+        modes.extend([
+            M::MouseTracking,
+            M::ButtonEventMouse,
+            M::AnyEventMouse,
+            M::SGRMouse,
+        ]);
+    }
+    if paste {
+        modes.push(M::BracketedPaste);
+    }
+    modes
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
+    for &code in modes {
+        let mode = DecPrivateMode::Code(code);
+        write!(out, "{}", Csi::Mode(Mode::SetDecPrivateMode(mode)))?;
+    }
+    out.flush()
+}
+
+/// Switch the modes back off, newest first, and show the cursor.
+///
+/// A frame interrupted between hiding the cursor and showing it again leaves it
+/// hidden, and a hidden cursor is invisible in the shell the user comes back to.
+#[cfg(not(target_arch = "wasm32"))]
+fn restore_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
+    for &code in modes.iter().rev() {
+        let mode = DecPrivateMode::Code(code);
+        write!(out, "{}", Csi::Mode(Mode::ResetDecPrivateMode(mode)))?;
+    }
+    let cursor = DecPrivateMode::Code(DecPrivateModeCode::ShowCursor);
+    write!(out, "{}", Csi::Mode(Mode::SetDecPrivateMode(cursor)))?;
+    out.flush()
 }
 
 /// Where the native host's waiting happens.
@@ -108,24 +289,25 @@ pub fn run<D: Demo + 'static>(mut demo: D) -> io::Result<()> {
 trait Events {
     /// Wait for the next event, for at most `timeout` — indefinitely when it is
     /// [`None`]. `Ok(None)` means the wait ran out with nothing to route.
-    fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<CrosstermEvent>>;
+    fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<TerminalEvent>>;
 }
 
 /// The terminal itself: poll when there is a deadline, block when there is not.
 #[cfg(not(target_arch = "wasm32"))]
-struct TerminalEvents;
+struct TerminalEvents(EventReader);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Events for TerminalEvents {
-    fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<CrosstermEvent>> {
-        use ratatui::crossterm::event;
-
+    fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<TerminalEvent>> {
+        // Everything is taken, escape replies included: a reply that outran the
+        // startup query's fence is one this host has no use for, and leaving it
+        // buffered would only hand it to the next read.
         if let Some(timeout) = timeout
-            && !event::poll(timeout)?
+            && !self.0.poll(Some(timeout), |_| true)?
         {
             return Ok(None);
         }
-        event::read().map(Some)
+        self.0.read(|_| true).map(Some)
     }
 }
 
@@ -166,7 +348,7 @@ where
         }
         // A resize is not an app event: the new size reaches the demo as the
         // next frame's area, so all the host owes it is that frame.
-        stale |= matches!(event, CrosstermEvent::Resize(..));
+        stale |= matches!(event, TerminalEvent::WindowResized(..));
         if let Ok(event) = Event::try_from(event) {
             stale |= demo.handle_event(event);
         }
@@ -193,29 +375,32 @@ where
     Ok(terminal.size()? != drawn)
 }
 
-/// Run `demo` in the browser. Returns once the host is wired up; the demo keeps
-/// running on browser events and animation frames.
+/// Run the demo `build` returns in the browser. Returns once the host is wired
+/// up; the demo keeps running on browser events and animation frames.
+///
+/// There is no terminal to ask here, so [`theme`] already answers and `build`
+/// runs immediately.
 ///
 /// # Errors
 ///
 /// Returns an I/O error if the canvas backend or one of the listeners cannot be
 /// installed.
 #[cfg(target_arch = "wasm32")]
-pub fn run<D: Demo + 'static>(demo: D) -> io::Result<()> {
-    web_host::start(demo)
+pub fn run_lazy<D: Demo + 'static>(build: impl FnOnce() -> D) -> io::Result<()> {
+    web_host::start(build())
 }
 
 /// Ctrl+C, the demos' quit key.
 #[cfg(not(target_arch = "wasm32"))]
-fn is_quit(event: &CrosstermEvent) -> bool {
-    use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+fn is_quit(event: &TerminalEvent) -> bool {
+    use ratatui_termina::termina::event::{KeyCode, KeyEventKind, Modifiers};
 
     matches!(
         event,
-        CrosstermEvent::Key(key)
+        TerminalEvent::Key(key)
             if key.kind == KeyEventKind::Press
                 && key.code == KeyCode::Char('c')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.modifiers.contains(Modifiers::CONTROL)
     )
 }
 
@@ -538,13 +723,16 @@ mod tests {
     use ratatui::{
         backend::{ClearType, TestBackend, WindowSize},
         buffer::Cell,
-        crossterm::event::{KeyCode, KeyEvent as CrosstermKeyEvent, KeyModifiers},
         layout::{Position, Size},
+    };
+    use ratatui_termina::termina::{
+        WindowSize as TerminalSize,
+        event::{KeyCode, KeyEvent as TerminalKeyEvent, Modifiers},
     };
 
     use super::{
-        ANIMATION_FRAME, Backend, Color, CrosstermEvent, Demo, Duration, Event, Events, Frame,
-        Terminal, draw_frame, drive, io,
+        ANIMATION_FRAME, Backend, Color, Demo, Duration, Event, Events, Frame, Terminal,
+        TerminalEvent, draw_frame, drive, io,
     };
 
     /// A [`TestBackend`] that reports a native host's error type, and that can
@@ -666,13 +854,13 @@ mod tests {
     /// The waits the host performs, scripted: one entry answers one wait.
     struct Script {
         /// `Some(event)` hands an event over; `None` is a wait that ran out.
-        steps: VecDeque<Option<CrosstermEvent>>,
+        steps: VecDeque<Option<TerminalEvent>>,
         /// The timeout the host asked for, per wait, in order.
         waits: Vec<Option<Duration>>,
     }
 
     impl Script {
-        fn new(steps: impl IntoIterator<Item = Option<CrosstermEvent>>) -> Self {
+        fn new(steps: impl IntoIterator<Item = Option<TerminalEvent>>) -> Self {
             Self {
                 steps: steps.into_iter().collect(),
                 waits: Vec::new(),
@@ -681,25 +869,31 @@ mod tests {
     }
 
     impl Events for Script {
-        fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<CrosstermEvent>> {
+        fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<TerminalEvent>> {
             self.waits.push(timeout);
             // A spent script quits, so the loop returns instead of running on.
             Ok(self.steps.pop_front().unwrap_or_else(|| Some(quit())))
         }
     }
 
-    fn key(code: char) -> CrosstermEvent {
-        CrosstermEvent::Key(CrosstermKeyEvent::new(
-            KeyCode::Char(code),
-            KeyModifiers::NONE,
+    fn key(code: char) -> TerminalEvent {
+        TerminalEvent::Key(TerminalKeyEvent::new(KeyCode::Char(code), Modifiers::NONE))
+    }
+
+    fn quit() -> TerminalEvent {
+        TerminalEvent::Key(TerminalKeyEvent::new(
+            KeyCode::Char('c'),
+            Modifiers::CONTROL,
         ))
     }
 
-    fn quit() -> CrosstermEvent {
-        CrosstermEvent::Key(CrosstermKeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL,
-        ))
+    fn resize(cols: u16, rows: u16) -> TerminalEvent {
+        TerminalEvent::WindowResized(TerminalSize {
+            cols,
+            rows,
+            pixel_width: None,
+            pixel_height: None,
+        })
     }
 
     /// Run the host over `script` and hand back the terminal it drew on.
@@ -711,6 +905,29 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("the test backend opens");
         drive(probe, &mut terminal, script).expect("the scripted host reaches the quit key");
         terminal
+    }
+
+    #[test]
+    fn the_fallback_theme_leaves_no_color_to_the_terminal() {
+        // It is chosen exactly when the terminal's polarity is unknown, so a
+        // `Color::Reset` in it would be a color picked by a terminal the rest
+        // of the theme was not solved for: `Theme::terminal`'s Reset text on
+        // its concrete dark wells is near-black on near-black once the screen
+        // turns out to be light.
+        //
+        // Read through `theme()`, not `fallback_theme()`, so this also pins
+        // what an unasked terminal gets: no query has run in a test process.
+        let theme = super::theme();
+        assert_eq!(*theme, super::fallback_theme());
+
+        for (role, color) in [
+            ("foreground", theme.foreground),
+            ("background", theme.background),
+            ("surface", theme.surface),
+            ("field", theme.field),
+        ] {
+            assert_ne!(color, Color::Reset, "{role} is named, not inherited");
+        }
     }
 
     #[test]
@@ -771,7 +988,7 @@ mod tests {
     #[test]
     fn a_resize_draws_even_though_the_demo_never_sees_it() {
         let mut probe = Probe::default();
-        let mut script = Script::new([Some(CrosstermEvent::Resize(30, 10))]);
+        let mut script = Script::new([Some(resize(30, 10))]);
 
         run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
 

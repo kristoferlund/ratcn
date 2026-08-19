@@ -1196,6 +1196,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatui-termina"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0bf912d9e66f057a759d92e386a280ea886b352ab757d6ac4d653c7ed2c43c2"
+dependencies = [
+ "instability",
+ "ratatui-core",
+ "termina",
+]
+
+[[package]]
 name = "ratatui-widgets"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1222,6 +1233,7 @@ dependencies = [
  "criterion",
  "ratatui",
  "ratzilla",
+ "termina",
  "unicode-segmentation",
  "unicode-width",
  "web-sys",
@@ -1476,6 +1488,7 @@ version = "0.0.1"
 dependencies = [
  "gloo-timers",
  "ratatui",
+ "ratatui-termina",
  "ratcn",
  "ratzilla",
 ]
@@ -1650,6 +1663,19 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
+
+[[package]]
+name = "termina"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9048a889effe34a5cddee0af7f53285198b16dca3be510858d38dfdb3e62a04e"
+dependencies = [
+ "bitflags",
+ "parking_lot",
+ "rustix",
+ "signal-hook",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "thiserror"
