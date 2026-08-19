@@ -10,6 +10,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A `termina` feature, converting [termina](https://docs.rs/termina) events into
+  `runtime::Event` the way `crossterm` does. Both features can be on at once;
+  neither is default, and `crossterm` is unchanged.
+- `terminal_query::query(&mut terminal)` (feature `termina`) asks the terminal
+  for its own background and foreground and hands back `TerminalColors` for
+  `Theme::adaptive`. Call it in raw mode before the event loop reads anything;
+  it returns `None` when the terminal cannot be asked or will not answer.
 - `Theme::adaptive(background, foreground, palette16)` derives a full theme
   from externally chosen colors (e.g. queried from the terminal). A light
   background yields a light theme, and every derived theme passes the same

@@ -127,6 +127,8 @@ pub mod linear_nav;
 pub mod list_core;
 pub mod runtime;
 pub mod selection_indicator;
+#[cfg(feature = "termina")]
+pub mod terminal_query;
 pub mod text_width;
 pub mod theme;
 pub mod toast;

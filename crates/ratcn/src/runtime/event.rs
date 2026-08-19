@@ -1,8 +1,8 @@
 //! Normalized input events.
 //!
 //! The interaction runtime defines its own event vocabulary so components match
-//! one set of types across backends. Conversions from crossterm and ratzilla are
-//! feature-gated (`crossterm`, `ratzilla`).
+//! one set of types across backends. Conversions from crossterm, termina, and
+//! ratzilla are feature-gated (`crossterm`, `termina`, `ratzilla`).
 
 /// An input event, in the runtime's own vocabulary rather than a backend's.
 ///
@@ -773,6 +773,307 @@ mod crossterm_conv {
                 _ => Err(Unsupported),
             }
         }
+    }
+}
+
+#[cfg(feature = "termina")]
+mod termina_conv {
+    use super::{
+        Event, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind, ScrollDirection,
+        Unsupported,
+    };
+    use termina::event as tn;
+
+    fn modifiers(held: tn::Modifiers) -> Modifiers {
+        Modifiers {
+            ctrl: held.contains(tn::Modifiers::CONTROL),
+            alt: held.contains(tn::Modifiers::ALT),
+            shift: held.contains(tn::Modifiers::SHIFT),
+        }
+    }
+
+    fn mouse_button(button: tn::MouseButton) -> MouseButton {
+        match button {
+            tn::MouseButton::Left => MouseButton::Left,
+            tn::MouseButton::Right => MouseButton::Right,
+            tn::MouseButton::Middle => MouseButton::Middle,
+        }
+    }
+
+    /// Termina reports zero-based cells, the same space a rendered
+    /// [`Rect`](ratatui::layout::Rect) is in, so the coordinates pass through.
+    impl From<tn::MouseEvent> for MouseEvent {
+        fn from(event: tn::MouseEvent) -> Self {
+            use tn::MouseEventKind as K;
+            let kind = match event.kind {
+                K::Down(b) => MouseKind::Down(mouse_button(b)),
+                K::Up(b) => MouseKind::Up(mouse_button(b)),
+                K::Drag(b) => MouseKind::Drag(mouse_button(b)),
+                K::Moved => MouseKind::Moved,
+                K::ScrollUp => MouseKind::Scroll(ScrollDirection::Up),
+                K::ScrollDown => MouseKind::Scroll(ScrollDirection::Down),
+                K::ScrollLeft => MouseKind::Scroll(ScrollDirection::Left),
+                K::ScrollRight => MouseKind::Scroll(ScrollDirection::Right),
+            };
+            Self {
+                kind,
+                column: event.column,
+                row: event.row,
+                modifiers: modifiers(event.modifiers),
+            }
+        }
+    }
+
+    impl TryFrom<tn::KeyEvent> for KeyEvent {
+        type Error = Unsupported;
+
+        fn try_from(event: tn::KeyEvent) -> Result<Self, Self::Error> {
+            // A repeat is a press the user is still making, so it routes; a
+            // release is the one kind this vocabulary has no place for.
+            if event.kind == tn::KeyEventKind::Release {
+                return Err(Unsupported);
+            }
+            let code = match event.code {
+                tn::KeyCode::Char(c) => KeyCode::Char(c),
+                tn::KeyCode::Function(n) => KeyCode::F(n),
+                tn::KeyCode::Backspace => KeyCode::Backspace,
+                tn::KeyCode::Enter => KeyCode::Enter,
+                tn::KeyCode::Left => KeyCode::Left,
+                tn::KeyCode::Right => KeyCode::Right,
+                tn::KeyCode::Up => KeyCode::Up,
+                tn::KeyCode::Down => KeyCode::Down,
+                tn::KeyCode::Tab => KeyCode::Tab,
+                tn::KeyCode::BackTab => KeyCode::BackTab,
+                tn::KeyCode::Delete => KeyCode::Delete,
+                tn::KeyCode::Home => KeyCode::Home,
+                tn::KeyCode::End => KeyCode::End,
+                tn::KeyCode::PageUp => KeyCode::PageUp,
+                tn::KeyCode::PageDown => KeyCode::PageDown,
+                tn::KeyCode::Escape => KeyCode::Esc,
+                _ => return Err(Unsupported),
+            };
+            Ok(Self {
+                code,
+                modifiers: modifiers(event.modifiers),
+            })
+        }
+    }
+
+    /// Termina keeps terminal *responses* — CSI, OSC, DCS — in the same enum as
+    /// input, so a query reply reaching the app's event loop is an ordinary
+    /// unsupported event rather than the fake keystrokes crossterm invents for
+    /// it.
+    impl TryFrom<termina::Event> for Event {
+        type Error = Unsupported;
+
+        fn try_from(event: termina::Event) -> Result<Self, Self::Error> {
+            match event {
+                termina::Event::Key(key) => KeyEvent::try_from(key).map(Event::Key),
+                termina::Event::Mouse(mouse) => Ok(Event::Mouse(mouse.into())),
+                termina::Event::Paste(s) => Ok(Event::Paste(s)),
+                _ => Err(Unsupported),
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "termina"))]
+mod termina_tests {
+    use super::{
+        Event, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind, ScrollDirection,
+        Unsupported,
+    };
+    use termina::event as tn;
+
+    fn key(code: tn::KeyCode, modifiers: tn::Modifiers) -> tn::KeyEvent {
+        tn::KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn termina_shift_backtab_keeps_normalized_code_and_modifiers() {
+        let event = KeyEvent::try_from(key(tn::KeyCode::BackTab, tn::Modifiers::SHIFT));
+
+        assert_eq!(
+            event,
+            Ok(KeyEvent {
+                code: KeyCode::BackTab,
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Modifiers::NONE
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn terminas_own_names_for_escape_and_function_keys_map_across() {
+        assert_eq!(
+            KeyEvent::try_from(key(tn::KeyCode::Escape, tn::Modifiers::NONE)),
+            Ok(KeyEvent::new(KeyCode::Esc))
+        );
+        assert_eq!(
+            KeyEvent::try_from(key(tn::KeyCode::Function(7), tn::Modifiers::NONE)),
+            Ok(KeyEvent::new(KeyCode::F(7)))
+        );
+    }
+
+    #[test]
+    fn every_modifier_the_vocabulary_names_survives_at_once() {
+        let held = tn::Modifiers::CONTROL | tn::Modifiers::ALT | tn::Modifiers::SHIFT;
+
+        assert_eq!(
+            KeyEvent::try_from(key(tn::KeyCode::Char('K'), held)),
+            Ok(KeyEvent {
+                code: KeyCode::Char('K'),
+                modifiers: Modifiers {
+                    ctrl: true,
+                    alt: true,
+                    shift: true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_key_release_does_not_convert_but_a_repeat_does() {
+        let held = tn::KeyEvent {
+            code: tn::KeyCode::Char('j'),
+            kind: tn::KeyEventKind::Release,
+            modifiers: tn::Modifiers::NONE,
+            state: tn::KeyEventState::NONE,
+        };
+
+        assert_eq!(KeyEvent::try_from(held), Err(Unsupported));
+        assert_eq!(
+            KeyEvent::try_from(tn::KeyEvent {
+                kind: tn::KeyEventKind::Repeat,
+                ..held
+            }),
+            Ok(KeyEvent::new(KeyCode::Char('j')))
+        );
+    }
+
+    #[test]
+    fn keys_outside_the_vocabulary_stay_unsupported() {
+        for code in [
+            tn::KeyCode::Insert,
+            tn::KeyCode::CapsLock,
+            tn::KeyCode::Menu,
+            tn::KeyCode::Null,
+            tn::KeyCode::Modifier(tn::ModifierKeyCode::LeftShift),
+            tn::KeyCode::Media(tn::MediaKeyCode::Play),
+        ] {
+            assert_eq!(
+                KeyEvent::try_from(key(code, tn::Modifiers::NONE)),
+                Err(Unsupported),
+                "{code:?} has no place in the runtime vocabulary"
+            );
+        }
+    }
+
+    #[test]
+    fn termina_mouse_cells_and_kinds_pass_through_unshifted() {
+        // Every button, because a transposed pair reads correctly from any one
+        // of them: the middle button is its own opposite.
+        let buttons = [
+            (tn::MouseButton::Left, MouseButton::Left),
+            (tn::MouseButton::Right, MouseButton::Right),
+            (tn::MouseButton::Middle, MouseButton::Middle),
+        ];
+
+        for (reported, button) in buttons {
+            let event = MouseEvent::from(tn::MouseEvent {
+                kind: tn::MouseEventKind::Drag(reported),
+                column: 3,
+                row: 4,
+                modifiers: tn::Modifiers::CONTROL,
+            });
+
+            assert_eq!(
+                event,
+                MouseEvent {
+                    kind: MouseKind::Drag(button),
+                    column: 3,
+                    row: 4,
+                    modifiers: Modifiers {
+                        ctrl: true,
+                        ..Modifiers::NONE
+                    },
+                },
+                "termina's {reported:?} is the runtime's {button:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn presses_and_releases_keep_their_button_too() {
+        for (reported, button) in [
+            (tn::MouseButton::Left, MouseButton::Left),
+            (tn::MouseButton::Right, MouseButton::Right),
+            (tn::MouseButton::Middle, MouseButton::Middle),
+        ] {
+            let down = MouseEvent::from(tn::MouseEvent {
+                kind: tn::MouseEventKind::Down(reported),
+                column: 0,
+                row: 0,
+                modifiers: tn::Modifiers::NONE,
+            });
+            let up = MouseEvent::from(tn::MouseEvent {
+                kind: tn::MouseEventKind::Up(reported),
+                column: 0,
+                row: 0,
+                modifiers: tn::Modifiers::NONE,
+            });
+
+            assert_eq!(down.kind, MouseKind::Down(button), "{reported:?} press");
+            assert_eq!(up.kind, MouseKind::Up(button), "{reported:?} release");
+        }
+    }
+
+    #[test]
+    fn all_four_scroll_axes_map_to_their_directions() {
+        let axes = [
+            (tn::MouseEventKind::ScrollUp, ScrollDirection::Up),
+            (tn::MouseEventKind::ScrollDown, ScrollDirection::Down),
+            (tn::MouseEventKind::ScrollLeft, ScrollDirection::Left),
+            (tn::MouseEventKind::ScrollRight, ScrollDirection::Right),
+        ];
+
+        for (reported, direction) in axes {
+            let event = MouseEvent::from(tn::MouseEvent {
+                kind: reported,
+                column: 0,
+                row: 0,
+                modifiers: tn::Modifiers::NONE,
+            });
+            assert_eq!(
+                event.kind,
+                MouseKind::Scroll(direction),
+                "termina's {reported:?} is the runtime's {direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bracketed_paste_arrives_whole() {
+        let event = Event::try_from(termina::Event::Paste("two\nlines".to_owned()));
+
+        assert_eq!(event, Ok(Event::Paste("two\nlines".to_owned())));
+    }
+
+    #[test]
+    fn escape_replies_and_focus_notices_are_not_app_events() {
+        use termina::escape::csi::{Csi, Device};
+
+        // The reply to a startup query, arriving after the query window has
+        // closed: an ignored event, not the burst of fake keystrokes crossterm
+        // turns the same bytes into.
+        let reply = Event::try_from(termina::Event::Csi(Csi::Device(Device::DeviceAttributes(
+            (),
+        ))));
+
+        assert_eq!(reply, Err(Unsupported));
+        assert_eq!(Event::try_from(termina::Event::FocusIn), Err(Unsupported));
     }
 }
 

@@ -15,6 +15,7 @@ version.workspace = true
 [dependencies]
 ratatui.workspace = true
 ratzilla = { workspace = true, optional = true }
+termina = { version = "0.3.3", optional = true }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 
@@ -35,6 +36,7 @@ harness = false
 default = []
 crossterm = ["ratatui/crossterm"]
 ratzilla = ["dep:ratzilla", "dep:web-sys"]
+termina = ["dep:termina"]
 
 [lints.rust]
 ambiguous_negative_literals = "warn"

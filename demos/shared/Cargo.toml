@@ -14,5 +14,5 @@ ratcn = { workspace = true, features = ["ratzilla"] }
 ratzilla.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ratcn = { workspace = true, features = ["crossterm"] }
-ratatui = { workspace = true, features = ["crossterm"] }
+ratcn = { workspace = true, features = ["termina"] }
+ratatui-termina.workspace = true
