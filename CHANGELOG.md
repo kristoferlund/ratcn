@@ -17,6 +17,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for its own background and foreground and hands back `TerminalColors` for
   `Theme::adaptive`. Call it in raw mode before the event loop reads anything;
   it returns `None` when the terminal cannot be asked or will not answer.
+- `terminal_query::ThemeWatch` (feature `termina`) follows a terminal that
+  reports its own theme changes: hand it every event, call `step` once a pass,
+  and it debounces, re-asks for the colors, and hands back the new ones. Switch
+  DEC mode 2031 on for any terminal `query` answered, and off before handing back.
 - `Theme::adaptive(background, foreground, palette16)` derives a full theme
   from externally chosen colors (e.g. queried from the terminal). A light
   background yields a light theme, and every derived theme passes the same

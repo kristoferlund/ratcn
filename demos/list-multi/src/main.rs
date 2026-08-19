@@ -114,7 +114,7 @@ impl demo_shared::Demo for App {
             .set_style(area, Style::default().bg(theme.background));
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render(frame, state, &theme, |ctx| {
             let muted = ctx.theme.muted_foreground;
             let list = List::new(TOPICS.map(|label| ListItem::new(label, label)))
                 .item_focus(|s: &AppState| s.focused_topic, Msg::TopicFocusChanged)
