@@ -11,7 +11,9 @@
 //! resize. Nothing else. An idle demo costs one blocked read natively, and
 //! nothing at all in the browser.
 
-use std::{io, sync::OnceLock, time::Duration};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+use std::{io, sync::RwLock, time::Duration};
 
 use ratatui::{Frame, Terminal, backend::Backend, style::Color};
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +24,8 @@ use ratatui_termina::{
         escape::csi::{Csi, DecPrivateMode, DecPrivateModeCode, Mode},
     },
 };
+#[cfg(not(target_arch = "wasm32"))]
+use ratcn::terminal_query::ThemeWatch;
 use ratcn::{Theme, runtime::Event};
 
 /// The theme every demo paints with.
@@ -30,18 +34,34 @@ use ratcn::{Theme, runtime::Event};
 /// so the demos sit in the user's own palette rather than next to it. In the
 /// browser, and on a terminal that could not be asked, it is a preset.
 ///
-/// It is resolved once, natively, before the demo is built. A demo built by
-/// `main` and handed to [`run`] has therefore already been built by then, so it
-/// must read this per frame rather than at construction; a demo that has to
-/// read it while being built is built by [`run_lazy`] instead, after the
-/// terminal has answered.
+/// It is resolved before the demo is built, and on a terminal that reports its
+/// own theme changes it is resolved *again* whenever the user flips theirs — so
+/// read it per frame and paint from what it says. A demo that copies it into
+/// its own state stops following the terminal at that moment. A demo that has
+/// to read it while being built is built by [`run_lazy`], after the first
+/// answer is in.
 #[must_use]
-pub fn theme() -> &'static Theme {
-    THEME.get_or_init(fallback_theme)
+pub fn theme() -> Theme {
+    *THEME
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Resolved by the native [`run_lazy`]; never set in the browser.
-static THEME: OnceLock<Theme> = OnceLock::new();
+/// Publish a newly resolved theme, and report whether it is a change — which is
+/// what the next frame depends on being told.
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_theme(theme: Theme) -> bool {
+    let mut published = THEME
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let changed = *published != theme;
+    *published = theme;
+    changed
+}
+
+/// Resolved by the native [`run_lazy`] and re-resolved by its event loop; in
+/// the browser it keeps the value it was born with.
+static THEME: RwLock<Theme> = RwLock::new(fallback_theme());
 
 /// The theme to paint with when the terminal's own colors are unknown.
 ///
@@ -51,7 +71,7 @@ static THEME: OnceLock<Theme> = OnceLock::new();
 /// which on a light terminal is near-black text on a near-black fill. A theme
 /// that names its colors is at least legible on every terminal, whichever way
 /// round that terminal is.
-fn fallback_theme() -> Theme {
+const fn fallback_theme() -> Theme {
     Theme::default_dark()
 }
 
@@ -113,9 +133,11 @@ pub trait Demo {
 /// Run `demo` until it quits (natively) or forever (in the browser).
 ///
 /// The demo already exists, so it was built before the terminal was asked about
-/// its colors. That is fine for a demo whose theme is a constant, and wrong for
-/// one that reads [`theme`] while being built — which panics here rather than
-/// silently painting the fallback. Those demos use [`run_lazy`].
+/// its colors. That is fine for a demo whose theme is a constant. A demo that
+/// reads [`theme`] must read it *per frame* — a copy taken while the demo was
+/// being built is not only the pre-query theme, it also stops following the
+/// terminal from then on. A demo that has to read the theme while being built
+/// uses [`run_lazy`], which builds it after the query.
 ///
 /// # Errors
 ///
@@ -142,27 +164,29 @@ pub fn run_lazy<D: Demo + 'static>(build: impl FnOnce() -> D) -> io::Result<()> 
     // Raw mode first: nothing below reads a reply that the line discipline
     // would otherwise hold back until Enter.
     output.enter_raw_mode()?;
+    // The one window the query has: raw mode is on and no event reader has
+    // taken a byte yet, so the terminal's answers are the only thing in the
+    // stream that is not the user typing. It happens before the alternate
+    // screen so a slow terminal is answered against the shell the user can
+    // still see, rather than behind a blank screen.
+    //
+    // The panic hook has to know the mode list, and whether the subscription
+    // joins it is the query's answer — so the query goes first and the hook is
+    // installed against the list it produced.
+    let (theme, subscribe) = queried(&mut output);
+    publish_theme(theme);
+
+    let modes = modes(D::INPUT, D::PASTE, subscribe);
     // Termina restores raw mode after this hook runs, so the hook owes only the
     // modes this host turns on below. It writes through a handle of its own,
-    // which is why it can run while the session is being unwound.
-    let modes = modes(D::INPUT, D::PASTE);
+    // which is why it can run while the session is being unwound. Nothing is on
+    // yet, so the query above had nothing for a hook to put back.
     output.set_panic_hook({
         let modes = modes.clone();
         move |handle| {
             let _ = restore_modes(handle, &modes);
         }
     });
-
-    // The one window the query has: raw mode is on and no event reader has
-    // taken a byte yet, so the terminal's answers are the only thing in the
-    // stream that is not the user typing. It happens before the alternate
-    // screen so a slow terminal is answered against the shell the user can
-    // still see, rather than behind a blank screen.
-    assert!(
-        THEME.set(queried_theme(&mut output)).is_ok(),
-        "the theme must be resolved before any demo code reads it: a demo that \
-         reads `theme()` while being built belongs in `run_lazy`, not `run`"
-    );
 
     let events = output.event_reader();
     // `Terminal::new` measures the grid and can fail. It runs while the modes
@@ -213,30 +237,48 @@ impl Drop for Session {
     }
 }
 
-/// Solve a theme from the colors the terminal reports about itself.
+/// Solve a theme from the colors the terminal reports about itself, and say
+/// whether to subscribe to changes in them.
+///
+/// Any terminal that answered is subscribed to. There is no way to ask mode
+/// 2031 whether it is supported, and switching it on where it is not costs
+/// nothing — the notification that never comes is the same silence as not
+/// asking. The light/dark verdict is deliberately *not* the signal: it is a
+/// separate capability with wider support than the mode, and a verdict that
+/// merely arrived after the startup fence would write off a terminal that
+/// supports everything.
 ///
 /// A terminal that cannot be asked, will not answer, or answers only in part
-/// gets the [`fallback_theme`]. So does one whose reply could not be read: the
-/// same terminal is about to be drawn on, and if it is broken enough to fail
-/// here the frame will say so.
+/// gets the [`fallback_theme`] and no subscription. So does one whose reply
+/// could not be read: the same terminal is about to be drawn on, and if it is
+/// broken enough to fail here the frame will say so.
+///
+/// Neither branch is reachable without a terminal, so both are covered by the
+/// pty scenarios rather than by a test here: an answering terminal is sent
+/// `?2031h` and follows a flip, a silent one is sent neither.
 #[cfg(not(target_arch = "wasm32"))]
-fn queried_theme(terminal: &mut PlatformTerminal) -> Theme {
+fn queried(terminal: &mut PlatformTerminal) -> (Theme, bool) {
     match ratcn::terminal_query::query(terminal) {
-        Ok(Some(colors)) => Theme::adaptive(
-            colors.background,
-            colors.foreground,
-            colors.palette16.as_ref(),
+        Ok(Some(colors)) => (
+            Theme::adaptive(
+                colors.background,
+                colors.foreground,
+                colors.palette16.as_ref(),
+            ),
+            true,
         ),
-        Ok(None) | Err(_) => fallback_theme(),
+        Ok(None) | Err(_) => (fallback_theme(), false),
     }
 }
 
 /// The terminal modes the host switches on, in the order it switches them on.
 ///
 /// Termina deliberately manages none of these: they are protocol, and the
-/// application decides. Restoring walks the list back off in reverse.
+/// application decides. Restoring walks the list back off in reverse, which is
+/// why the theme subscription goes on last — it comes off first, and no change
+/// gets reported into a terminal that has started being put back.
 #[cfg(not(target_arch = "wasm32"))]
-fn modes(input: bool, paste: bool) -> Vec<DecPrivateModeCode> {
+fn modes(input: bool, paste: bool, subscribe: bool) -> Vec<DecPrivateModeCode> {
     use DecPrivateModeCode as M;
 
     let mut modes = vec![M::ClearAndEnableAlternateScreen];
@@ -253,6 +295,9 @@ fn modes(input: bool, paste: bool) -> Vec<DecPrivateModeCode> {
     }
     if paste {
         modes.push(M::BracketedPaste);
+    }
+    if subscribe {
+        modes.push(M::Theme);
     }
     modes
 }
@@ -316,9 +361,16 @@ impl Events for TerminalEvents {
 fn drive<D, B, E>(demo: &mut D, terminal: &mut Terminal<B>, events: &mut E) -> io::Result<()>
 where
     D: Demo,
-    B: Backend<Error = io::Error>,
+    B: Backend<Error = io::Error> + io::Write,
     E: Events,
 {
+    // Idle unless the terminal was subscribed to, and free either way: a
+    // terminal that never reports a change never moves it out of `Idle`.
+    //
+    // A process that can be suspended would re-query on SIGCONT as well — the
+    // terminal may have been re-themed while it was stopped. These demos do not
+    // handle suspension, so there is no handler for it to hang off.
+    let mut watch = ThemeWatch::new();
     let mut stale = true;
     loop {
         if stale {
@@ -335,10 +387,29 @@ where
         // deadline's work happens whether the wake-up or an event caused the
         // frame. The browser host has no such asymmetry: its timer is
         // independent of input.
-        let timeout = demo.wake().map(|delay| delay.max(ANIMATION_FRAME));
-        let Some(event) = events.next(timeout)? else {
-            // The wait ran out: the deadline the demo named has arrived, and no
-            // event needs inventing for it.
+        let wanted = demo.wake().map(|delay| delay.max(ANIMATION_FRAME));
+        let timeout = soonest(wanted, watch.wake(Instant::now()));
+        let event = events.next(timeout)?;
+
+        // The watch sees the event before the demo does, and takes nothing away
+        // from it: a reply is not an app event, and a keystroke that arrived
+        // mid-exchange is not a reply.
+        let now = Instant::now();
+        if let Some(event) = &event {
+            watch.absorb(event, now);
+        }
+        if let Some(colors) = watch.step(terminal.backend_mut(), now)? {
+            stale |= publish_theme(Theme::adaptive(
+                colors.background,
+                colors.foreground,
+                colors.palette16.as_ref(),
+            ));
+        }
+
+        let Some(event) = event else {
+            // The wait ran out. Either the demo's deadline arrived or the
+            // watch's did; a frame answers both, and the watch's costs one
+            // frame per theme change.
             stale = true;
             continue;
         };
@@ -352,6 +423,15 @@ where
         if let Ok(event) = Event::try_from(event) {
             stale |= demo.handle_event(event);
         }
+    }
+}
+
+/// The nearer of two waits, where [`None`] is "no deadline of my own".
+#[cfg(not(target_arch = "wasm32"))]
+fn soonest(one: Option<Duration>, other: Option<Duration>) -> Option<Duration> {
+    match (one, other) {
+        (Some(one), Some(other)) => Some(one.min(other)),
+        (only, None) | (None, only) => only,
     }
 }
 
@@ -742,6 +822,9 @@ mod tests {
         inner: TestBackend,
         /// Adopted during the next flush, once.
         resize_on_flush: Option<Size>,
+        /// Bytes the host wrote straight through, rather than as cells: the
+        /// theme watch's re-query is the only thing that does.
+        written: Vec<u8>,
     }
 
     impl HostBackend {
@@ -749,6 +832,7 @@ mod tests {
             Self {
                 inner: TestBackend::new(width, height),
                 resize_on_flush: None,
+                written: Vec::new(),
             }
         }
 
@@ -756,6 +840,20 @@ mod tests {
         fn resizing(mut self, width: u16, height: u16) -> Self {
             self.resize_on_flush = Some(Size::new(width, height));
             self
+        }
+    }
+
+    /// The re-query the theme watch writes goes through the backend, which the
+    /// real one is: `TerminaBackend` is the terminal's own writer. Discarding
+    /// it here would let the watch write into a hole and no test would notice.
+    impl io::Write for HostBackend {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 
@@ -857,6 +955,11 @@ mod tests {
         steps: VecDeque<Option<TerminalEvent>>,
         /// The timeout the host asked for, per wait, in order.
         waits: Vec<Option<Duration>>,
+        /// Whether a wait that runs out really takes that long. Off by default,
+        /// because a scripted deadline is usually seconds the test has no
+        /// reason to spend; on where the watch's own deadlines are what is
+        /// being driven, and those are wall-clock.
+        sleeps: bool,
     }
 
     impl Script {
@@ -864,7 +967,13 @@ mod tests {
             Self {
                 steps: steps.into_iter().collect(),
                 waits: Vec::new(),
+                sleeps: false,
             }
+        }
+
+        fn sleeping(mut self) -> Self {
+            self.sleeps = true;
+            self
         }
     }
 
@@ -872,7 +981,14 @@ mod tests {
         fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<TerminalEvent>> {
             self.waits.push(timeout);
             // A spent script quits, so the loop returns instead of running on.
-            Ok(self.steps.pop_front().unwrap_or_else(|| Some(quit())))
+            let step = self.steps.pop_front().unwrap_or_else(|| Some(quit()));
+            if self.sleeps
+                && step.is_none()
+                && let Some(timeout) = timeout
+            {
+                std::thread::sleep(timeout);
+            }
+            Ok(step)
         }
     }
 
@@ -896,6 +1012,31 @@ mod tests {
         })
     }
 
+    /// The terminal reporting that its theme changed.
+    fn re_themed() -> TerminalEvent {
+        use ratatui_termina::termina::escape::csi::{Csi, Mode, ThemeMode};
+
+        TerminalEvent::Csi(Csi::Mode(Mode::ReportTheme(ThemeMode::Light)))
+    }
+
+    /// The terminal answering one half of a colour re-query.
+    fn color_reply(background: bool, red: u8, green: u8, blue: u8) -> TerminalEvent {
+        use ratatui_termina::termina::{
+            escape::osc::{ColorOrQuery, DynamicColorNumber, Osc},
+            style::RgbColor,
+        };
+
+        let slot = if background {
+            DynamicColorNumber::TextBackgroundColor
+        } else {
+            DynamicColorNumber::TextForegroundColor
+        };
+        TerminalEvent::Osc(Osc::ChangeDynamicColors(
+            slot,
+            vec![ColorOrQuery::Color(RgbColor::new(red, green, blue))],
+        ))
+    }
+
     /// Run the host over `script` and hand back the terminal it drew on.
     fn run_scripted(
         probe: &mut Probe,
@@ -915,10 +1056,10 @@ mod tests {
         // its concrete dark wells is near-black on near-black once the screen
         // turns out to be light.
         //
-        // Read through `theme()`, not `fallback_theme()`, so this also pins
-        // what an unasked terminal gets: no query has run in a test process.
-        let theme = super::theme();
-        assert_eq!(*theme, super::fallback_theme());
+        // What an unasked terminal actually gets is pinned by
+        // `the_published_theme_is_what_the_next_frame_reads`, which owns the
+        // published theme — this one must not touch it.
+        let theme = super::fallback_theme();
 
         for (role, color) in [
             ("foreground", theme.foreground),
@@ -928,6 +1069,123 @@ mod tests {
         ] {
             assert_ne!(color, Color::Reset, "{role} is named, not inherited");
         }
+    }
+
+    /// The published theme is one value for the whole process. Tests that move
+    /// it take this in turn rather than racing over it, and put the fallback
+    /// back when they are done.
+    fn published_theme() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn a_solved_theme_differs_from_another_by_more_than_its_name() {
+        // Every change this feature produces is `Adaptive` following `Adaptive`,
+        // so a comparison that stopped at the name would report no change ever
+        // and quietly switch live re-theming off.
+        let _guard = published_theme();
+
+        let light =
+            ratcn::Theme::adaptive(Color::Rgb(253, 246, 227), Color::Rgb(101, 123, 131), None);
+        let dark = ratcn::Theme::adaptive(Color::Rgb(26, 27, 38), Color::Rgb(192, 202, 245), None);
+        assert_eq!(
+            light.name, dark.name,
+            "both are solved, so both are Adaptive"
+        );
+
+        assert!(super::publish_theme(light), "the first is a change");
+        assert!(
+            super::publish_theme(dark),
+            "and so is the second, name for name identical though it is"
+        );
+
+        super::publish_theme(super::fallback_theme());
+    }
+
+    #[test]
+    fn the_published_theme_is_what_the_next_frame_reads() {
+        let _guard = published_theme();
+        // No query has run here, so this is what an unasked terminal gets.
+        assert_eq!(super::theme(), super::fallback_theme());
+
+        let flipped = ratcn::Theme::catppuccin();
+        assert!(
+            super::publish_theme(flipped),
+            "a different theme is a change, and the frame that shows it is owed"
+        );
+        assert_eq!(super::theme(), flipped, "a demo reads it on the next frame");
+        assert!(
+            !super::publish_theme(flipped),
+            "re-publishing the same theme owes no frame: a terminal that \
+             reports a change to the colors it already had costs no repaint"
+        );
+
+        assert!(super::publish_theme(super::fallback_theme()));
+        assert_eq!(super::theme(), super::fallback_theme());
+    }
+
+    #[test]
+    fn the_subscription_goes_on_last_so_it_comes_off_first() {
+        use super::DecPrivateModeCode as M;
+
+        let quiet = super::modes(false, false, false);
+        let subscribed = super::modes(true, true, true);
+
+        assert!(
+            !quiet.contains(&M::Theme),
+            "a terminal that cannot report changes is not subscribed to"
+        );
+        assert_eq!(
+            subscribed.last(),
+            Some(&M::Theme),
+            "restoring walks the list backwards, so last on is first off"
+        );
+        assert_eq!(
+            subscribed.first(),
+            Some(&M::ClearAndEnableAlternateScreen),
+            "and the screen the user came from is the last thing given back"
+        );
+    }
+
+    #[test]
+    fn restoring_switches_the_subscription_off_before_anything_else() {
+        let modes = super::modes(true, true, true);
+        let mut written = Vec::new();
+
+        super::restore_modes(&mut written, &modes).expect("a vector accepts every write");
+
+        let written = String::from_utf8(written).expect("escape sequences are ASCII");
+        let subscription_off = written
+            .find("\x1b[?2031l")
+            .expect("the subscription is switched off");
+        let screen_back = written
+            .find("\x1b[?1049l")
+            .expect("the alternate screen is left");
+
+        assert!(
+            subscription_off < screen_back,
+            "no change may be reported into a terminal that has started being \
+             put back: {written:?}"
+        );
+        assert!(
+            written.ends_with("\x1b[?25h"),
+            "and the cursor is visible again at the end: {written:?}"
+        );
+    }
+
+    #[test]
+    fn the_nearer_of_two_waits_wins_and_no_wait_at_all_yields() {
+        let short = Duration::from_millis(10);
+        let long = Duration::from_millis(500);
+
+        assert_eq!(super::soonest(Some(long), Some(short)), Some(short));
+        assert_eq!(super::soonest(Some(short), Some(long)), Some(short));
+        assert_eq!(super::soonest(Some(short), None), Some(short));
+        assert_eq!(super::soonest(None, Some(long)), Some(long));
+        assert_eq!(super::soonest(None, None), None);
     }
 
     #[test]
@@ -1056,6 +1314,71 @@ mod tests {
             vec![Some(ANIMATION_FRAME)],
             "a zero wait would spin the CPU for nothing new to show"
         );
+    }
+
+    #[test]
+    fn a_reported_theme_change_shortens_the_wait_a_demo_asked_to_be_endless() {
+        // The demo names no deadline, so before the notification the host waits
+        // for input with no timeout at all. Afterwards it owes the watch a
+        // visit, and the wait it asks for has to be short enough to make it.
+        let mut probe = Probe::default();
+        let mut script = Script::new([Some(re_themed())]);
+
+        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+
+        assert!(
+            probe.routed.is_empty(),
+            "a terminal's report is not an app event: {:?}",
+            probe.routed
+        );
+        assert_eq!(script.waits.first(), Some(&None), "endless, until the news");
+        let after = script.waits.get(1).copied().flatten();
+        let waited = after.expect("the watch put a deadline on the next wait");
+        assert!(
+            waited <= Duration::from_millis(100),
+            "the re-query is due within the collapse window: {waited:?}"
+        );
+    }
+
+    #[test]
+    fn a_reported_change_is_re_queried_and_the_answer_reaches_the_next_frame() {
+        // The whole pipeline through the host: notification in, re-query out on
+        // the wire, replies in, new theme published, frame drawn. Costs the one
+        // debounce window in real time, which is what the sleeping script is
+        // for — the watch's deadlines are wall-clock.
+        let _guard = published_theme();
+        super::publish_theme(super::fallback_theme());
+
+        let mut probe = Probe::default();
+        let mut script = Script::new([
+            Some(re_themed()),
+            // The wait that lets the collapse window close.
+            None,
+            Some(color_reply(false, 101, 123, 131)),
+            Some(color_reply(true, 253, 246, 227)),
+        ])
+        .sleeping();
+
+        let terminal = run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+
+        let written = String::from_utf8(terminal.backend().written.clone())
+            .expect("escape sequences are ASCII");
+        assert_eq!(
+            written, "\x1b]10;?\x07\x1b]11;?\x07",
+            "the re-query went out through the terminal's own writer, once"
+        );
+        assert_eq!(
+            super::theme(),
+            ratcn::Theme::adaptive(Color::Rgb(253, 246, 227), Color::Rgb(101, 123, 131), None),
+            "the colours the terminal answered with are what the app now wears"
+        );
+        assert_eq!(
+            probe.frames, 3,
+            "the first frame, the one the closing window asked for, and the one \
+             the new theme did"
+        );
+
+        super::publish_theme(super::fallback_theme());
     }
 
     #[test]

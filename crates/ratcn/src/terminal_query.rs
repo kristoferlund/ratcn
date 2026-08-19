@@ -51,8 +51,13 @@
 //! device-attributes request as a fence: when the DA1 reply arrives, whatever
 //! has not answered will not answer, and the query stops without waiting. A
 //! terminal that answers nothing at all — including the fence — stops the query
-//! at a one-second backstop, which is also what catches the terminals that
-//! answered the light/dark query *after* the fence.
+//! at a one-second backstop.
+//!
+//! The fence is what ends a normal exchange, so an answer that arrives *after*
+//! it is simply lost — that is what a fence is for, and the backstop does not
+//! rescue it. Ghostty answered the light/dark query out of order until January
+//! 2026 and would have lost its verdict here. Nothing depends on that verdict:
+//! it is advisory, and the colors are what a theme is built from.
 //!
 //! Terminals known to mishandle the exchange are never asked: see [`query`].
 
@@ -187,6 +192,222 @@ fn exchange<T: Terminal>(terminal: &mut T, asked: bool) -> io::Result<Option<Ter
     Ok(replies.resolve())
 }
 
+/// The re-query a notification triggers: the two colors, and no fence.
+///
+/// Nothing is left for a fence to decide. The terminal answered these once
+/// already — that is what got the subscription switched on — so what bounds
+/// this exchange is [`ThemeWatch`]'s own deadline, not a reply that says the
+/// rest will never come.
+const REQUERY: &str = "\x1b]10;?\x07\x1b]11;?\x07";
+
+/// How long notifications are collected before the colors are asked for.
+///
+/// Terminals send these in bursts — one per palette slot on some, one per
+/// transition step on others — and each one would otherwise cost a round trip
+/// and a repaint.
+const DEBOUNCE: Duration = Duration::from_millis(100);
+
+/// Follows a terminal that reports its own theme changes, and works out what
+/// the app should look like afterwards.
+///
+/// Switch on DEC mode 2031 once [`query`] has answered, then hand this every
+/// event the loop reads and call [`step`](Self::step) once per pass. It asks
+/// the terminal for its colors again when a change settles, and hands back the
+/// new ones when they arrive. Switch the mode off again before the terminal is
+/// handed back.
+///
+/// It never blocks and owns no thread: the host keeps waiting on its own event
+/// source, shortening the wait to [`wake`](Self::wake) when there is a deadline
+/// to meet.
+///
+/// # Which terminals to switch the mode on for
+///
+/// Any terminal that answered the startup query at all. There is no way to ask
+/// mode 2031 whether it is supported: DECRQM would be the direct test, and
+/// termina 0.3.3's parser types DECRPM replies for modes 2026 and 2027 only,
+/// dropping mode 2031's at every reported value — the answer can be written but
+/// never read.
+///
+/// The light/dark query is *not* the signal either, tempting as it looks. The
+/// specification defines `CSI ? 996 n` and mode 2031 as separate capabilities
+/// and mandates neither from the other, and the query is the more widely
+/// implemented of the two; a terminal whose verdict merely arrived after the
+/// startup fence would be written off despite supporting everything.
+///
+/// Switching the mode on where it is not supported costs nothing: `DECSET`
+/// solicits no reply, and a terminal that does not know a private mode ignores
+/// it. The notification that never comes is the same silence as not asking.
+///
+/// # Example
+///
+/// The shape of a host loop. Note that `wake` returning [`None`] means the
+/// watch owes nothing — which is a wait with no timeout, not a wait of zero —
+/// and that a poll which times out must not be followed by a read.
+///
+/// ```no_run
+/// use std::time::Instant;
+///
+/// use ratcn::{Theme, terminal_query::ThemeWatch};
+/// use termina::{PlatformTerminal, Terminal as _};
+///
+/// # fn main() -> std::io::Result<()> {
+/// let mut terminal = PlatformTerminal::new()?;
+/// terminal.enter_raw_mode()?;
+/// let reader = terminal.event_reader();
+/// let mut watch = ThemeWatch::new();
+///
+/// loop {
+///     // Wait for input, but never past the watch's next deadline.
+///     let ready = reader.poll(watch.wake(Instant::now()), |_| true)?;
+///     if ready {
+///         let event = reader.read(|_| true)?;
+///         watch.absorb(&event, Instant::now());
+///         // ... and route `event` to the app as usual.
+///     }
+///     if let Some(colors) = watch.step(&mut terminal, Instant::now())? {
+///         let _theme = Theme::adaptive(colors.background, colors.foreground, None);
+///     }
+///     # break;
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct ThemeWatch {
+    state: Watching,
+}
+
+/// Where the watch is in the notification-to-new-colors round trip.
+#[derive(Debug)]
+enum Watching {
+    /// Nothing has happened, and nothing is owed.
+    Idle,
+    /// A change was reported. Everything that arrives before `due` is the same
+    /// change still settling.
+    Collapsing { due: Instant },
+    /// The colors have been asked for again, and the answer is owed by
+    /// `deadline`.
+    Awaiting { deadline: Instant, replies: Replies },
+}
+
+impl Default for ThemeWatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ThemeWatch {
+    /// A watch with nothing pending.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            state: Watching::Idle,
+        }
+    }
+
+    /// Note one event read from the terminal.
+    ///
+    /// Events that are neither a change notification nor a reply this watch is
+    /// waiting for are ignored, so a host can hand it everything it reads
+    /// without sorting first — and hand the same event on to the app, which is
+    /// what keeps a keystroke that arrived mid-exchange a keystroke.
+    pub fn absorb(&mut self, event: &Event, now: Instant) {
+        match event {
+            // The notification carries a light/dark value of its own, and it is
+            // deliberately not read: terminals disagree over whether it
+            // describes the palette or the desktop, so it says *that* something
+            // changed and never *what* it changed to. The colors come from the
+            // re-query.
+            //
+            // A `CSI ? 997 ; N n` that is not a notification at all — the
+            // startup query's own verdict, arriving after the fence gave up on
+            // it — is indistinguishable from one, and costs a re-query that
+            // reports the colors already showing. That is the accepted price:
+            // it corrects itself, and the alternative is a subscription that
+            // second-guesses the terminal.
+            Event::Csi(Csi::Mode(csi::Mode::ReportTheme(_))) => {
+                // A window already open is not pushed back. Extending it on
+                // every notification would let a terminal that keeps sending
+                // hold the re-query off indefinitely; collapsing into a fixed
+                // window instead guarantees the round trip happens, and a
+                // change that lands after it opens a window of its own.
+                if !matches!(self.state, Watching::Collapsing { .. }) {
+                    self.state = Watching::Collapsing {
+                        due: deadline(now, DEBOUNCE),
+                    };
+                }
+            }
+            // Anything collected before this notification described the theme
+            // the terminal has just left, so it is dropped with the state.
+            event => {
+                if let Watching::Awaiting { replies, .. } = &mut self.state {
+                    let _fence = replies.absorb(event);
+                }
+            }
+        }
+    }
+
+    /// How long the host may wait before calling [`step`](Self::step) again, or
+    /// [`None`] when nothing is pending and the wait is the app's to decide.
+    #[must_use]
+    pub fn wake(&self, now: Instant) -> Option<Duration> {
+        match self.state {
+            Watching::Idle => None,
+            Watching::Collapsing { due: at } | Watching::Awaiting { deadline: at, .. } => {
+                Some(at.saturating_duration_since(now))
+            }
+        }
+    }
+
+    /// Advance the watch, writing the re-query to `out` when one comes due.
+    ///
+    /// Returns the terminal's new colors on the pass that completes them. A
+    /// terminal that stops answering costs one bounded wait and is then dropped
+    /// quietly: the colors already on screen are the last ones it stood behind,
+    /// which is a better answer than none.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the re-query cannot be written.
+    pub fn step<W: io::Write>(
+        &mut self,
+        out: &mut W,
+        now: Instant,
+    ) -> io::Result<Option<TerminalColors>> {
+        match &mut self.state {
+            Watching::Idle => Ok(None),
+            Watching::Collapsing { due } => {
+                if now < *due {
+                    return Ok(None);
+                }
+                out.write_all(REQUERY.as_bytes())?;
+                out.flush()?;
+                self.state = Watching::Awaiting {
+                    deadline: deadline(now, BACKSTOP),
+                    replies: Replies::default(),
+                };
+                Ok(None)
+            }
+            Watching::Awaiting { deadline, replies } => {
+                if let Some(colors) = replies.resolve() {
+                    self.state = Watching::Idle;
+                    return Ok(Some(colors));
+                }
+                if now >= *deadline {
+                    self.state = Watching::Idle;
+                }
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// `now + span`, saturating to `now` at the end of the clock rather than
+/// panicking — a deadline already reached is the safe direction.
+fn deadline(now: Instant, span: Duration) -> Instant {
+    now.checked_add(span).unwrap_or(now)
+}
+
 /// Whether this terminal is asked at all. See [`query`]'s gates.
 fn asked(term: Option<&str>, stdout_is_tty: bool) -> bool {
     stdout_is_tty
@@ -276,11 +497,11 @@ fn reported(colors: &[ColorOrQuery]) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ColorOrQuery, Csi, Duration, DynamicColorNumber, Event, Fence, Osc, QUERIES, Replies,
-        Terminal, TerminalColors, asked, csi, exchange, io,
+        ColorOrQuery, Csi, Duration, DynamicColorNumber, Event, Fence, Osc, QUERIES, REQUERY,
+        Replies, Terminal, TerminalColors, ThemeWatch, asked, csi, exchange, io,
     };
     use ratatui::style::Color;
-    use std::{cell::RefCell, collections::VecDeque};
+    use std::{cell::RefCell, collections::VecDeque, time::Instant};
     use termina::Parser;
 
     /// A terminal that records what was written to it and answers from a script.
@@ -388,6 +609,310 @@ mod tests {
         Event::Key(termina::event::KeyEvent::from(
             termina::event::KeyCode::Char(code),
         ))
+    }
+
+    /// Everything the watch is told, at a time the test names. No clock is read
+    /// anywhere in here: `t0` is a fixed origin and every deadline is an offset
+    /// from it, so the state machine is exercised at exact instants.
+    struct Watched {
+        watch: ThemeWatch,
+        written: Vec<u8>,
+        t0: Instant,
+    }
+
+    impl Watched {
+        fn new() -> Self {
+            Self {
+                watch: ThemeWatch::new(),
+                written: Vec::new(),
+                t0: Instant::now(),
+            }
+        }
+
+        fn at(&self, millis: u64) -> Instant {
+            self.t0 + Duration::from_millis(millis)
+        }
+
+        /// Feed everything `script` parses to, as arriving at `millis`.
+        fn feed(&mut self, millis: u64, script: &str) {
+            let mut parser = Parser::default();
+            parser.parse(script.as_bytes(), false);
+            while let Some(event) = parser.pop() {
+                self.watch.absorb(&event, self.at(millis));
+            }
+        }
+
+        fn step(&mut self, millis: u64) -> Option<TerminalColors> {
+            let at = self.at(millis);
+            self.watch
+                .step(&mut self.written, at)
+                .expect("writing to a vector cannot fail")
+        }
+
+        fn wake(&self, millis: u64) -> Option<Duration> {
+            self.watch.wake(self.at(millis))
+        }
+
+        /// How many re-queries have gone out.
+        fn requeries(&self) -> usize {
+            String::from_utf8_lossy(&self.written)
+                .matches(REQUERY)
+                .count()
+        }
+    }
+
+    /// The reply to a re-query: the two colors, no verdict and no fence.
+    const RETHEMED: &str = "\x1b]10;rgb:6565/7b7b/8383\x07\x1b]11;rgb:fdfd/f6f6/e3e3\x07";
+
+    /// A change notification. The value it carries is never read.
+    const NOTIFIED: &str = "\x1b[?997;2n";
+
+    #[test]
+    fn a_lost_light_dark_verdict_costs_nothing_but_the_verdict() {
+        // The verdict and the subscription are separate capabilities, and the
+        // verdict is the more widely implemented of the two — so a terminal
+        // whose verdict was lost to the fence still answers the colors, and is
+        // still worth subscribing to. Nothing here reads `dark` to decide.
+        let both = absorbed(ANSWERED).0.resolve().expect("both colors");
+        let lost_verdict = absorbed("\x1b]10;rgb:c0c0/caca/f5f5\x07\x1b]11;rgb:1a1a/1b1b/2626\x07")
+            .0
+            .resolve()
+            .expect("both colors");
+
+        assert_eq!(both.dark, Some(true));
+        assert_eq!(lost_verdict.dark, None);
+        assert_eq!(
+            (both.background, both.foreground),
+            (lost_verdict.background, lost_verdict.foreground),
+            "the colors a theme is built from are the same either way"
+        );
+    }
+
+    #[test]
+    fn a_watch_with_nothing_pending_asks_for_no_wait_and_writes_nothing() {
+        let mut watched = Watched::new();
+
+        assert_eq!(watched.wake(0), None, "the wait is the app's to decide");
+        assert_eq!(watched.step(0), None);
+        assert!(watched.written.is_empty());
+    }
+
+    #[test]
+    fn a_notification_is_re_queried_once_the_window_closes() {
+        let mut watched = Watched::new();
+
+        watched.feed(0, NOTIFIED);
+        assert_eq!(
+            watched.wake(0),
+            Some(Duration::from_millis(100)),
+            "the host is asked to come back when the window closes"
+        );
+        assert_eq!(watched.step(50), None, "still settling");
+        assert_eq!(watched.requeries(), 0, "and nothing has gone out");
+
+        assert_eq!(watched.step(100), None, "the re-query goes out, unanswered");
+        assert_eq!(watched.requeries(), 1);
+        assert_eq!(
+            String::from_utf8_lossy(&watched.written),
+            REQUERY,
+            "what goes out is the re-query and nothing else"
+        );
+    }
+
+    #[test]
+    fn the_re_query_asks_for_the_two_colors_and_fences_nothing() {
+        // Read back through the parser the replies come through, so the OSC
+        // numbers and the `?` payload are checked as values. Pinned
+        // independently of `REQUERY` itself: an assertion written against the
+        // constant would agree with whatever the constant said.
+        let mut parser = Parser::default();
+        parser.parse(REQUERY.as_bytes(), false);
+        let mut asked_for = Vec::new();
+        while let Some(event) = parser.pop() {
+            asked_for.push(event);
+        }
+
+        assert_eq!(
+            asked_for,
+            vec![
+                Event::Osc(Osc::ChangeDynamicColors(
+                    DynamicColorNumber::TextForegroundColor,
+                    vec![ColorOrQuery::Query]
+                )),
+                Event::Osc(Osc::ChangeDynamicColors(
+                    DynamicColorNumber::TextBackgroundColor,
+                    vec![ColorOrQuery::Query]
+                )),
+            ]
+        );
+        assert_eq!(
+            REQUERY.matches('\x07').count(),
+            2,
+            "both go out BEL-terminated, as at startup: {REQUERY:?}"
+        );
+
+        let fence = Csi::Device(csi::Device::RequestPrimaryDeviceAttributes).to_string();
+        assert!(
+            !REQUERY.contains(&fence),
+            "nothing is left for a fence to decide — the terminal answered these \
+             once already — and its reply would only arrive as an event no one \
+             is waiting for: {REQUERY:?}"
+        );
+    }
+
+    #[test]
+    fn a_burst_of_notifications_costs_exactly_one_re_query() {
+        // Terminals send one per palette slot, or one per transition step.
+        let mut watched = Watched::new();
+
+        for arrival in [0, 5, 12, 30, 99] {
+            watched.feed(arrival, NOTIFIED);
+        }
+        watched.step(100);
+
+        assert_eq!(watched.requeries(), 1, "the window collapsed all five");
+    }
+
+    #[test]
+    fn a_window_already_open_is_not_pushed_back_by_more_notifications() {
+        // Extending on every notification would let a terminal that keeps
+        // sending hold the re-query off for as long as it liked.
+        let mut watched = Watched::new();
+
+        watched.feed(0, NOTIFIED);
+        for arrival in [40, 80, 95] {
+            watched.feed(arrival, NOTIFIED);
+        }
+        watched.step(100);
+
+        assert_eq!(
+            watched.requeries(),
+            1,
+            "the window still closed a hundred milliseconds after it opened"
+        );
+    }
+
+    #[test]
+    fn the_replies_to_a_re_query_become_the_terminals_new_colors() {
+        let mut watched = Watched::new();
+
+        watched.feed(0, NOTIFIED);
+        assert_eq!(watched.step(100), None, "the re-query is out");
+        watched.feed(120, RETHEMED);
+
+        assert_eq!(
+            watched.step(120),
+            Some(TerminalColors {
+                background: Color::Rgb(253, 246, 227),
+                foreground: Color::Rgb(101, 123, 131),
+                dark: None,
+                palette16: None,
+            }),
+            "a re-query asks for colors alone, so it brings back no verdict"
+        );
+        assert_eq!(watched.wake(120), None, "and the watch is idle again");
+    }
+
+    #[test]
+    fn half_an_answer_is_not_a_theme_and_the_watch_gives_up_on_its_own() {
+        let mut watched = Watched::new();
+
+        watched.feed(0, NOTIFIED);
+        watched.step(100);
+        watched.feed(150, "\x1b]11;rgb:fdfd/f6f6/e3e3\x07");
+
+        assert_eq!(watched.step(200), None, "one color derives nothing");
+        assert!(
+            watched.wake(200).is_some(),
+            "the answer is still owed, so the host still has a deadline"
+        );
+        assert_eq!(
+            watched.step(1_200),
+            None,
+            "the terminal stopped answering, and the colors on screen stand"
+        );
+        assert_eq!(
+            watched.wake(1_200),
+            None,
+            "the watch let it go rather than waiting on it forever"
+        );
+    }
+
+    #[test]
+    fn a_terminal_that_never_answers_at_all_is_dropped_after_one_bounded_wait() {
+        let mut watched = Watched::new();
+
+        watched.feed(0, NOTIFIED);
+        watched.step(100);
+
+        assert_eq!(watched.step(1_099), None, "still inside the wait");
+        assert!(watched.wake(1_099).is_some());
+        assert_eq!(watched.step(1_100), None);
+        assert_eq!(watched.wake(1_100), None, "one second after the re-query");
+        assert_eq!(watched.requeries(), 1, "and it was not retried");
+    }
+
+    #[test]
+    fn typing_and_unrelated_reports_pass_the_watch_by() {
+        let mut watched = Watched::new();
+
+        watched.feed(0, NOTIFIED);
+        watched.step(100);
+        // A keystroke, a cursor-position report meant for someone else, and a
+        // dynamic color nobody asked for.
+        watched.feed(110, "q\x1b[10;5R\x1b]12;rgb:ffff/0000/0000\x07");
+
+        assert_eq!(watched.step(110), None, "none of that is an answer");
+        watched.feed(120, RETHEMED);
+        assert!(
+            watched.step(120).is_some(),
+            "and none of it displaced the real one"
+        );
+    }
+
+    #[test]
+    fn a_second_change_mid_exchange_starts_over_rather_than_mixing_answers() {
+        let mut watched = Watched::new();
+
+        watched.feed(0, NOTIFIED);
+        watched.step(100);
+        // Half the answer to the first re-query, and then the user flips again.
+        watched.feed(110, "\x1b]11;rgb:1a1a/1b1b/2626\x07");
+        watched.feed(120, NOTIFIED);
+
+        assert_eq!(watched.step(120), None, "the window is open again");
+        assert_eq!(watched.step(220), None, "and a second re-query goes out");
+        assert_eq!(watched.requeries(), 2);
+
+        // Only one color arrives this time. If the discarded half had been kept
+        // it would complete a theme out of two different terminals.
+        watched.feed(230, "\x1b]10;rgb:6565/7b7b/8383\x07");
+        assert_eq!(
+            watched.step(230),
+            None,
+            "the pre-flip half was dropped with the state it described"
+        );
+    }
+
+    #[test]
+    fn the_notifications_own_light_dark_value_is_never_read_as_a_color() {
+        // `CSI ?997;2n` says light, and it is only ever a trigger: the terminals
+        // that send it disagree about whether it describes the palette or the
+        // desktop.
+        let mut dark_notice = Watched::new();
+        dark_notice.feed(0, "\x1b[?997;1n");
+        dark_notice.step(100);
+        dark_notice.feed(110, RETHEMED);
+
+        let colors = dark_notice.step(110).expect("the re-query was answered");
+
+        assert_eq!(
+            colors.background,
+            Color::Rgb(253, 246, 227),
+            "the background is the one the re-query brought back, not the one \
+             the notification implied"
+        );
+        assert_eq!(colors.dark, None);
     }
 
     #[test]

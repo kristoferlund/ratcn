@@ -1,7 +1,5 @@
 //! Theme picker tile and its focused/selected rows.
 
-use std::sync::OnceLock;
-
 use ratatui::{
     layout::{Constraint, Layout},
     style::{Modifier, Style},
@@ -33,12 +31,6 @@ fn ordered(resolved: Theme) -> Vec<Theme> {
         .collect()
 }
 
-/// The picker's themes, settled once for the process.
-fn themes() -> &'static [Theme] {
-    static THEMES: OnceLock<Vec<Theme>> = OnceLock::new();
-    THEMES.get_or_init(|| ordered(*demo_shared::theme()))
-}
-
 pub struct State {
     focused: Option<&'static str>,
     selected: &'static str,
@@ -46,9 +38,10 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
+        let opening = ordered(demo_shared::theme())[0].name;
         Self {
-            focused: Some(themes()[0].name),
-            selected: themes()[0].name,
+            focused: Some(opening),
+            selected: opening,
         }
     }
 }
@@ -70,20 +63,41 @@ impl State {
         }
     }
 
+    /// The theme the picker is showing, as of this frame.
     pub fn theme(&self) -> Theme {
-        themes()
-            .iter()
-            .find(|theme| theme.name == self.selected)
-            .copied()
-            .expect("selected theme is always declared")
+        selected_theme(self.selected, demo_shared::theme())
     }
+}
+
+/// Which theme the row named `selected` stands for, given what the terminal
+/// currently resolves to.
+///
+/// The resolved row is read live, so a terminal that re-themes carries the app
+/// with it — but only while that row is the selection. A preset the user picked
+/// by hand is their choice, and a flip of the terminal does not take it back;
+/// it changes what the resolved row would give them if they went back to it.
+fn selected_theme(selected: &str, resolved: Theme) -> Theme {
+    if selected == resolved.name {
+        return resolved;
+    }
+    Theme::presets()
+        .iter()
+        .find(|preset| preset.name == selected)
+        .copied()
+        .unwrap_or(resolved)
 }
 
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
+    // Built per frame, never cached: on a terminal that reports its own theme
+    // changes the resolved entry is a different color after every flip, and a
+    // list settled at startup would keep showing the colors it was born with.
+    // Its *name* does not move — a solved theme is always `Adaptive` — so a
+    // selection made against an earlier list still matches.
+    let themes = ordered(demo_shared::theme());
     let picker = List::new(
-        themes()
+        themes
             .iter()
             .map(|theme| ListItem::new(theme.name, theme.name)),
     )
@@ -101,7 +115,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let [header_area, intro_area, list_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(3),
-        Constraint::Length(themes().len() as u16),
+        Constraint::Length(themes.len() as u16),
     ])
     .spacing(1)
     .areas(inner);
@@ -116,8 +130,8 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     );
     ctx.paint_widget(
         Paragraph::new(
-            "Ratcn includes seven preset themes, supports custom themes, and solves \
-             one from your terminal's colors.",
+            "Seven preset themes, custom themes, and one solved from your \
+             terminal's colors when it answers.",
         )
         .style(Style::default().fg(theme.muted_foreground))
         .wrap(Wrap { trim: true }),
@@ -128,7 +142,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{State, ordered, themes};
+    use super::{State, ordered, selected_theme};
     use ratatui::style::Color;
     use ratcn::Theme;
 
@@ -142,10 +156,84 @@ mod tests {
 
     /// A theme no preset can be: solved from a terminal's own colors, so it is
     /// named `Adaptive` and shares its name with nothing in `presets()`. This
-    /// is the case the tests cannot reach through [`themes`], because without a
-    /// terminal to ask the resolved theme *is* a preset.
+    /// is the case the tests cannot reach through [`demo_shared::theme`],
+    /// because without a terminal to ask the resolved theme *is* a preset.
     fn solved() -> Theme {
         Theme::adaptive(Color::Rgb(253, 246, 227), Color::Rgb(101, 123, 131), None)
+    }
+
+    /// The same terminal after the user flips it the other way.
+    fn solved_dark() -> Theme {
+        Theme::adaptive(Color::Rgb(26, 27, 38), Color::Rgb(192, 202, 245), None)
+    }
+
+    #[test]
+    fn the_resolved_row_follows_the_terminal_wherever_it_goes() {
+        // Its name never moves — a solved theme is always `Adaptive` — so the
+        // selection made against the light one still names the dark one.
+        let light = solved();
+        let dark = solved_dark();
+        assert_eq!(light.name, dark.name);
+
+        assert_eq!(selected_theme(light.name, light), light);
+        assert_eq!(
+            selected_theme(light.name, dark),
+            dark,
+            "the row is read live: the app wears whatever the terminal is now"
+        );
+    }
+
+    #[test]
+    fn a_preset_the_user_picked_is_not_taken_back_by_the_terminal() {
+        let nord = Theme::nord();
+
+        assert_eq!(
+            selected_theme(nord.name, solved()),
+            nord,
+            "their choice stands while the terminal is light"
+        );
+        assert_eq!(
+            selected_theme(nord.name, solved_dark()),
+            nord,
+            "and still stands after it flips: the flip changed what `Adaptive` \
+             offers, not what they chose"
+        );
+    }
+
+    #[test]
+    fn the_resolved_row_outranks_a_preset_that_shares_its_name() {
+        // The row is the terminal's, whatever it is called. Today a solved
+        // theme is always `Adaptive` and no preset can collide with it, so
+        // without this the lookup would happen to give the same answer by
+        // falling through to the resolved theme anyway — and would stop doing
+        // so the moment a resolved theme took a preset's name.
+        let mut impostor = solved();
+        impostor.name = Theme::nord().name;
+
+        assert_eq!(
+            selected_theme(impostor.name, impostor),
+            impostor,
+            "the selection named the resolved row, so it gets the resolved row"
+        );
+        assert_ne!(selected_theme(impostor.name, impostor), Theme::nord());
+    }
+
+    #[test]
+    fn a_selection_that_names_nothing_falls_back_to_the_resolved_theme() {
+        // Unreachable through the picker, which only ever selects a row it
+        // listed — but the answer has to be a theme either way.
+        assert_eq!(selected_theme("no such theme", solved()), solved());
+    }
+
+    #[test]
+    fn going_back_to_the_resolved_row_returns_the_terminals_own_theme() {
+        // Driven through `selected_theme` with a resolved theme no preset can
+        // be: in-process the resolved theme *is* a preset, so a round trip
+        // through `State` would prove nothing about the branch it takes.
+        let resolved = solved();
+
+        assert_eq!(selected_theme(Theme::nord().name, resolved), Theme::nord());
+        assert_eq!(selected_theme(resolved.name, resolved), resolved);
     }
 
     #[test]
@@ -196,7 +284,9 @@ mod tests {
         // A wiring pin only: with no terminal to ask, the resolved theme is
         // itself a preset, so this cannot tell `ordered` apart from `presets()`
         // by construction. What `ordered` actually does is pinned above.
-        assert_eq!(State::default().selected, themes()[0].name);
-        assert_eq!(themes(), ordered(*demo_shared::theme()));
+        assert_eq!(
+            State::default().selected,
+            ordered(demo_shared::theme())[0].name
+        );
     }
 }
