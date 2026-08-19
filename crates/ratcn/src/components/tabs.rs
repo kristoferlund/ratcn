@@ -10,9 +10,7 @@ use ratatui::{
 
 use crate::Theme;
 use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, shape_width};
-use crate::color::{
-    DISABLED_DIM, FOCUS_DARKEN, FOCUS_LIGHTEN, HOVER_DARKEN, HOVER_LIGHTEN, darken, dim, lighten,
-};
+use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
 use crate::linear_nav;
 use crate::list_core;
 use crate::runtime::{
@@ -97,7 +95,8 @@ pub struct TabsStyle {
     /// keyboard focus.
     pub focused_foreground: Color,
     /// An unselected tab's fill while it is the cursor tab and the row has
-    /// keyboard focus (the secondary button's focus lighten).
+    /// keyboard focus (the secondary button's focus shift, away from the
+    /// background).
     pub focused_background: Color,
     /// An unselected tab's label while the pointer is over the row and this is
     /// the cursor tab.
@@ -111,7 +110,7 @@ pub struct TabsStyle {
     /// The selected tab's label while focused.
     pub selected_focused_foreground: Color,
     /// The selected tab's fill while focused (the default button's focus
-    /// darken).
+    /// shift, toward the background's own end).
     pub selected_focused_background: Color,
     /// The selected tab's label while hovered.
     pub selected_hovered_foreground: Color,
@@ -155,27 +154,30 @@ impl TabsStyle {
 
     /// Derived from the theme exactly as the button variants are: the selected
     /// tab is a `Default` (primary) button, an unselected tab a `Secondary`
-    /// button — including the same focus and hover shifts (a bright fill
-    /// darkens, a dark fill lightens) and the disabled dim toward the surface.
+    /// button — including the same focus and hover shifts (a selected tab
+    /// deepens toward the screen's own end, an unselected one climbs away from
+    /// it) and the disabled dim toward the surface.
     ///
     /// Label colors do not change with focus or hover here, since the fill
     /// already carries that. A style that flattens the fills should set the
     /// `*_foreground` slots instead.
     #[must_use]
-    pub const fn from_theme(theme: &Theme) -> Self {
+    pub fn from_theme(theme: &Theme) -> Self {
+        let pressed = nearest_to(theme.background);
+        let raised = away_from(theme.background);
         Self {
             foreground: theme.secondary_foreground,
             background: theme.secondary,
             focused_foreground: theme.secondary_foreground,
-            focused_background: lighten(theme.secondary, FOCUS_LIGHTEN),
+            focused_background: dim(theme.secondary, raised, FOCUS_SHIFT),
             hovered_foreground: theme.secondary_foreground,
-            hovered_background: lighten(theme.secondary, HOVER_LIGHTEN),
+            hovered_background: dim(theme.secondary, raised, HOVER_SHIFT),
             selected_foreground: theme.primary_foreground,
             selected_background: theme.primary,
             selected_focused_foreground: theme.primary_foreground,
-            selected_focused_background: darken(theme.primary, FOCUS_DARKEN),
+            selected_focused_background: dim(theme.primary, pressed, FOCUS_SHIFT),
             selected_hovered_foreground: theme.primary_foreground,
-            selected_hovered_background: darken(theme.primary, HOVER_DARKEN),
+            selected_hovered_background: dim(theme.primary, pressed, HOVER_SHIFT),
             disabled_foreground: theme.muted_foreground,
             disabled_background: dim(theme.secondary, theme.surface, DISABLED_DIM),
             selected_disabled_foreground: theme.muted_foreground,
@@ -303,7 +305,7 @@ impl<'a> TabsWidget<'a> {
 
     /// Take colors from `theme`.
     #[must_use]
-    pub const fn themed(mut self, theme: &Theme) -> Self {
+    pub fn themed(mut self, theme: &Theme) -> Self {
         self.style = TabsStyle::from_theme(theme);
         self
     }

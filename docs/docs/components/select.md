@@ -119,9 +119,9 @@ Select::new(items)
 
 ## Styling
 
-The trigger's default, focus, and hover backdrops match List. Hover is slightly
-lighter than focus, so it remains visible when the trigger already has keyboard
-focus. `SelectStyle` controls trigger, panel, cursor, selection, and disabled
+The trigger's default, focus, and hover backdrops match List. Hover sits one
+step further from the background than focus, so it remains visible when the
+trigger already has keyboard focus. `SelectStyle` controls trigger, panel, cursor, selection, and disabled
 colors. `SelectWidget` is the paint-only ratatui widget for using the same
 appearance without the runtime.
 

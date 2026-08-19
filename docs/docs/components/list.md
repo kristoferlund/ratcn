@@ -187,8 +187,10 @@ on the same frame the pointer arrives.
 
 Colors come from the theme. `.style(...)` overrides them, and the closure gets
 the active theme each render so a derived style follows theme switches. Focus
-lightens the field backdrop subtly; hover lightens it a little further, so the
-pointer remains visible when the list already has keyboard focus.
+separates the field backdrop subtly from the background; hover separates it a
+little further, so the pointer remains visible when the list already has
+keyboard focus. Which way that is comes from the theme: a dark theme's well
+lightens, a light theme's darkens.
 
 ```rust
 use ratcn::ListStyle;

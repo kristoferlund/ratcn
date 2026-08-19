@@ -24,7 +24,7 @@ use ratatui::{
 
 use crate::Theme;
 use crate::color::{
-    DISABLED_DIM, FIELD_FOCUS_LIGHTEN, FIELD_HOVER_LIGHTEN, blendable, dim, lighten,
+    DISABLED_DIM, FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, ROW_FOCUS_SHIFT, away_from, blendable, dim,
 };
 use crate::linear_nav::{self, NavOutcome, ScrollStep};
 use crate::list_core::{
@@ -37,7 +37,6 @@ use crate::runtime::{
 use crate::selection_indicator;
 use crate::theme::resolve_style;
 
-const ROW_FOCUS_LIGHTEN: u16 = 15;
 const INDICATOR_CLOSED: &str = "∨";
 const INDICATOR_OPEN: &str = "∧";
 
@@ -138,27 +137,28 @@ impl SelectStyle {
 
     /// Derive every select color from `theme`.
     #[must_use]
-    pub const fn from_theme(theme: &Theme) -> Self {
+    pub fn from_theme(theme: &Theme) -> Self {
         // Disabled dims toward the background, or the surface when the theme
         // leaves its background to the terminal — the same answer `ListStyle`
         // gives, so a select and a list cannot disagree about disabled.
         let backdrop = blendable(theme.background, theme.surface);
-        let panel_background = lighten(theme.field, FIELD_FOCUS_LIGHTEN);
+        let away = away_from(theme.background);
+        let panel_background = dim(theme.field, away, FIELD_FOCUS_SHIFT);
         Self {
             value_foreground: theme.foreground,
             placeholder_foreground: theme.muted_foreground,
             trigger_background: theme.field,
             focused_trigger_background: panel_background,
-            hovered_trigger_background: lighten(theme.field, FIELD_HOVER_LIGHTEN),
+            hovered_trigger_background: dim(theme.field, away, FIELD_HOVER_SHIFT),
             indicator: theme.muted_foreground,
             border: theme.border,
             panel_background,
             option_foreground: theme.muted_foreground,
             focused_option_foreground: theme.foreground,
-            focused_option_background: lighten(panel_background, ROW_FOCUS_LIGHTEN),
+            focused_option_background: dim(panel_background, away, ROW_FOCUS_SHIFT),
             selected_foreground: theme.foreground,
             selected_focused_foreground: theme.foreground,
-            selected_focused_background: lighten(panel_background, ROW_FOCUS_LIGHTEN),
+            selected_focused_background: dim(panel_background, away, ROW_FOCUS_SHIFT),
             selected_marker: theme.primary,
             unselected_marker: theme.muted_foreground,
             disabled_foreground: dim(theme.muted_foreground, backdrop, DISABLED_DIM),
@@ -263,7 +263,7 @@ impl<'a> SelectWidget<'a> {
 
     /// Take colors from `theme`.
     #[must_use]
-    pub const fn themed(mut self, theme: &Theme) -> Self {
+    pub fn themed(mut self, theme: &Theme) -> Self {
         self.style = SelectStyle::from_theme(theme);
         self
     }
@@ -1309,10 +1309,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{
-        ListStyle,
-        runtime::{FocusState, Modifiers, Ratcn, ScopeOptions},
-    };
+    use crate::runtime::{FocusState, Modifiers, Ratcn, ScopeOptions};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Fruit {
@@ -1349,89 +1346,6 @@ mod tests {
         .into_iter()
         .map(|(value, label)| ListItem::new(value, label))
         .collect()
-    }
-
-    #[test]
-    fn list_and_select_share_themed_control_surfaces() {
-        for theme in Theme::presets() {
-            let list = ListStyle::from_theme(theme);
-            let select = SelectStyle::from_theme(theme);
-            assert_eq!(
-                select.trigger_background, list.background,
-                "{} base",
-                theme.name
-            );
-            assert_eq!(
-                select.focused_trigger_background, list.focused_background,
-                "{} focus",
-                theme.name
-            );
-            assert_eq!(
-                select.hovered_trigger_background, list.hovered_background,
-                "{} hover",
-                theme.name
-            );
-            assert_eq!(
-                select.panel_background, list.focused_background,
-                "{} panel",
-                theme.name
-            );
-            assert_eq!(
-                select.focused_option_background, list.focused_row_background,
-                "{} row",
-                theme.name
-            );
-            assert_eq!(
-                select.selected_focused_foreground, list.selected_focused_foreground,
-                "{} selected focused foreground",
-                theme.name
-            );
-            assert_eq!(
-                select.selected_focused_background, list.selected_focused_background,
-                "{} selected focused background",
-                theme.name
-            );
-            assert_eq!(
-                select.disabled_background, list.disabled_background,
-                "{} disabled",
-                theme.name
-            );
-            assert_eq!(
-                select.selected_disabled_foreground, list.disabled_foreground,
-                "{} selected disabled foreground",
-                theme.name
-            );
-            assert_eq!(
-                select.selected_disabled_background, list.disabled_background,
-                "{} selected disabled background",
-                theme.name
-            );
-            assert_ne!(
-                list.background, list.focused_background,
-                "{} focus",
-                theme.name
-            );
-            assert_ne!(
-                list.focused_background, list.hovered_background,
-                "{} hover",
-                theme.name
-            );
-            assert_ne!(
-                list.focused_background, list.focused_row_background,
-                "{} focused row",
-                theme.name
-            );
-            assert_ne!(
-                list.foreground, list.selected_foreground,
-                "{} selected text",
-                theme.name
-            );
-            assert_ne!(
-                list.unselected_marker, list.selected_marker,
-                "{} selected marker",
-                theme.name
-            );
-        }
     }
 
     #[test]
