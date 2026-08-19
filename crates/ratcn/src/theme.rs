@@ -219,7 +219,12 @@ impl Theme {
             secondary_foreground: Color::Rgb(250, 250, 250),
             accent: Color::Rgb(139, 92, 246),
             destructive: Color::Rgb(255, 100, 103),
-            destructive_foreground: Color::Rgb(250, 250, 250),
+            // The same tone `primary_foreground` uses, for the same reason:
+            // both are labels on a bright fill. Dark text holds 6.21:1 on this
+            // red and 4.88:1 once the pointer darkens it; a near-white label
+            // bottoms out at 2.77:1, and though it climbs to 3.52:1 as the fill
+            // darkens, it is climbing from under the floor.
+            destructive_foreground: Color::Rgb(23, 23, 23),
             warning: Color::Rgb(250, 204, 21),
             border: Color::Rgb(94, 94, 94),
             ring: dim(primary, background, RING_DIM),
@@ -321,6 +326,19 @@ impl Theme {
     /// dimmer `light4` (`fg4`), which drops under 4.5:1 against the upper rungs
     /// of the well ladder. Gruvbox's own comment color is dimmer still —
     /// `gray` `#928374` — and is not used here at all.
+    ///
+    /// `bright_red` is mid-luminance, so no tone in the palette labels it at
+    /// 4.5:1 across a button's states: `dark0_hard`, the darkest there is,
+    /// holds 4.77:1 falling to 3.78:1, and the light end is worse still at
+    /// 3.03:1. Gruvbox's own `ErrorMsg` — `dark0` on `bright_red` — is one of
+    /// the pairs that misses.
+    ///
+    /// `neutral_red` under `light0` would hold 4.82:1, but `destructive` is
+    /// also the toast's error accent, and there it is a frame and an icon on
+    /// the toast's own surface: the brighter red is 3.82:1 there and the
+    /// neutral one 2.40:1. One role, two jobs, and only the bright red serves
+    /// both at all — so the button label takes the documented exception rather
+    /// than the palette taking a red it does not use in dark mode.
     #[must_use]
     pub const fn gruvbox() -> Self {
         let primary = Color::Rgb(250, 189, 47); // bright yellow #fabd2f
@@ -338,9 +356,11 @@ impl Theme {
             secondary_foreground: Color::Rgb(235, 219, 178), // light1 #ebdbb2
             accent: Color::Rgb(254, 128, 25),           // bright orange #fe8019
             destructive: Color::Rgb(251, 73, 52),       // bright red #fb4934
-            destructive_foreground: Color::Rgb(40, 40, 40), // dark0 #282828
-            warning: Color::Rgb(250, 189, 47),          // bright yellow #fabd2f
-            border: Color::Rgb(124, 111, 100),          // dark4 #7c6f64
+            // dark0_hard, the palette's darkest tone, rather than dark0: the
+            // extra step buys the whole trajectory 0.4:1. See the note above.
+            destructive_foreground: Color::Rgb(29, 32, 33), // dark0_hard #1d2021
+            warning: Color::Rgb(250, 189, 47),              // bright yellow #fabd2f
+            border: Color::Rgb(124, 111, 100),              // dark4 #7c6f64
             ring: dim(primary, background, RING_DIM),
             cursor: Color::Rgb(250, 189, 47), // bright yellow #fabd2f
         }
@@ -362,6 +382,12 @@ impl Theme {
     /// Nord has no tone between `nord0` and `nord1`, so `surface` is the
     /// midpoint of the two: a dialog has to be raised off the background and
     /// still stay under the well.
+    ///
+    /// `nord11` is the one red Nord ships and it sits mid-luminance, so no tone
+    /// on either side of it reaches 4.5:1 as a label — the palette cannot serve
+    /// this pair, and the crate's contrast test says so by name. The light side
+    /// is chosen because it is the side that improves as the fill darkens under
+    /// focus and the pointer.
     #[must_use]
     pub const fn nord() -> Self {
         let primary = Color::Rgb(136, 192, 208); // nord8 #88c0d0
@@ -380,8 +406,11 @@ impl Theme {
             secondary_foreground: Color::Rgb(236, 239, 244), // nord6 #eceff4
             accent: Color::Rgb(180, 142, 173),          // nord15 #b48ead
             destructive: Color::Rgb(191, 97, 106),      // nord11 #bf616a
-            destructive_foreground: Color::Rgb(46, 52, 64), // nord0 #2e3440
-            warning: Color::Rgb(235, 203, 139),         // nord13 #ebcb8b
+            // The light side of nord11, which is the better of two bad sides:
+            // nord0 is 3.05:1 and falls to 2.45:1 under the pointer, nord6 is
+            // 3.55:1 and climbs to 4.42:1. See the note above.
+            destructive_foreground: Color::Rgb(236, 239, 244), // nord6 #eceff4
+            warning: Color::Rgb(235, 203, 139),                // nord13 #ebcb8b
             // Off-palette, tuned for the 3:1 a boundary needs on nord0: no Nord
             // tone lands in the window. nord3, the palette's own line color, is
             // 1.693:1 there, and the next tone up is nord4, which is text.
@@ -658,15 +687,33 @@ mod tests {
         }
     }
 
-    /// The floor a preset's text pairs must clear. 4.5:1 is WCAG 2.1's
-    /// normal-text guidance (1.4.3) and every preset holds it — except
-    /// Solarized, whose whole design is a narrow ramp: Schoonover's own dark
-    /// body pair, `base0` on `base03`, is 4.75:1, so the palette starts with
-    /// almost no headroom and every lifted fill spends some of it. Its two
-    /// worst pairs are a default button's label at rest, 3.41:1 on the
-    /// undarkened blue, and muted text on a hovered well, 3.85:1.
-    fn text_contrast_floor(theme: &Theme) -> f64 {
-        if theme.name == "Solarized" { 3.4 } else { 4.5 }
+    /// The floor a pair must clear. 4.5:1 is WCAG 2.1's normal-text guidance
+    /// (1.4.3), and it is what every preset is held to except where the palette
+    /// itself cannot serve the pair. Both exceptions below are palette facts,
+    /// not tuning that stopped early, and each names the number it settles for.
+    ///
+    /// Solarized is narrow everywhere: Schoonover's own dark body pair, `base0`
+    /// on `base03`, is 4.75:1, so the palette starts with almost no headroom
+    /// and every lifted fill spends some of it. Its two worst pairs are a
+    /// default button's label at rest, 3.41:1 on the undarkened blue, and a
+    /// ghost button's label under the pointer, 3.42:1.
+    ///
+    /// Nord and Gruvbox are narrow in one place each, and it is the same place:
+    /// a mid-luminance red that no tone of their own can label at 4.5:1 from
+    /// either side. Nord ships one red at all; Gruvbox's other reds cost more
+    /// elsewhere than they buy here, since `destructive` is a toast's frame and
+    /// icon as well as a button's fill. `nord6` on `nord11` is 3.55:1 at its
+    /// worst and `dark0_hard` on `bright_red` 3.78:1.
+    ///
+    /// The Nord and Gruvbox exception is scoped by pair *name*, so a pair added
+    /// later under a name starting the same way would inherit it. Name new
+    /// pairs accordingly, or key this differently.
+    fn contrast_floor(theme: &Theme, pair: &str) -> f64 {
+        match theme.name {
+            "Nord" | "Gruvbox" if pair.starts_with("destructive button") => 3.5,
+            "Solarized" => 3.4,
+            _ => 4.5,
+        }
     }
 
     /// Every foreground-on-fill pair a themed component paints as text, named by
@@ -674,12 +721,10 @@ mod tests {
     /// for focus and hover, which is where a label's contrast is spent, and
     /// which are taken from the real style constructors rather than recomputed.
     ///
-    /// Two kinds of pair are deliberately absent. Disabled pairs are covered by
-    /// `preset_disabled_wells_read_as_disabled` instead: WCAG 1.4.3 exempts
+    /// One kind of pair is deliberately absent: disabled pairs, covered by
+    /// `preset_disabled_wells_read_as_disabled` instead. WCAG 1.4.3 exempts
     /// inactive components, and a disabled control that met the text floor
-    /// would not look disabled. The destructive variant is excluded pending a
-    /// palette decision — `default_dark` itself paints its label at 2.77:1, so
-    /// pinning it would fail the reference theme.
+    /// would not look disabled.
     fn text_pairs(theme: &Theme) -> Vec<(String, Color, Color)> {
         let mut pairs = surface_text_pairs(theme);
         pairs.append(&mut well_text_pairs(theme));
@@ -766,6 +811,7 @@ mod tests {
         for (variant, name) in [
             (ButtonVariant::Default, "default button"),
             (ButtonVariant::Secondary, "secondary button"),
+            (ButtonVariant::Destructive, "destructive button"),
             (ButtonVariant::Ghost, "ghost button"),
             (ButtonVariant::Outline, "outline button"),
         ] {
@@ -932,8 +978,8 @@ mod tests {
     #[test]
     fn preset_text_stays_readable_on_every_fill_it_is_painted_on() {
         for theme in measurable_presets() {
-            let floor = text_contrast_floor(theme);
             for (pair, foreground, background) in text_pairs(theme) {
+                let floor = contrast_floor(theme, &pair);
                 let ratio = contrast(foreground, background);
                 assert!(
                     ratio >= floor,
@@ -993,5 +1039,47 @@ mod tests {
             "the terminal primary and its muted text are the same color, so a \
              selected marker cannot be told from an unselected one"
         );
+    }
+
+    /// `destructive` is the one role in this preset that keeps a hue, because
+    /// the hue *is* the role — a red button is red on every palette. The cost
+    /// is that its derived fills resolve through the VGA table before they
+    /// darken, so focus lands on a fixed `#f00000` and hover on `#e00000`
+    /// whatever red the terminal draws at rest.
+    ///
+    /// What can still be checked is which side of that red the label sits on.
+    /// Black holds 4.17:1 at its worst against the approximation and white
+    /// 3.998:1, while the same label on `Color::Red` — the terminal's *dark*
+    /// red — collapses to 1.70:1. The floor is 4:1 rather than 4.5:1 because
+    /// the table is a stand-in for a palette this preset cannot read: it says
+    /// the choice is the right side of the red, not that any user's terminal
+    /// meets a ratio. The margin it turns on is thousandths, so the failure
+    /// prints thousandths.
+    #[test]
+    fn terminal_destructive_label_is_on_the_readable_side_of_its_red() {
+        let theme = Theme::terminal();
+        let button = ButtonStyle::from_theme(&theme, ButtonVariant::Destructive);
+
+        for (state, fill) in [
+            ("at rest", button.background),
+            ("focused", button.focused_background),
+            ("hovered", button.hovered_background),
+        ] {
+            let (label, fill) = (resolved(theme.destructive_foreground), resolved(fill));
+            let ratio = contrast(label, fill);
+            assert!(
+                ratio >= 4.0,
+                "the terminal destructive label is {ratio:.3}:1 {state}, below the 4:1 the \
+                 fallback table can promise"
+            );
+        }
+    }
+
+    /// A named color as the channels the crate would derive from it. Named
+    /// colors are the terminal preset's whole point, and they are exactly what
+    /// [`luminance`] cannot read.
+    fn resolved(color: Color) -> Color {
+        let (r, g, b) = resolve_rgb(color).expect("a named or rgb color resolves to channels");
+        Color::Rgb(r, g, b)
     }
 }

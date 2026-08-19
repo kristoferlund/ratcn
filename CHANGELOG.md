@@ -239,6 +239,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   there — and every painted text pair is held to contrast floors by permanent
   tests. The tone-by-tone mapping and each judgment call are documented on the
   presets themselves in `theme.rs`.
+- Each preset's `destructive_foreground` sits on whichever side of its own red
+  keeps a delete button's label legible as the fill darkens under focus and the
+  pointer, and destructive buttons join the presets' contrast tests. Default and
+  Gruvbox move to darker labels, Nord to a lighter one. Two palettes ship a red
+  no tone of theirs can label at 4.5:1 from either side, so Nord and Gruvbox
+  settle for a documented 3.5:1 on that one pair.
 - `Theme::terminal`'s `primary` is neutral white rather than `LightBlue`: a
   named accent's derived focus and hover states resolved through a fixed VGA
   table into pure blue regardless of the terminal's palette; a neutral one
