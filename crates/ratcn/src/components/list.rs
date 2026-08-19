@@ -10,7 +10,7 @@ use ratatui::{
 
 use crate::Theme;
 use crate::color::{
-    DISABLED_DIM, FIELD_FOCUS_LIGHTEN, FIELD_HOVER_LIGHTEN, blendable, dim, lighten,
+    DISABLED_DIM, FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, ROW_FOCUS_SHIFT, away_from, blendable, dim,
 };
 use crate::linear_nav::{self, NavOutcome, ScrollStep};
 use crate::list_core::{
@@ -23,8 +23,6 @@ use crate::runtime::{
 use crate::selection_indicator;
 use crate::text_width::display_width;
 use crate::theme::resolve_style;
-
-const ROW_FOCUS_LIGHTEN: u16 = 15;
 
 /// Every color a list can paint.
 ///
@@ -107,14 +105,16 @@ impl ListStyle {
 
     /// Derive every list color from `theme`.
     ///
-    /// The focus and cursor-row fills are lightened from the theme's field
-    /// color rather than being separate theme entries, so a custom theme only
+    /// The focus and cursor-row fills are shifted from the theme's field color
+    /// rather than being separate theme entries, so a custom theme only
     /// supplies the base colors and the list stays consistent with the rest of
-    /// the UI.
+    /// the UI. Which way they shift comes from the theme's background: away
+    /// from it, so a light theme's well deepens where a dark theme's
+    /// brightens.
     ///
     /// The cursor row takes the theme's ordinary `foreground`, not its muted
-    /// one: it is the lightest fill in the list, so muted text is where the
-    /// list's contrast is thinnest, and the row the cursor is on is the row
+    /// one: it is the fill furthest from the background, so muted text is where
+    /// the list's contrast is thinnest, and the row the cursor is on is the row
     /// least in need of de-emphasis. `Select` derives its focused option the
     /// same way.
     ///
@@ -126,11 +126,12 @@ impl ListStyle {
     /// dims toward its surface instead: [`Color::Reset`] carries no channels to
     /// blend, and blending toward it would leave the well where it was.
     #[must_use]
-    pub const fn from_theme(theme: &Theme) -> Self {
+    pub fn from_theme(theme: &Theme) -> Self {
         let backdrop = blendable(theme.background, theme.surface);
-        let focused_background = lighten(theme.field, FIELD_FOCUS_LIGHTEN);
-        let hovered_background = lighten(theme.field, FIELD_HOVER_LIGHTEN);
-        let focused_row_background = lighten(focused_background, ROW_FOCUS_LIGHTEN);
+        let away = away_from(theme.background);
+        let focused_background = dim(theme.field, away, FIELD_FOCUS_SHIFT);
+        let hovered_background = dim(theme.field, away, FIELD_HOVER_SHIFT);
+        let focused_row_background = dim(focused_background, away, ROW_FOCUS_SHIFT);
         Self {
             foreground: theme.muted_foreground,
             background: theme.field,
@@ -272,7 +273,7 @@ impl<'a> ListWidget<'a> {
 
     /// Take colors from `theme`.
     #[must_use]
-    pub const fn themed(mut self, theme: &Theme) -> Self {
+    pub fn themed(mut self, theme: &Theme) -> Self {
         self.style = ListStyle::from_theme(theme);
         self
     }

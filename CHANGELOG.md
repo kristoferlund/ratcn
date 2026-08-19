@@ -10,6 +10,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Theme::adaptive(background, foreground, palette16)` derives a full theme
+  from externally chosen colors (e.g. queried from the terminal). A light
+  background yields a light theme, and every derived theme passes the same
+  contrast floors the presets are held to.
+- `color::luminance` and `color::contrast` (WCAG 2.1), `color::away_from` and
+  `color::nearest_to` (which end of the ramp a color shifts toward).
+- `color::ROW_FOCUS_SHIFT`, previously duplicated privately in `List` and
+  `Select`.
 - `color::blendable`, picking the first of two colors that has channels to
   blend — how disabled fills derive on a theme whose background is the
   terminal's own.
@@ -115,6 +123,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** the direction-named shift constant pairs collapse into
+  `color::FOCUS_SHIFT`, `HOVER_SHIFT`, `FIELD_FOCUS_SHIFT`, and
+  `FIELD_HOVER_SHIFT` — the direction now comes from the theme.
+- **Breaking:** `from_theme` and `themed` on `ListStyle`, `SelectStyle`,
+  `TabsStyle`, and `ButtonStyle` are no longer `const fn`.
 - **Breaking:** `runtime::RenderCtx` is `runtime::DeclareCtx`. `render` now
   names one thing — `Ratcn::render`, the whole frame — while `declare` names
   tree building and `paint` names cell writing. Every signature, bound, and
@@ -233,6 +246,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   draws moves to `Component::paint`.
 - **Breaking:** `Dialog` and `Tooltip` hold their bodies, footer, and actions in
   private types. Their builders are unchanged.
+- Fills shift by the background's polarity instead of a hardcoded direction.
+  The seven presets render identically; light backgrounds get the mirror image.
 - Every theme preset is retuned. Wells, dialogs, and text are re-derived from
   each palette's official tones into one consistent model — `background` <
   `surface` < `field`, with the focus, hover, and cursor fills stepping up from

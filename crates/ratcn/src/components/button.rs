@@ -10,9 +10,7 @@ use ratatui::{
 
 use crate::Theme;
 use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, shape_width};
-use crate::color::{
-    DISABLED_DIM, FOCUS_DARKEN, FOCUS_LIGHTEN, HOVER_DARKEN, HOVER_LIGHTEN, darken, dim, lighten,
-};
+use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton,
     MouseKind, PaintCtx, fixed_height,
@@ -159,30 +157,35 @@ impl ButtonStyle {
     /// This is what [`Button`] and [`ButtonWidget`] call for you. Call it
     /// directly when you want a variant's colors as a starting point to tweak.
     #[must_use]
-    pub const fn from_theme(theme: &Theme, variant: ButtonVariant) -> Self {
-        // Focus shifts a fill by a fixed amount, in the direction that makes it
-        // stand out: a bright fill (primary, destructive) darkens; a dark fill
-        // (secondary, ghost) lightens.
+    pub fn from_theme(theme: &Theme, variant: ButtonVariant) -> Self {
+        // Focus shifts a fill by a fixed amount, in the direction the theme's
+        // own polarity gives it. A loud fill (primary, destructive) deepens
+        // toward the end the screen sits at, so it reads as pressed; a quiet
+        // one (secondary, ghost) climbs away from the screen, so it reads as
+        // raised. On a light terminal both are the other way round in absolute
+        // terms, which is why the direction comes from the background.
+        let pressed = nearest_to(theme.background);
+        let raised = away_from(theme.background);
         match variant {
             ButtonVariant::Default => Self::filled(
                 theme.primary,
                 theme.primary_foreground,
-                darken(theme.primary, FOCUS_DARKEN),
-                darken(theme.primary, HOVER_DARKEN),
+                dim(theme.primary, pressed, FOCUS_SHIFT),
+                dim(theme.primary, pressed, HOVER_SHIFT),
                 theme,
             ),
             ButtonVariant::Secondary => Self::filled(
                 theme.secondary,
                 theme.secondary_foreground,
-                lighten(theme.secondary, FOCUS_LIGHTEN),
-                lighten(theme.secondary, HOVER_LIGHTEN),
+                dim(theme.secondary, raised, FOCUS_SHIFT),
+                dim(theme.secondary, raised, HOVER_SHIFT),
                 theme,
             ),
             ButtonVariant::Destructive => Self::filled(
                 theme.destructive,
                 theme.destructive_foreground,
-                darken(theme.destructive, FOCUS_DARKEN),
-                darken(theme.destructive, HOVER_DARKEN),
+                dim(theme.destructive, pressed, FOCUS_SHIFT),
+                dim(theme.destructive, pressed, HOVER_SHIFT),
                 theme,
             ),
             ButtonVariant::Outline => Self {
@@ -195,7 +198,7 @@ impl ButtonStyle {
                 focused_border: theme.primary,
                 hovered_foreground: theme.foreground,
                 hovered_background: theme.background,
-                hovered_border: darken(theme.primary, HOVER_DARKEN),
+                hovered_border: dim(theme.primary, pressed, HOVER_SHIFT),
                 disabled_foreground: theme.muted_foreground,
                 disabled_background: theme.background,
                 disabled_border: theme.border,
@@ -205,12 +208,12 @@ impl ButtonStyle {
                 foreground: theme.foreground,
                 background: theme.background,
                 focused_foreground: theme.foreground,
-                focused_background: lighten(theme.secondary, FOCUS_LIGHTEN),
+                focused_background: dim(theme.secondary, raised, FOCUS_SHIFT),
                 border: theme.background,
-                focused_border: lighten(theme.secondary, FOCUS_LIGHTEN),
+                focused_border: dim(theme.secondary, raised, FOCUS_SHIFT),
                 hovered_foreground: theme.foreground,
-                hovered_background: lighten(theme.secondary, HOVER_LIGHTEN),
-                hovered_border: lighten(theme.secondary, HOVER_LIGHTEN),
+                hovered_background: dim(theme.secondary, raised, HOVER_SHIFT),
+                hovered_border: dim(theme.secondary, raised, HOVER_SHIFT),
                 disabled_foreground: theme.muted_foreground,
                 disabled_background: theme.background,
                 disabled_border: theme.background,
@@ -1279,7 +1282,8 @@ mod tests {
         let theme = Theme::default_dark();
 
         // The focused fill is derived by shifting the base rather than stored
-        // on the theme; for a bright fill the shift darkens.
+        // on the theme. This theme's background is dark, so a loud fill deepens
+        // toward it.
         let default = ButtonStyle::from_theme(&theme, ButtonVariant::Default);
         let (Color::Rgb(br, bg, bb), Color::Rgb(fr, fg, fb)) =
             (default.background, default.focused_background)
@@ -1289,7 +1293,7 @@ mod tests {
         assert_ne!(default.focused_background, default.background);
         assert!(
             fr <= br && fg <= bg && fb <= bb,
-            "focus should darken a bright fill"
+            "focus should deepen a loud fill toward a dark theme's background"
         );
 
         // Disabled dims toward the surface but keeps the variant's hue, so a
