@@ -14,7 +14,7 @@ use std::io;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Margin},
-    style::{Color, Style},
+    style::Style,
     widgets::Block,
 };
 use ratcn::{
@@ -22,7 +22,6 @@ use ratcn::{
     runtime::{DeclareCtx, Event, EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
 };
 
-const THEME: Theme = Theme::default_dark();
 const PADDING_X: u16 = 2;
 const PADDING_Y: u16 = 2;
 
@@ -110,10 +109,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
@@ -125,15 +120,15 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
         let area = area.inner(Margin::new(PADDING_X, PADDING_Y));
         let state = &self.state;
         let panels_layout = Layout::vertical([Constraint::Fill(1); 2]).spacing(1);
-        self.ratcn.render(frame, state, &THEME, |ctx| {
+        self.ratcn.render(frame, state, theme, |ctx| {
             let [panel_a_area, panel_b_area] = area.layout(&panels_layout);
             ctx.scope(ids::PANEL_A, panel_a_area, Self::panel_options(), |ctx| {
                 Self::panel(ctx, PanelId::A, &[ids::A1, ids::A2]);

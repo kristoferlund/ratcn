@@ -56,11 +56,6 @@ onMounted(async () => {
 
 <main class="ratcn-home">
   <section class="ratcn-hero" aria-labelledby="ratcn-title">
-    <a class="ratcn-badge" href="/docs/demos">
-      <span class="ratcn-badge-dot"></span>
-      Introducing live WebAssembly previews
-      <span class="ratcn-badge-arrow">→</span>
-    </a>
     <h1 id="ratcn-title">The Foundation for your Terminal UI</h1>
     <p class="ratcn-lede">
       A set of beautifully designed components that you can copy and paste into

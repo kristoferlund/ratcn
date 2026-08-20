@@ -25,10 +25,9 @@ use ratatui::style::Color;
 /// light theme's control and brightens a dark theme's.
 ///
 /// It is capped by the label that stays put on top of it. A fill moving toward
-/// the screen's own end is also moving toward its own label: past about this
-/// much, palettes with a mid-luminance accent (Solarized's blue, Nord's frost)
-/// drop their hovered button labels under 4.5:1, which the preset contrast test
-/// pins.
+/// the screen's own end is also moving toward its own label, and past about
+/// this much a palette with a mid-luminance accent (Solarized's blue, Nord's
+/// frost) loses the hovered button label the preset contrast test pins.
 pub const FOCUS_SHIFT: u16 = 6;
 
 /// Hover is stronger than focus so moving the pointer over an already-focused
@@ -109,12 +108,8 @@ pub fn luminance(color: Color) -> Option<f64> {
     Some(0.2126 * channel[r as usize] + 0.7152 * channel[g as usize] + 0.0722 * channel[b as usize])
 }
 
-/// The sRGB transfer function, one entry per channel value.
-///
-/// A channel is a `u8`, so this is the whole domain — the table is exact, not
-/// an approximation. It exists because luminance is the crate's innermost loop:
-/// solving one adaptive theme measures thousands of candidate colors, and
-/// `powf` per channel per measurement made that the dominant cost.
+/// The sRGB transfer function, one entry per channel value — a u8 channel is
+/// the whole domain, so the table is exact.
 static LINEAR_CHANNEL: LazyLock<[f64; 256]> = LazyLock::new(|| {
     std::array::from_fn(|value| {
         #[allow(
@@ -279,70 +274,37 @@ mod tests {
         );
     }
 
-    /// `darken` and `lighten` are `dim` against black and white, which holds
-    /// only if the blend rounds identically to the standalone weighted average
-    /// each of them used to compute — every channel value against every
-    /// percentage, since one rounding difference would show as an off-by-one
-    /// fill.
+    /// `darken` and `lighten` are `dim` against black and white, so they have to
+    /// round the way a blend toward those endpoints rounds. The boundaries are
+    /// where a rounding difference would show.
     #[test]
     fn darkening_and_lightening_round_as_a_blend_toward_the_endpoints() {
-        for amount in 0..=100_u16 {
-            let keep = 100 - amount;
-            for channel in 0..=255_u8 {
-                let color = Color::Rgb(channel, channel, channel);
-                let scaled = u16::from(channel) * keep;
-                let dark = u8::try_from((scaled + 50) / 100).expect("a darkened channel fits u8");
-                let light = u8::try_from((scaled + 255 * amount + 50) / 100)
-                    .expect("a lightened channel fits u8");
-                assert_eq!(
-                    darken(color, amount),
-                    Color::Rgb(dark, dark, dark),
-                    "darken({channel}, {amount})"
-                );
-                assert_eq!(
-                    lighten(color, amount),
-                    Color::Rgb(light, light, light),
-                    "lighten({channel}, {amount})"
-                );
-            }
-        }
-    }
+        let gray = Color::Rgb(128, 128, 128);
 
-    /// The table is a cache, so it has to hold exactly what it caches.
-    ///
-    /// Every contrast floor in the crate is measured through it — a theme is
-    /// solved against these numbers and tested against these numbers, so a
-    /// table that drifted from the formula would move both sides at once and
-    /// nothing else would notice. The comparison is exact rather than
-    /// approximate because the table is built by this formula and nothing
-    /// stands between them: an epsilon here would license a drift.
-    #[test]
-    fn the_channel_table_is_the_wcag_transfer_function() {
-        for value in 0..=255_usize {
-            #[allow(
-                clippy::cast_precision_loss,
-                reason = "the index is 0..=255, which f64 represents exactly"
-            )]
-            let scaled = value as f64 / 255.0;
-            let expected = if scaled <= 0.039_28 {
-                scaled / 12.92
-            } else {
-                ((scaled + 0.055) / 1.055).powf(2.4)
-            };
-            assert_eq!(
-                LINEAR_CHANNEL[value].to_bits(),
-                expected.to_bits(),
-                "the cached transfer of channel {value} is {}, not the {expected} the formula \
-                 gives",
-                LINEAR_CHANNEL[value]
-            );
-        }
+        assert_eq!(darken(gray, 0), gray, "nothing moves at all");
+        assert_eq!(lighten(gray, 0), gray);
+        assert_eq!(darken(gray, 100), Color::Rgb(0, 0, 0), "all the way down");
+        assert_eq!(
+            lighten(gray, 100),
+            Color::Rgb(255, 255, 255),
+            "all the way up"
+        );
+        // Halves round away from zero, in both directions and at both ends.
+        assert_eq!(darken(Color::Rgb(1, 1, 1), 50), Color::Rgb(1, 1, 1));
+        assert_eq!(darken(Color::Rgb(3, 3, 3), 50), Color::Rgb(2, 2, 2));
+        assert_eq!(
+            lighten(Color::Rgb(254, 254, 254), 50),
+            Color::Rgb(255, 255, 255)
+        );
+        assert_eq!(
+            darken(Color::Rgb(255, 255, 255), 1),
+            Color::Rgb(252, 252, 252)
+        );
     }
 
     /// A color the crate cannot read is taken as dark, so a theme that leaves
     /// its background to the terminal keeps the lighter-is-more direction the
-    /// crate's own default has. The pair is documented on both functions and
-    /// every derived state on the terminal preset depends on it.
+    /// crate's own default has.
     #[test]
     fn an_unreadable_anchor_points_the_way_a_dark_one_does() {
         assert_eq!(

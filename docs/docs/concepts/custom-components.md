@@ -167,11 +167,11 @@ What still follows declaration order is hit-testing, and it knows nothing about
 pixels: a later sibling drawn underneath another still takes the clicks over
 its own area.
 
-That is the whole contract. A composite is an ordinary `Component`; there is no
-composite trait to implement and no lifecycle to opt into. What a composite does
-need is somewhere to keep what its builders were handed until `declare` uses
-it, and a way to keep answering geometry questions once that is gone. In
-practice that is four pieces:
+A composite is an ordinary `Component`; there is no composite trait to implement
+and no lifecycle to opt into. What a composite does need is somewhere to keep
+what its builders were handed until `declare` uses it, and a way to keep
+answering geometry questions once that is gone. In practice that is four
+pieces:
 
 **Deferred drawing.** A `paint` closure runs after declaration has ended, so it
 owns what it draws with: it is `'static` and receives a `PaintCtx` carrying the
@@ -210,9 +210,8 @@ is either a description or a caller's closure, a footer that is either a
 caller's closure or a measured action row, a private `dims` every rect comes
 from, and border dragging that re-derives the box between frames.
 
-Nothing it does is out of reach for a component of your own. Copy
-`components/dialog.rs` into your own crate and edit it: the `copy-fixture` crate
-does exactly that with every copyable built-in and compiles each one alone
+Copy `components/dialog.rs` into your own crate and edit it: the `copy-fixture`
+crate does exactly that with every copyable built-in and compiles each one alone
 against `ratcn` as an ordinary external dependency, so a built-in can only use
 what you can use too.
 

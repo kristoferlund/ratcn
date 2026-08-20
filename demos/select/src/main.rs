@@ -3,14 +3,13 @@ use std::io;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout},
-    style::{Color, Style},
+    style::Style,
 };
 use ratcn::{
     ListItem, Select, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn},
 };
 
-const THEME: Theme = Theme::default_dark();
 const FRUITS: [&str; 10] = [
     "Mango",
     "Papaya",
@@ -67,10 +66,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
@@ -82,18 +77,18 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
         let [column] = Layout::horizontal([Constraint::Length(28)])
             .flex(Flex::Center)
             .areas(area);
         let [select_area] = Layout::vertical([Constraint::Length(1)])
             .flex(Flex::Center)
             .areas(column);
-        self.ratcn.render(frame, &self.state, &THEME, |ctx| {
+        self.ratcn.render(frame, &self.state, theme, |ctx| {
             ctx.component(
                 "fruit",
                 Select::new(FRUITS.map(|fruit| ListItem::new(fruit, fruit)))

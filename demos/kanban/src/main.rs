@@ -20,7 +20,7 @@ use ratatui::{
     Frame,
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Margin, Position, Rect},
-    style::{Color, Style},
+    style::Style,
     symbols::border,
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
@@ -32,7 +32,6 @@ use ratcn::{
     },
 };
 
-const THEME: Theme = Theme::default_dark();
 const CARD_WIDTH: u16 = 13;
 const CARD_HEIGHT: u16 = 3;
 const CARD_VERTICAL_SPACING: u16 = 1;
@@ -94,10 +93,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
@@ -109,11 +104,11 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
         let board_layout = BoardLayout {
             area: area.inner(Margin::new(
                 BOARD_HORIZONTAL_PADDING,
@@ -121,7 +116,7 @@ impl demo_shared::Demo for App {
             )),
         };
         let state = &self.state;
-        self.ratcn.render(frame, state, &THEME, |ctx| {
+        self.ratcn.render(frame, state, theme, |ctx| {
             let column_areas = board_layout.column_areas();
             ctx.paint(move |ctx| {
                 for (column_index, column_area) in column_areas.iter().enumerate() {

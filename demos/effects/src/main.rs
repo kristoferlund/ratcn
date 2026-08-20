@@ -18,7 +18,7 @@ use std::{
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Flex, Layout},
-    style::{Color, Style},
+    style::Style,
     widgets::{Paragraph, Wrap},
 };
 use ratcn::{
@@ -30,7 +30,6 @@ use ratcn::{
 /// wakes nothing by itself, so the host has to come back and ask.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CONTENT_WIDTH: u16 = 50;
-const THEME: Theme = Theme::default_dark();
 
 mod ids {
     pub const REFRESH: &str = "refresh";
@@ -113,10 +112,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     /// Route one input event through ratcn; a component that reacts emits a
     /// `Msg`, which feeds the same `dispatch` path as everything else.
     fn handle_event(&mut self, event: Event) -> bool {
@@ -136,7 +131,7 @@ impl demo_shared::Demo for App {
         self.state.joke.is_loading().then_some(POLL_INTERVAL)
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         // Completions arrive between frames; applying them here is what turns a
         // wake-up into the frame that shows the new joke.
         let _ = self.drain();
@@ -144,10 +139,10 @@ impl demo_shared::Demo for App {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
 
         let joke = joke_text(&self.state.joke);
-        self.ratcn.render(frame, &self.state, &THEME, |ctx| {
+        self.ratcn.render(frame, &self.state, theme, |ctx| {
             let content_width = area.width.min(CONTENT_WIDTH);
             let joke_height = wrapped_height(&joke, content_width).max(1);
             let content_height = joke_height + 1 + ButtonSize::Large.height();

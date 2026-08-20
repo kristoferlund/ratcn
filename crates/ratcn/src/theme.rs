@@ -226,11 +226,9 @@ impl Theme {
             secondary_foreground: Color::Rgb(250, 250, 250),
             accent: Color::Rgb(139, 92, 246),
             destructive: Color::Rgb(255, 100, 103),
-            // The same tone `primary_foreground` uses, for the same reason:
-            // both are labels on a bright fill. Dark text holds 6.21:1 on this
-            // red and 4.88:1 once the pointer darkens it; a near-white label
-            // bottoms out at 2.77:1, and though it climbs to 3.52:1 as the fill
-            // darkens, it is climbing from under the floor.
+            // The same tone `primary_foreground` uses, and for the same reason:
+            // both are labels on a bright fill, where only a dark label holds
+            // the floor across all three fill states.
             destructive_foreground: Color::Rgb(23, 23, 23),
             warning: Color::Rgb(250, 204, 21),
             border: Color::Rgb(94, 94, 94),
@@ -239,28 +237,17 @@ impl Theme {
         }
     }
 
-    /// Terminal-friendly colors: inherit the outer terminal background, but use
-    /// concrete neutral surfaces for component wells. [`Color::Reset`] carries
-    /// no RGB channels, so derived states like focused list backgrounds
-    /// need real surface colors to lighten from. Named colors (`Gray`,
-    /// `Yellow`, …) keep the terminal palette at rest; their derived
-    /// focus/hover/disabled states resolve through
-    /// [`resolve_rgb`]'s fixed VGA approximation.
+    /// The terminal's own palette: [`Color::Reset`] for the outer background
+    /// and body text, named colors for the rest, whose derived states resolve
+    /// through [`resolve_rgb`]'s fixed VGA approximation.
     ///
-    /// That approximation is why `primary` is neutral here rather than a hue.
-    /// A named accent only survives as long as nothing derives from it: the
-    /// moment a default button is focused, `primary` is resolved to VGA and
-    /// darkened, which replaces whatever blue the terminal had with a fixed
-    /// `#0000e6`. A neutral primary degrades into a neutral gray instead, which
-    /// reads as "pressed" against any palette — and it mirrors
-    /// [`default_dark`](Self::default_dark), whose `primary` is a near-white.
-    /// It is the terminal's bright white rather than its white so that it stays
-    /// distinct from `muted_foreground`, which markers are drawn against.
+    /// `primary` is a neutral rather than a hue, because that approximation
+    /// replaces a named accent with a fixed rgb the moment a state derives from
+    /// it, and a neutral degrades into a neutral.
     ///
-    /// The well surfaces are the part this preset cannot make adaptive. They
-    /// are concrete dark RGB, so a light terminal gets dark wells; the
-    /// alternative — [`Color::Reset`] wells — costs every focus, hover, and
-    /// cursor-row fill, because there is nothing to lighten.
+    /// The well surfaces are concrete dark rgb rather than [`Color::Reset`],
+    /// which carries no channels for a focus, hover, or cursor-row fill to
+    /// lighten from — so a light terminal gets dark wells.
     #[must_use]
     pub const fn terminal() -> Self {
         let primary = Color::White;
@@ -286,17 +273,12 @@ impl Theme {
         }
     }
 
-    /// The Catppuccin Mocha palette: soft pastels on a deep indigo background.
+    /// The Catppuccin Mocha palette: soft pastels on a deep indigo background,
+    /// from `catppuccin/palette`'s `palette.json`.
     ///
-    /// Tones from `catppuccin/palette`'s `palette.json`, in the flavor's own
-    /// layering order: `crust`, `mantle`, `base`, then the `surface` tones for
-    /// interactive fills.
-    ///
-    /// `surface` is off-palette, 30% of the way from `crust` to `base`. The
-    /// flavor's own middle tone, `mantle`, leaves only 1.07:1 between a dialog
-    /// and a well drawn inside it, and the well is the layer with no frame to
-    /// fall back on. `crust`→`base` is 1.14:1 in total, so the split is tight
-    /// either way; this preset is the one that pins both floors.
+    /// `surface` is off-palette, 30% of the way from `crust` to `base`; the
+    /// flavor's own middle tone, `mantle`, leaves too little between a dialog
+    /// and a well drawn inside it.
     #[must_use]
     pub const fn catppuccin() -> Self {
         let primary = Color::Rgb(137, 180, 250); // blue #89b4fa
@@ -323,29 +305,17 @@ impl Theme {
         }
     }
 
-    /// The Gruvbox dark palette: warm, low-contrast retro tones.
+    /// The Gruvbox dark palette: warm, low-contrast retro tones, from
+    /// `morhetz/gruvbox`'s `colors/gruvbox.vim`, using the *bright* accent
+    /// variants dark mode calls for.
     ///
-    /// Tones from `morhetz/gruvbox`'s `colors/gruvbox.vim`, which names the
-    /// dark ramp `dark0`…`dark4` and the light ramp `light0`…`light4`, and uses
-    /// the *bright* accent variants in dark mode.
+    /// `muted_foreground` is `light2` rather than the dimmer `light4`, which
+    /// does not read on the upper rungs of the well ladder.
     ///
-    /// `muted_foreground` is `light2` (the palette's `fg2`) rather than the
-    /// dimmer `light4` (`fg4`), which drops under 4.5:1 against the upper rungs
-    /// of the well ladder. Gruvbox's own comment color is dimmer still —
-    /// `gray` `#928374` — and is not used here at all.
-    ///
-    /// `bright_red` is mid-luminance, so no tone in the palette labels it at
-    /// 4.5:1 across a button's states: `dark0_hard`, the darkest there is,
-    /// holds 4.77:1 falling to 3.78:1, and the light end is worse still at
-    /// 3.03:1. Gruvbox's own `ErrorMsg` — `dark0` on `bright_red` — is one of
-    /// the pairs that misses.
-    ///
-    /// `neutral_red` under `light0` would hold 4.82:1, but `destructive` is
-    /// also the toast's error accent, and there it is a frame and an icon on
-    /// the toast's own surface: the brighter red is 3.82:1 there and the
-    /// neutral one 2.40:1. One role, two jobs, and only the bright red serves
-    /// both at all — so the button label takes the documented exception rather
-    /// than the palette taking a red it does not use in dark mode.
+    /// `destructive_foreground` is `dark0_hard` rather than `dark0`: no tone
+    /// labels the mid-luminance `bright_red` across a button's states, so the
+    /// pair takes a documented contrast exception on the palette's darkest
+    /// tone.
     #[must_use]
     pub const fn gruvbox() -> Self {
         let primary = Color::Rgb(250, 189, 47); // bright yellow #fabd2f
@@ -363,38 +333,29 @@ impl Theme {
             secondary_foreground: Color::Rgb(235, 219, 178), // light1 #ebdbb2
             accent: Color::Rgb(254, 128, 25),           // bright orange #fe8019
             destructive: Color::Rgb(251, 73, 52),       // bright red #fb4934
-            // dark0_hard, the palette's darkest tone, rather than dark0: the
-            // extra step buys the whole trajectory 0.4:1. See the note above.
             destructive_foreground: Color::Rgb(29, 32, 33), // dark0_hard #1d2021
-            warning: Color::Rgb(250, 189, 47),              // bright yellow #fabd2f
-            border: Color::Rgb(124, 111, 100),              // dark4 #7c6f64
+            warning: Color::Rgb(250, 189, 47),          // bright yellow #fabd2f
+            border: Color::Rgb(124, 111, 100),          // dark4 #7c6f64
             ring: dim(primary, background, RING_DIM),
             cursor: Color::Rgb(250, 189, 47), // bright yellow #fabd2f
         }
     }
 
-    /// The Nord palette: cool desaturated blues.
+    /// The Nord palette: cool desaturated blues, from `nordtheme/nord`'s
+    /// `src/nord.css`.
     ///
-    /// Tones from `nordtheme/nord`'s `src/nord.css`. Polar Night `nord0` is the
-    /// origin background and `nord1` the elevated UI tone the palette suggests
-    /// for raised surfaces; `nord2` and `nord3` are the two above it. Snow
-    /// Storm `nord4` is primary text and `nord6` the brightest.
+    /// Text is `nord6`/`nord4`, both from Snow Storm, because Nord ships no dim
+    /// neutral between its two ramps.
     ///
-    /// Text uses `nord6`/`nord4` rather than `nord4`/`nord9`. Nord's ramp jumps
-    /// straight from Polar Night to Snow Storm with no dim neutral in between,
-    /// so the two emphases have to come from the light end; `nord9` is a Frost
-    /// *accent*, and reading list rows in it both misuses the role and lands
-    /// under 4.5:1.
+    /// `surface` is off-palette, the midpoint of `nord0` and `nord1`, which
+    /// Nord has no tone between.
     ///
-    /// Nord has no tone between `nord0` and `nord1`, so `surface` is the
-    /// midpoint of the two: a dialog has to be raised off the background and
-    /// still stay under the well.
+    /// `border` is off-palette: no Nord tone lands in the window a boundary
+    /// needs on `nord0`.
     ///
-    /// `nord11` is the one red Nord ships and it sits mid-luminance, so no tone
-    /// on either side of it reaches 4.5:1 as a label — the palette cannot serve
-    /// this pair, and the crate's contrast test says so by name. The light side
-    /// is chosen because it is the side that improves as the fill darkens under
-    /// focus and the pointer.
+    /// `destructive_foreground` is the light side of `nord11`, the one red Nord
+    /// ships, and a documented contrast exception — the light side is the one
+    /// that improves as the fill darkens.
     #[must_use]
     pub const fn nord() -> Self {
         let primary = Color::Rgb(136, 192, 208); // nord8 #88c0d0
@@ -413,35 +374,27 @@ impl Theme {
             secondary_foreground: Color::Rgb(236, 239, 244), // nord6 #eceff4
             accent: Color::Rgb(180, 142, 173),          // nord15 #b48ead
             destructive: Color::Rgb(191, 97, 106),      // nord11 #bf616a
-            // The light side of nord11, which is the better of two bad sides:
-            // nord0 is 3.05:1 and falls to 2.45:1 under the pointer, nord6 is
-            // 3.55:1 and climbs to 4.42:1. See the note above.
             destructive_foreground: Color::Rgb(236, 239, 244), // nord6 #eceff4
-            warning: Color::Rgb(235, 203, 139),                // nord13 #ebcb8b
-            // Off-palette, tuned for the 3:1 a boundary needs on nord0: no Nord
-            // tone lands in the window. nord3, the palette's own line color, is
-            // 1.693:1 there, and the next tone up is nord4, which is text.
+            warning: Color::Rgb(235, 203, 139),         // nord13 #ebcb8b
+            // Off-palette: nord3, the palette's own line color, does not clear
+            // the boundary floor on nord0, and the next tone up is text.
             border: Color::Rgb(112, 126, 155),
             ring: dim(primary, background, RING_DIM),
             cursor: Color::Rgb(136, 192, 208), // nord8 #88c0d0
         }
     }
 
-    /// The Tokyo Night palette: saturated blues and purples on near-black.
-    ///
-    /// Tones from `folke/tokyonight.nvim`'s `night` variant
+    /// The Tokyo Night palette: saturated blues and purples on near-black, from
+    /// `folke/tokyonight.nvim`'s `night` variant
     /// (`lua/tokyonight/colors/storm.lua` with the `night.lua` overrides).
     ///
-    /// `surface` is the midpoint of `bg` and `bg_highlight` rather than the
-    /// variant's `bg_float`. Floats in tokyonight are *darker* than the editor
-    /// background, which a dialog here cannot be: the modal backdrop blends the
-    /// screen toward `background`, so a darker dialog would sink into the very
-    /// thing it floats over.
+    /// `surface` is off-palette, the midpoint of `bg` and `bg_highlight`: the
+    /// variant's own `bg_float` is *darker* than the editor background, and a
+    /// dialog would sink into the backdrop it floats over.
     ///
-    /// `secondary` is `bg_visual`, the variant's selection fill, rather than
-    /// `terminal_black`. It is the only background tone dark enough to keep a
-    /// hovered secondary label at 4.5:1 once the fill lightens, while still
-    /// reading as a raised control against `bg`.
+    /// `secondary` is `bg_visual`, the selection fill, rather than
+    /// `terminal_black` — the only background tone that keeps a hovered
+    /// secondary label readable while still reading as a raised control.
     #[must_use]
     pub const fn tokyo_night() -> Self {
         let primary = Color::Rgb(122, 162, 247); // blue #7aa2f7
@@ -468,21 +421,19 @@ impl Theme {
         }
     }
 
-    /// The Solarized Dark palette: low-contrast, carefully balanced.
+    /// The Solarized Dark palette: low-contrast, carefully balanced, from Ethan
+    /// Schoonover's `altercation/solarized` README.
     ///
-    /// Tones from Ethan Schoonover's `altercation/solarized` README. Dark mode
-    /// uses `base03` as background and `base02` as its one background
-    /// highlight — the palette ships no third background tone, so the well is
-    /// `base02`, `surface` is off-palette 30% of the way between them, and the
-    /// ladder above the well is derived. `base03`→`base02` is 1.16:1 in total
-    /// and the well takes the larger share of it, since a dialog has a ring
-    /// frame to be found by and a well has nothing.
+    /// `surface` is off-palette, 30% of the way from `base03` to `base02`,
+    /// because the palette ships no third background tone.
     ///
-    /// Text is shifted one rung up the ramp from Schoonover's own dark mapping
-    /// (`base2`/`base1` where he uses `base1`/`base0`). His mapping puts body
-    /// text at 4.75:1 on `base03` — right at the WCAG floor with no headroom —
-    /// and every rung of the well ladder spends some of it. The tones are the
-    /// palette's; only which rung plays which role moved.
+    /// Text is one rung up the ramp from Schoonover's own dark mapping
+    /// (`base2`/`base1` where he uses `base1`/`base0`), which leaves no
+    /// headroom for the well ladder to spend.
+    ///
+    /// `primary_foreground` is `base3`, the light-mode background: this blue
+    /// takes a documented contrast exception, and `base3` is the side that
+    /// improves as the fill darkens.
     #[must_use]
     pub const fn solarized() -> Self {
         let primary = Color::Rgb(38, 139, 210); // blue #268bd2
@@ -496,18 +447,14 @@ impl Theme {
             surface: dim(background, field, 30),
             field,
             primary,
-            // base3, the light-mode background, not base03. Nothing clears
-            // 4.5:1 on this blue, so the choice is which direction the button
-            // moves under the pointer: base3 climbs 3.41 → 4.10 → 4.99 as the
-            // fill darkens, while base03 starts at 4.08 and falls to 2.78.
-            primary_foreground: Color::Rgb(253, 246, 227),
-            secondary: Color::Rgb(88, 110, 117), // base01 #586e75
+            primary_foreground: Color::Rgb(253, 246, 227), // base3 #fdf6e3
+            secondary: Color::Rgb(88, 110, 117),           // base01 #586e75
             secondary_foreground: Color::Rgb(253, 246, 227), // base3 #fdf6e3
-            accent: Color::Rgb(211, 54, 130),    // magenta #d33682
-            destructive: Color::Rgb(220, 50, 47), // red #dc322f
+            accent: Color::Rgb(211, 54, 130),              // magenta #d33682
+            destructive: Color::Rgb(220, 50, 47),          // red #dc322f
             destructive_foreground: Color::Rgb(253, 246, 227), // base3 #fdf6e3
-            warning: Color::Rgb(181, 137, 0),    // yellow #b58900
-            border: Color::Rgb(101, 123, 131),   // base00 #657b83
+            warning: Color::Rgb(181, 137, 0),              // yellow #b58900
+            border: Color::Rgb(101, 123, 131),             // base00 #657b83
             ring: dim(primary, background, RING_DIM),
             cursor: Color::Rgb(42, 161, 152), // cyan #2aa198
         }
@@ -516,57 +463,30 @@ impl Theme {
     /// A theme solved around a background and a foreground someone else chose —
     /// the terminal's own, a browser's computed style, a user setting.
     ///
-    /// The presets answer "what does Gruvbox look like". This answers a
-    /// different question: given only *these two colors*, what palette keeps
-    /// every relationship the crate's contrast floors demand? Everything is
-    /// solved rather than picked — the well against the 1.10..=1.35 window, the
-    /// surface into the gap below it, text and lines against their floors — in
-    /// the same integer blend arithmetic the components paint with, so a color
-    /// that solves to a floor here measures to the same floor there.
+    /// Every role is solved rather than picked — the well against its window,
+    /// the surface into the gap below it, text and lines against their floors —
+    /// in the same integer blend arithmetic the components paint with, so a
+    /// color that solves to a floor here measures to the same floor there. The
+    /// solvers land on every input the crate's sweep puts to them, and a
+    /// background too close to the middle of the ramp is deepened toward its own
+    /// end until the rest becomes solvable.
     ///
     /// Polarity is not a parameter. A light background derives a light theme:
     /// wells sit *darker* than the screen and deepen from there, filled
     /// controls brighten as they take focus, and text darkens. Nothing in the
-    /// call changes; [`crate::color::away_from`] reads it off the
-    /// background.
+    /// call changes; [`crate::color::away_from`] reads it off the background.
     ///
     /// `palette16` is the terminal's own ANSI colors, if the caller has them,
     /// used for the three roles a neutral cannot fill — error, warning, and the
-    /// signature accent. They are repaired toward the readable end until they
-    /// clear their floors, because a palette's red is chosen to be *seen as
-    /// text on the background*, not to be a fill with a label on it. Without
-    /// them the same three roles come from fixed seeds and take the same
-    /// repair.
+    /// signature accent. Without them those roles come from fixed seeds.
     ///
-    /// # Total
+    /// A pair too close together to carry a UI is not honored verbatim: the
+    /// foreground is pushed away from the background until it holds on every
+    /// fill it will be painted on. Body text therefore ends up further from what
+    /// the terminal reported than anything else in the theme.
     ///
-    /// A derived theme is named `"Adaptive"`, which is not one of the names the
-    /// tests grant a contrast exception, so the solvers have to actually land —
-    /// and no input has been found that stops them. That is a swept property,
-    /// not a proof: the crate's own sweep derives a theme from every preset's
-    /// pair, the four polarity corners, the low-contrast pairs real terminals
-    /// report, the pairs that once broke an invariant, an RGB lattice, and a
-    /// seeded walk between its points — each with and without a terminal
-    /// palette to take hues from — and holds every one of them to every floor
-    /// the presets are held to.
-    ///
-    /// Totality is not free, and where it cannot be had by solving a color it
-    /// is had by refusing the background: a screen too close to the middle of
-    /// the ramp is deepened toward its own end until the rest becomes solvable
-    /// (see below). Colors with no channels to read ([`Color::Reset`],
-    /// `Indexed`) are replaced by [`default_dark`](Self::default_dark)'s pair
-    /// before anything is solved, which is the only sense in which the function
-    /// can refuse an input outright.
-    ///
-    /// # A low-contrast pair is not honored verbatim
-    ///
-    /// A terminal may report a pair that cannot carry a UI: Solarized Light's
-    /// real background and foreground are 4.13:1, and a well's top rung eats
-    /// that to 2.26:1. The foreground is therefore pushed away from the
-    /// background until it holds 4.5:1 on every fill it will be painted on, on
-    /// whichever side can get there. Body text ends up further from what the
-    /// terminal reported than anything else in the theme; the alternative is a
-    /// list whose rows cannot be read.
+    /// `ratcn::terminal` (feature `termina`) asks the terminal for the pair and
+    /// re-solves when it changes.
     ///
     /// ```
     /// use ratatui::style::Color;
@@ -601,7 +521,7 @@ impl Theme {
         // solvable, keeping the hue and the polarity the terminal reported
         // while buying back the room the ladder needs. A background that was
         // already workable is not moved at all.
-        let (layers, hues) = (0..=100)
+        let solved = (0..=100)
             .map(|deepen| dim(queried_background, near, deepen))
             .find_map(|background| {
                 let layers = Layers::solve(background, queried_text, away)?;
@@ -611,27 +531,12 @@ impl Theme {
                 // answer to that is a deeper screen, not a worse red.
                 let hues = Hues::solve(palette16, &layers, away, near)?;
                 Some((layers, hues))
-            })
-            // Unreachable in practice — the walk ends at an extreme, and an
-            // extreme always solves — but written as a value rather than an
-            // unwrap so the function has no panic to document.
-            .unwrap_or((
-                Layers {
-                    background: fallback.background,
-                    surface: fallback.surface,
-                    field: fallback.field,
-                    secondary: fallback.secondary,
-                    primary: fallback.primary,
-                    ring: fallback.ring,
-                    foreground: fallback.foreground,
-                    muted_foreground: fallback.muted_foreground,
-                },
-                Hues {
-                    accent: fallback.accent,
-                    destructive: fallback.destructive,
-                    warning: fallback.warning,
-                },
-            ));
+            });
+        // The walk ends at an extreme, which always solves. Returning the
+        // preset keeps the function panic-free if it ever does not.
+        let Some((layers, hues)) = solved else {
+            return fallback;
+        };
 
         let labels = [layers.background, layers.foreground];
 
@@ -794,39 +699,8 @@ impl Layers {
         let secondary = dim(background, away, QUIET_FILL_SHIFT);
         let backdrops = [background, surface, rungs[0], rungs[1], rungs[2]];
 
-        // One predicate answers for all the text in the theme. Disabled rows
-        // are in it because they are derived from muted text and dimmed again
-        // from there — the pair that runs out first on a saturated background,
-        // where there is room to dim long past the point the disabled twin
-        // survives.
-        let disabled_well = dim(field, background, DISABLED_DIM);
-        let measured = Backdrops::new(&backdrops);
-        let readable = |text: Color| {
-            measured.worst(text) >= TEXT_FLOOR
-                && contrast_or_zero(dim(text, background, DISABLED_DIM), disabled_well)
-                    >= DISABLED_LEGIBILITY
-        };
-        // Body text is pushed away from the background until it holds, and far
-        // enough past that for muted text to still exist: taking the least push
-        // that clears the floor leaves body text sitting exactly on it, with no
-        // room underneath, and every muted role — list rows at rest,
-        // placeholders, dialog descriptions, toast bodies — collapses onto it.
-        // Coarse to fine again, for the same reason: the least push that works
-        // is what keeps body text closest to what the terminal reported, both
-        // ends have to be tried, and asking every amount of both is the
-        // expensive half of solving a theme.
-        let solved_text = |amount: u16| {
-            [Color::White, Color::Black]
-                .into_iter()
-                .map(|end| dim(queried_text, end, amount))
-                .filter(|text| readable(*text))
-                .find_map(|text| Some((text, recedes_from(text, background, &readable)?)))
-        };
-        let coarse = (0..=20)
-            .map(|step| step * 5)
-            .find(|amount| solved_text(*amount).is_some())?;
         let (foreground, muted_foreground) =
-            (coarse.saturating_sub(4)..=coarse).find_map(solved_text)?;
+            solve_text(queried_text, background, field, &backdrops)?;
 
         // `primary` is placed, not searched for: the background shifted
         // [`NEUTRAL_FILL_SHIFT`] toward the far end, which is what makes it a
@@ -867,9 +741,8 @@ impl Layers {
 /// fine — a pass in tens finds the dimmest decade that holds, and a fine pass
 /// inside it takes amounts while they hold. Both passes can be stepped over by
 /// a dip, so the answer may sit a few channel steps short of what checking all
-/// hundred amounts would find (measured: 43 of 4000 backgrounds, median 3
-/// steps). What it cannot be is invalid — every amount returned is one
-/// `holds` accepted.
+/// hundred amounts would find. What it cannot be is invalid — every amount
+/// returned is one `holds` accepted.
 fn recedes_from(
     foreground: Color,
     background: Color,
@@ -881,12 +754,9 @@ fn recedes_from(
             && contrast_or_zero(muted, background) < reach
             && contrast_or_zero(muted, foreground) >= MUTED_STEP
     };
-    // Coarse first, then refine. The answer wanted is the dimmest blend that
-    // holds, and this is asked once per candidate body text while a theme is
-    // being solved — walking all hundred amounts every time made the sweep an
-    // order of magnitude slower than the whole rest of the suite. A coarse pass
-    // finds the window, a fine pass finds the edge inside it, and anything the
-    // coarse pass steps over is a slightly less dim muted, never an invalid one.
+    // Coarse first, then refine: a coarse pass finds the window and a fine pass
+    // finds the edge inside it. Anything the coarse pass steps over is a
+    // slightly less dim muted, never an invalid one.
     let coarse = (0..=10)
         .rev()
         .map(|step| step * 10)
@@ -964,10 +834,8 @@ fn well_rungs(field: Color, away: Color) -> [Color; 3] {
 
 /// The worst contrast `text` has against any of `backdrops`.
 ///
-/// The backdrops' luminances are computed once and kept, because this is the
-/// crate's innermost loop: solving a theme asks it for hundreds of candidate
-/// texts against the same handful of fills, and each answer is otherwise three
-/// `powf` calls per channel per side.
+/// The backdrops' luminances are computed once and kept: a solver asks for many
+/// candidate texts against the same handful of fills.
 struct Backdrops {
     luminances: Vec<Option<f64>>,
 }
@@ -999,18 +867,44 @@ impl Backdrops {
     }
 }
 
-/// The worst contrast `text` has against any of `backdrops`, for the callers
-/// that ask once rather than in a loop — allocation-free, because the hue
-/// repair asks it a hundred times per role.
-fn worst_against(text: Color, backdrops: &[Color]) -> f64 {
-    let Some(text) = luminance(text) else {
-        return 0.0;
+/// Body text and the muted text below it, pushed away from `background` until
+/// both hold their floors.
+///
+/// Taking the least push that clears the floor leaves body text sitting exactly
+/// on it, with no room underneath, and every muted role — list rows at rest,
+/// placeholders, dialog descriptions, toast bodies — collapses onto it. So the
+/// walk asks for a push that clears the floor *and* leaves muted text somewhere
+/// below. It runs coarse to fine, and tries both ends, so the push that wins is
+/// the smallest one: body text stays as close as it can to what the terminal
+/// reported.
+fn solve_text(
+    queried_text: Color,
+    background: Color,
+    field: Color,
+    backdrops: &[Color],
+) -> Option<(Color, Color)> {
+    // One predicate answers for all the text in the theme. Disabled rows are in
+    // it because they are derived from muted text and dimmed again from there,
+    // so a text this predicate admits has to leave a legible disabled twin on
+    // the disabled well.
+    let disabled_well = dim(field, background, DISABLED_DIM);
+    let measured = Backdrops::new(backdrops);
+    let readable = |text: Color| {
+        measured.worst(text) >= TEXT_FLOOR
+            && contrast_or_zero(dim(text, background, DISABLED_DIM), disabled_well)
+                >= DISABLED_LEGIBILITY
     };
-    backdrops
-        .iter()
-        .filter_map(|backdrop| luminance(*backdrop))
-        .map(|backdrop| (text.max(backdrop) + 0.05) / (text.min(backdrop) + 0.05))
-        .fold(f64::INFINITY, f64::min)
+    let pushed = |amount: u16| {
+        [Color::White, Color::Black]
+            .into_iter()
+            .map(|end| dim(queried_text, end, amount))
+            .filter(|text| readable(*text))
+            .find_map(|text| Some((text, recedes_from(text, background, &readable)?)))
+    };
+    let coarse = (0..=20)
+        .map(|step| step * 5)
+        .find(|amount| pushed(*amount).is_some())?;
+    (coarse.saturating_sub(4)..=coarse).find_map(pushed)
 }
 
 /// The three fills a control paints: at rest, focused, and hovered.
@@ -1055,16 +949,18 @@ fn best_label(fill: Color, pressed: Color, candidates: &[Color]) -> Color {
     let score = |label: Color| measured.worst(label);
     // The extremes are written as channels, not as `Color::White`/`Color::Black`:
     // those are named colors, measured here through the VGA table but painted
-    // as whatever the terminal's ANSI 0 and 15 happen to be — `#073642` on a
-    // Solarized palette. A label proven at 6.2:1 has to be the label that gets
-    // drawn.
+    // as whatever the terminal's ANSI 0 and 15 happen to be. The label that was
+    // measured has to be the label that gets drawn.
     let extremes = [Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 0)];
     let mut best = candidates.first().copied().unwrap_or(extremes[0]);
+    let mut best_score = score(best);
     for candidate in candidates.iter().copied().chain(extremes) {
-        if score(candidate) > score(best) {
+        let candidate_score = score(candidate);
+        if candidate_score > best_score {
             best = candidate;
+            best_score = candidate_score;
         }
-        if score(best) >= TEXT_FLOOR {
+        if best_score >= TEXT_FLOOR {
             break;
         }
     }
@@ -1086,8 +982,7 @@ impl Hues {
     /// The convention is not universal: Solarized repurposes the bright half,
     /// putting orange in slot 9 and a base gray in slot 11, so `warning`
     /// derives to a gray that clears every floor and stays distinct while
-    /// reading as no warning at all. Trusting the slot may need a saturation
-    /// sanity-check once the palette arrives over OSC 4.
+    /// reading as no warning at all.
     const RED: usize = 9;
     const YELLOW: usize = 11;
     const MAGENTA: usize = 13;
@@ -1110,11 +1005,9 @@ impl Hues {
         // of the same family rather than being replaced by a neutral.
         //
         // A hue that is also a fill has to hold the boundary floor in all three
-        // of its states, not just at rest. Focus and hover walk a fill back
-        // toward the screen, and on a light theme that is the direction the
-        // page already is: every real light terminal palette measured put a
-        // hovered delete button under 3:1 on its own surface when only the
-        // resting state was solved for.
+        // of its states, not just at rest: focus and hover walk a fill back
+        // toward the screen, which on a light theme is the direction the page
+        // already is.
         let repair = |hue: Color, is_a_fill: bool, taken: &[Color]| {
             (0..=100)
                 .map(|amount| dim(hue, away, amount))
@@ -1130,10 +1023,11 @@ impl Hues {
                         .all(|state| contrast_or_zero(*state, layers.surface) >= LINE_FLOOR)
                         && (!is_a_fill
                             || (steps_visibly(candidate, near)
-                                && worst_against(
-                                    best_label(candidate, near, &[layers.background]),
-                                    &states,
-                                ) >= TEXT_FLOOR))
+                                && Backdrops::new(&states).worst(best_label(
+                                    candidate,
+                                    near,
+                                    &[layers.background],
+                                )) >= TEXT_FLOOR))
                 })
         };
         // Solved in turn, each refusing the answers already given: a palette
@@ -1165,6 +1059,23 @@ impl Hues {
 
 #[cfg(test)]
 mod tests {
+
+    /// A backdrop the crate cannot measure scores a ratio no floor accepts, so
+    /// an unmeasurable color can never satisfy a solver. Skipping it instead
+    /// would let an all-unmeasurable list score [`f64::INFINITY`] and pass.
+    #[test]
+    fn text_on_a_backdrop_with_no_channels_passes_no_floor() {
+        let unmeasurable = Backdrops::new(&[Color::Reset]).worst(Color::Rgb(255, 255, 255));
+        let mixed =
+            Backdrops::new(&[Color::Rgb(0, 0, 0), Color::Reset]).worst(Color::Rgb(255, 255, 255));
+
+        assert!(unmeasurable < TEXT_FLOOR, "scored {unmeasurable}");
+        assert!(
+            mixed < TEXT_FLOOR,
+            "one unmeasurable backdrop is enough to fail: scored {mixed}"
+        );
+    }
+
     use super::*;
     use crate::{
         ButtonStyle, ButtonVariant, DialogStyle, ListStyle, SelectStyle, TabsStyle, ToasterStyle,
@@ -1182,21 +1093,18 @@ mod tests {
         crate::color::contrast(a, b).expect("a measured theme pair has channels")
     }
 
-    /// A border is a UI boundary, so WCAG 2.1 non-text contrast (1.4.11) asks
-    /// for 3:1 against what it sits on. Every rgb preset was below that once —
-    /// the field borders were nearly invisible on a dark background — so this
-    /// pins the floor for future palette edits.
+    /// A border is a UI boundary, so WCAG 2.1 non-text contrast (1.4.11) is the
+    /// floor against what it sits on.
     ///
     /// The ring is measured against the surface as well, because a dialog frame
     /// is drawn around one and the dialog title is painted in it. That title is
     /// the one piece of text held to the boundary floor rather than the text
-    /// floor: it is the ring doing double duty, and holding it to 4.5:1 would
-    /// mean no palette could tint its dialog frames with its own accent.
+    /// floor: it is the ring doing double duty, and holding it to the text floor
+    /// would mean no palette could tint its dialog frames with its own accent.
     ///
     /// The border is measured against the background only. Against the surface
-    /// it is a weaker line — `default_dark`, the reference, is 2.89:1 there —
-    /// and pinning that would mean retuning the theme the others are tuned
-    /// against.
+    /// it is a weaker line, and pinning that would mean retuning the theme the
+    /// others are tuned against.
     fn check_lines(theme: &Theme) {
         for (role, line, backdrop) in [
             ("border", theme.border, theme.background),
@@ -1223,10 +1131,8 @@ mod tests {
 
     /// The floors are the numbers they name.
     ///
-    /// Every check above measures against a constant, which keeps the
-    /// derivation and the tests from drifting apart — but it also means a
-    /// weakened constant weakens both sides at once and nothing notices. These
-    /// are the citations, written down where a mutation has to argue with them.
+    /// Every check above measures against a constant, so a weakened constant
+    /// would weaken both sides at once. These are the citations.
     #[test]
     fn the_floors_are_the_numbers_they_name() {
         // WCAG 2.1 SC 1.4.3, normal text.
@@ -1247,10 +1153,7 @@ mod tests {
     /// Every invariant a theme has to hold, whatever produced it.
     ///
     /// The checks are written against one theme rather than looped over the
-    /// presets so that a theme nobody authored can be held to the same bar. A
-    /// preset is a claim about taste that has to survive measurement; a derived
-    /// theme is only ever the measurement, so if these pass for every input the
-    /// derivation is correct in the only sense the crate defines.
+    /// presets, so that a theme nobody authored is held to the same bar.
     fn check_every_invariant(theme: &Theme) {
         check_lines(theme);
         check_well_window(theme);
@@ -1351,10 +1254,10 @@ mod tests {
             (Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 0)),
             (Color::Rgb(0, 0, 0), Color::Rgb(0, 0, 0)),
             (Color::Rgb(255, 255, 255), Color::Rgb(255, 255, 255)),
-            // Solarized Light's real pair, 4.13:1 — the case that decided the
-            // low-contrast policy.
+            // Solarized Light's real pair, the one the low-contrast repair
+            // fires on.
             (Color::Rgb(253, 246, 227), Color::Rgb(101, 123, 131)),
-            // Solarized Dark's real pair, 4.75:1.
+            // Solarized Dark's real pair.
             (Color::Rgb(0, 43, 54), Color::Rgb(131, 148, 150)),
             (Color::Rgb(128, 128, 128), Color::Rgb(138, 138, 138)),
             (Color::Rgb(48, 48, 48), Color::Rgb(48, 48, 48)),
@@ -1362,9 +1265,8 @@ mod tests {
             (Color::Reset, Color::Reset),
             (Color::Indexed(4), Color::Indexed(7)),
         ]);
-        // The pairs that were found violating an invariant before the solvers
-        // learned to answer for them, kept as named cases so a regression is
-        // reported by name rather than by lattice coordinate.
+        // Named regression cases, so a failure is reported by name rather than
+        // by lattice coordinate.
         cases.extend([
             (Color::Rgb(177, 179, 15), Color::Rgb(0, 0, 0)),
             (Color::Rgb(55, 42, 65), Color::Rgb(255, 255, 255)),
@@ -1384,29 +1286,6 @@ mod tests {
                 }
             }
         }
-        // A seeded walk over the space between the lattice points. The seed is
-        // a literal so the suite runs the same pairs on every machine and every
-        // day: a sweep that changed what it covered between runs would turn a
-        // regression into a coin flip.
-        //
-        // The walk is short because its job is discovery, and what it has
-        // discovered is already above it under its own name. Every pair it
-        // ever failed on is a named case; the walk is what finds the next one,
-        // which costs the suite little when it is this long and would cost it
-        // most of its runtime if it were the sweep.
-        let mut seed = 0x2026_0819_u64;
-        let mut next = move || {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            u8::try_from(seed % 256).unwrap_or(0)
-        };
-        for _ in 0..200 {
-            cases.push((
-                Color::Rgb(next(), next(), next()),
-                Color::Rgb(next(), next(), next()),
-            ));
-        }
         cases
     }
 
@@ -1420,10 +1299,8 @@ mod tests {
     /// deepened toward its own end.
     ///
     /// The expected deepening is spelled out here with its own literal
-    /// comparison rather than by calling [`nearest_to`]. Sharing that function
-    /// with the derivation would make this test agree with whatever the
-    /// derivation believes: moving the light/dark threshold off 0.5 would move
-    /// both sides together and prove nothing.
+    /// comparison rather than by calling [`nearest_to`], so the test cannot
+    /// agree with the derivation by construction.
     fn check_background_is_the_one_asked_for(theme: &Theme, queried: Color) {
         let Some(queried) = resolve_rgb(queried).map(|(r, g, b)| Color::Rgb(r, g, b)) else {
             // A color with no channels is the one input replaced outright,
@@ -1586,6 +1463,159 @@ mod tests {
         }
     }
 
+    /// What six real terminal pairs solve to, value by value.
+    ///
+    /// The floor properties only ask whether a derived color clears its floor,
+    /// so a drift that still clears every floor is invisible to them; these
+    /// literals are what sees it. They are also what notices if the minimal-push
+    /// refinement in [`solve_text`] is lost, since a coarse-only walk lands body
+    /// text further from the queried foreground than what is recorded here.
+    #[test]
+    fn named_pairs_solve_to_these_values() {
+        // Per case: the queried (background, foreground), then the solved
+        // (foreground, muted_foreground, background, surface, field, primary,
+        // border).
+        for (name, queried, expected) in [
+            (
+                "Solarized Light",
+                (Color::Rgb(253, 246, 227), Color::Rgb(101, 123, 131)),
+                (
+                    Color::Rgb(45, 55, 59),
+                    Color::Rgb(66, 74, 76),
+                    Color::Rgb(253, 246, 227),
+                    Color::Rgb(249, 242, 224),
+                    Color::Rgb(230, 224, 207),
+                    Color::Rgb(25, 25, 23),
+                    Color::Rgb(144, 140, 129),
+                ),
+            ),
+            (
+                "Tokyo Night",
+                (Color::Rgb(26, 27, 38), Color::Rgb(192, 202, 245)),
+                (
+                    Color::Rgb(208, 216, 248),
+                    Color::Rgb(190, 197, 227),
+                    Color::Rgb(26, 27, 38),
+                    Color::Rgb(29, 30, 40),
+                    Color::Rgb(42, 43, 53),
+                    Color::Rgb(232, 232, 233),
+                    Color::Rgb(102, 102, 110),
+                ),
+            ),
+            (
+                "Gruvbox Light",
+                (Color::Rgb(251, 241, 199), Color::Rgb(60, 56, 54)),
+                (
+                    Color::Rgb(53, 50, 48),
+                    Color::Rgb(73, 69, 63),
+                    Color::Rgb(251, 241, 199),
+                    Color::Rgb(247, 237, 196),
+                    Color::Rgb(228, 219, 181),
+                    Color::Rgb(25, 24, 20),
+                    Color::Rgb(143, 137, 113),
+                ),
+            ),
+            (
+                "black on white",
+                (Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 0)),
+                (
+                    Color::Rgb(0, 0, 0),
+                    Color::Rgb(77, 77, 77),
+                    Color::Rgb(255, 255, 255),
+                    Color::Rgb(251, 251, 251),
+                    Color::Rgb(232, 232, 232),
+                    Color::Rgb(26, 26, 26),
+                    Color::Rgb(148, 148, 148),
+                ),
+            ),
+            (
+                "the crate's dark reference",
+                (Color::Rgb(10, 10, 10), Color::Rgb(250, 250, 250)),
+                (
+                    Color::Rgb(250, 250, 250),
+                    Color::Rgb(185, 185, 185),
+                    Color::Rgb(10, 10, 10),
+                    Color::Rgb(15, 15, 15),
+                    Color::Rgb(32, 32, 32),
+                    Color::Rgb(231, 231, 231),
+                    Color::Rgb(93, 93, 93),
+                ),
+            ),
+            (
+                // Mid-ramp: the background is deepened before anything else
+                // solves, so every value below is read off a screen the caller
+                // did not ask for.
+                "amber on mid-ramp blue",
+                (Color::Rgb(0, 64, 255), Color::Rgb(255, 191, 0)),
+                (
+                    Color::Rgb(255, 254, 252),
+                    Color::Rgb(230, 233, 245),
+                    Color::Rgb(0, 45, 181),
+                    Color::Rgb(4, 49, 182),
+                    Color::Rgb(23, 64, 188),
+                    Color::Rgb(230, 234, 248),
+                    Color::Rgb(112, 137, 214),
+                ),
+            ),
+        ] {
+            let theme = Theme::adaptive(queried.0, queried.1, None);
+            for (role, derived, want) in [
+                ("foreground", theme.foreground, expected.0),
+                ("muted_foreground", theme.muted_foreground, expected.1),
+                ("background", theme.background, expected.2),
+                ("surface", theme.surface, expected.3),
+                ("field", theme.field, expected.4),
+                ("primary", theme.primary, expected.5),
+                ("border", theme.border, expected.6),
+            ] {
+                assert_eq!(derived, want, "{name}: {role} solved to {derived:?}");
+            }
+        }
+    }
+
+    /// [`best_label`] satisfices: the first candidate that clears
+    /// [`TEXT_FLOOR`] is the answer, even when a later one measures higher.
+    /// Pressing the fill toward itself flattens the trajectory, so the only
+    /// thing under test is the order.
+    #[test]
+    fn a_label_is_the_first_candidate_that_clears() {
+        let fill = Color::Rgb(255, 255, 255);
+        let preferred = Color::Rgb(118, 118, 118);
+        let starker = Color::Rgb(0, 0, 0);
+        assert!(contrast(preferred, fill) >= TEXT_FLOOR);
+        assert!(contrast(starker, fill) > contrast(preferred, fill));
+
+        let label = best_label(fill, fill, &[preferred, starker]);
+        assert_eq!(
+            label, preferred,
+            "the starker candidate was taken over one that already cleared"
+        );
+    }
+
+    /// A label's worst moment is not always at rest: Solarized Dark's screen
+    /// color, used as a label on the seed red, clears [`TEXT_FLOOR`] on the
+    /// resting fill and fails on the fills the button moves to. A label chosen
+    /// at rest would lose contrast exactly when the button is being used.
+    #[test]
+    fn a_label_is_scored_across_the_fill_it_will_move_to() {
+        let fill = Color::Rgb(255, 100, 103);
+        let background = Color::Rgb(0, 43, 54);
+        let pressed = nearest_to(background);
+        assert!(contrast(background, fill) >= TEXT_FLOOR);
+
+        let states = fill_states(fill, pressed);
+        let worst = Backdrops::new(&states).worst(background);
+        assert!(
+            worst < TEXT_FLOOR,
+            "at rest is the worst moment: {worst:.3}"
+        );
+        assert_ne!(
+            best_label(fill, pressed, &[background]),
+            background,
+            "a label was taken that only holds while the button is at rest"
+        );
+    }
+
     /// A well at rest must read as a distinct region without competing with the
     /// screen behind it. `default_dark` — the reference the other presets are
     /// tuned against — sits at 1.20:1, and every rung above it spends contrast
@@ -1677,27 +1707,10 @@ mod tests {
         }
     }
 
-    /// The floor a pair must clear. 4.5:1 is WCAG 2.1's normal-text guidance
-    /// (1.4.3), and it is what every preset is held to except where the palette
-    /// itself cannot serve the pair. Both exceptions below are palette facts,
-    /// not tuning that stopped early, and each names the number it settles for.
-    ///
-    /// Solarized is narrow everywhere: Schoonover's own dark body pair, `base0`
-    /// on `base03`, is 4.75:1, so the palette starts with almost no headroom
-    /// and every lifted fill spends some of it. Its two worst pairs are a
-    /// default button's label at rest, 3.41:1 on the undarkened blue, and a
-    /// ghost button's label under the pointer, 3.42:1.
-    ///
-    /// Nord and Gruvbox are narrow in one place each, and it is the same place:
-    /// a mid-luminance red that no tone of their own can label at 4.5:1 from
-    /// either side. Nord ships one red at all; Gruvbox's other reds cost more
-    /// elsewhere than they buy here, since `destructive` is a toast's frame and
-    /// icon as well as a button's fill. `nord6` on `nord11` is 3.55:1 at its
-    /// worst and `dark0_hard` on `bright_red` 3.78:1.
-    ///
-    /// The Nord and Gruvbox exception is scoped by pair *name*, so a pair added
-    /// later under a name starting the same way would inherit it. Name new
-    /// pairs accordingly, or key this differently.
+    /// The floor a pair must clear: WCAG 2.1 normal text (1.4.3), except for
+    /// Solarized, Nord, and Gruvbox, whose palettes take a documented exception
+    /// where they cannot serve a pair — keyed by pair-name prefix, so name new
+    /// pairs with that in mind.
     fn contrast_floor(theme: &Theme, pair: &str) -> f64 {
         match theme.name {
             "Nord" | "Gruvbox" if pair.starts_with("destructive button") => 3.5,
@@ -1794,7 +1807,7 @@ mod tests {
     ///
     /// A button's label stays put while its fill shifts under focus and the
     /// pointer, so the fill is moving toward the label it has to stay legible
-    /// against — which is the half of the derivation nothing measured before.
+    /// against.
     fn control_text_pairs(theme: &Theme) -> Vec<(String, Color, Color)> {
         let tabs = TabsStyle::from_theme(theme);
         let mut pairs = Vec::new();
@@ -1881,15 +1894,12 @@ mod tests {
     /// state, not just at rest.
     ///
     /// Focus and hover walk a fill toward the screen's own end, and on a light
-    /// theme that is where the page already is: every real light terminal
-    /// palette measured — GitHub Light, Solarized Light, Gruvbox Light,
-    /// Catppuccin Latte, One Half Light, plain white — put a hovered delete
-    /// button between 2.63:1 and 2.69:1 on its own surface while its resting
-    /// state passed.
+    /// theme that is where the page already is — so a resting state that passes
+    /// says nothing about the hovered one.
     ///
     /// Nord and Solarized are excused for the same reason they are excused
-    /// elsewhere: their one red is mid-luminance and already sits at 2.74:1 and
-    /// 3.12:1 at rest, so the states below it were never reachable.
+    /// elsewhere: their one red is mid-luminance and already misses at rest, so
+    /// the states below it were never reachable.
     fn check_fill_states_stay_on_the_page(theme: &Theme) {
         if matches!(theme.name, "Nord" | "Solarized") {
             return;
@@ -1959,10 +1969,8 @@ mod tests {
 
     /// A control's three fills, checked for size *and* direction.
     ///
-    /// Size alone leaves the direction unpinned — swapping the focus and hover
-    /// amounts, or hardcoding one end of the ramp in a component, changes every
-    /// fill in the crate and moves no measured number. Direction is the sign of
-    /// two successive luminance steps agreeing: whichever way a theme's polarity
+    /// Size alone leaves the direction unpinned. Direction is the sign of two
+    /// successive luminance steps agreeing: whichever way a theme's polarity
     /// sends a fill, it has to keep going that way.
     fn check_three_fills(theme: &Theme, role: &str, rest: Color, focused: Color, hovered: Color) {
         for (step, from, to) in [("focus", rest, focused), ("hover", focused, hovered)] {

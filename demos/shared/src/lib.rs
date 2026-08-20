@@ -4,6 +4,11 @@
 //! should wake it. [`run`] owns everything else — the terminal or canvas, the
 //! event listeners, and the redraw policy.
 //!
+//! Everything a terminal app needs beyond that is
+//! [`ratcn::terminal`]: opening the terminal, putting it back,
+//! and following its colors. This crate is the demos' glue and nothing more, so
+//! that a demo can be lifted out of this repository with it and still run.
+//!
 //! # Frames happen for a reason
 //!
 //! The host renders when something says the last frame is stale: the first
@@ -11,69 +16,14 @@
 //! resize. Nothing else. An idle demo costs one blocked read natively, and
 //! nothing at all in the browser.
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-use std::{io, sync::RwLock, time::Duration};
+use std::{io, time::Duration};
 
-use ratatui::{Frame, Terminal, backend::Backend, style::Color};
+#[cfg(target_arch = "wasm32")]
+use ratatui::style::Color;
+use ratatui::{Frame, Terminal, backend::Backend};
 #[cfg(not(target_arch = "wasm32"))]
-use ratatui_termina::{
-    TerminaBackend,
-    termina::{
-        Event as TerminalEvent, EventReader, PlatformTerminal, Terminal as _,
-        escape::csi::{Csi, DecPrivateMode, DecPrivateModeCode, Mode},
-    },
-};
-#[cfg(not(target_arch = "wasm32"))]
-use ratcn::terminal_query::ThemeWatch;
+use ratcn::terminal::{Session, SessionEvent, SessionOptions, termina};
 use ratcn::{Theme, runtime::Event};
-
-/// The theme every demo paints with.
-///
-/// Natively it is solved from the colors this terminal reported about itself,
-/// so the demos sit in the user's own palette rather than next to it. In the
-/// browser, and on a terminal that could not be asked, it is a preset.
-///
-/// It is resolved before the demo is built, and on a terminal that reports its
-/// own theme changes it is resolved *again* whenever the user flips theirs — so
-/// read it per frame and paint from what it says. A demo that copies it into
-/// its own state stops following the terminal at that moment. A demo that has
-/// to read it while being built is built by [`run_lazy`], after the first
-/// answer is in.
-#[must_use]
-pub fn theme() -> Theme {
-    *THEME
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Publish a newly resolved theme, and report whether it is a change — which is
-/// what the next frame depends on being told.
-#[cfg(not(target_arch = "wasm32"))]
-fn publish_theme(theme: Theme) -> bool {
-    let mut published = THEME
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let changed = *published != theme;
-    *published = theme;
-    changed
-}
-
-/// Resolved by the native [`run_lazy`] and re-resolved by its event loop; in
-/// the browser it keeps the value it was born with.
-static THEME: RwLock<Theme> = RwLock::new(fallback_theme());
-
-/// The theme to paint with when the terminal's own colors are unknown.
-///
-/// A preset that names every color, rather than [`Theme::terminal`]: the
-/// fallback runs exactly when the polarity of the screen is unknown, and the
-/// `terminal` preset pairs [`Color::Reset`] text with concrete dark wells —
-/// which on a light terminal is near-black text on a near-black fill. A theme
-/// that names its colors is at least legible on every terminal, whichever way
-/// round that terminal is.
-const fn fallback_theme() -> Theme {
-    Theme::default_dark()
-}
 
 /// The shortest wait worth honoring: a wake sooner than the display refreshes
 /// cannot show anything new. [`Demo::wake`] values this small or smaller mean
@@ -82,26 +32,24 @@ pub const ANIMATION_FRAME: Duration = Duration::from_millis(16);
 
 /// One demo, in the shape a host can drive.
 pub trait Demo {
-    /// Whether the demo reads input at all.
-    ///
-    /// A demo that only paints leaves this off: no browser listeners, and a
-    /// native terminal keeps its own mouse — with capture on, terminals
-    /// usually stop offering text selection.
+    /// Whether the demo reads input. Turning it on installs the browser's
+    /// listeners and takes over the terminal's mouse.
     const INPUT: bool = true;
 
     /// Whether the host delivers clipboard pastes — bracketed paste natively,
     /// the browser's `paste` event on the web.
     const PASTE: bool = false;
 
-    /// The color behind the grid.
-    ///
-    /// In the browser this is the canvas padding: the terminal grid covers a
-    /// whole number of cells, so a few pixels are usually left over along the
-    /// right and bottom edges.
-    fn background(&self) -> Color;
+    /// The theme this demo paints with, and what it falls back to under
+    /// [`ADAPTIVE`](Self::ADAPTIVE).
+    const THEME: Theme = Theme::default_dark();
 
-    /// Paint one frame.
-    fn draw(&mut self, frame: &mut Frame);
+    /// Turn this on to paint with the terminal's own colors, following them as
+    /// the user changes them. They reach [`draw`](Self::draw) each frame.
+    const ADAPTIVE: bool = false;
+
+    /// Paint one frame with `theme`.
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme);
 
     /// Route one event, returning whether the screen now needs redrawing.
     ///
@@ -117,14 +65,14 @@ pub trait Demo {
     /// How long the host may wait, with no event arriving at all, before it has
     /// to render again. [`None`] waits indefinitely.
     ///
-    /// This is the only way a demo whose screen depends on the clock — a toast
-    /// that expires, an animation, a background fetch still in flight — gets
-    /// the frame that no input event is going to ask for.
+    /// This is how a demo whose screen depends on the clock — a toast that
+    /// expires, an animation, a background fetch still in flight — gets the
+    /// frame it needs between input events.
     ///
-    /// It is a deadline, not a tick: a demo reads the clock in [`draw`](Self::draw)
-    /// and works from that reading, so any frame serves the deadline. Natively
-    /// that is what keeps sustained input from starving it — a wait answered by
-    /// an event never runs out, but it does draw.
+    /// It is a deadline: a demo reads the clock in [`draw`](Self::draw) and
+    /// works from that reading, so any frame serves it. Under sustained input
+    /// every frame is drawn from a fresh reading, which is what keeps the
+    /// deadline's work happening.
     fn wake(&self) -> Option<Duration> {
         None
     }
@@ -132,249 +80,76 @@ pub trait Demo {
 
 /// Run `demo` until it quits (natively) or forever (in the browser).
 ///
-/// The demo already exists, so it was built before the terminal was asked about
-/// its colors. That is fine for a demo whose theme is a constant. A demo that
-/// reads [`theme`] must read it *per frame* — a copy taken while the demo was
-/// being built is not only the pre-query theme, it also stops following the
-/// terminal from then on. A demo that has to read the theme while being built
-/// uses [`run_lazy`], which builds it after the query.
-///
 /// # Errors
 ///
 /// Returns an I/O error if the terminal or the browser canvas cannot be set up,
 /// and natively if drawing or reading input fails.
-pub fn run<D: Demo + 'static>(demo: D) -> io::Result<()> {
-    run_lazy(move || demo)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run<D: Demo + 'static>(mut demo: D) -> io::Result<()> {
+    let mut session = Session::open(options_for::<D>())?;
+    drive(&mut demo, &mut session)
 }
 
-/// Run the demo `build` returns, building it only once [`theme`] can answer.
-///
-/// The theme is resolved from the terminal inside this call, and a demo that
-/// reads it while being built has to be built after that — a picker seeding its
-/// selection from the theme list, a widget caching a color. `build` runs at the
-/// one moment where the terminal is open, the query has been answered, and no
-/// frame has been drawn.
-///
-/// # Errors
-///
-/// The same as [`run`].
+/// What a demo asks of its terminal.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run_lazy<D: Demo + 'static>(build: impl FnOnce() -> D) -> io::Result<()> {
-    let mut output = PlatformTerminal::new()?;
-    // Raw mode first: nothing below reads a reply that the line discipline
-    // would otherwise hold back until Enter.
-    output.enter_raw_mode()?;
-    // The one window the query has: raw mode is on and no event reader has
-    // taken a byte yet, so the terminal's answers are the only thing in the
-    // stream that is not the user typing. It happens before the alternate
-    // screen so a slow terminal is answered against the shell the user can
-    // still see, rather than behind a blank screen.
-    //
-    // The panic hook has to know the mode list, and whether the subscription
-    // joins it is the query's answer — so the query goes first and the hook is
-    // installed against the list it produced.
-    let (theme, subscribe) = queried(&mut output);
-    publish_theme(theme);
-
-    let modes = modes(D::INPUT, D::PASTE, subscribe);
-    // Termina restores raw mode after this hook runs, so the hook owes only the
-    // modes this host turns on below. It writes through a handle of its own,
-    // which is why it can run while the session is being unwound. Nothing is on
-    // yet, so the query above had nothing for a hook to put back.
-    output.set_panic_hook({
-        let modes = modes.clone();
-        move |handle| {
-            let _ = restore_modes(handle, &modes);
-        }
-    });
-
-    let events = output.event_reader();
-    // `Terminal::new` measures the grid and can fail. It runs while the modes
-    // are still off, so there is nothing to restore if it does — which is why
-    // the session takes them on afterwards and not before.
-    let session = Session {
-        terminal: Terminal::new(TerminaBackend::new(output))?,
-        modes,
-    };
-    let mut session = session.enable()?;
-
-    let mut demo = build();
-    drive(
-        &mut demo,
-        &mut session.terminal,
-        &mut TerminalEvents(events),
-    )
-}
-
-/// The native host's terminal, holding the modes it switched on.
-///
-/// Dropping it switches them back off. That is what covers every path out of
-/// [`run_lazy`] once the modes are on — a `?`, the quit key, or an unwinding
-/// panic — so the user never gets their shell back inside the alternate screen
-/// with the mouse still captured. Errors while restoring are dropped: `Drop`
-/// has nowhere to report them and the process is on its way out anyway.
-#[cfg(not(target_arch = "wasm32"))]
-struct Session {
-    terminal: Terminal<TerminaBackend<PlatformTerminal>>,
-    modes: Vec<DecPrivateModeCode>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Session {
-    /// Switch the modes on. A failure part-way through still restores, because
-    /// the guard already owns them: resetting a mode that never went on is
-    /// what the terminal does with any mode it does not know.
-    fn enable(mut self) -> io::Result<Self> {
-        set_modes(self.terminal.backend_mut(), &self.modes)?;
-        Ok(self)
+fn options_for<D: Demo>() -> SessionOptions {
+    let mut options = SessionOptions::new();
+    if D::INPUT {
+        options = options.mouse();
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for Session {
-    fn drop(&mut self) {
-        let _ = restore_modes(self.terminal.backend_mut(), &self.modes);
+    if D::PASTE {
+        options = options.paste();
     }
+    if D::ADAPTIVE {
+        options = options.adaptive();
+    }
+    options
 }
 
-/// Solve a theme from the colors the terminal reports about itself, and say
-/// whether to subscribe to changes in them.
+/// What the loop needs of its host: a frame to draw on, and the next thing to
+/// happen.
 ///
-/// Any terminal that answered is subscribed to. There is no way to ask mode
-/// 2031 whether it is supported, and switching it on where it is not costs
-/// nothing — the notification that never comes is the same silence as not
-/// asking. The light/dark verdict is deliberately *not* the signal: it is a
-/// separate capability with wider support than the mode, and a verdict that
-/// merely arrived after the startup fence would write off a terminal that
-/// supports everything.
-///
-/// A terminal that cannot be asked, will not answer, or answers only in part
-/// gets the [`fallback_theme`] and no subscription. So does one whose reply
-/// could not be read: the same terminal is about to be drawn on, and if it is
-/// broken enough to fail here the frame will say so.
-///
-/// Neither branch is reachable without a terminal, so both are covered by the
-/// pty scenarios rather than by a test here: an answering terminal is sent
-/// `?2031h` and follows a flip, a silent one is sent neither.
+/// [`Session`] is the one that matters; the tests supply a scripted one, which
+/// is how the redraw policy below is checked without a terminal.
 #[cfg(not(target_arch = "wasm32"))]
-fn queried(terminal: &mut PlatformTerminal) -> (Theme, bool) {
-    match ratcn::terminal_query::query(terminal) {
-        Ok(Some(colors)) => (
-            Theme::adaptive(
-                colors.background,
-                colors.foreground,
-                colors.palette16.as_ref(),
-            ),
-            true,
-        ),
-        Ok(None) | Err(_) => (fallback_theme(), false),
-    }
-}
+trait Host {
+    type Backend: Backend<Error = io::Error>;
 
-/// The terminal modes the host switches on, in the order it switches them on.
-///
-/// Termina deliberately manages none of these: they are protocol, and the
-/// application decides. Restoring walks the list back off in reverse, which is
-/// why the theme subscription goes on last — it comes off first, and no change
-/// gets reported into a terminal that has started being put back.
-#[cfg(not(target_arch = "wasm32"))]
-fn modes(input: bool, paste: bool, subscribe: bool) -> Vec<DecPrivateModeCode> {
-    use DecPrivateModeCode as M;
+    fn terminal(&mut self) -> &mut Terminal<Self::Backend>;
 
-    let mut modes = vec![M::ClearAndEnableAlternateScreen];
-    if input {
-        // Presses, motion with a button held, motion without one, and SGR
-        // coordinates — without the last, a click past column 223 cannot be
-        // encoded at all.
-        modes.extend([
-            M::MouseTracking,
-            M::ButtonEventMouse,
-            M::AnyEventMouse,
-            M::SGRMouse,
-        ]);
-    }
-    if paste {
-        modes.push(M::BracketedPaste);
-    }
-    if subscribe {
-        modes.push(M::Theme);
-    }
-    modes
+    /// What the terminal says it looks like, or `fallback`.
+    fn theme(&self, fallback: Theme) -> Theme;
+
+    /// Wait for at most `timeout`, or indefinitely when it is [`None`].
+    fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<SessionEvent>>;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
-    for &code in modes {
-        let mode = DecPrivateMode::Code(code);
-        write!(out, "{}", Csi::Mode(Mode::SetDecPrivateMode(mode)))?;
+impl Host for Session {
+    type Backend = ratcn::terminal::SessionBackend;
+
+    fn terminal(&mut self) -> &mut Terminal<Self::Backend> {
+        self.terminal_mut()
     }
-    out.flush()
-}
 
-/// Switch the modes back off, newest first, and show the cursor.
-///
-/// A frame interrupted between hiding the cursor and showing it again leaves it
-/// hidden, and a hidden cursor is invisible in the shell the user comes back to.
-#[cfg(not(target_arch = "wasm32"))]
-fn restore_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
-    for &code in modes.iter().rev() {
-        let mode = DecPrivateMode::Code(code);
-        write!(out, "{}", Csi::Mode(Mode::ResetDecPrivateMode(mode)))?;
+    fn theme(&self, fallback: Theme) -> Theme {
+        self.theme_with_fallback(fallback)
     }
-    let cursor = DecPrivateMode::Code(DecPrivateModeCode::ShowCursor);
-    write!(out, "{}", Csi::Mode(Mode::SetDecPrivateMode(cursor)))?;
-    out.flush()
-}
 
-/// Where the native host's waiting happens.
-///
-/// A demo waits on the terminal. The tests drive the same loop from a scripted
-/// source, which is also how they see the waits the host asks for.
-#[cfg(not(target_arch = "wasm32"))]
-trait Events {
-    /// Wait for the next event, for at most `timeout` — indefinitely when it is
-    /// [`None`]. `Ok(None)` means the wait ran out with nothing to route.
-    fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<TerminalEvent>>;
-}
-
-/// The terminal itself: poll when there is a deadline, block when there is not.
-#[cfg(not(target_arch = "wasm32"))]
-struct TerminalEvents(EventReader);
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Events for TerminalEvents {
-    fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<TerminalEvent>> {
-        // Everything is taken, escape replies included: a reply that outran the
-        // startup query's fence is one this host has no use for, and leaving it
-        // buffered would only hand it to the next read.
-        if let Some(timeout) = timeout
-            && !self.0.poll(Some(timeout), |_| true)?
-        {
-            return Ok(None);
-        }
-        self.0.read(|_| true).map(Some)
+    fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<SessionEvent>> {
+        Session::next(self, timeout)
     }
 }
 
 /// Draw, wait, route, repeat, until the quit key.
 #[cfg(not(target_arch = "wasm32"))]
-fn drive<D, B, E>(demo: &mut D, terminal: &mut Terminal<B>, events: &mut E) -> io::Result<()>
-where
-    D: Demo,
-    B: Backend<Error = io::Error> + io::Write,
-    E: Events,
-{
-    // Idle unless the terminal was subscribed to, and free either way: a
-    // terminal that never reports a change never moves it out of `Idle`.
-    //
-    // A process that can be suspended would re-query on SIGCONT as well — the
-    // terminal may have been re-themed while it was stopped. These demos do not
-    // handle suspension, so there is no handler for it to hang off.
-    let mut watch = ThemeWatch::new();
+fn drive<D: Demo, H: Host>(demo: &mut D, host: &mut H) -> io::Result<()> {
     let mut stale = true;
     loop {
         if stale {
-            stale = draw_frame(demo, terminal)?;
+            // Read every frame: this is what follows a terminal that re-themes.
+            let theme = host.theme(D::THEME);
+            stale = draw_frame(demo, host.terminal(), &theme)?;
         }
 
         // The wait is as long as the demo will allow. A deadline sooner than one
@@ -387,31 +162,23 @@ where
         // deadline's work happens whether the wake-up or an event caused the
         // frame. The browser host has no such asymmetry: its timer is
         // independent of input.
-        let wanted = demo.wake().map(|delay| delay.max(ANIMATION_FRAME));
-        let timeout = soonest(wanted, watch.wake(Instant::now()));
-        let event = events.next(timeout)?;
-
-        // The watch sees the event before the demo does, and takes nothing away
-        // from it: a reply is not an app event, and a keystroke that arrived
-        // mid-exchange is not a reply.
-        let now = Instant::now();
-        if let Some(event) = &event {
-            watch.absorb(event, now);
-        }
-        if let Some(colors) = watch.step(terminal.backend_mut(), now)? {
-            stale |= publish_theme(Theme::adaptive(
-                colors.background,
-                colors.foreground,
-                colors.palette16.as_ref(),
-            ));
-        }
-
-        let Some(event) = event else {
-            // The wait ran out. Either the demo's deadline arrived or the
-            // watch's did; a frame answers both, and the watch's costs one
-            // frame per theme change.
+        let timeout = demo.wake().map(|delay| delay.max(ANIMATION_FRAME));
+        let Some(event) = host.next(timeout)? else {
+            // The wait ran out: the deadline the demo named has arrived, and no
+            // event needs inventing for it.
             stale = true;
             continue;
+        };
+
+        let event = match event {
+            // The terminal re-themed. Nothing was asked of this loop to make it
+            // happen; it arrives like any other event.
+            // The frame above reads the theme, so this owes only the frame.
+            SessionEvent::ThemeChanged(_) => {
+                stale = true;
+                continue;
+            }
+            SessionEvent::Input(event) => event,
         };
 
         if is_quit(&event) {
@@ -419,20 +186,25 @@ where
         }
         // A resize is not an app event: the new size reaches the demo as the
         // next frame's area, so all the host owes it is that frame.
-        stale |= matches!(event, TerminalEvent::WindowResized(..));
+        stale |= matches!(event, termina::Event::WindowResized(..));
         if let Ok(event) = Event::try_from(event) {
             stale |= demo.handle_event(event);
         }
     }
 }
 
-/// The nearer of two waits, where [`None`] is "no deadline of my own".
+/// Ctrl+C, the demos' quit key.
 #[cfg(not(target_arch = "wasm32"))]
-fn soonest(one: Option<Duration>, other: Option<Duration>) -> Option<Duration> {
-    match (one, other) {
-        (Some(one), Some(other)) => Some(one.min(other)),
-        (only, None) | (None, only) => only,
-    }
+fn is_quit(event: &termina::Event) -> bool {
+    use termina::event::{KeyCode, KeyEventKind, Modifiers};
+
+    matches!(
+        event,
+        termina::Event::Key(key)
+            if key.kind == KeyEventKind::Press
+                && key.code == KeyCode::Char('c')
+                && key.modifiers.contains(Modifiers::CONTROL)
+    )
 }
 
 /// Draw one frame, and report whether the grid changed size while it was being
@@ -446,45 +218,30 @@ fn soonest(one: Option<Duration>, other: Option<Duration>) -> Option<Duration> {
 ///
 /// Returns the backend's error if the frame cannot be drawn or the grid cannot
 /// be measured.
-fn draw_frame<D, B>(demo: &mut D, terminal: &mut Terminal<B>) -> io::Result<bool>
+fn draw_frame<D, B>(demo: &mut D, terminal: &mut Terminal<B>, theme: &Theme) -> io::Result<bool>
 where
     D: Demo,
     B: Backend<Error = io::Error>,
 {
-    let drawn = terminal.draw(|frame| demo.draw(frame))?.area.as_size();
+    let drawn = terminal
+        .draw(|frame| demo.draw(frame, theme))?
+        .area
+        .as_size();
     Ok(terminal.size()? != drawn)
 }
 
-/// Run the demo `build` returns in the browser. Returns once the host is wired
-/// up; the demo keeps running on browser events and animation frames.
-///
-/// There is no terminal to ask here, so [`theme`] already answers and `build`
-/// runs immediately.
+/// Run `demo` in the browser. Returns once the host is wired up; the demo keeps
+/// running on browser events and animation frames.
 ///
 /// # Errors
 ///
 /// Returns an I/O error if the canvas backend or one of the listeners cannot be
 /// installed.
 #[cfg(target_arch = "wasm32")]
-pub fn run_lazy<D: Demo + 'static>(build: impl FnOnce() -> D) -> io::Result<()> {
-    web_host::start(build())
+pub fn run<D: Demo + 'static>(demo: D) -> io::Result<()> {
+    web_host::start(demo)
 }
 
-/// Ctrl+C, the demos' quit key.
-#[cfg(not(target_arch = "wasm32"))]
-fn is_quit(event: &TerminalEvent) -> bool {
-    use ratatui_termina::termina::event::{KeyCode, KeyEventKind, Modifiers};
-
-    matches!(
-        event,
-        TerminalEvent::Key(key)
-            if key.kind == KeyEventKind::Press
-                && key.code == KeyCode::Char('c')
-                && key.modifiers.contains(Modifiers::CONTROL)
-    )
-}
-
-/// The browser host: events in, animation frames out, nothing in between.
 #[cfg(target_arch = "wasm32")]
 mod web_host {
     use std::{
@@ -508,12 +265,9 @@ mod web_host {
 
     /// Drives one demo on its own animation frames.
     ///
-    /// Ratzilla's `draw_web` is deliberately unused: it consumes the terminal
-    /// and re-arms `requestAnimationFrame` unconditionally, so a fully idle
-    /// demo still renders a complete frame sixty times a second. The terminal
-    /// it drives is an ordinary Ratatui [`Terminal`], so this host keeps the
-    /// terminal instead and asks for a frame only when there is something new
-    /// to show.
+    /// Ratzilla's `draw_web` re-arms `requestAnimationFrame` unconditionally,
+    /// so an idle demo would render sixty frames a second. This host keeps the
+    /// [`Terminal`] and asks for a frame only when there is something new.
     struct Host<D> {
         demo: RefCell<D>,
         terminal: RefCell<Terminal<WebGl2Backend>>,
@@ -541,7 +295,7 @@ mod web_host {
     /// reference to the host, the host owns the callback, and that cycle is
     /// what keeps the demo alive after `main` returns.
     pub fn start<D: Demo + 'static>(demo: D) -> io::Result<()> {
-        let backend = super::web_backend(demo.background())?;
+        let backend = super::web_backend(D::THEME.background)?;
         let host = Rc::new(Host {
             demo: RefCell::new(demo),
             terminal: RefCell::new(Terminal::new(backend)?),
@@ -599,8 +353,9 @@ mod web_host {
             let outgrew = super::draw_frame(
                 &mut *self.demo.borrow_mut(),
                 &mut self.terminal.borrow_mut(),
+                &D::THEME,
             )
-            .expect("the canvas backend accepts every frame");
+            .expect("the canvas backend refused a frame");
             self.rendered.set(true);
             // The canvas adopted a resize while this frame was flushed, so the
             // frame that settles on the new grid is the next one.
@@ -619,11 +374,11 @@ mod web_host {
             let frame = self.frame.borrow();
             let callback = frame
                 .as_ref()
-                .expect("the frame callback is installed before the first request");
+                .expect("a frame was requested before the host was wired up");
             web_sys::window()
-                .expect("a demo runs in a browser window")
+                .expect("no browser window to draw in")
                 .request_animation_frame(callback.as_ref().unchecked_ref())
-                .expect("the browser schedules animation frames");
+                .expect("the browser refused an animation frame");
         }
 
         /// Arm the frame the demo asked the clock for, replacing any deadline
@@ -770,7 +525,8 @@ mod browser_paste {
 #[cfg(target_arch = "wasm32")]
 pub use browser_paste::BrowserPasteListener;
 
-/// Elapsed time since the demo started, from the platform's monotonic clock.
+/// Elapsed time since this was first called, from the platform's monotonic
+/// clock. Demos call it every frame, so the first call is the first frame.
 #[must_use]
 pub fn monotonic_time() -> Duration {
     #[cfg(target_arch = "wasm32")]
@@ -784,6 +540,8 @@ pub fn monotonic_time() -> Duration {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // A process-start instant has to be remembered somewhere, and `Instant`
+        // has no const constructor.
         use std::{sync::OnceLock, time::Instant};
 
         static START: OnceLock<Instant> = OnceLock::new();
@@ -791,11 +549,11 @@ pub fn monotonic_time() -> Duration {
     }
 }
 
-/// The redraw policy, driven from a scripted terminal.
+/// The redraw policy, driven from a scripted host.
 ///
-/// The policy is the whole point of this host, and every claim it makes is
-/// observable natively: the frames a demo is asked to draw, and the waits the
-/// host performs between them.
+/// The policy is the whole point of this crate, and every claim it makes is
+/// observable: the frames a demo is asked to draw, and the waits the loop asks
+/// for between them.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::{collections::VecDeque, convert::Infallible};
@@ -805,14 +563,15 @@ mod tests {
         buffer::Cell,
         layout::{Position, Size},
     };
-    use ratatui_termina::termina::{
-        WindowSize as TerminalSize,
+    use ratcn::Theme;
+    use ratcn::terminal::termina::{
+        self, WindowSize as TerminalSize,
         event::{KeyCode, KeyEvent as TerminalKeyEvent, Modifiers},
     };
 
     use super::{
-        ANIMATION_FRAME, Backend, Color, Demo, Duration, Event, Events, Frame, Terminal,
-        TerminalEvent, draw_frame, drive, io,
+        ANIMATION_FRAME, Backend, Demo, Duration, Event, Frame, Host, SessionEvent, SessionOptions,
+        Terminal, draw_frame, drive, io,
     };
 
     /// A [`TestBackend`] that reports a native host's error type, and that can
@@ -822,9 +581,6 @@ mod tests {
         inner: TestBackend,
         /// Adopted during the next flush, once.
         resize_on_flush: Option<Size>,
-        /// Bytes the host wrote straight through, rather than as cells: the
-        /// theme watch's re-query is the only thing that does.
-        written: Vec<u8>,
     }
 
     impl HostBackend {
@@ -832,7 +588,6 @@ mod tests {
             Self {
                 inner: TestBackend::new(width, height),
                 resize_on_flush: None,
-                written: Vec::new(),
             }
         }
 
@@ -843,23 +598,9 @@ mod tests {
         }
     }
 
-    /// The re-query the theme watch writes goes through the backend, which the
-    /// real one is: `TerminaBackend` is the terminal's own writer. Discarding
-    /// it here would let the watch write into a hole and no test would notice.
-    impl io::Write for HostBackend {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.written.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
     /// A `TestBackend` cannot fail; a native host's backend can.
     fn native<T>(result: Result<T, Infallible>) -> io::Result<T> {
-        Ok(result.expect("a TestBackend is infallible"))
+        Ok(result.expect("a TestBackend cannot fail"))
     }
 
     impl Backend for HostBackend {
@@ -926,15 +667,14 @@ mod tests {
         /// The deadline to report once `frames` frames have been drawn, so a
         /// test can watch the host re-read it. Missing entries are no deadline.
         deadlines: Vec<Option<Duration>>,
+        /// The theme each frame was painted with, in order.
+        themes: Vec<Theme>,
     }
 
     impl Demo for Probe {
-        fn background(&self) -> Color {
-            Color::Reset
-        }
-
-        fn draw(&mut self, frame: &mut Frame) {
+        fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
             self.frames += 1;
+            self.themes.push(*theme);
             let area = frame.area();
             frame.render_widget("probe", area);
         }
@@ -949,251 +689,127 @@ mod tests {
         }
     }
 
-    /// The waits the host performs, scripted: one entry answers one wait.
+    /// The host, scripted: one entry answers one wait.
     struct Script {
+        terminal: Terminal<HostBackend>,
+        /// What the terminal says it looks like, if it says anything.
+        theme: Option<Theme>,
         /// `Some(event)` hands an event over; `None` is a wait that ran out.
-        steps: VecDeque<Option<TerminalEvent>>,
-        /// The timeout the host asked for, per wait, in order.
+        steps: VecDeque<Option<SessionEvent>>,
+        /// The timeout the loop asked for, per wait, in order.
         waits: Vec<Option<Duration>>,
-        /// Whether a wait that runs out really takes that long. Off by default,
-        /// because a scripted deadline is usually seconds the test has no
-        /// reason to spend; on where the watch's own deadlines are what is
-        /// being driven, and those are wall-clock.
-        sleeps: bool,
     }
 
     impl Script {
-        fn new(steps: impl IntoIterator<Item = Option<TerminalEvent>>) -> Self {
+        fn new(
+            backend: HostBackend,
+            steps: impl IntoIterator<Item = Option<SessionEvent>>,
+        ) -> Self {
             Self {
+                terminal: Terminal::new(backend).expect("the test backend opens"),
+                theme: None,
                 steps: steps.into_iter().collect(),
                 waits: Vec::new(),
-                sleeps: false,
             }
-        }
-
-        fn sleeping(mut self) -> Self {
-            self.sleeps = true;
-            self
         }
     }
 
-    impl Events for Script {
-        fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<TerminalEvent>> {
+    impl Host for Script {
+        type Backend = HostBackend;
+
+        fn terminal(&mut self) -> &mut Terminal<HostBackend> {
+            &mut self.terminal
+        }
+
+        fn theme(&self, fallback: Theme) -> Theme {
+            self.theme.unwrap_or(fallback)
+        }
+
+        fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<SessionEvent>> {
             self.waits.push(timeout);
             // A spent script quits, so the loop returns instead of running on.
             let step = self.steps.pop_front().unwrap_or_else(|| Some(quit()));
-            if self.sleeps
-                && step.is_none()
-                && let Some(timeout) = timeout
-            {
-                std::thread::sleep(timeout);
+            // The terminal wears a theme from the moment it reports it, the way
+            // a real one does.
+            if let Some(SessionEvent::ThemeChanged(theme)) = &step {
+                self.theme = Some(*theme);
             }
             Ok(step)
         }
     }
 
-    fn key(code: char) -> TerminalEvent {
-        TerminalEvent::Key(TerminalKeyEvent::new(KeyCode::Char(code), Modifiers::NONE))
+    fn input(event: termina::Event) -> SessionEvent {
+        SessionEvent::Input(event)
     }
 
-    fn quit() -> TerminalEvent {
-        TerminalEvent::Key(TerminalKeyEvent::new(
+    fn key(code: char) -> SessionEvent {
+        input(termina::Event::Key(TerminalKeyEvent::new(
+            KeyCode::Char(code),
+            Modifiers::NONE,
+        )))
+    }
+
+    fn quit() -> SessionEvent {
+        input(termina::Event::Key(TerminalKeyEvent::new(
             KeyCode::Char('c'),
             Modifiers::CONTROL,
-        ))
+        )))
     }
 
-    fn resize(cols: u16, rows: u16) -> TerminalEvent {
-        TerminalEvent::WindowResized(TerminalSize {
+    fn resize(cols: u16, rows: u16) -> SessionEvent {
+        input(termina::Event::WindowResized(TerminalSize {
             cols,
             rows,
             pixel_width: None,
             pixel_height: None,
-        })
+        }))
     }
 
-    /// The terminal reporting that its theme changed.
-    fn re_themed() -> TerminalEvent {
-        use ratatui_termina::termina::escape::csi::{Csi, Mode, ThemeMode};
-
-        TerminalEvent::Csi(Csi::Mode(Mode::ReportTheme(ThemeMode::Light)))
+    /// Run the loop over `script` and hand back what it drew on.
+    fn run_scripted(probe: &mut Probe, script: &mut Script) {
+        drive(probe, script).expect("the scripted host reaches the quit key");
     }
 
-    /// The terminal answering one half of a colour re-query.
-    fn color_reply(background: bool, red: u8, green: u8, blue: u8) -> TerminalEvent {
-        use ratatui_termina::termina::{
-            escape::osc::{ColorOrQuery, DynamicColorNumber, Osc},
-            style::RgbColor,
-        };
-
-        let slot = if background {
-            DynamicColorNumber::TextBackgroundColor
-        } else {
-            DynamicColorNumber::TextForegroundColor
-        };
-        TerminalEvent::Osc(Osc::ChangeDynamicColors(
-            slot,
-            vec![ColorOrQuery::Color(RgbColor::new(red, green, blue))],
-        ))
-    }
-
-    /// Run the host over `script` and hand back the terminal it drew on.
-    fn run_scripted(
-        probe: &mut Probe,
-        backend: HostBackend,
-        script: &mut Script,
-    ) -> Terminal<HostBackend> {
-        let mut terminal = Terminal::new(backend).expect("the test backend opens");
-        drive(probe, &mut terminal, script).expect("the scripted host reaches the quit key");
-        terminal
-    }
-
+    /// A demo that reads no input keeps the terminal's own mouse, and one that
+    /// never pastes leaves bracketed paste alone.
     #[test]
-    fn the_fallback_theme_leaves_no_color_to_the_terminal() {
-        // It is chosen exactly when the terminal's polarity is unknown, so a
-        // `Color::Reset` in it would be a color picked by a terminal the rest
-        // of the theme was not solved for: `Theme::terminal`'s Reset text on
-        // its concrete dark wells is near-black on near-black once the screen
-        // turns out to be light.
-        //
-        // What an unasked terminal actually gets is pinned by
-        // `the_published_theme_is_what_the_next_frame_reads`, which owns the
-        // published theme — this one must not touch it.
-        let theme = super::fallback_theme();
-
-        for (role, color) in [
-            ("foreground", theme.foreground),
-            ("background", theme.background),
-            ("surface", theme.surface),
-            ("field", theme.field),
-        ] {
-            assert_ne!(color, Color::Reset, "{role} is named, not inherited");
+    fn a_demo_gets_the_terminal_modes_it_asked_for_and_no_others() {
+        struct Quiet;
+        struct Everything;
+        impl Demo for Quiet {
+            const INPUT: bool = false;
+            fn draw(&mut self, _frame: &mut Frame, _theme: &Theme) {}
         }
-    }
+        impl Demo for Everything {
+            const PASTE: bool = true;
+            const ADAPTIVE: bool = true;
+            fn draw(&mut self, _frame: &mut Frame, _theme: &Theme) {}
+        }
 
-    /// The published theme is one value for the whole process. Tests that move
-    /// it take this in turn rather than racing over it, and put the fallback
-    /// back when they are done.
-    fn published_theme() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-        LOCK.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    #[test]
-    fn a_solved_theme_differs_from_another_by_more_than_its_name() {
-        // Every change this feature produces is `Adaptive` following `Adaptive`,
-        // so a comparison that stopped at the name would report no change ever
-        // and quietly switch live re-theming off.
-        let _guard = published_theme();
-
-        let light =
-            ratcn::Theme::adaptive(Color::Rgb(253, 246, 227), Color::Rgb(101, 123, 131), None);
-        let dark = ratcn::Theme::adaptive(Color::Rgb(26, 27, 38), Color::Rgb(192, 202, 245), None);
         assert_eq!(
-            light.name, dark.name,
-            "both are solved, so both are Adaptive"
-        );
-
-        assert!(super::publish_theme(light), "the first is a change");
-        assert!(
-            super::publish_theme(dark),
-            "and so is the second, name for name identical though it is"
-        );
-
-        super::publish_theme(super::fallback_theme());
-    }
-
-    #[test]
-    fn the_published_theme_is_what_the_next_frame_reads() {
-        let _guard = published_theme();
-        // No query has run here, so this is what an unasked terminal gets.
-        assert_eq!(super::theme(), super::fallback_theme());
-
-        let flipped = ratcn::Theme::catppuccin();
-        assert!(
-            super::publish_theme(flipped),
-            "a different theme is a change, and the frame that shows it is owed"
-        );
-        assert_eq!(super::theme(), flipped, "a demo reads it on the next frame");
-        assert!(
-            !super::publish_theme(flipped),
-            "re-publishing the same theme owes no frame: a terminal that \
-             reports a change to the colors it already had costs no repaint"
-        );
-
-        assert!(super::publish_theme(super::fallback_theme()));
-        assert_eq!(super::theme(), super::fallback_theme());
-    }
-
-    #[test]
-    fn the_subscription_goes_on_last_so_it_comes_off_first() {
-        use super::DecPrivateModeCode as M;
-
-        let quiet = super::modes(false, false, false);
-        let subscribed = super::modes(true, true, true);
-
-        assert!(
-            !quiet.contains(&M::Theme),
-            "a terminal that cannot report changes is not subscribed to"
+            super::options_for::<Quiet>(),
+            SessionOptions::new(),
+            "a demo that asks for nothing gets the alternate screen alone, and \
+             its terminal is never queried"
         );
         assert_eq!(
-            subscribed.last(),
-            Some(&M::Theme),
-            "restoring walks the list backwards, so last on is first off"
+            super::options_for::<Probe>(),
+            SessionOptions::new().mouse(),
+            "reading input is what asks for the mouse"
         );
         assert_eq!(
-            subscribed.first(),
-            Some(&M::ClearAndEnableAlternateScreen),
-            "and the screen the user came from is the last thing given back"
+            super::options_for::<Everything>(),
+            SessionOptions::new().mouse().paste().adaptive(),
+            "and following the terminal is what asks for the query"
         );
-    }
-
-    #[test]
-    fn restoring_switches_the_subscription_off_before_anything_else() {
-        let modes = super::modes(true, true, true);
-        let mut written = Vec::new();
-
-        super::restore_modes(&mut written, &modes).expect("a vector accepts every write");
-
-        let written = String::from_utf8(written).expect("escape sequences are ASCII");
-        let subscription_off = written
-            .find("\x1b[?2031l")
-            .expect("the subscription is switched off");
-        let screen_back = written
-            .find("\x1b[?1049l")
-            .expect("the alternate screen is left");
-
-        assert!(
-            subscription_off < screen_back,
-            "no change may be reported into a terminal that has started being \
-             put back: {written:?}"
-        );
-        assert!(
-            written.ends_with("\x1b[?25h"),
-            "and the cursor is visible again at the end: {written:?}"
-        );
-    }
-
-    #[test]
-    fn the_nearer_of_two_waits_wins_and_no_wait_at_all_yields() {
-        let short = Duration::from_millis(10);
-        let long = Duration::from_millis(500);
-
-        assert_eq!(super::soonest(Some(long), Some(short)), Some(short));
-        assert_eq!(super::soonest(Some(short), Some(long)), Some(short));
-        assert_eq!(super::soonest(Some(short), None), Some(short));
-        assert_eq!(super::soonest(None, Some(long)), Some(long));
-        assert_eq!(super::soonest(None, None), None);
     }
 
     #[test]
     fn the_first_frame_is_drawn_before_any_event_arrives() {
         let mut probe = Probe::default();
-        let mut script = Script::new([]);
+        let mut script = Script::new(HostBackend::new(20, 5), []);
 
-        let terminal = run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+        run_scripted(&mut probe, &mut script);
 
         assert_eq!(probe.frames, 1);
         assert_eq!(
@@ -1201,7 +817,8 @@ mod tests {
             vec![None],
             "a demo with no deadline waits for input, with no timeout"
         );
-        let painted: String = terminal
+        let painted: String = script
+            .terminal
             .backend()
             .inner
             .buffer()
@@ -1209,10 +826,7 @@ mod tests {
             .iter()
             .map(Cell::symbol)
             .collect();
-        assert!(
-            painted.contains("probe"),
-            "the frame reached the backend: {painted:?}"
-        );
+        assert!(painted.contains("probe"), "the frame reached the backend");
     }
 
     #[test]
@@ -1221,9 +835,9 @@ mod tests {
             handled: VecDeque::from([true]),
             ..Probe::default()
         };
-        let mut script = Script::new([Some(key('y'))]);
+        let mut script = Script::new(HostBackend::new(20, 5), [Some(key('y'))]);
 
-        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+        run_scripted(&mut probe, &mut script);
 
         assert_eq!(probe.routed.len(), 1, "the event reached the demo");
         assert_eq!(probe.frames, 2, "the first frame, and one for the event");
@@ -1235,9 +849,9 @@ mod tests {
             handled: VecDeque::from([false]),
             ..Probe::default()
         };
-        let mut script = Script::new([Some(key('n'))]);
+        let mut script = Script::new(HostBackend::new(20, 5), [Some(key('n'))]);
 
-        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+        run_scripted(&mut probe, &mut script);
 
         assert_eq!(probe.routed.len(), 1, "the event reached the demo");
         assert_eq!(probe.frames, 1, "only the first frame");
@@ -1246,16 +860,52 @@ mod tests {
     #[test]
     fn a_resize_draws_even_though_the_demo_never_sees_it() {
         let mut probe = Probe::default();
-        let mut script = Script::new([Some(resize(30, 10))]);
+        let mut script = Script::new(HostBackend::new(20, 5), [Some(resize(30, 10))]);
 
-        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+        run_scripted(&mut probe, &mut script);
+
+        assert!(probe.routed.is_empty(), "a resize is not an app event");
+        assert_eq!(probe.frames, 2, "the new size reaches the demo as an area");
+    }
+
+    /// Each frame is painted with the theme read from the terminal for that
+    /// frame, so a change reaches the screen through `draw` alone.
+    #[test]
+    fn a_re_theme_reaches_the_next_frame_without_the_demo_matching_it() {
+        let flipped = Theme::catppuccin();
+        let mut probe = Probe::default();
+        let mut script = Script::new(
+            HostBackend::new(20, 5),
+            [Some(SessionEvent::ThemeChanged(flipped))],
+        );
+
+        run_scripted(&mut probe, &mut script);
 
         assert!(
             probe.routed.is_empty(),
-            "a resize is not an app event: {:?}",
-            probe.routed
+            "a theme change is not routed at the components"
         );
-        assert_eq!(probe.frames, 2, "the new size reaches the demo as an area");
+        assert_eq!(probe.frames, 2, "the frame that wears it was drawn");
+        assert_eq!(
+            probe.themes,
+            vec![<Probe as Demo>::THEME, flipped],
+            "the first frame wears the preset, and the frame after the change \
+             wears what the terminal now says"
+        );
+    }
+
+    #[test]
+    fn a_demo_paints_with_its_own_preset_when_the_terminal_says_nothing() {
+        let mut probe = Probe::default();
+        let mut script = Script::new(HostBackend::new(20, 5), []);
+
+        run_scripted(&mut probe, &mut script);
+
+        assert_eq!(
+            probe.themes,
+            vec![<Probe as Demo>::THEME],
+            "the fallback is the demo's own const, not the crate's"
+        );
     }
 
     #[test]
@@ -1265,9 +915,9 @@ mod tests {
             deadlines: vec![None, Some(deadline)],
             ..Probe::default()
         };
-        let mut script = Script::new([None]);
+        let mut script = Script::new(HostBackend::new(20, 5), [None]);
 
-        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+        run_scripted(&mut probe, &mut script);
 
         assert_eq!(probe.frames, 2, "the deadline caused a frame of its own");
         assert!(
@@ -1286,10 +936,9 @@ mod tests {
             deadlines: vec![None, Some(first), Some(second)],
             ..Probe::default()
         };
-        // An ignored event, then a wait that runs out.
-        let mut script = Script::new([Some(key('n')), None]);
+        let mut script = Script::new(HostBackend::new(20, 5), [Some(key('n')), None]);
 
-        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+        run_scripted(&mut probe, &mut script);
 
         assert_eq!(
             script.waits,
@@ -1305,9 +954,9 @@ mod tests {
             deadlines: vec![None, Some(Duration::ZERO)],
             ..Probe::default()
         };
-        let mut script = Script::new([]);
+        let mut script = Script::new(HostBackend::new(20, 5), []);
 
-        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+        run_scripted(&mut probe, &mut script);
 
         assert_eq!(
             script.waits,
@@ -1317,82 +966,13 @@ mod tests {
     }
 
     #[test]
-    fn a_reported_theme_change_shortens_the_wait_a_demo_asked_to_be_endless() {
-        // The demo names no deadline, so before the notification the host waits
-        // for input with no timeout at all. Afterwards it owes the watch a
-        // visit, and the wait it asks for has to be short enough to make it.
-        let mut probe = Probe::default();
-        let mut script = Script::new([Some(re_themed())]);
-
-        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
-
-        assert!(
-            probe.routed.is_empty(),
-            "a terminal's report is not an app event: {:?}",
-            probe.routed
-        );
-        assert_eq!(script.waits.first(), Some(&None), "endless, until the news");
-        let after = script.waits.get(1).copied().flatten();
-        let waited = after.expect("the watch put a deadline on the next wait");
-        assert!(
-            waited <= Duration::from_millis(100),
-            "the re-query is due within the collapse window: {waited:?}"
-        );
-    }
-
-    #[test]
-    fn a_reported_change_is_re_queried_and_the_answer_reaches_the_next_frame() {
-        // The whole pipeline through the host: notification in, re-query out on
-        // the wire, replies in, new theme published, frame drawn. Costs the one
-        // debounce window in real time, which is what the sleeping script is
-        // for — the watch's deadlines are wall-clock.
-        let _guard = published_theme();
-        super::publish_theme(super::fallback_theme());
-
-        let mut probe = Probe::default();
-        let mut script = Script::new([
-            Some(re_themed()),
-            // The wait that lets the collapse window close.
-            None,
-            Some(color_reply(false, 101, 123, 131)),
-            Some(color_reply(true, 253, 246, 227)),
-        ])
-        .sleeping();
-
-        let terminal = run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
-
-        let written = String::from_utf8(terminal.backend().written.clone())
-            .expect("escape sequences are ASCII");
-        assert_eq!(
-            written, "\x1b]10;?\x07\x1b]11;?\x07",
-            "the re-query went out through the terminal's own writer, once"
-        );
-        assert_eq!(
-            super::theme(),
-            ratcn::Theme::adaptive(Color::Rgb(253, 246, 227), Color::Rgb(101, 123, 131), None),
-            "the colours the terminal answered with are what the app now wears"
-        );
-        assert_eq!(
-            probe.frames, 3,
-            "the first frame, the one the closing window asked for, and the one \
-             the new theme did"
-        );
-
-        super::publish_theme(super::fallback_theme());
-    }
-
-    #[test]
     fn the_quit_key_ends_the_loop_without_routing_it() {
         let mut probe = Probe::default();
-        let mut script = Script::new([Some(quit()), Some(key('y'))]);
+        let mut script = Script::new(HostBackend::new(20, 5), [Some(quit()), Some(key('y'))]);
 
-        run_scripted(&mut probe, HostBackend::new(20, 5), &mut script);
+        run_scripted(&mut probe, &mut script);
 
-        assert!(
-            probe.routed.is_empty(),
-            "the quit key is the host's, not the demo's: {:?}",
-            probe.routed
-        );
+        assert!(probe.routed.is_empty(), "the quit key is the host's");
         assert_eq!(probe.frames, 1, "nothing after the quit key ran");
     }
 
@@ -1404,31 +984,34 @@ mod tests {
             .expect("the test backend opens");
 
         assert!(
-            !draw_frame(&mut probe, &mut steady).expect("the test backend draws"),
+            !draw_frame(&mut probe, &mut steady, &Theme::default_dark())
+                .expect("the test backend draws"),
             "a grid that did not move needs no second frame"
         );
         assert!(
-            draw_frame(&mut probe, &mut resizing).expect("the test backend draws"),
+            draw_frame(&mut probe, &mut resizing, &Theme::default_dark())
+                .expect("the test backend draws"),
             "the flush adopted a new size, so the frame just drawn is stale"
         );
     }
 
     #[test]
     fn the_loop_draws_the_frame_that_settles_a_grid_it_outgrew() {
-        let script = || Script::new([Some(key('n'))]);
         let probe = || Probe {
             handled: VecDeque::from([false]),
             ..Probe::default()
         };
 
         let mut steady_probe = probe();
-        run_scripted(&mut steady_probe, HostBackend::new(20, 5), &mut script());
+        run_scripted(
+            &mut steady_probe,
+            &mut Script::new(HostBackend::new(20, 5), [Some(key('n'))]),
+        );
 
         let mut resized_probe = probe();
         run_scripted(
             &mut resized_probe,
-            HostBackend::new(20, 5).resizing(30, 10),
-            &mut script(),
+            &mut Script::new(HostBackend::new(20, 5).resizing(30, 10), [Some(key('n'))]),
         );
 
         assert_eq!(steady_probe.frames, 1, "nothing asked for a second frame");

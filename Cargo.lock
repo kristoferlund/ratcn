@@ -1232,6 +1232,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "ratatui",
+ "ratatui-termina",
  "ratzilla",
  "termina",
  "unicode-segmentation",
@@ -1488,7 +1489,6 @@ version = "0.0.1"
 dependencies = [
  "gloo-timers",
  "ratatui",
- "ratatui-termina",
  "ratcn",
  "ratzilla",
 ]

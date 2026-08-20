@@ -3,7 +3,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -92,9 +92,8 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
+    // The module const is the one source: `screens` paints from it directly.
+    const THEME: Theme = THEME;
 
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
@@ -107,11 +106,11 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
         let area = area
             .centered(
                 Constraint::Length(DEMO_WIDTH),
@@ -119,14 +118,14 @@ impl demo_shared::Demo for App {
             )
             .inner(Margin::new(PADDING_X, PADDING_Y));
         let state = &self.state;
-        self.ratcn.render(frame, state, &THEME, |ctx| {
+        self.ratcn.render(frame, state, theme, |ctx| {
             let [title, _gap, tabs, content, status] = area.layout(&shell_layout());
 
             ctx.paint_widget(
                 Line::from(Span::styled(
                     "LEDGER 1993 · Modern Double-Entry Bookkeeping",
                     Style::default()
-                        .fg(THEME.accent)
+                        .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
                 )),
                 title,
@@ -152,7 +151,7 @@ impl demo_shared::Demo for App {
             ctx.paint_widget(
                 Paragraph::new(Line::from(Span::styled(
                     status_line,
-                    Style::default().fg(THEME.muted_foreground),
+                    Style::default().fg(theme.muted_foreground),
                 )))
                 .centered(),
                 status,
@@ -187,6 +186,20 @@ fn shell_layout() -> Layout {
 
 #[cfg(test)]
 mod tests {
+
+    /// The palette this demo exists to show is easy to lose: the `Demo` trait
+    /// defaults `THEME`, so an impl that omits it still compiles and quietly
+    /// paints the default while `screens` keeps painting gruvbox.
+    #[test]
+    fn the_demo_wears_the_palette_its_screens_paint_with() {
+        assert_eq!(
+            <App as demo_shared::Demo>::THEME,
+            THEME,
+            "the host and the screens must agree on the palette"
+        );
+        assert_ne!(THEME, Theme::default_dark(), "and it is not the default");
+    }
+
     use demo_shared::Demo as _;
     use ratatui::{Terminal, backend::TestBackend};
     use ratcn::runtime::{ChildId, KeyCode, KeyEvent};
@@ -198,7 +211,9 @@ mod tests {
     };
 
     fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) {
-        terminal.draw(|frame| app.draw(frame)).expect("draw");
+        terminal
+            .draw(|frame| app.draw(frame, &THEME))
+            .expect("draw");
     }
 
     fn key(code: KeyCode) -> Event {

@@ -1,5 +1,5 @@
 ---
-description: "Why ratcn panics on declaration mistakes and defers every paint to a replay after declaring: what each decision buys, what it costs, and which alternatives were rejected."
+description: "Why ratcn panics on declaration mistakes and defers every paint until the tree is complete: what each rule guarantees, and what it costs."
 ---
 
 # Design decisions
@@ -21,18 +21,16 @@ recover from at runtime. There is no useful branch to write for "two children
 share an id" — the fix is editing the declaration. Rust treats indexing past the
 end of a slice the same way, and for the same reason.
 
-Returning a `Result` instead was considered and rejected, for two reasons:
+A `Result` would reach nowhere better. Declaring is where these mistakes are
+found, and declaring does not paint: every one is detected while the frame is
+still only a description of itself, so an error value would have to be threaded
+back out through every nested declaration to reach a caller that cannot act on
+it. A panic reaches the same place in one step.
 
-- Declaring is where these mistakes are found, and declaring does not paint:
-  every mistake is detected while the frame is still only a description of
-  itself. An error value would therefore have to be threaded back out through
-  every nested declaration to reach a caller that could act on it, for a
-  condition the caller cannot act on. A panic reaches the same place in one
-  step.
-- Anything that returns a `Result` invites `?` and `let _ =`. A bug that can be
-  passed along quietly will be, and it would resurface later as misrouted
-  events, far from where it started. A panic points at the exact call, the
-  first time the mistake is reached.
+A `Result` also invites `?` and `let _ =`. A bug that can be passed along
+quietly is, and it resurfaces later as misrouted events, far from where it
+started. A panic points at the exact call, the first time the mistake is
+reached.
 
 ### What a panic guarantees
 
@@ -89,27 +87,14 @@ subtree contain anything focusable?* A parent is reached before its children
 have declared, so at the moment a container is declared that question has no
 answer yet.
 
-Earlier versions had components promise the answer up front, through a
-`focusable_descendants()` method. It worked, but every composite had to carry
-it, and the promise repeated something the children already said for
-themselves. Deferring paint removes the question entirely — by the time
-anything needs a flag, the tree is complete and the runtime just looks.
-
-Deferring is also what removed the second declaration. An earlier design ran
-the closure twice, once to learn the tree and once to paint it with the
-resolved focus, and paid for it with an idempotency contract: the two runs had
-to declare the same tree, checked declaration-by-declaration, and any impurity
-in the closure was a panic. Separating *when a paint is decided* from *when it
-happens* buys the same ordering with one run and no contract.
+Deferring the paint removes the question: by the time anything needs a flag,
+the tree is complete and the runtime just looks. Separating *when a paint is
+decided* from *when it happens* buys that ordering from a single run of the
+closure, with nothing for the closure to promise in advance.
 
 The same mechanism is what makes painting and routing agree. Focus is resolved
 by one function, over one tree, and it is the same function event routing uses
 later. There is no second answer to drift from.
-
-The obvious alternative — reusing last frame's answer — is accurate except
-exactly when it matters: the first frame, and any frame where focusability
-changed. Both leave a window where focus paints in one place and events go to
-another.
 
 ### What this costs the closure
 
@@ -120,5 +105,4 @@ because none exists yet: the flags are only offered to `PaintCtx`, where
 styling uses them freely.
 
 The one thing paint owes in return is that it cannot decide *structure*. A
-paint closure draws; it does not declare. That is what keeps "the tree is
-complete before any flag is read" true rather than merely usual.
+paint closure draws; it does not declare.

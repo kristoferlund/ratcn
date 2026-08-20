@@ -18,8 +18,8 @@ loop ownership.
 
 ## Turning it on
 
-A terminal does not report mouse events until the host asks it to. With Ratcn's
-`crossterm` feature, `InputModes` is an optional RAII helper:
+A terminal reports mouse events once the host asks it to. With Ratcn's
+`crossterm` feature, `InputModes` is the RAII helper that asks:
 
 ```rust
 let _input_modes = ratcn::crossterm::InputModes::new()
@@ -27,21 +27,18 @@ let _input_modes = ratcn::crossterm::InputModes::new()
     .enable()?;
 ```
 
-The host still decides whether to enable the mode and must retain the guard for
-the event loop's lifetime. Dropping the last Ratcn guard that requested a mode
-restores it, including on `?` or panic unwinding. Hosts with their own terminal
-lifecycle abstraction can use that instead; Ratcn never enables terminal state
-implicitly.
+The host decides when to enable the mode and retains the guard for the event
+loop's lifetime. Dropping the last Ratcn guard that requested a mode restores
+it, including on `?` or panic unwinding. A host with its own terminal lifecycle
+abstraction can drive the same modes through that.
 
 ::: warning Bind it to a name
-`let _input_modes = …` keeps the guard alive for the scope. `let _ = …` drops it
-immediately and disables mouse capture unless another Ratcn guard still owns the
-mode. The same retention rule applies to bracketed paste and host-owned raw mode
-or alternate-screen guards.
+`let _input_modes = …` keeps the guard alive for the scope, and mouse capture
+stays on for as long as it lives. The same retention rule applies to bracketed
+paste and host-owned raw mode or alternate-screen guards.
 :::
 
-`InputModes` is feature-gated backend glue, not lifecycle ownership:
-constructing it changes nothing, and only the host's explicit `enable()` call
+`InputModes` is feature-gated backend glue: the host's `enable()` call is what
 changes terminal modes.
 
 ## Synthesizing clicks and drags

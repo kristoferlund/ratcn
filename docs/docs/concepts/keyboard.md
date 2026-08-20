@@ -69,27 +69,22 @@ even while a List has focus. The navigation chords above are the deliberate
 exception — `Ctrl+N` is a control's own key, because every control with a
 cursor wants the same four.
 
-**Shift is never navigation.** `J` is not `j`. Shift is left unclaimed so
-range-selection can be added later without changing what any key means today.
+**Shift is never navigation.** `J` is not `j`. Shift is left unclaimed.
 
 **An unhandled key bubbles.** A key a component does not recognise is reported
 as ignored, and travels up to its ancestors and then to your app. So a
 single-letter hotkey keeps working while a list has focus — except for the four
 letters the navigation map takes (`h`, `j`, `k`, `l`).
 
-That last exception is a real trade. If your app needs `j` as a global hotkey,
-bind it outside the focused control, or check it before calling
-`Ratcn::handle_event` — see [Host integration](./host-integration).
+If your app needs `j` as a global hotkey, bind it outside the focused control,
+or check it before calling `Ratcn::handle_event` — see
+[Host integration](./host-integration).
 
-## What is not here
+## Keys outside the map
 
-**No typeahead.** Typing a letter does not jump to a matching item. Single
-character matching only helps on a sorted list, and needs a keystroke buffer
-with a timeout to do better — which needs a clock, and this library never reads
-one. The navigation keys cover the same ground more predictably.
+Typing a letter does not jump to a matching item: there is no typeahead.
 
-**No key repeat handling, no chords beyond `KeyChord`.** A backend key that this
-vocabulary has no place for — a key release, a function key beyond `F(u8)` —
-does not convert into an `Event` and is ignored. See
+A backend key this vocabulary has no place for — a key release, a function key
+beyond `F(u8)` — does not convert into an `Event` and is ignored. See
 [`KeyCode`](https://docs.rs/ratcn/latest/ratcn/runtime/enum.KeyCode.html) for
 the full list of what is representable.

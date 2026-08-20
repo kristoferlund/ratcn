@@ -154,10 +154,10 @@ choose between**, and that is usually the root. Motion focuses the *direct
 child* of that scope which the pointer entered, descending to its first
 focusable leaf; motion between components *inside* that child changes nothing.
 
-That distinction is the whole point. A pane grid with `hover_focus()` at the
-root behaves as expected — the mouse picks the pane, then the keyboard works
-inside it. Set it on the pane instead and every drift between two buttons in
-that pane moves focus, which is rarely what anyone wants:
+A pane grid with `hover_focus()` at the root behaves as expected — the mouse
+picks the pane, then the keyboard works inside it. Set it on the pane instead
+and every drift between two buttons in that pane moves focus, which is rarely
+what anyone wants:
 
 ```rust
 // Usually right: the mouse picks the pane, not the control inside it.

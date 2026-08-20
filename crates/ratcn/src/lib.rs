@@ -5,13 +5,16 @@
 //! on top: components that can be focused, hovered, and clicked, in a
 //! shadcn-inspired visual style you can theme.
 //!
+//! Themes do not have to be picked from a list: [`Theme::adaptive`] solves a
+//! whole palette — wells, surfaces, text, lines, accents — from a background and
+//! a foreground someone else chose. `ratcn::terminal` (feature `termina`) asks
+//! the terminal for that pair and re-solves when the user changes it.
+//!
 //! # Preview status
 //!
 //! This is a preview release.
 //!
-//! - **The API will break.** The public surface is still moving: recent work
-//!   has renamed methods, changed signatures, and removed components. Pin an
-//!   exact version and expect to edit when you upgrade.
+//! - **The API will break.** Pin an exact version.
 //! - **There is no install command.** Each component module is self-contained
 //!   and meant to be copied into your own project, but copying is a manual file
 //!   copy today. A CLI is intended and does not exist.
@@ -128,7 +131,7 @@ pub mod list_core;
 pub mod runtime;
 pub mod selection_indicator;
 #[cfg(feature = "termina")]
-pub mod terminal_query;
+pub mod terminal;
 pub mod text_width;
 pub mod theme;
 pub mod toast;

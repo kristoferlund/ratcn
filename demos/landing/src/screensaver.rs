@@ -139,7 +139,7 @@ mod tests {
         state
             .modals_state
             .open(ID, &mut state.focus)
-            .expect("screensaver opens once");
+            .expect("cannot open the screensaver: it is already open");
         let mut ratcn = Ratcn::new().modals(|state: &AppState| &state.modals_state);
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).expect("terminal");
         let theme = Theme::default_dark();

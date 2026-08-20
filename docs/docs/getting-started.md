@@ -4,7 +4,7 @@ description: "Install ratcn, pick the feature for your backend, and get a focusa
 
 # Getting started
 
-The wizard below is itself a ratcn app — buttons, a select, and a list. Press `Enter` to move through it, or `Tab` into a step to make its choice. Its source is [`demos/wizard`](https://github.com/kristoferlund/ratcn/tree/main/demos/wizard.
+The wizard below is itself a ratcn app — buttons, a select, and a list. Press `Enter` to move through it, or `Tab` into a step to make its choice. Its source is [`demos/wizard`](https://github.com/kristoferlund/ratcn/tree/main/demos/wizard).
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 460px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -34,11 +34,12 @@ cargo add ratatui
 
 | Feature | For |
 |---|---|
-| `crossterm` | Terminal apps — the usual choice |
+| `crossterm` | Terminal apps on a crossterm backend |
+| `termina` | Terminal apps using `ratcn::terminal::Session`, which opens and restores the terminal and can follow its colors |
 | `ratzilla` | Running in the browser through [Ratzilla](https://github.com/orhun/ratzilla) |
 | *(none)* | Paint-only widgets, or your own backend |
 
-Neither feature is on by default, so you only pay for the one you use.
+Enable the one that matches your backend.
 
 ## A first app
 
@@ -117,10 +118,10 @@ background task) get the same single path into state.
 Wiring this into a real event loop, native or browser, is covered in
 [Host integration](./concepts/host-integration).
 
-## Just want the look?
+## Paint-only widgets
 
-You do not have to adopt the runtime. Every interactive component paints
-through a plain Ratatui widget that you can use on its own:
+Every interactive component paints through a plain Ratatui widget that you can
+use on its own:
 
 ```rust
 frame.render_widget(
@@ -129,11 +130,11 @@ frame.render_widget(
 );
 ```
 
-Give it a theme and a couple of bools and that is the whole integration. If you
-already have focus and event handling you like, keep it — and adopt the runtime
-later, one component at a time, if you want to.
+It takes a theme and a couple of bools. If you already have focus and event
+handling you like, keep it — and adopt the runtime later, one component at a
+time, if you want to.
 
-## Try it before you build it
+## Running the demos
 
 Every demo runs in your terminal from a checkout of the repository:
 

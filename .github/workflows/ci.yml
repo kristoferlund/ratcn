@@ -72,8 +72,12 @@ jobs:
       - name: Clippy (workspace, wasm)
         run: cargo clippy --workspace --all-targets --target wasm32-unknown-unknown --locked -- -D warnings
 
+      # `-p shared` too: the demos' host is documentation a reader copies, and a
+      # broken link in it fails nothing else.
       - name: Rustdoc
-        run: cargo doc -p ratcn --all-features --no-deps --locked
+        run: |
+          cargo doc -p ratcn --all-features --no-deps --locked
+          cargo doc -p shared --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
       - name: Package
