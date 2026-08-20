@@ -15,7 +15,7 @@ use std::io;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Paragraph},
 };
 use ratcn::{
@@ -27,7 +27,6 @@ use ratcn::{
     },
 };
 
-const THEME: Theme = Theme::default_dark();
 const BLOCK_WIDTH: u16 = 30;
 const BLOCK_HEIGHT: u16 = 7;
 const HOVER_DARKEN_PERCENT: u16 = 10;
@@ -66,10 +65,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(Msg::BlockMoved(offset)) => {
@@ -81,11 +76,11 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
         let draggable_block_area = offset_rect(
             area,
             area.centered(
@@ -94,7 +89,7 @@ impl demo_shared::Demo for App {
             ),
             self.state.block_offset,
         );
-        self.ratcn.render(frame, &self.state, &THEME, |ctx| {
+        self.ratcn.render(frame, &self.state, theme, |ctx| {
             ctx.component(
                 ids::BLOCK,
                 DraggableBlock {

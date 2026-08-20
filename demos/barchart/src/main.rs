@@ -5,15 +5,9 @@
 
 use std::io;
 
-use ratatui::{
-    Frame,
-    layout::Constraint,
-    style::{Color, Style},
-    widgets::Bar,
-};
+use ratatui::{Frame, layout::Constraint, style::Style, widgets::Bar};
 use ratcn::{BarChartWidget, Theme};
 
-const THEME: Theme = Theme::default_dark();
 const DATA: [(&str, u64); 5] = [
     ("Mon", 12),
     ("Tue", 18),
@@ -41,15 +35,11 @@ struct Chart;
 impl demo_shared::Demo for Chart {
     const INPUT: bool = false;
 
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
 
         let chart_area = area.centered(
             Constraint::Length(CHART_WIDTH),
@@ -58,7 +48,7 @@ impl demo_shared::Demo for Chart {
 
         frame.render_widget(
             BarChartWidget::new(bars())
-                .themed(&THEME)
+                .themed(theme)
                 // Pinned so the chart keeps one scale instead of rescaling to
                 // whichever bar happens to be tallest.
                 .max_value(24)

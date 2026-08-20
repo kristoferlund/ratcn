@@ -15,4 +15,3 @@ ratzilla.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ratcn = { workspace = true, features = ["termina"] }
-ratatui-termina.workspace = true

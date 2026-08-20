@@ -3,7 +3,7 @@ use std::{io, time::Duration};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
+    style::Style,
     widgets::{Paragraph, Wrap},
 };
 use ratcn::{
@@ -11,7 +11,6 @@ use ratcn::{
     runtime::{CellOffset, Event, EventResult, FocusState, ModalState, Ratcn},
 };
 
-const THEME: Theme = Theme::default_dark();
 const WRITERS: [&str; 8] = [
     "Ursula K. Le Guin",
     "Octavia E. Butler",
@@ -128,10 +127,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
@@ -150,15 +145,15 @@ impl demo_shared::Demo for App {
             .time_until_next_expiry(demo_shared::monotonic_time())
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let now = demo_shared::monotonic_time();
         let _ = self.state.toasts.prune_expired(now);
 
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
-        self.ratcn.render(frame, &self.state, &THEME, |ctx| {
+            .set_style(area, Style::default().bg(theme.background));
+        self.ratcn.render(frame, &self.state, theme, |ctx| {
             let open_button = Button::new("Open Dialog").on_press(|| Msg::OpenDialog);
             let button_area = area.centered(
                 Constraint::Length(open_button.width()),
@@ -174,7 +169,7 @@ impl demo_shared::Demo for App {
             }
         });
         frame.render_widget(
-            ToasterWidget::new(&self.state.toasts, now).themed(&THEME),
+            ToasterWidget::new(&self.state.toasts, now).themed(theme),
             frame.area(),
         );
     }

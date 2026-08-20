@@ -10,17 +10,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `terminal::Session` (feature `termina`) opens the terminal — raw mode, the
+  alternate screen, the input modes you ask for — and restores every one on any
+  exit, panic included. `Session::next` is the event source.
+- `SessionOptions::adaptive()` has the session ask the terminal what colors it
+  uses and follow them as they change. `session.theme()` and
+  `theme_with_fallback(preset)` answer per frame; paint from one of them and the
+  app follows a re-theme.
 - A `termina` feature, converting [termina](https://docs.rs/termina) events into
-  `runtime::Event` the way `crossterm` does. Both features can be on at once;
-  neither is default, and `crossterm` is unchanged.
-- `terminal_query::query(&mut terminal)` (feature `termina`) asks the terminal
-  for its own background and foreground and hands back `TerminalColors` for
-  `Theme::adaptive`. Call it in raw mode before the event loop reads anything;
-  it returns `None` when the terminal cannot be asked or will not answer.
-- `terminal_query::ThemeWatch` (feature `termina`) follows a terminal that
-  reports its own theme changes: hand it every event, call `step` once a pass,
-  and it debounces, re-asks for the colors, and hands back the new ones. Switch
-  DEC mode 2031 on for any terminal `query` answered, and off before handing back.
+  `runtime::Event` the way `crossterm` does. Both features can be on at once,
+  and neither is on by default.
+- `terminal::query(&mut terminal)` (feature `termina`) asks the terminal for its
+  own background and foreground and hands back `TerminalColors`, whose `theme()`
+  solves them. Call it in raw mode before the event loop reads anything.
+- The `termina` feature re-exports the crate as `ratcn::terminal::termina`,
+  where the types inside `SessionEvent::Input` live.
 - `Theme::adaptive(background, foreground, palette16)` derives a full theme
   from externally chosen colors (e.g. queried from the terminal). A light
   background yields a light theme, and every derived theme passes the same

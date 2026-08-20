@@ -12,9 +12,8 @@ components that you can copy, paste, theme, and own in your application code.
 ratcn is a preview release. It works, and it is documented, but three things
 are worth knowing before you build on it:
 
-- **The API will break.** The public surface is still moving — recent work has
-  renamed methods, changed signatures, and removed components outright. Pin an
-  exact version and expect to edit when you upgrade.
+- **The API will break.** The public surface is still moving. Pin an exact
+  version and expect to edit when you upgrade.
 - **There is no install command.** The shadcn resemblance is in how the code is
   structured, not yet in tooling. Copying a component into your project is a
   manual file copy today. A CLI is intended, but it does not exist.
@@ -24,9 +23,7 @@ are worth knowing before you build on it:
   [Dialog](./components/dialog), [Toast](./components/toast),
   [BarChart](./components/barchart), and [Tooltip](./components/tooltip).
   Notably missing and planned next are **text input**, **multi-line text
-  area**, and a **scroll area** for content taller than its viewport. Input and
-  TextArea existed in an earlier preview and were withdrawn pending upstream
-  fixes in the text-editing crate they wrap.
+  area**, and a **scroll area** for content taller than its viewport.
 
 If there are specific components, patterns, or features you would like to see
 included, please [open an issue](https://github.com/kristoferlund/ratcn/issues).
@@ -113,8 +110,9 @@ The concept pages each cover one idea in depth. Roughly in reading order:
 - [Layers and modals](./concepts/layers-and-modals) — dialogs, overlays, and
   paint ordering.
 - [Themes](./concepts/themes) — built-in presets and authoring your own palette.
-- [Host integration](./concepts/host-integration) — wiring the runtime into a
-  native crossterm loop or a browser app with ratzilla.
+- [Host integration](./concepts/host-integration) — opening and restoring the
+  terminal with a `Session`, the event loop shape, and a browser app with
+  ratzilla.
 - [Mouse Input](./concepts/mouse) and [Dragging](./concepts/dragging) — enabling
   mouse support, and how clicks, hover, and drags reach components.
 - [Structuring a larger app](./concepts/composition) — splitting state,
@@ -126,4 +124,4 @@ The concept pages each cover one idea in depth. Roughly in reading order:
 
 Component pages under [Components](./components/button) cover each built-in
 component's features with live previews, and [Demos](./demos) lists every
-runnable example in the repository — including two full applications.
+runnable example in the repository — including three full applications.

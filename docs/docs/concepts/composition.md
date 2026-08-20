@@ -59,8 +59,8 @@ The panel border is a plain Ratatui `Block`, drawn from a `ctx.paint` closure
 whose `PaintCtx::contains_focus` says whether focus is inside, so the accent
 follows the user. Layout stays ordinary Ratatui code throughout.
 
-That is the whole mechanism. The rest of this page is what to do with it once
-there is more than one screen.
+The rest of this page is what to do with that once there is more than one
+screen.
 
 ## Splitting state and messages
 

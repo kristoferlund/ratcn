@@ -38,16 +38,27 @@ ratcn.render(frame, &state, &theme, |ctx| {
 
 The presets are `default_dark`, `terminal`, `catppuccin`, `gruvbox`, `nord`,
 `tokyo_night`, and `solarized`. `Theme::presets()` returns them as a
-`&'static [Theme]` in stable picker order — iterate or index it, but do not
-depend on the count, which grows as presets are added.
+`&'static [Theme]` in stable picker order — iterate or index it, and take the
+count from the slice itself.
+
+## Solving one from two colors
+
+`Theme::adaptive(background, foreground, palette16)` derives a whole palette
+from a background and a foreground someone else chose, and the pair carries the
+polarity: a light background yields a light theme, with wells sitting darker
+than the screen and text darkening from there. `palette16` is the terminal's own
+ANSI colors, where the caller has them, and fills three roles: error, warning,
+and the accent. On a terminal, `ratcn::terminal` (feature `termina`) supplies
+the pair: it asks the terminal at startup and re-solves as the user flips their
+terminal theme underneath the app. See
+[Host integration](./host-integration#opening-adaptively) for the session that
+does the asking.
 
 ## Writing your own
 
 To author a palette, start from a preset and assign the roles you care about.
-`Theme` is `#[non_exhaustive]`, so a struct literal is not available; the fields
-are public and the presets are `const`, so a `const fn` gives the same result.
-(The display name is a `&'static str`, so authored names must be static in the
-current API.)
+`Theme` is `#[non_exhaustive]`; its fields are public and the presets are
+`const`, so a `const fn` builds one. The display name is a `&'static str`.
 
 ```rust
 use ratatui::style::Color;
@@ -66,5 +77,4 @@ const THEME: Theme = operations();
 
 Pass the same theme to runtime rendering and paint-only widgets so both halves
 of the library agree. To recolor a single component, use that component's
-`.style(|theme| ...)` override — see each component page's Styling section —
-rather than adding a palette role.
+`.style(|theme| ...)` override — see each component page's Styling section.

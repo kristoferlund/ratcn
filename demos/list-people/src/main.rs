@@ -11,7 +11,7 @@ use std::io;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::Paragraph,
 };
@@ -34,7 +34,6 @@ const VISIBLE_PEOPLE: u16 = 4;
 const LIST_WIDTH: u16 = 34;
 const LIST_HEIGHT: u16 = ROW_HEIGHT * VISIBLE_PEOPLE;
 const CONTENT_HEIGHT: u16 = LIST_HEIGHT + 2;
-const THEME: Theme = Theme::default_dark();
 
 mod ids {
     pub const LIST: &str = "people";
@@ -98,10 +97,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
@@ -113,14 +108,14 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
 
         let state = &self.state;
-        self.ratcn.render(frame, state, &THEME, |ctx| {
+        self.ratcn.render(frame, state, theme, |ctx| {
             let muted = ctx.theme.muted_foreground;
             let list = List::new(PEOPLE.map(|(name, _)| ListItem::new(name, name)))
                 .item_focus(|s: &AppState| s.focused_person, Msg::PersonFocusChanged)

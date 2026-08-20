@@ -11,11 +11,11 @@ use std::io;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
+    style::Style,
     widgets::Paragraph,
 };
 use ratcn::{
-    List, ListItem,
+    List, ListItem, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
 
@@ -97,9 +97,9 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        demo_shared::theme().background
-    }
+    // One line: paint with the terminal's own colors, falling back to `THEME`
+    // if it will not say what they are.
+    const ADAPTIVE: bool = true;
 
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
@@ -112,14 +112,13 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
-        let theme = demo_shared::theme();
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, state, &theme, |ctx| {
+        self.ratcn.render(frame, state, theme, |ctx| {
             let muted = ctx.theme.muted_foreground;
             let list = List::new(FOLDERS.map(|label| ListItem::new(label, label)))
                 .item_focus(

@@ -1,5 +1,5 @@
 ---
-description: "Every ratcn demo, what it shows, and how to run it — from single-component examples to two full applications you can read end to end."
+description: "Every ratcn demo, what it shows, and how to run it — from single-component examples to three full applications you can read end to end."
 ---
 
 # Demos
@@ -18,8 +18,8 @@ WebAssembly.
 
 ## Full applications
 
-Start here if you want to see how the pieces fit together at real size. Both
-are worth reading as source, not just running.
+Start here if you want to see how the pieces fit together at real size. All
+three are worth reading as source, not just running.
 
 | Demo | Shows |
 |---|---|
@@ -64,6 +64,7 @@ cd demos/ledger93
 trunk serve
 ```
 
-Each demo's `Cargo.toml` selects `crossterm` when built natively and `ratzilla`
-when built for `wasm32`, so the same `main.rs` covers both. See
+The same `main.rs` covers both targets. Each demo's `Cargo.toml` adds ratcn's
+`ratzilla` feature for `wasm32`, and the host they all share, `demos/shared`,
+enables ratcn's `termina` feature for the native build. See
 [Host integration](./concepts/host-integration) for how that wiring works.

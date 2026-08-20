@@ -9,7 +9,7 @@ use std::{io, time::Duration};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
 };
 use ratcn::{
@@ -44,6 +44,8 @@ struct AppState {
     focus: FocusState,
     controls_disabled: bool,
     themes_state: tiles::themes::State,
+    /// What the terminal says it looks like, refreshed each frame.
+    resolved_theme: Theme,
     notifications_state: tiles::notifications::State,
     release_state: tiles::release::State,
     modals_state: ModalState,
@@ -53,7 +55,7 @@ struct AppState {
 
 impl AppState {
     fn theme(&self) -> Theme {
-        self.themes_state.theme()
+        self.themes_state.theme(self.resolved_theme)
     }
 }
 
@@ -70,7 +72,7 @@ enum AppMsg {
 }
 
 fn main() -> io::Result<()> {
-    demo_shared::run_lazy(App::new)
+    demo_shared::run(App::new())
 }
 
 impl App {
@@ -106,7 +108,7 @@ impl App {
                 self.state
                     .modals_state
                     .open(screensaver::ID, &mut self.state.focus)
-                    .expect("the screensaver only opens from the base layer");
+                    .expect("cannot open the screensaver: a modal is already open");
             }
             AppMsg::ScreensaverDismissed => {
                 self.state.modals_state.close(&mut self.state.focus);
@@ -153,11 +155,9 @@ impl demo_shared::Demo for App {
     /// the wiring is the demonstration, since no component reads a paste yet.
     const PASTE: bool = true;
 
-    /// The canvas padding is fixed at construction, so it tracks the starting
-    /// theme; switching themes leaves it on the previous background.
-    fn background(&self) -> Color {
-        self.state.theme().background
-    }
+    /// Paint with the terminal's own colors, falling back to `THEME`. The
+    /// picker lists whatever that resolves to alongside the presets.
+    const ADAPTIVE: bool = true;
 
     fn handle_event(&mut self, event: Event) -> bool {
         // The screensaver is dismissed by app policy, before routing: any
@@ -197,7 +197,10 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
+        // The picker lists whatever the terminal currently resolves to, so the
+        // frame's theme reaches the state before anything reads it.
+        self.state.resolved_theme = *theme;
         let now = demo_shared::monotonic_time();
         let _ = self.state.toasts.prune_expired(now);
 

@@ -3,7 +3,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin},
-    style::{Color, Style},
+    style::Style,
 };
 use ratcn::{
     ButtonSize, Theme,
@@ -93,12 +93,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    /// The canvas padding is fixed at construction, so it tracks the starting
-    /// theme; choosing another theme leaves it on the previous background.
-    fn background(&self) -> Color {
-        self.palette().background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
@@ -110,7 +104,8 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    /// The wizard paints with the palette its own picker selects.
+    fn draw(&mut self, frame: &mut Frame, _theme: &Theme) {
         let theme = self.palette();
         let area = frame.area();
         frame
@@ -187,7 +182,9 @@ mod tests {
     }
 
     fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) {
-        terminal.draw(|frame| app.draw(frame)).expect("draw");
+        terminal
+            .draw(|frame| app.draw(frame, &App::THEME))
+            .expect("draw");
     }
 
     fn rendered_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {

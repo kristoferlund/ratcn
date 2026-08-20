@@ -14,6 +14,7 @@ version.workspace = true
 
 [dependencies]
 ratatui.workspace = true
+ratatui-termina = { workspace = true, optional = true }
 ratzilla = { workspace = true, optional = true }
 termina = { version = "0.3.3", optional = true }
 unicode-segmentation = "1.13.3"
@@ -32,11 +33,16 @@ criterion = "0.5.1"
 name = "frame"
 harness = false
 
+# ratzilla is wasm-only, so `all-features` cannot build here; these two are what
+# a terminal consumer sees.
+[package.metadata.docs.rs]
+features = ["crossterm", "termina"]
+
 [features]
 default = []
 crossterm = ["ratatui/crossterm"]
 ratzilla = ["dep:ratzilla", "dep:web-sys"]
-termina = ["dep:termina"]
+termina = ["dep:termina", "dep:ratatui-termina"]
 
 [lints.rust]
 ambiguous_negative_literals = "warn"

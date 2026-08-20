@@ -8,7 +8,7 @@ use std::io;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin},
-    style::{Color, Style},
+    style::Style,
     widgets::{Paragraph, Wrap},
 };
 use ratcn::{
@@ -16,7 +16,6 @@ use ratcn::{
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
 
-const THEME: Theme = Theme::default_dark();
 const DEMO_WIDTH: u16 = 54;
 const DEMO_HEIGHT: u16 = 13;
 const CONTENT_PADDING: Margin = Margin::new(4, 2);
@@ -98,10 +97,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
@@ -113,13 +108,15 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
+        // Copied: the paint closures below outlive this borrow.
+        let theme = *theme;
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, state, &THEME, |ctx| {
+        self.ratcn.render(frame, state, &theme, |ctx| {
             let tabs = Tabs::new([
                 Tab::new(Screen::Overview, "Overview"),
                 Tab::new(Screen::Analytics, "Analytics").disabled(true),
@@ -141,7 +138,7 @@ impl demo_shared::Demo for App {
             let content = state.selected.content();
             ctx.paint(move |ctx| {
                 ctx.with_buffer(|buf| {
-                    buf.set_style(content_area, Style::default().bg(THEME.surface));
+                    buf.set_style(content_area, Style::default().bg(theme.surface));
                 });
                 ctx.widget(
                     Paragraph::new(content).wrap(Wrap { trim: true }),

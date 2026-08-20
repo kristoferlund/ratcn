@@ -81,9 +81,9 @@ is nothing to write.
 ## Interaction
 
 Moving the pointer onto the trigger shows the bubble, and moving it off hides
-it again. That is the whole of it for a hover-driven tooltip — the two above,
-and the one in the demo — where Esc does nothing: there is no stored flag to
-clear, and the pointer still says the bubble belongs on screen.
+it again. For a hover-driven tooltip — the two above, and the one in the demo —
+Esc does nothing: there is no stored flag to clear, and the pointer still says
+the bubble belongs on screen.
 
 Esc belongs to the `.open(read, on_open_change)` form. While such a tooltip is
 open and something inside its trigger has focus, an unmodified Esc bubbles out

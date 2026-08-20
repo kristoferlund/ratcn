@@ -15,14 +15,12 @@ use std::io;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout},
-    style::{Color, Style},
+    style::Style,
 };
 use ratcn::{
     Button, Theme, Tooltip, TooltipSide,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
-
-const THEME: Theme = Theme::default_dark();
 
 /// The child id every Tooltip gives the button inside it. Unique among its own
 /// siblings, which is all an id has to be.
@@ -130,10 +128,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn background(&self) -> Color {
-        THEME.background
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         // Record which device the user is on before routing, so the tooltip
         // reader can tell keyboard focus from the focus a click leaves behind.
@@ -154,11 +148,11 @@ impl demo_shared::Demo for App {
         switched || routed
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
         let area = frame.area();
         frame
             .buffer_mut()
-            .set_style(area, Style::default().bg(THEME.background));
+            .set_style(area, Style::default().bg(theme.background));
 
         let [edge_area, rest_area] =
             Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
@@ -167,7 +161,7 @@ impl demo_shared::Demo for App {
             .areas(rest_area);
 
         let state = &self.state;
-        self.ratcn.render(frame, state, &THEME, |ctx| {
+        self.ratcn.render(frame, state, theme, |ctx| {
             let [edge_button_area] =
                 Layout::horizontal([Constraint::Length(button(EDGE.1).width())])
                     .flex(Flex::Center)

@@ -31,19 +31,12 @@ fn ordered(resolved: Theme) -> Vec<Theme> {
         .collect()
 }
 
+#[derive(Default)]
 pub struct State {
     focused: Option<&'static str>,
-    selected: &'static str,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        let opening = ordered(demo_shared::theme())[0].name;
-        Self {
-            focused: Some(opening),
-            selected: opening,
-        }
-    }
+    /// [`None`] is the row the terminal resolved to, which is where the picker
+    /// opens and what it falls back to.
+    selected: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -57,15 +50,21 @@ impl State {
         match msg {
             Msg::FocusChanged(focused) => self.focused = Some(focused),
             Msg::Selected(selected) => {
-                self.selected = selected;
+                self.selected = Some(selected);
                 self.focused = Some(selected);
             }
         }
     }
 
-    /// The theme the picker is showing, as of this frame.
-    pub fn theme(&self) -> Theme {
-        selected_theme(self.selected, demo_shared::theme())
+    /// The theme the picker is showing, given what the terminal currently
+    /// reports.
+    pub fn theme(&self, resolved: Theme) -> Theme {
+        selected_theme(self.selected, resolved)
+    }
+
+    /// The row the picker opens on, which `ordered` puts first.
+    pub const fn opening(resolved: Theme) -> &'static str {
+        resolved.name
     }
 }
 
@@ -76,7 +75,10 @@ impl State {
 /// with it — but only while that row is the selection. A preset the user picked
 /// by hand is their choice, and a flip of the terminal does not take it back;
 /// it changes what the resolved row would give them if they went back to it.
-fn selected_theme(selected: &str, resolved: Theme) -> Theme {
+fn selected_theme(selected: Option<&str>, resolved: Theme) -> Theme {
+    let Some(selected) = selected else {
+        return resolved;
+    };
     if selected == resolved.name {
         return resolved;
     }
@@ -95,7 +97,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     // list settled at startup would keep showing the colors it was born with.
     // Its *name* does not move — a solved theme is always `Adaptive` — so a
     // selection made against an earlier list still matches.
-    let themes = ordered(demo_shared::theme());
+    let themes = ordered(ctx.state().resolved_theme);
     let picker = List::new(
         themes
             .iter()
@@ -106,7 +108,14 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         |focused, _| AppMsg::Themes(Msg::FocusChanged(focused)),
     )
     .selection(
-        |state: &AppState| Some(state.themes_state.selected),
+        |state: &AppState| {
+            Some(
+                state
+                    .themes_state
+                    .selected
+                    .unwrap_or(State::opening(state.resolved_theme)),
+            )
+        },
         |selected| AppMsg::Themes(Msg::Selected(selected)),
     )
     .disabled(controls_disabled);
@@ -142,7 +151,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{State, ordered, selected_theme};
+    use super::{Msg, State, ordered, selected_theme};
     use ratatui::style::Color;
     use ratcn::Theme;
 
@@ -175,9 +184,9 @@ mod tests {
         let dark = solved_dark();
         assert_eq!(light.name, dark.name);
 
-        assert_eq!(selected_theme(light.name, light), light);
+        assert_eq!(selected_theme(Some(light.name), light), light);
         assert_eq!(
-            selected_theme(light.name, dark),
+            selected_theme(Some(light.name), dark),
             dark,
             "the row is read live: the app wears whatever the terminal is now"
         );
@@ -188,12 +197,12 @@ mod tests {
         let nord = Theme::nord();
 
         assert_eq!(
-            selected_theme(nord.name, solved()),
+            selected_theme(Some(nord.name), solved()),
             nord,
             "their choice stands while the terminal is light"
         );
         assert_eq!(
-            selected_theme(nord.name, solved_dark()),
+            selected_theme(Some(nord.name), solved_dark()),
             nord,
             "and still stands after it flips: the flip changed what `Adaptive` \
              offers, not what they chose"
@@ -211,18 +220,18 @@ mod tests {
         impostor.name = Theme::nord().name;
 
         assert_eq!(
-            selected_theme(impostor.name, impostor),
+            selected_theme(Some(impostor.name), impostor),
             impostor,
             "the selection named the resolved row, so it gets the resolved row"
         );
-        assert_ne!(selected_theme(impostor.name, impostor), Theme::nord());
+        assert_ne!(selected_theme(Some(impostor.name), impostor), Theme::nord());
     }
 
     #[test]
     fn a_selection_that_names_nothing_falls_back_to_the_resolved_theme() {
         // Unreachable through the picker, which only ever selects a row it
         // listed — but the answer has to be a theme either way.
-        assert_eq!(selected_theme("no such theme", solved()), solved());
+        assert_eq!(selected_theme(Some("no such theme"), solved()), solved());
     }
 
     #[test]
@@ -232,8 +241,11 @@ mod tests {
         // through `State` would prove nothing about the branch it takes.
         let resolved = solved();
 
-        assert_eq!(selected_theme(Theme::nord().name, resolved), Theme::nord());
-        assert_eq!(selected_theme(resolved.name, resolved), resolved);
+        assert_eq!(
+            selected_theme(Some(Theme::nord().name), resolved),
+            Theme::nord()
+        );
+        assert_eq!(selected_theme(Some(resolved.name), resolved), resolved);
     }
 
     #[test]
@@ -280,13 +292,20 @@ mod tests {
     }
 
     #[test]
-    fn the_picker_opens_on_the_theme_at_the_head_of_its_own_list() {
-        // A wiring pin only: with no terminal to ask, the resolved theme is
-        // itself a preset, so this cannot tell `ordered` apart from `presets()`
-        // by construction. What `ordered` actually does is pinned above.
+    fn the_picker_opens_on_the_theme_the_terminal_resolved_to() {
+        let mut state = State::default();
+
         assert_eq!(
-            State::default().selected,
-            ordered(demo_shared::theme())[0].name
+            state.theme(solved()),
+            solved(),
+            "nothing has been picked, so the resolved row is what shows"
+        );
+
+        state.update(Msg::Selected(Theme::nord().name));
+        assert_eq!(
+            state.theme(solved()),
+            Theme::nord(),
+            "and a pick is honoured"
         );
     }
 }
