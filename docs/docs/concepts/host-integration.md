@@ -59,7 +59,10 @@ drawing you already write.
 ### Opening adaptively
 
 `.adaptive()` makes a session follow the terminal. It asks the terminal what
-colors it uses while opening and subscribes to changes if it answered.
+colors it uses while opening, subscribes to changes it reports, and asks again
+when the window regains focus, shortly after every change signal, and when input
+resumes after a pause — which is how a change reaches an app whose terminal was
+recoloured from outside, or has no change notification to send.
 `session.theme()` is what that answer becomes, falling back to
 `Theme::default_dark()` where the terminal keeps quiet;
 `session.theme_with_fallback(fallback)` uses a preset of the app's own as that

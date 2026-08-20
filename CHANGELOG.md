@@ -14,9 +14,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   alternate screen, the input modes you ask for — and restores every one on any
   exit, panic included. `Session::next` is the event source.
 - `SessionOptions::adaptive()` has the session ask the terminal what colors it
-  uses and follow them as they change. `session.theme()` and
-  `theme_with_fallback(preset)` answer per frame; paint from one of them and the
-  app follows a re-theme.
+  uses and follow them: it asks again when the window regains focus, shortly
+  after every change signal, and when input resumes after a pause.
+  `session.theme()` and `theme_with_fallback(preset)` answer per frame.
 - A `termina` feature, converting [termina](https://docs.rs/termina) events into
   `runtime::Event` the way `crossterm` does. Both features can be on at once,
   and neither is on by default.

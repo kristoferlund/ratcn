@@ -27,7 +27,9 @@
 //! ```
 //!
 //! Or paint with the terminal's own colors. [`SessionOptions::adaptive`] asks
-//! the terminal what it looks like and follows it as the user changes it; read
+//! the terminal what it looks like and follows it as the user changes it: it
+//! asks again when the window regains focus, shortly after every change signal,
+//! and when input resumes after a pause. Read
 //! [`theme_with_fallback`](Session::theme_with_fallback) each frame and paint
 //! from what it says.
 //!
@@ -82,8 +84,8 @@ use watch::Watch;
 
 pub use query::{TerminalColors, query};
 /// The terminal library this module is built on, re-exported so an integrator
-/// can name the types inside [`SessionEvent::Input`] without depending on it
-/// separately and keeping the versions in step.
+/// names the types inside [`SessionEvent::Input`] through ratcn, at the version
+/// ratcn builds against.
 pub use termina;
 
 /// The backend a [`Session`] draws through.
@@ -157,9 +159,10 @@ impl SessionOptions {
 
     /// Paint with the terminal's own colors, and follow them as they change.
     ///
-    /// The session asks the terminal what it looks like while opening, and
-    /// subscribes to changes it reports. [`Session::theme`] answers with what
-    /// it said.
+    /// The session asks the terminal what it looks like while opening,
+    /// subscribes to changes it reports, and asks again when the window regains
+    /// focus, shortly after every change signal, and when input resumes after a
+    /// pause. [`Session::theme`] answers with what it said.
     pub const fn adaptive(mut self) -> Self {
         self.adaptive = true;
         self
@@ -170,8 +173,10 @@ impl Session {
     /// Open the terminal and switch on the modes `options` asked for.
     ///
     /// Under [`SessionOptions::adaptive`] the terminal is asked what colors it
-    /// uses while the session opens, and subscribed to for changes it reports;
-    /// [`theme`](Self::theme) answers with what it said.
+    /// uses while the session opens, subscribed to for changes it reports, and
+    /// asked again when the window regains focus, shortly after every change
+    /// signal, and when input resumes after a pause; [`theme`](Self::theme)
+    /// answers with what it said.
     ///
     /// # Errors
     ///
@@ -197,7 +202,7 @@ impl Session {
         } else {
             None
         };
-        let (theme, watch) = opening(answer);
+        let (theme, watch) = opening(answer, Instant::now());
 
         let modes = modes(options, watch.is_some());
         // Termina restores raw mode after this hook runs, so the hook owes only
@@ -286,9 +291,9 @@ impl Drop for Session {
 /// The terminal modes a session switches on, in the order it switches them on.
 ///
 /// Termina deliberately manages none of these: they are protocol, and the
-/// application decides. Restoring walks the list back off in reverse, which is
-/// why the theme subscription goes on last — it comes off first, and no change
-/// gets reported into a terminal that has started being put back.
+/// application decides. Restoring walks the list back off in reverse, so the
+/// theme subscription goes on last and comes off first — a terminal being put
+/// back reports no change into a session that is closing.
 fn modes(options: SessionOptions, subscribe: bool) -> Vec<DecPrivateModeCode> {
     use DecPrivateModeCode as M;
 
@@ -308,7 +313,10 @@ fn modes(options: SessionOptions, subscribe: bool) -> Vec<DecPrivateModeCode> {
         modes.push(M::BracketedPaste);
     }
     if subscribe {
-        modes.push(M::Theme);
+        // Focus tracking is the second trigger for a re-query: a terminal
+        // recoloured from outside its own theme selector reports nothing, and
+        // some terminals have no mode 2031 to report through.
+        modes.extend([M::FocusTracking, M::Theme]);
     }
     modes
 }
@@ -416,9 +424,12 @@ const fn stored_or(stored: Option<Theme>, fallback: Theme) -> Theme {
 /// A terminal that answered is followed; one that would not say — or was never
 /// asked — leaves both empty, so the watch exists exactly where mode 2031 is
 /// switched on.
-fn opening(answer: Option<TerminalColors>) -> (Option<Theme>, Option<Watch>) {
+///
+/// `now` is when the session opened, which is the quiet the first event is
+/// measured against.
+fn opening(answer: Option<TerminalColors>, now: Instant) -> (Option<Theme>, Option<Watch>) {
     match answer {
-        Some(colors) => (Some(colors.theme()), Some(Watch::new(Some(colors)))),
+        Some(colors) => (Some(colors.theme()), Some(Watch::new(Some(colors), now))),
         None => (None, None),
     }
 }
@@ -456,8 +467,9 @@ fn restore_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::
 #[cfg(test)]
 mod tests {
     use super::{
-        DecPrivateModeCode as M, Duration, SessionEvent, SessionOptions, Source, TerminalColors,
-        Watch, io, modes, opening, pump, pump_and_remember, remember, restore_modes, stored_or,
+        DecPrivateModeCode as M, Duration, Instant, SessionEvent, SessionOptions, Source,
+        TerminalColors, Watch, io, modes, opening, pump, pump_and_remember, remember,
+        restore_modes, stored_or,
     };
     use crate::Theme;
     use ratatui::style::Color;
@@ -466,13 +478,22 @@ mod tests {
     use termina::Parser;
 
     /// An event source the test writes the script for: each step is either an
-    /// event to hand over or a wait to really sit out. Running dry is an error
-    /// rather than an empty poll, so a loop that would spin says so.
+    /// event to hand over or a wait to really sit out. A spent script is a
+    /// terminal with nothing more to say, and [`POLLS`] is what keeps a loop
+    /// that would never leave it from running forever.
     struct Scripted {
         steps: RefCell<VecDeque<Option<termina::Event>>>,
         /// The timeout each poll was given, in order.
         polls: RefCell<Vec<Option<Duration>>>,
     }
+
+    /// How many times one `pump` call may ask the source before the loop it is
+    /// in counts as a spin.
+    ///
+    /// Every script here is a handful of steps, and every pass through the loop
+    /// spends one: a pump still asking after this many has stopped making
+    /// progress through anything.
+    const POLLS: usize = 64;
 
     impl Scripted {
         /// `script` parses to the events; `waits` marks, by index, the points
@@ -515,14 +536,24 @@ mod tests {
     impl Source for Scripted {
         fn poll(&self, timeout: Option<Duration>) -> io::Result<bool> {
             self.polls.borrow_mut().push(timeout);
+            let asked = self.polls.borrow().len();
+            if asked > POLLS {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!("the source was asked {asked} times: the loop is spinning"),
+                ));
+            }
             match self.steps.borrow().front() {
                 Some(Some(_)) => return Ok(true),
                 Some(None) => {}
+                // A spent script is a terminal with nothing more to say: it
+                // sits out whatever wait it was given, and answers an unbounded
+                // one the way a silent terminal does, by staying silent.
                 None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "the script ran dry: the loop would spin here",
-                    ));
+                    if let Some(timeout) = timeout {
+                        std::thread::sleep(timeout);
+                    }
+                    return Ok(false);
                 }
             }
             self.steps.borrow_mut().pop_front();
@@ -542,6 +573,13 @@ mod tests {
     }
 
     const NOTIFIED: &str = "\x1b[?997;2n";
+
+    /// Long enough for a collapse window to close and its answer to arrive.
+    const PATIENT: Duration = Duration::from_millis(500);
+
+    /// Long enough for a collapse window to close, which is what a re-query on
+    /// its way out would need.
+    const PAST_THE_WINDOW: Duration = Duration::from_millis(200);
     const LIGHT: &str = "\x1b]10;rgb:6565/7b7b/8383\x07\x1b]11;rgb:fdfd/f6f6/e3e3\x07";
 
     fn typed(code: char) -> termina::Event {
@@ -550,11 +588,21 @@ mod tests {
         ))
     }
 
+    /// A watch on a session nobody has touched since it opened, which is how
+    /// the quiet the input trigger answers to is arranged without sitting one
+    /// out.
+    fn quiet_watch() -> Watch {
+        let opened = Instant::now()
+            .checked_sub(super::watch::IDLE + Duration::from_secs(1))
+            .expect("the process clock has six seconds behind it");
+        Watch::new(None, opened)
+    }
+
     #[test]
     fn typing_reaches_the_app_whether_or_not_the_terminal_is_watched() {
         for watched in [false, true] {
             let source = Scripted::new("q", &[]);
-            let mut watch = Watch::new(None);
+            let mut watch = Watch::new(None, Instant::now());
             let mut out = Vec::new();
 
             let event = pump(
@@ -574,12 +622,67 @@ mod tests {
     }
 
     #[test]
+    fn focus_reaches_the_app_whether_or_not_the_terminal_is_watched() {
+        for watched in [false, true] {
+            let source = Scripted::new("\x1b[I", &[]);
+            let mut watch = Watch::new(None, Instant::now());
+            let mut out = Vec::new();
+
+            let event = pump(
+                &source,
+                &mut out,
+                watched.then_some(&mut watch),
+                Some(PATIENT),
+            )
+            .expect("a scripted source cannot fail");
+
+            assert_eq!(
+                event,
+                Some(SessionEvent::Input(termina::Event::FocusIn)),
+                "the watch observes focus without taking it (watched: {watched})"
+            );
+            assert!(
+                out.is_empty(),
+                "focus opens a window; the re-query it triggers goes out when \
+                 that window closes (watched: {watched})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_that_follows_nothing_writes_nothing_when_focus_returns() {
+        // A session with no re-query to trigger has nothing for focus to do,
+        // and the wait in the middle carries it long past any collapse window.
+        let source = Scripted::new("\x1b[Iq", &[1]);
+        let mut out = Vec::new();
+
+        let focus =
+            pump(&source, &mut out, None, Some(PATIENT)).expect("a scripted source cannot fail");
+        let quiet = pump(&source, &mut out, None, Some(PAST_THE_WINDOW))
+            .expect("a scripted source cannot fail");
+        let after =
+            pump(&source, &mut out, None, Some(PATIENT)).expect("a scripted source cannot fail");
+
+        assert_eq!(focus, Some(SessionEvent::Input(termina::Event::FocusIn)));
+        assert_eq!(
+            quiet, None,
+            "the wait ran out, and nothing came due while it did"
+        );
+        assert_eq!(
+            after,
+            Some(SessionEvent::Input(typed('q'))),
+            "and the session goes on routing what the user does"
+        );
+        assert!(out.is_empty(), "not one byte went out");
+    }
+
+    #[test]
     fn a_terminals_own_answer_is_never_input() {
         // Unsolicited or left over, an escape report is not something the app
         // can read. The contract is the same with a watch and without one.
         for watched in [false, true] {
             let source = Scripted::new("\x1b[?62;1;6cq", &[]);
-            let mut watch = Watch::new(None);
+            let mut watch = Watch::new(None, Instant::now());
             let mut out = Vec::new();
 
             let event = pump(
@@ -616,17 +719,21 @@ mod tests {
     fn a_pending_watch_shortens_a_wait_the_caller_made_long() {
         // The caller names five seconds; the watch owes a re-query in a
         // hundred milliseconds, and the poll has to come back in time for it.
-        let source = Scripted::new(NOTIFIED, &[1]);
-        let mut watch = Watch::new(None);
+        // A keystroke after the window closes, so the pump has something to
+        // return once the re-query has gone out.
+        let source = Scripted::new(&format!("{NOTIFIED}q"), &[1]);
+        let mut watch = Watch::new(None, Instant::now());
         let mut out = Vec::new();
 
-        let _ = pump(
+        let event = pump(
             &source,
             &mut out,
             Some(&mut watch),
             Some(Duration::from_secs(5)),
-        );
+        )
+        .expect("a scripted source cannot fail");
 
+        assert_eq!(event, Some(SessionEvent::Input(typed('q'))));
         let shortened = source.poll_at(1).expect("a second wait happened");
         assert!(
             shortened <= Duration::from_millis(100),
@@ -637,7 +744,7 @@ mod tests {
     #[test]
     fn the_colours_a_re_query_brings_back_are_the_theme_that_comes_out() {
         let source = Scripted::new(&format!("{NOTIFIED}{LIGHT}"), &[1]);
-        let mut watch = Watch::new(None);
+        let mut watch = Watch::new(None, Instant::now());
         let mut out = Vec::new();
 
         let event =
@@ -669,8 +776,129 @@ mod tests {
     }
 
     #[test]
+    fn focus_returning_re_queries_and_reports_a_real_change() {
+        // The reproducer, at the seam: a terminal that reports no change of its
+        // own, recoloured while the app was in the background.
+        let source = Scripted::new(&format!("\x1b[I{LIGHT}"), &[1]);
+        let mut watch = Watch::new(None, Instant::now());
+        let mut out = Vec::new();
+
+        let focus = pump(&source, &mut out, Some(&mut watch), Some(PATIENT))
+            .expect("a scripted source cannot fail");
+        let event = pump(&source, &mut out, Some(&mut watch), Some(PATIENT))
+            .expect("a scripted source cannot fail");
+
+        assert_eq!(
+            focus,
+            Some(SessionEvent::Input(termina::Event::FocusIn)),
+            "focus reaches the app: the watch observes it without taking it"
+        );
+        assert_eq!(
+            event,
+            Some(SessionEvent::ThemeChanged(answered().theme())),
+            "the colors the re-query brought back are the new theme"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "\x1b]10;?\x07\x1b]11;?\x07",
+            "and the re-query went out"
+        );
+    }
+
+    #[test]
+    fn focus_returning_to_an_unchanged_terminal_owes_the_app_nothing() {
+        // Alt-tabbing costs a round trip and no frame.
+        let known = TerminalColors {
+            background: Color::Rgb(26, 27, 38),
+            foreground: Color::Rgb(192, 202, 245),
+        };
+        let unchanged = "\x1b]10;rgb:c0c0/caca/f5f5\x07\x1b]11;rgb:1a1a/1b1b/2626\x07";
+        let source = Scripted::new(&format!("\x1b[I{unchanged}q"), &[1]);
+        let mut watch = Watch::new(Some(known), Instant::now());
+        let mut out = Vec::new();
+
+        let focus = pump(&source, &mut out, Some(&mut watch), Some(PATIENT))
+            .expect("a scripted source cannot fail");
+        let event = pump(&source, &mut out, Some(&mut watch), Some(PATIENT))
+            .expect("a scripted source cannot fail");
+
+        assert_eq!(focus, Some(SessionEvent::Input(termina::Event::FocusIn)));
+        assert_eq!(
+            event,
+            Some(SessionEvent::Input(typed('q'))),
+            "the re-query answered with what was already on screen, so the next \
+             thing the app hears is the keystroke"
+        );
+    }
+
+    #[test]
+    fn input_after_a_long_quiet_re_queries_and_reports_a_real_change() {
+        // The other reproducer: a compositor that gives the window no focus
+        // event at all, so the user coming back to it is the whole signal.
+        let source = Scripted::new(&format!("q{LIGHT}"), &[1]);
+        let mut watch = quiet_watch();
+        let mut out = Vec::new();
+
+        let typing = pump(&source, &mut out, Some(&mut watch), Some(PATIENT))
+            .expect("a scripted source cannot fail");
+        let event = pump(&source, &mut out, Some(&mut watch), Some(PATIENT))
+            .expect("a scripted source cannot fail");
+
+        assert_eq!(
+            typing,
+            Some(SessionEvent::Input(typed('q'))),
+            "the keystroke is the app's, trigger or not"
+        );
+        assert_eq!(
+            event,
+            Some(SessionEvent::ThemeChanged(answered().theme())),
+            "the colors the re-query brought back are the new theme"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "\x1b]10;?\x07\x1b]11;?\x07",
+            "and the re-query went out through the terminal's own writer"
+        );
+    }
+
+    #[test]
+    fn input_inside_a_session_already_in_use_asks_the_terminal_nothing() {
+        // Typing is what a session is for. Only the first keystroke after a
+        // spell of nothing at all says the user was somewhere else.
+        let source = Scripted::new("q", &[1]);
+        let mut watch = Watch::new(None, Instant::now());
+        let mut out = Vec::new();
+
+        let typing = pump(&source, &mut out, Some(&mut watch), Some(PATIENT))
+            .expect("a scripted source cannot fail");
+        let quiet = pump(&source, &mut out, Some(&mut watch), Some(PAST_THE_WINDOW))
+            .expect("a scripted source cannot fail");
+
+        assert_eq!(typing, Some(SessionEvent::Input(typed('q'))));
+        assert_eq!(quiet, None, "the wait ran out with nothing to report");
+        assert!(out.is_empty(), "and no window ever opened");
+    }
+
+    #[test]
+    fn a_session_that_follows_nothing_writes_nothing_when_input_resumes() {
+        // A session with no re-query to trigger has no quiet to answer to
+        // either, however long it was left alone.
+        let source = Scripted::new("q", &[1]);
+        let mut out = Vec::new();
+
+        let typing =
+            pump(&source, &mut out, None, Some(PATIENT)).expect("a scripted source cannot fail");
+        let quiet = pump(&source, &mut out, None, Some(PAST_THE_WINDOW))
+            .expect("a scripted source cannot fail");
+
+        assert_eq!(typing, Some(SessionEvent::Input(typed('q'))));
+        assert_eq!(quiet, None);
+        assert!(out.is_empty(), "not one byte went out");
+    }
+
+    #[test]
     fn a_terminal_that_answered_is_worn_and_followed() {
-        let (theme, watch) = opening(Some(answered()));
+        let (theme, watch) = opening(Some(answered()), Instant::now());
 
         assert_eq!(theme, Some(answered().theme()), "the answer is worn");
         assert!(watch.is_some(), "and the terminal is followed");
@@ -678,7 +906,7 @@ mod tests {
 
     #[test]
     fn a_terminal_that_said_nothing_is_neither_worn_nor_followed() {
-        let (theme, watch) = opening(None);
+        let (theme, watch) = opening(None, Instant::now());
 
         assert_eq!(theme, None, "there is nothing to wear but a fallback");
         assert!(
@@ -694,7 +922,7 @@ mod tests {
         // A caller that reads the theme after the event must see the theme the
         // event carried.
         let source = Scripted::new(&format!("{NOTIFIED}{LIGHT}"), &[1]);
-        let mut watch = Watch::new(None);
+        let mut watch = Watch::new(None, Instant::now());
         let mut out = Vec::new();
         let mut stored = None;
 
@@ -782,6 +1010,21 @@ mod tests {
             subscribed.first(),
             Some(&M::ClearAndEnableAlternateScreen),
             "and the screen the user came from is the last thing given back"
+        );
+    }
+
+    #[test]
+    fn following_the_terminal_turns_on_focus_reporting_too() {
+        let unanswered = modes(SessionOptions::new().mouse(), false);
+        let subscribed = modes(SessionOptions::new().mouse(), true);
+
+        assert!(
+            !unanswered.contains(&M::FocusTracking),
+            "a session with no re-query has nothing for focus to trigger"
+        );
+        assert!(
+            subscribed.contains(&M::FocusTracking),
+            "focus is the second trigger for a re-query"
         );
     }
 
