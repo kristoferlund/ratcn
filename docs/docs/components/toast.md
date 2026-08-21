@@ -1,11 +1,11 @@
 ---
-description: "Transient corner notifications for Ratatui apps. Toast is one message, ToasterState is the stack your app owns, and ToasterWidget draws it."
+description: "Transient corner notifications for Ratatui apps. Toast is one message, ToasterState is the stack your app owns, and ToasterWidget paints it."
 ---
 
 # Toast
 
 Transient notifications stacked in a corner. `Toast` is one message,
-`ToasterState` is the stack your app keeps, and `ToasterWidget` draws it.
+`ToasterState` is the stack your app keeps, and `ToasterWidget` paints it.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 420px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -113,7 +113,7 @@ Ids are not deduplicated; with several matches, the oldest entry is affected
 whether it has expired or not. Prune first when expired entries should not take
 precedence. `dismiss` needs no clock reading; `replace` uses `now` only to start
 the replacement's lifetime. Apps that need a different lifecycle entirely can
-own a custom collection of `ToastEntry` values and render it with
+own a custom collection of `ToastEntry` values and paint it with
 `ToasterWidget::from_entries(...)`.
 
 To let Escape dismiss the most recently pushed toast, identified or anonymous:
@@ -149,8 +149,8 @@ your own layout needs to know.
 
 Toasts have no fixed height — the title and description wrap at the stack width
 and the widget measures the result. If the area cannot hold every visible toast,
-the newest that fit whole are drawn and the rest wait for the next frame. A toast
-is never clipped mid-content and toasts never overlap.
+the newest that fit whole are painted and the rest wait for the next frame. A
+toast is never clipped mid-content and toasts never overlap.
 
 ## Styling
 
@@ -166,7 +166,7 @@ style.error = theme.accent;
 ToasterWidget::new(&state.toasts, now).style(style)
 ```
 
-Every toast draws a border by default. `.border(false)` on a toast drops it for
+Every toast paints a border by default. `.border(false)` on a toast drops it for
 that toast, and `ToasterStyle::border_style` picks the line-drawing glyphs for
 all of them.
 
@@ -190,7 +190,7 @@ frame.render_widget(
 For writing your own renderer against `entries()`, `Toast` and `ToastEntry`
 expose read accessors: `title`, `description_text`, `toast_kind`, `toast_id`,
 `is_bordered`, `is_expired_after`, `created_at`, `age`, and `is_expired`.
-`ToasterWidget::visible()` iterates what would be drawn.
+`ToasterWidget::visible()` iterates what would be painted.
 
 ## Full API
 

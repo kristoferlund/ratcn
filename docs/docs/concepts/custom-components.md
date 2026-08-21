@@ -13,8 +13,9 @@ lines.
 
 Write a component when the demoed behavior needs real event handling or its own
 interaction identity. Purely decorative content should stay direct paint:
-build a Ratatui widget and draw it from a `ctx.paint` closure. Paint-only content
-declared as a component costs identity, traversal, and hit-testing for nothing.
+build a Ratatui widget and paint it from a `ctx.paint` closure. Paint-only
+content declared as a component takes on identity, traversal, and hit-testing
+it never uses.
 
 ## The trait
 
@@ -37,9 +38,9 @@ impl Component<AppState, Msg> for MyComponent {
 }
 ```
 
-Declaring and drawing are two methods because they happen in two walks.
+Declaring and painting are two methods because they happen in two walks.
 `declare` lays the component out and declares its descendants, and paints
-nothing. `paint` draws, after the whole tree is declared and focus has
+nothing. `paint` writes cells, after the whole tree is declared and focus has
 resolved — which is why the interaction flags (`ctx.focused`,
 `ctx.contains_focus`, `ctx.hovered`, `ctx.contains_hover`) live on `PaintCtx`
 and not on `DeclareCtx`: while `declare` runs, focus has nothing complete to
@@ -50,7 +51,7 @@ the pointer is inside this declaration, for the rare component whose
 `handle_event` reads back must be recorded in `declare`, and must therefore not
 depend on those flags.
 
-Every method except `declare` has a default. `paint` defaults to drawing
+Every method except `declare` has a default. `paint` defaults to painting
 nothing, which is right for a composite that is only a container.
 `is_focusable` defaults to `false`; override it for anything that should take
 part in Tab traversal. It answers from the props the component was declared
@@ -64,14 +65,14 @@ the previous retained surface remains active. Returning an area with zero
 width or height keeps the component's identity and paint but excludes it and its
 descendants from interaction for that surface. `scope_options` matters only for
 composites (below). `prepare` runs once per declaration, before any of those
-answers are read, so all of them may be computed from what it pins: `Tooltip`
-and `Select` resolve their open flag there, and `List`, `Select`, and `Tabs` use
-it to fail loud when two items carry the same value.
+answers are read, so all of them may be computed from what it pins: `Select`
+resolves its open flag there, and `List`, `Select`, and `Tabs` use it to fail
+loud when two items carry the same value.
 `MeasuredComponent` adds a `measure` method so containers such as the Dialog
 action row can size a component before declaring it.
 
 A reusable component is worth splitting into the library's two halves: a
-stateless paint widget that only draws, and the `Component` that owns behavior
+stateless paint widget that only paints, and the `Component` that owns behavior
 and paints by constructing the widget. Keep shared vocabulary — dimensions,
 variants, `width()` — on the paint widget so layout constraints and actual paint
 cannot disagree. A one-off app component can skip the split and paint directly.
@@ -79,20 +80,20 @@ cannot disagree. A one-off app component can skip the split and paint directly.
 ## What a component may hold
 
 A component is built fresh each frame and then kept, inert, as the surface
-events route through. It is never re-rendered when state changes, so by the time
+events route through. It is never rebuilt when state changes, so by the time
 an event arrives it may describe a slightly older frame than the state does.
 That is fine, as long as each piece of what it holds is read at the right
 moment. There are four kinds.
 
 **Declaration props** — label, disabled, variant, colors. Plain values taken
-from state while declaring (`.disabled(state.saving)`). These are deliberately
-one frame old: they describe what the user actually saw, and what the user saw
+from state while declaring (`.disabled(state.saving)`). These are one frame
+old: they describe what the user actually saw, and what the user saw
 is what their click meant. A button that looked enabled on screen should press.
 
 **Controlled bindings** — the focused row, the scroll offset, the selection.
 Stored as closures (`Fn(&S) -> …`) and called inside `handle_event`, so they
 read state as it is *now*. This matters because two events can arrive before the
-next frame is drawn, and each one has to build on the last:
+next frame is painted, and each one has to build on the last:
 
 ```text
 render N     state.name = ""      component retained
@@ -161,11 +162,10 @@ which is queued before them. A `ctx.paint` closure reached *after* those
 declarations is queued after them, on the same layer, and is the usual answer.
 `ctx.defer_paint` goes one step further, flushing after the current layer has
 finished declaring, which is what decoration that must also cover *later
-siblings* — a drag ghost — needs, at the cost of having no identity or geometry
-of its own.
+siblings* — a drag ghost — needs; it has no identity or geometry of its own.
 
 What still follows declaration order is hit-testing, and it knows nothing about
-pixels: a later sibling drawn underneath another still takes the clicks over
+pixels: a later sibling painted underneath another still takes the clicks over
 its own area.
 
 A composite is an ordinary `Component`; there is no composite trait to implement
@@ -174,8 +174,8 @@ what its builders were handed until `declare` uses it, and a way to keep
 answering geometry questions once that is gone. In practice that is four
 pieces:
 
-**Deferred drawing.** A `paint` closure runs after declaration has ended, so it
-owns what it draws with: it is `'static` and receives a `PaintCtx` carrying the
+**Deferred painting.** A `paint` closure runs after declaration has ended, so it
+owns what it paints with: it is `'static` and receives a `PaintCtx` carrying the
 theme, the state, the area, and the interaction flags. Layout computed while
 declaring has to be moved in. Where a style-dependent widget also produces
 layout — a bordered `Block` whose colors follow focus — compute the layout from
@@ -226,7 +226,7 @@ what you can use too.
   `interaction_area` returned one. Retain the paint allocation in `declare` when
   the geometry has to come from that instead, and cache anything else there
   too, never in `paint`.
-- Everything that draws: `paint`, styled from its interaction flags.
+- Everything that paints: `paint`, styled from its interaction flags.
 - Interactive geometry within the paint area: express it with `interaction_area`.
 - Gesture mechanics that outlive the instance: `ctx.transient`.
 - `is_focusable` reflects the same condition that makes events ignored.

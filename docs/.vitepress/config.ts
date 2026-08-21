@@ -196,8 +196,7 @@ export default defineConfig({
             { text: 'Mouse input', link: '/docs/concepts/mouse' },
             { text: 'Dragging', link: '/docs/concepts/dragging' },
             { text: 'Structuring a larger app', link: '/docs/concepts/composition' },
-            { text: 'Custom components', link: '/docs/concepts/custom-components' },
-            { text: 'Design decisions', link: '/docs/concepts/design-decisions' }
+            { text: 'Custom components', link: '/docs/concepts/custom-components' }
           ]
         },
         {

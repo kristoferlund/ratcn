@@ -39,7 +39,7 @@ match state.selected {
 }
 ```
 
-The row draws only the tabs — what appears below is yours, matched on the
+The row paints only the tabs — what appears below is yours, matched on the
 selected value in the same frame. Tabs are identified by your own values rather
 than by position, so filtering or reordering the row keeps the same tab selected.
 The readers return `Option`s: `None` means no cursor or no active tab yet, and
@@ -114,7 +114,7 @@ focus or click targets.
 
 ## Disabled
 
-Disabled tabs render dimmed, ignore clicks, and are skipped by arrow keys. A
+Disabled tabs paint dimmed, ignore clicks, and are skipped by arrow keys. A
 selected tab that becomes disabled stays visibly selected, so the panel on screen
 always has an identifiable tab.
 
@@ -170,7 +170,7 @@ render on any terminal.
 
 ## Paint-only widget
 
-`TabsWidget` draws a row without focus or events. It is an ordinary Ratatui
+`TabsWidget` paints a row without focus or events. It is an ordinary Ratatui
 widget, so it works in a plain Ratatui app with no `Ratcn` runtime. Everything
 is addressed by index rather than by value — which tab is selected, which the cursor is on
 (`.focused_tab(...)`), which are disabled, and whether the row itself has focus:

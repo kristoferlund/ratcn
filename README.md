@@ -29,12 +29,12 @@ If you want specific components, patterns, or features, please
 A component module holds up to two cooperating halves:
 
 - A **paint-only widget** (`ButtonWidget`, `ListWidget`, `BarChartWidget`, ...)
-  is a plain ratatui `Widget` that just draws. It is usable on its own without
+  is a plain ratatui `Widget` that only paints. It is usable on its own without
   the runtime. BarChart and Toast are paint-only and stop here.
 - An **interactive component** (`Button`, `List`, `Select`, ...) — declared
   through the runtime each frame, it handles focus, events, and messages. Most
-  paint via a widget half. Dialog is the exception: it is an interactive
-  composite with no separate paint widget.
+  paint via a widget half. Dialog and ScrollArea are the exceptions:
+  interactive composites with no separate paint widget.
 
 Your app owns state, events, and updates. The library enters your loop at
 exactly two removable call sites: `Ratcn::render` and `Ratcn::handle_event`.
@@ -47,14 +47,14 @@ Requires Rust 1.88 (1.90 for the browser build). For a native crossterm app:
 
 ```sh
 cargo add ratcn --features crossterm
-cargo add ratatui --no-default-features --features layout-cache,crossterm
+cargo add ratatui --no-default-features --features layout-cache,std,crossterm
 ```
 
 For a browser app, select the ratzilla integration instead:
 
 ```sh
 cargo add ratcn --features ratzilla
-cargo add ratatui --no-default-features --features layout-cache
+cargo add ratatui --no-default-features --features layout-cache,std
 cargo add ratzilla
 ```
 
@@ -69,7 +69,7 @@ A copied module still depends on:
 
 - the `ratcn` runtime — the `Component` trait, `DeclareCtx`/`EventCtx`,
   `EventResult`, and the normalized event types;
-- the theme types (`Theme`, and `BorderStyle` where a border is drawn), plus
+- the theme types (`Theme`, and `BorderStyle` where a border is painted), plus
   the crate's small helper modules the component uses (such as color math, text
   width, linear navigation, and the toast state module);
 - `ratatui` itself.

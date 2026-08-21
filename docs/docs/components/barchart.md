@@ -5,7 +5,7 @@ description: "BarChartWidget is a themed adapter over Ratatui's BarChart, adding
 # BarChartWidget
 
 A themed adapter over Ratatui's `BarChart`, adding grouping and a value display
-switch. The bars, labels, and drawing are Ratatui's; ratcn supplies the theme
+switch. The bars, labels, and painting are Ratatui's; ratcn supplies the theme
 colors on top. It is paint-only and an ordinary Ratatui widget — no `Ratcn`
 runtime needed, just `frame.render_widget(...)`.
 
@@ -83,7 +83,7 @@ grouped bars too. Set `.direction(Direction::Horizontal)` for horizontal groups
 — that is `ratatui::layout::Direction`, the layout axis. The runtime's own
 `Forward`/`Backward` enum is `ratcn::runtime::Step`, a different type.
 Horizontal group labels occupy the space reserved by `.group_gap(...)` and are
-not drawn when that gap is `0`. A group with no bars is dropped: it paints
+not painted when that gap is `0`. A group with no bars is dropped: it paints
 nothing, and it takes neither space nor a group gap in `.width()`/`.height()`.
 
 ```rust
@@ -104,10 +104,10 @@ between clusters in a grouped chart, on top of the bar gap that already separate
 the two bars either side of the boundary. `.show_values(false)` hides the number
 printed inside each bar, for bars too narrow to fit one.
 
-A vertical bar rarely ends exactly on a cell boundary, so its top cell is drawn
-with a partial block. `.bar_set(...)` chooses those glyphs — the default gives
-the smoothest result, and coarser sets exist for terminals whose fonts lack
-them. Horizontal bars use whole cells and only use the set's `full` and `empty`
+A vertical bar rarely ends exactly on a cell boundary, so its top cell is
+painted with a partial block. `.bar_set(...)` chooses those glyphs — the
+default gives the smoothest result, and coarser sets exist for terminals whose
+fonts lack them. Horizontal bars use whole cells and only use the set's `full` and `empty`
 symbols.
 
 ```rust

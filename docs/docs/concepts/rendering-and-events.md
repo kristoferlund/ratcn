@@ -1,18 +1,18 @@
 ---
-description: "How a frame is declared, how ratcn retains it as the interaction surface, and how events reach the right component and bubble back to your app as messages."
+description: "How a frame is declared, how ratcn keeps it as the retained surface, and how events reach the right component and bubble back to your app as messages."
 ---
 
 # Rendering and event routing
 
 Ratcn enters an app at two calls:
 
-- `Ratcn::render(frame, state, theme, declare)` paints and declares one frame.
+- `Ratcn::render(frame, state, theme, declare)` declares and paints one frame.
 - `Ratcn::handle_event(event, state)` routes one event through the last
   successful declaration.
 
 The declaration is immediate Rust code. Build components from current state,
 split areas with Ratatui, queue decorative widgets with
-`DeclareCtx::paint_widget`, and register interactive components with
+`DeclareCtx::paint_widget`, and declare interactive components with
 `DeclareCtx::component`:
 
 ```rust
@@ -39,7 +39,7 @@ type used by nested scopes, dialog sections, and a component's own `declare`.
 with `component` get an identity and can receive events; widgets you paint are
 decoration and cannot.
 
-Declaring does not draw. `ctx.paint` queues a `'static` closure at the point it
+Declaring does not paint. `ctx.paint` queues a `'static` closure at the point it
 was reached, and the runtime replays the whole queue in that order once the
 tree is complete and focus has resolved — so paint order is still declaration
 order, and the closure gets a `PaintCtx` carrying the theme, the state, the
@@ -52,6 +52,13 @@ flags, or when they belong together as a single op.
 Declaring is also how things appear and disappear: an `if` around a `component`
 call adds or removes that component for the frame. There is no separate
 mount/unmount step.
+
+The closure runs exactly once per frame and is `FnOnce`, so it may have side
+effects, consume what it captures, and move owned values into the components it
+declares. What it cannot read is a focus flag — whether a declaration is
+focused, or contains focus, is offered to `PaintCtx`, once the tree is complete
+and focus has resolved. Hover is the exception: `DeclareCtx::pointer_within()`
+answers it while declaring.
 
 ## What an event sees
 
@@ -78,11 +85,22 @@ value on the correct side. It becomes relevant when you
 [write your own component](./custom-components), which walks through which data
 belongs where.
 
-If anything in the declaration panics, Ratcn keeps the previous interaction
-surface. Pixels already painted stay on screen, but events never route through
-a half-declared frame. Before the first successful render, all events are
-`Ignored`. Why declaration mistakes panic instead of returning errors is
-covered in [Design decisions](./design-decisions).
+### When a declaration is wrong
+
+Declaration mistakes panic: duplicate sibling ids in one scope, a duplicate
+modal root id, a modal root that a bound `ModalState` does not name, an
+`interaction_area` reaching outside its paint area. Each is a bug in the
+declaration, and the panic points at the call that made it.
+
+Declaration, validation, and the modal check all finish before the first cell
+is written, so a pass that fails one of them paints nothing. Replacing the
+retained surface is the last step of a successful render, so any panic during a
+render — declaration or paint — leaves the previous surface in place: the last
+good frame stays on screen, events keep routing through it, and nothing ever
+routes through a half-declared frame. Before the first successful render, all
+events are `Ignored`. A host that wants to keep running through a declaration
+bug can catch the unwind around its draw call and carry on calling
+`handle_event`.
 
 ## Routing
 

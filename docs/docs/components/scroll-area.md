@@ -70,9 +70,9 @@ callback receives the remaining width and exactly the configured logical
 height, so ordinary Ratatui layout and real fixed-height allocations work
 inside it.
 
-Paint is rendered against the full logical area, then translated and clipped to
-the viewport. Offscreen descendants stay declared and focusable, and paint,
-hover, and take uncaptured pointer events on the rows that are visible. A
+Everything paints against the full logical area; the result is translated and
+clipped to the viewport. Offscreen descendants stay declared and focusable, and
+paint, hover, and take uncaptured pointer events on the rows that are visible. A
 captured pointer gesture keeps routing to its owner after leaving the viewport,
 so drag components work as they do elsewhere. Paint outside the logical content
 is clipped away.

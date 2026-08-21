@@ -55,7 +55,7 @@ single-letter app hotkey keeps working while a list has focus.
 ## Multi-selection
 
 Any number of items at once, with checkbox markers. Instead of a selected value
-you give a predicate: `List` asks "is this one selected?" per row it draws, so
+you give a predicate: `List` asks "is this one selected?" per row it paints, so
 the selection can live in a `HashSet`, a `Vec`, or a flag on each record.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 400px">
@@ -89,7 +89,7 @@ removes it. Enter or Space toggles the cursor item. Pick one mode —
 ## Custom rows
 
 `render_item` replaces the default marker-and-label line with anything you can
-draw. For rows taller than one line, return a `Text` and set `.row_height(...)`
+paint. For rows taller than one line, return a `Text` and set `.row_height(...)`
 to match.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 380px">
@@ -121,7 +121,7 @@ List::new(people)
 ```
 
 Every item is the same height, which keeps clicking and paging exact. The
-default markers are `■`/`□` and `●`/`○`; this demo draws ASCII `[x]`/`[ ]`
+default markers are `■`/`□` and `●`/`○`; this demo paints ASCII `[x]`/`[ ]`
 instead. The row's state colors are painted underneath what `render_item`
 returns, so unstyled text picks up the focused, selected, or disabled colors,
 and any color you set explicitly on a `Text`, `Line`, or `Span` is kept.
@@ -207,10 +207,10 @@ List::new(items).style(|theme| {
 
 ## Paint-only widget
 
-`ListWidget` draws a list without focus or events. It is an ordinary Ratatui
+`ListWidget` paints a list without focus or events. It is an ordinary Ratatui
 widget, so it works in a plain Ratatui app with no `Ratcn` runtime. Rows are
-pre-rendered `Text`s and everything else is addressed by index. Explicit colors
-in those `Text`s are preserved:
+`Text`s you build yourself and everything else is addressed by index. Explicit
+colors in those `Text`s are preserved:
 
 ```rust
 use ratatui::text::Text;
@@ -236,8 +236,9 @@ Scrolling is yours: hand over the rows that are on screen and say where they
 start with `first_item`. Every other index — `focused_row`, `selected_rows`,
 `disabled_rows` — counts from the start of the list, so scrolling changes only
 that number and the rows. The widget holds no scroll position and never adjusts
-one, so your app stays the only scroll policy, and a thousand-item list costs a
-thousand `Text`s only if you build them.
+one, so your app stays the only scroll policy. Offscreen rows are free: you
+build `Text`s for the rows you hand over, and the widget allocates nothing per
+item it does not paint.
 
 The widget is area-driven — it fills the area you give it and has nothing to
 measure — and it paints each item at whatever height its `Text` is. Keeping
@@ -245,9 +246,9 @@ those heights uniform is yours to do here, because the arithmetic that maps a
 screen row back to an item counts items rather than lines; the `List` component
 does it for you.
 
-The two row inputs use different encodings on purpose: `selected_rows` is a
-list of selected indices, since selection is sparse, while `disabled_rows` is
-one flag per item. Both are read at the item's own index, and only for the rows
+The two row inputs use different encodings: `selected_rows` is a list of
+selected indices, since selection is sparse, while `disabled_rows` is one flag
+per item. Both are read at the item's own index, and only for the rows
 the widget paints — so a windowed caller can name just the selected rows inside
 its window, but `disabled_rows` is a positional mask and has to be padded up to
 the window: entry *n* describes item *n*, and entries past the end of the slice

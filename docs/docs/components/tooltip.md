@@ -139,7 +139,7 @@ that render on any terminal.
 
 ## Paint-only widget
 
-`TooltipWidget` draws the bubble on its own. It is an ordinary Ratatui widget,
+`TooltipWidget` paints the bubble on its own. It is an ordinary Ratatui widget,
 so it works in a plain Ratatui app with no `Ratcn` runtime — take the look and
 keep your own hover handling:
 

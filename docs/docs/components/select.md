@@ -40,7 +40,7 @@ not change the selected value. Those values must be unique within one Select; a
 debug build panics on duplicates as the Select declares, and a release build
 takes them on trust, exactly as in [List](./list). In Select terminology, an item
 supplies value identity, an option is one choice, and a row is the terminal space
-used to draw that option.
+used to paint that option.
 
 ## State
 
@@ -100,7 +100,7 @@ ListItem::new(Fruit::Durian, "Durian").disabled(!state.durian_available)
 
 ## Custom rows
 
-`.render_item(...)` draws each option yourself — columns, secondary text,
+`.render_item(...)` paints each option yourself — columns, secondary text,
 per-option icons — from the same `ListItemState` row description `List` uses.
 The row's state colors are painted underneath what you return, so unstyled text
 picks them up, and any color you set explicitly on a `Text`, `Line`, or `Span`
@@ -141,7 +141,7 @@ render on any terminal.
 
 ## Paint-only widget
 
-`SelectWidget` draws a Select without focus or events. It is an ordinary
+`SelectWidget` paints a Select without focus or events. It is an ordinary
 Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime.
 Unlike the interactive component's overlaid popup, its open panel paints below
 the trigger inside the area passed to the widget. Options and state are
@@ -171,7 +171,7 @@ frame.render_widget(
 Call `.height(...)` and `.visible_options(...)` on the built widget when the
 surrounding layout needs to reserve exactly the rows it will paint — they read
 openness, disabled state, option count, and row height from the instance.
-`.visible_option_rows(...)` accepts pre-rendered screen rows for the options
+`.visible_option_rows(...)` accepts screen rows you build for the options
 actually painted — the ones from `scroll_offset` on, in paint order — while
 `.open(...)` still takes every option, because the panel's height is measured
 from their count. Pair it with `.row_height(...)` for multi-line rows. Together
