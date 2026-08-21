@@ -48,8 +48,7 @@ A **click** ("a press and release on the same component") and a **drag** ("a
 press, then a move with the button held") are higher-level — and synthesized for
 you.
 The `Ratcn` runtime tracks each button's gesture, so you feed the **raw** mouse
-events straight to `handle_event`, the same call you already use for keys —
-there is no separate tracker to own:
+events straight to `handle_event`, the same call you already use for keys:
 
 ```rust
 use ratcn::runtime::EventResult;
@@ -90,8 +89,9 @@ component — see
 
 ## What components do with it
 
-The `MouseKind`s a component is offered are `Down`, `Up`, `Click`, `Drag`,
-`DragEnd`, `Moved`, and `Scroll`. Components opt into the ones they need:
+The normalized `MouseKind` a component can receive is `Down`, `Up`, `Click`,
+`Drag`, `DragEnd`, `Moved`, and `Scroll`. Components opt into the ones they
+need:
 
 - **Primary click** activates by default — a button presses and a list row is
   chosen.
@@ -133,8 +133,8 @@ The `MouseKind`s a component is offered are `Down`, `Up`, `Click`, `Drag`,
   `ScopeOptions::hover_focus()`. The first move onto another direct focusable
   child focuses that child's first focusable leaf. It is off everywhere it is
   not explicitly set, so hover and focus remain independent there.
-- **Scroll** moves a stored, app-owned offset (lists) — the wheel
-  scrolls the view, independent of the cursor.
+- **Scroll** moves a stored, app-owned offset (lists, scroll areas) — the
+  wheel scrolls the view, independent of the cursor.
 - **Drag** moves an app-owned position, and **DragEnd** commits it. Captured
   gestures return `DragEnd` to their source; its release position lets that
   source apply its own drop-target hit test. See [Dragging](./dragging) for the
@@ -172,9 +172,9 @@ terminal.on_mouse_event({
 ```
 
 ratcn's `TryFrom` conversion accepts ratzilla's raw
-`ButtonDown`/`ButtonUp`/`Moved` stream. It intentionally ignores ratzilla's
-`SingleClick`/`DoubleClick`; the runtime's one tracker synthesizes clicks and
-drags uniformly for native and browser input.
+`ButtonDown`/`ButtonUp`/`Moved` stream, plus `Exited` for the pointer leaving
+the grid. It ignores ratzilla's `SingleClick`/`DoubleClick`; the runtime
+synthesizes clicks and drags uniformly for native and browser input.
 
 Page focus, key capture, and browser default prevention stay with the host.
 The demos' shared host script shows one working policy — forwarding captured

@@ -63,8 +63,7 @@ when it comes back, disabled controls ignore input meanwhile, and Tab simply
 moves on to an eligible target. The one exception is an open modal: a stored
 path that names something real outside it is pulled into the modal, because
 the modal owns input until it closes — while a path that matches nothing stays
-parked even then. Why the library never silently retargets focus is covered in
-[Design decisions](./design-decisions).
+parked even then.
 
 **Programmatic focus.** `FocusState::intent(path)` names a path without
 validating it — use it when app policy points focus somewhere that may not
@@ -84,8 +83,8 @@ option changes a scope's own role:
   focusable inside, such as a read-only chart. Focus still prefers a focusable
   descendant when one exists.
 
-The declare-then-draw mechanics behind this live in
-[Design decisions](./design-decisions).
+The declare-then-paint mechanics behind this live in
+[Rendering and event routing](./rendering-and-events).
 
 ## Hover
 
@@ -96,8 +95,8 @@ records where the pointer is, and every frame it commits resolves hover from
 that position against the surface it just declared — because a redraw can move
 a component out from under a pointer that never moved.
 
-The two paths are deliberately independent: typing keeps going to the focused
-field while the mouse drifts across other controls.
+The two paths are independent: typing keeps going to the focused field while
+the mouse drifts across other controls.
 
 Why the split? Focus is a decision your app can make on its own — open a
 dialog, focus its first field — so it lives in your state and moves by

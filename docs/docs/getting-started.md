@@ -27,7 +27,7 @@ cargo add ratcn --features crossterm
 `ratcn` builds on [Ratatui](https://ratatui.rs), so you need that too:
 
 ```sh
-cargo add ratatui
+cargo add ratatui --no-default-features --features layout-cache,std,crossterm
 ```
 
 ### Pick a feature for your backend
@@ -106,10 +106,10 @@ impl App {
 }
 ```
 
-Two calls do the work. `render` declares what is on screen this frame;
-`handle_event` routes one input event and hands back a message if something
-happened. Everything else — the loop, the terminal setup, `update` — stays
-yours.
+Two calls do the work. `render` declares what is on screen this frame and
+paints it; `handle_event` routes one input event and hands back a message if
+something happened. Everything else — the loop, the terminal setup, `update` —
+stays yours.
 
 Keeping `update` in its own function means every state change is a plain call
 you can test without a terminal, and messages from elsewhere (a timer, a
@@ -120,8 +120,8 @@ Wiring this into a real event loop, native or browser, is covered in
 
 ## Paint-only widgets
 
-Every interactive component paints through a plain Ratatui widget that you can
-use on its own:
+Most interactive components paint through a plain Ratatui widget you can use on
+its own — `Dialog` and `ScrollArea` are composites and have no widget half:
 
 ```rust
 frame.render_widget(

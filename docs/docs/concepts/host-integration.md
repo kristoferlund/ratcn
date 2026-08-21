@@ -5,8 +5,8 @@ description: "Wiring the ratcn runtime into a host loop: a terminal Session that
 # Host integration
 
 The host owns the application loop: redraw policy, time, terminal setup and
-restoration, backend listeners, and global shortcuts. Ratcn paints through
-`render` and routes normalized input through `handle_event`.
+restoration, backend listeners, and global shortcuts. Ratcn declares and paints
+a frame through `render`, and routes normalized input through `handle_event`.
 
 Async work follows the same boundary. The host executes app-defined effects and
 sends their completion messages back through a queue: a native loop wakes or
@@ -24,7 +24,7 @@ feature:
 
 ```sh
 cargo add ratcn --features termina
-cargo add ratatui --no-default-features --features layout-cache
+cargo add ratatui --no-default-features --features layout-cache,std
 ```
 
 The feature re-exports termina as `ratcn::terminal::termina`, so its types — the
@@ -34,7 +34,8 @@ are named through ratcn, at the version ratcn already builds against.
 `SessionOptions::new()` opens the alternate screen. `.mouse()` reports movement,
 clicks, and scrolling as events, which every part of ratcn's mouse handling
 needs; while it is on, the terminal's own text selection usually stops working.
-`.paste()` reports a paste as one `Event::Paste`, so a pasted newline stays
+`.paste()` delivers a whole paste as one `SessionEvent::Input`; converted with
+`Event::try_from` it becomes one `Event::Paste`, so a pasted newline stays
 distinct from the user hitting Enter.
 
 ### Opening with a preset theme
@@ -140,7 +141,7 @@ a guard that switches them off when dropped.
 
 ```sh
 cargo add ratcn --features crossterm
-cargo add ratatui --no-default-features --features layout-cache,crossterm
+cargo add ratatui --no-default-features --features layout-cache,std,crossterm
 ```
 
 ```rust
@@ -161,7 +162,7 @@ typed browser paste helper:
 
 ```sh
 cargo add ratcn --features ratzilla
-cargo add ratatui --no-default-features --features layout-cache
+cargo add ratatui --no-default-features --features layout-cache,std
 cargo add ratzilla
 ```
 
@@ -179,7 +180,7 @@ terminal.on_key_event({
 terminal.draw_web(move |frame| app.borrow_mut().draw(frame));
 ```
 
-Register mouse callbacks the same way; see
+Wire mouse callbacks the same way; see
 [Mouse Input](./mouse#in-the-browser) for the details. Time-based cleanup,
 including toast pruning, belongs in the draw callback or another host callback
 that can cause a frame.
@@ -191,7 +192,7 @@ animation frame when an event routes to something — any `EventResult` but
 least `Consumed` once a surface exists, so hover stays live under that rule. The
 demos run on such a host, in `demos/shared`.
 
-For paste, register a DOM `paste` listener and forward `text/plain` clipboard
+For paste, add a DOM `paste` listener and forward `text/plain` clipboard
 data as `Event::Paste`. The demos wrap the wiring in
 `demo_shared::BrowserPasteListener`. Guard `prevent_default()` behind
 `Ratcn::has_rendered()`, so the host takes the event over once the first frame

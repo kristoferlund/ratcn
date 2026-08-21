@@ -17,13 +17,13 @@ the only place state changes. When `handle_event` returns
 ```rust
 struct AppState {
     focus: FocusState,
-    fruit: Option<usize>,
+    fruit: Option<&'static str>,
     saved: bool,
 }
 
 enum Msg {
     FocusChanged(FocusState),
-    FruitSelected(usize),
+    FruitSelected(&'static str),
     Save,
 }
 
@@ -37,7 +37,7 @@ fn update(state: &mut AppState, msg: Msg) {
 
 let ratcn = Ratcn::new()
     .focus(|state: &AppState| &state.focus, Msg::FocusChanged);
-let fruits = List::new(["Mango", "Papaya"])
+let fruits = List::new(["Mango", "Papaya"].map(|name| ListItem::new(name, name)))
     .selection(|state: &AppState| state.fruit, Msg::FruitSelected);
 ```
 

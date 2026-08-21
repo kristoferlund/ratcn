@@ -65,8 +65,8 @@ Three rules decide whether a component claims a key at all. They matter because
 they are what keeps your app's own hotkeys working.
 
 **A component claims only unmodified keys.** `Ctrl+S` reaches your save handler
-even while a List has focus. The navigation chords above are the deliberate
-exception — `Ctrl+N` is a control's own key, because every control with a
+even while a List has focus. The navigation chords above are the exception —
+`Ctrl+N` is a control's own key, because every control with a
 cursor wants the same four.
 
 **Shift is never navigation.** `J` is not `j`. Shift is left unclaimed.

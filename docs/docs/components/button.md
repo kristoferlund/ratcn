@@ -51,7 +51,7 @@ same way. Each has a shorthand builder, or pass one to `.variant(...)`.
 | `Ghost` | `.ghost()` | The quietest. No fill or border until focused or hovered. |
 | `Destructive` | `.destructive()` | Deleting or discarding. Filled with the destructive color. |
 
-`Outline` needs a `Large` button to have a border to draw. At `Small` it has no
+`Outline` needs a `Large` button to have a border to paint. At `Small` it has no
 focus or hover indication; use `Ghost` for a quiet small button instead.
 
 ## Large
@@ -125,8 +125,8 @@ point: plain ANSI colors that render on any terminal.
 
 ## Paint-only widget
 
-`ButtonWidget` draws a button without focus or events. It is an ordinary Ratatui
-widget, so it works in a plain Ratatui app with no `Ratcn` runtime. It has the
+`ButtonWidget` paints a button without focus or events. It is an ordinary
+Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime. It has the
 same variant and size builders, and you supply the interaction states —
 `.focused(...)`, `.hovered(...)`, and `.disabled(...)`:
 

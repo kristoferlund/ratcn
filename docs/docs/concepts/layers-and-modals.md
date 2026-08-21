@@ -1,16 +1,16 @@
 ---
-description: "Paint ordering and the three layer kinds in ratcn: hint, popup, and modal, plus deferred paint and the app-owned modal stack that drives them."
+description: "Paint ordering and the three layer kinds in ratcn: hint, popup, and modal, plus deferred paint, viewports, and the app-owned modal stack that drives them."
 ---
 
 # Layers and modals
 
 Ratcn paints in declaration order: what you declare later paints on top of what
-you declared earlier. Nothing draws during the declaration itself — every paint
+you declared earlier. Nothing paints during the declaration itself — every paint
 is queued where it was reached and replayed in that order once the tree is
-complete — but the order you see on screen is the order you wrote. Two
-mechanisms go beyond that order — deferred paint for passive overlays, and
-**layers** for content that must float above everything. Pick the smallest one
-that does the job:
+complete — but the order you see on screen is the order you wrote. Three
+mechanisms go beyond that order — deferred paint for passive overlays,
+**layers** for content that must float above everything, and **viewports** for
+content that scrolls inside a window. Pick the smallest one that does the job:
 
 | Mechanism | Paint time and purpose | Interaction |
 | --- | --- | --- |
@@ -20,6 +20,7 @@ that does the job:
 | `hint` | A layer that explains: tooltips | Paints only; not a pointer or focus target |
 | `popup` | A layer that offers a choice: dropdowns, menus | Own events; no dim, no capture, no focus stealing |
 | `modal` | A layer that takes over: dialogs | Dims, captures, holds focus, traps keys |
+| `viewport` | Declaration order, clipped to a visible rectangle | Descendants keep identity, focus, and events, in logical coordinates |
 
 Use `defer_paint` for passive overlays that must land on top of the current
 layer — a floating dragged card, say. The closure receives a `PaintCtx` over the
@@ -110,3 +111,26 @@ opened by whatever app state your own component reads, and the runtime holds
 nothing about them between frames.
 
 See [Dialog](../components/dialog) for the packaged modal component.
+
+## Viewports
+
+`DeclareCtx::viewport` opens a clipped logical space. Descendants are declared
+against content as wide as the visible rectangle and as tall as the content
+height you give it, and the offset names the first content row on screen; an
+offset past the end is clamped to the last one that fills the rectangle.
+Everything a descendant sees is in that logical space — its area, its paint,
+and the pointer coordinates its events carry — so a component inside a viewport
+needs to know nothing about the scrolling around it. A viewport declared inside
+another viewport panics.
+
+Layers escape the clip: a `hint`, `popup`, `modal`, or `defer_paint` closure
+declared inside a viewport is projected into screen coordinates once and lands
+above everything, so a dropdown near the bottom edge stays whole.
+
+When focus reaches a descendant the viewport is clipping, the runtime calls
+`Component::reveal_in_viewport` on the component that opened the viewport, with
+that descendant's logical area, before emitting the app's focus message. That
+is how a scrolled-away control comes into view as Tab arrives at it.
+
+[ScrollArea](../components/scroll-area) is this mechanism packaged with a
+scrollbar and wheel and key handling.

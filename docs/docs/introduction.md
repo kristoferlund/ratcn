@@ -33,7 +33,7 @@ included, please [open an issue](https://github.com/kristoferlund/ratcn/issues).
 The library has two layers, and each works on its own:
 
 - **Paint-only widgets** — `ButtonWidget`, `BarChartWidget`, and friends.
-  Ordinary Ratatui widgets that just draw. They drop into any Ratatui app with
+  Ordinary Ratatui widgets that only paint. They drop into any Ratatui app with
   `frame.render_widget(...)`: no runtime, no message type, no change to how your
   app already works.
 - **Interactive components** — `Button`, `List`, `Tabs`, `Dialog`, and more.
@@ -52,8 +52,8 @@ and updates; the library reads state while rendering and returns messages when
 something happens. It enters your app at exactly two call sites — remove them
 and the rest of the loop is untouched:
 
-- `Ratcn::render(frame, state, theme, declare)` — paint one frame and declare
-  which components are on screen.
+- `Ratcn::render(frame, state, theme, declare)` — declare which components are
+  on screen this frame, and paint them.
 - `Ratcn::handle_event(event, state)` — route one input event and maybe get a
   message back.
 
@@ -68,7 +68,7 @@ A typical app has three pieces:
 Each frame, the closure you pass to `Ratcn::render` **declares** the UI: build
 components from current state, split areas with ordinary Ratatui layouts, and
 place each interactive component where it is painted. Decorative widgets are
-painted directly and need no ID or registration.
+painted directly and need no id.
 
 Components never write your state. A `Button` emits a message when pressed. A
 `List` reads its selection from your state and emits the chosen item for you to
@@ -119,8 +119,6 @@ The concept pages each cover one idea in depth. Roughly in reading order:
   messages, and rendering per screen once one module is not enough.
 - [Custom components](./concepts/custom-components) — writing your own
   components with the same powers as the built-ins, composites included.
-- [Design decisions](./concepts/design-decisions) — why declaration mistakes
-  panic, and other deliberate choices, for readers evaluating the library.
 
 Component pages under [Components](./components/button) cover each built-in
 component's features with live previews, and [Demos](./demos) lists every

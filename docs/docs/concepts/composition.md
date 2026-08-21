@@ -55,7 +55,7 @@ announcement. A scope with nothing focusable inside — a chart, a read-out —
 uses `ScopeOptions::default().focusable()`, which makes the scope itself the
 Tab stop. [Focus, hover, and identity](./focus-hover-identity) covers this.
 
-The panel border is a plain Ratatui `Block`, drawn from a `ctx.paint` closure
+The panel border is a plain Ratatui `Block`, painted from a `ctx.paint` closure
 whose `PaintCtx::contains_focus` says whether focus is inside, so the accent
 follows the user. Layout stays ordinary Ratatui code throughout.
 
