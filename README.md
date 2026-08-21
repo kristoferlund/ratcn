@@ -16,12 +16,10 @@ it:
 - **There is no install command.** The shadcn resemblance is in how the code is
   structured, not yet in tooling. Copying a component into your project is a
   manual file copy today. A CLI is intended, but it does not exist.
-- **The component set is small and growing.** Eight components ship today:
-  `Button`, `List`, `Select`, `Tabs`, `Dialog`, `Toast`, `BarChart`, and
-  `Tooltip`. Notably missing and planned next are **text input**, **multi-line
-  text area**, and a **scroll area** for content taller than its viewport.
-  Input and TextArea existed in an earlier preview and were withdrawn pending
-  upstream fixes in the text-editing crate they wrap.
+- **The component set is small and growing.** Nine components ship today:
+  `Button`, `List`, `Select`, `Tabs`, `Dialog`, `Toast`, `BarChart`, `Tooltip`,
+  and `ScrollArea`. Notably missing and planned next are **text input** and a
+  **multi-line text area**.
 
 If you want specific components, patterns, or features, please
 [open an issue](https://github.com/kristoferlund/ratcn/issues).

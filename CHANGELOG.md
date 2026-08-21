@@ -10,6 +10,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ScrollArea`, with `ScrollAreaChange` and `ScrollAreaStyle`: a vertical
+  viewport for arbitrary interactive descendants. Paint and pointer input are
+  clipped to the visible rows while descendants keep their full logical
+  allocations, and focus landing on a clipped descendant scrolls it into view.
+- `DeclareCtx::viewport`, the runtime mechanism behind `ScrollArea`, and
+  `Component::reveal_in_viewport`, which the runtime calls on the component
+  that declared a viewport when focus lands on a descendant it clips.
+- `DeclareCtx::pointer_within_area`, `pointer_within` narrowed to the
+  declaration's own rectangle.
 - `terminal::Session` (feature `termina`) opens the terminal — raw mode, the
   alternate screen, the input modes you ask for — and restores every one on any
   exit, panic included. `Session::next` is the event source.
@@ -138,6 +147,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `MouseEvent` coordinates and `DragPhase` positions are in the
+  coordinate space the receiving component was declared with, matching
+  `EventCtx::area`. Outside a viewport that is the screen.
 - **Breaking:** the direction-named shift constant pairs collapse into
   `color::FOCUS_SHIFT`, `HOVER_SHIFT`, `FIELD_FOCUS_SHIFT`, and
   `FIELD_HOVER_SHIFT` — the direction now comes from the theme.

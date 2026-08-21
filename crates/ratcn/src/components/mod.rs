@@ -7,7 +7,8 @@
 //!
 //! Interactive components (focusable, event-handling): [`Button`](crate::Button),
 //! [`List`](crate::List), [`Select`](crate::Select), [`Tabs`](crate::Tabs),
-//! [`Dialog`](crate::Dialog). Event-handling but never focusable:
+//! [`Dialog`](crate::Dialog), and [`ScrollArea`](crate::ScrollArea).
+//! Event-handling but never focusable:
 //! [`Tooltip`](crate::Tooltip), which explains the trigger it wraps rather than
 //! acting itself. Paint-only, with no interactive half:
 //! [`ToasterWidget`](crate::ToasterWidget), and
@@ -119,6 +120,7 @@ pub(crate) mod barchart;
 pub(crate) mod button;
 pub(crate) mod dialog;
 pub(crate) mod list;
+pub(crate) mod scroll_area;
 pub(crate) mod select;
 pub(crate) mod tabs;
 pub(crate) mod toast;

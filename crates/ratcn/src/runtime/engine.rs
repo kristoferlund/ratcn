@@ -13,8 +13,11 @@ use super::{
     ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyCode, KeyEvent,
     ModalState, MouseButton, MouseEvent, MouseKind, MouseTracker, PaintCtx, Painter, ScopeOptions,
     Step, TabWrap,
-    component::{InteractionFlags, PaintTarget, TransientMap},
+    component::{InteractionFlags, PaintTarget, PointerInputs, TransientMap},
 };
+
+// The per-viewport paint canvas holds one Ratatui cell per logical content cell.
+const MAX_VIEWPORT_CELLS: usize = 262_144;
 
 struct FocusBinding<State, Msg> {
     read: Box<dyn Fn(&State) -> &FocusState>,
@@ -23,6 +26,151 @@ struct FocusBinding<State, Msg> {
 
 struct ModalBinding<State> {
     read: Box<dyn Fn(&State) -> &ModalState>,
+}
+
+/// One vertical logical-content coordinate space projected into a screen rect.
+///
+/// The logical content shares the screen rectangle's origin and width and is
+/// `content_height` rows tall. `offset` is the first content row on screen, so
+/// the whole projection is a row shift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Viewport {
+    screen: Rect,
+    content_height: u16,
+    offset: u16,
+}
+
+/// How much of a node its viewport shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewportVisibility {
+    /// No viewport clips this node, or every row of it is on screen.
+    Full,
+    /// Some rows are on screen.
+    Partial,
+    /// No row is on screen.
+    Hidden,
+}
+
+impl Viewport {
+    /// The full logical allocation descendants are declared against.
+    fn content(self) -> Rect {
+        Rect::new(
+            self.screen.x,
+            self.screen.y,
+            self.screen.width,
+            self.content_height,
+        )
+    }
+
+    /// The logical rows the screen rectangle shows at this offset.
+    fn visible_content(self) -> Rect {
+        Rect::new(
+            self.screen.x,
+            self.screen.y.saturating_add(self.offset),
+            self.screen.width,
+            self.screen.height,
+        )
+        .intersection(self.content())
+    }
+
+    fn visibility(self, area: Rect) -> ViewportVisibility {
+        let visible = area.intersection(self.visible_content());
+        if visible == area {
+            ViewportVisibility::Full
+        } else if visible.is_empty() {
+            ViewportVisibility::Hidden
+        } else {
+            ViewportVisibility::Partial
+        }
+    }
+
+    /// The one screen-to-logical translation: a row moves down by the offset
+    /// and a column stays put. `None` past the coordinate limit.
+    fn to_logical(self, point: Position) -> Option<Position> {
+        Some(Position::new(point.x, point.y.checked_add(self.offset)?))
+    }
+
+    /// [`Self::to_logical`], clamped to the last representable row for the
+    /// callers that owe an answer for every point.
+    fn to_logical_clamped(self, point: Position) -> Position {
+        self.to_logical(point)
+            .unwrap_or_else(|| Position::new(point.x, u16::MAX))
+    }
+
+    /// [`Self::to_logical`] for points inside the visible screen rectangle.
+    fn visible_to_logical(self, point: Position) -> Option<Position> {
+        self.screen
+            .contains(point)
+            .then(|| self.to_logical(point))
+            .flatten()
+    }
+
+    fn mouse_to_logical(self, mouse: MouseEvent) -> MouseEvent {
+        let point = self.to_logical_clamped(Position::new(mouse.column, mouse.row));
+        MouseEvent {
+            column: point.x,
+            row: point.y,
+            ..mouse
+        }
+    }
+
+    /// A logical rectangle in screen coordinates, clipped to `clip`. Rows that
+    /// project above the screen are dropped.
+    pub(crate) fn project_rect(self, area: Rect, clip: Rect) -> Rect {
+        let above = self.offset.saturating_sub(area.y);
+        if above >= area.height {
+            return Rect::ZERO;
+        }
+        // `max` then subtract: both operands are at least `offset`.
+        let projected = Rect::new(
+            area.x,
+            area.y.max(self.offset) - self.offset,
+            area.width,
+            area.height - above,
+        )
+        .intersection(clip);
+        if projected.is_empty() {
+            Rect::ZERO
+        } else {
+            projected
+        }
+    }
+
+    /// A logical row in screen coordinates, `None` when it sits above the
+    /// screen.
+    const fn to_screen_row(self, row: u16) -> Option<u16> {
+        row.checked_sub(self.offset)
+    }
+
+    /// Every cell of `logical` paired with the screen cell it projects onto.
+    pub(crate) fn projected_positions(
+        self,
+        logical: Rect,
+    ) -> impl Iterator<Item = (Position, Position)> {
+        (logical.y..logical.bottom()).flat_map(move |y| {
+            let screen_y = self.to_screen_row(y);
+            (logical.x..logical.right())
+                .filter_map(move |x| Some((Position::new(x, y), Position::new(x, screen_y?))))
+        })
+    }
+
+    /// The frame rectangle in this viewport's logical coordinates.
+    pub(crate) fn logical_frame(self, frame: Rect) -> Rect {
+        Rect {
+            y: frame.y.saturating_add(self.offset),
+            ..frame
+        }
+    }
+}
+
+/// One declared viewport, and where it sits in the tree being built.
+struct ViewportRecord {
+    viewport: Viewport,
+    /// The declaration that opened it, once one is open.
+    owner: Option<usize>,
+    /// The layer open at declaration. A descendant on another layer escaped
+    /// the clip.
+    layer: usize,
 }
 
 enum FocusAdvance {
@@ -136,6 +284,9 @@ pub(crate) struct Node<State, Msg> {
     parent: Option<usize>,
     children: Vec<usize>,
     area: Rect,
+    /// Index into [`Surface::viewports`] of the innermost viewport this node
+    /// was declared inside.
+    viewport: Option<usize>,
     options: ScopeOptions,
     is_scope: bool,
     self_focusable: bool,
@@ -156,6 +307,7 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
             .field("parent", &self.parent)
             .field("children", &self.children)
             .field("area", &self.area)
+            .field("viewport", &self.viewport)
             .field("options", &self.options)
             .field("is_scope", &self.is_scope)
             .field("self_focusable", &self.self_focusable)
@@ -177,6 +329,8 @@ pub(crate) struct Surface<State, Msg> {
     /// The policy of each layer, indexed by the layer number nodes carry.
     /// Index 0 is the base layer.
     layer_policies: Vec<LayerPolicy>,
+    /// Every viewport declared this pass, in declaration order.
+    viewports: Vec<ViewportRecord>,
 }
 
 impl<State, Msg> Default for Surface<State, Msg> {
@@ -186,6 +340,7 @@ impl<State, Msg> Default for Surface<State, Msg> {
             roots: Vec::new(),
             layer_roots: Vec::new(),
             layer_policies: vec![LayerPolicy::base()],
+            viewports: Vec::new(),
         }
     }
 }
@@ -197,6 +352,7 @@ impl<State, Msg> fmt::Debug for Surface<State, Msg> {
             .field("roots", &self.roots.len())
             .field("layer_roots", &self.layer_roots.len())
             .field("layer_policies", &self.layer_policies.len())
+            .field("viewports", &self.viewports.len())
             .finish()
     }
 }
@@ -447,7 +603,10 @@ impl<State, Msg> Surface<State, Msg> {
         let matched = self.nodes_along_path(path);
         matched.len() == path.len()
             && matched.last().is_some_and(|&index| {
-                self.participates(index) && self.has_hit_geometry(index) && self.interactive(index)
+                self.participates(index)
+                    && self.has_hit_geometry(index)
+                    && self.interactive(index)
+                    && self.viewport_visibility(index) != ViewportVisibility::Hidden
             })
     }
 
@@ -470,7 +629,9 @@ impl<State, Msg> Surface<State, Msg> {
                 && self.interactive(index)
                 && self.participates(index)
                 && self.has_hit_geometry(index)
-                && node.area.contains(point)
+                && self
+                    .logical_point(index, point)
+                    .is_some_and(|point| node.area.contains(point))
             {
                 let key = (node.layer, index);
                 if best.is_none_or(|best| key > best) {
@@ -691,6 +852,36 @@ impl<State, Msg> Surface<State, Msg> {
             })
     }
 
+    /// The viewport that clips `index`, if one does. A node declared on a
+    /// layer opened inside a viewport escaped that clip and has none.
+    fn clipping_viewport(&self, index: usize) -> Option<&ViewportRecord> {
+        let node = &self.nodes[index];
+        let record = &self.viewports[node.viewport?];
+        (record.layer == node.layer).then_some(record)
+    }
+
+    /// How much of `index` its viewport shows. The one answer behind pointer
+    /// eligibility, anchor culling, and whether focus needs revealing.
+    fn viewport_visibility(&self, index: usize) -> ViewportVisibility {
+        self.clipping_viewport(index)
+            .map_or(ViewportVisibility::Full, |record| {
+                record.viewport.visibility(self.nodes[index].area)
+            })
+    }
+
+    /// `point` in the coordinate space `index` was declared with.
+    fn logical_point(&self, index: usize, point: Position) -> Option<Position> {
+        let node = &self.nodes[index];
+        let Some(record) = node.viewport.map(|index| &self.viewports[index]) else {
+            return Some(point);
+        };
+        if record.layer == node.layer {
+            record.viewport.visible_to_logical(point)
+        } else {
+            record.viewport.to_logical(point)
+        }
+    }
+
     fn next_focus(
         &self,
         focus: &FocusState,
@@ -721,7 +912,7 @@ impl<State, Msg> Surface<State, Msg> {
             let Some(current) = parent else {
                 return FocusAdvance::Ignored;
             };
-            return self.next_from_scope(current, focus, direction, root_options);
+            return self.next_from_scope(current, direction, root_options);
         }
 
         let Some(current) = matched.last().copied() else {
@@ -729,13 +920,17 @@ impl<State, Msg> Surface<State, Msg> {
                 .edge_focus(None, direction)
                 .map_or(FocusAdvance::Ignored, FocusAdvance::Move);
         };
-        self.next_from_scope(current, focus, direction, root_options)
+        self.next_from_scope(current, direction, root_options)
     }
 
+    /// The next focusable node after `current`, walking outwards until a
+    /// scope wraps or the root runs out.
+    ///
+    /// A step that lands back on the node it started from is still a
+    /// `Move`; the caller compares it against the current focus.
     fn next_from_scope(
         &self,
         mut current: usize,
-        focus: &FocusState,
         direction: Step,
         root_options: &ScopeOptions,
     ) -> FocusAdvance {
@@ -773,11 +968,7 @@ impl<State, Msg> Surface<State, Msg> {
                 let mut path = parent.map_or_else(Vec::new, |index| self.path_of(index));
                 self.extend_to_edge(next, direction, &mut path);
                 let next = FocusState::intent(path);
-                return if next == *focus {
-                    FocusAdvance::Consumed
-                } else {
-                    FocusAdvance::Move(next)
-                };
+                return FocusAdvance::Move(next);
             }
             let Some(parent) = parent else {
                 return FocusAdvance::Ignored;
@@ -787,7 +978,15 @@ impl<State, Msg> Surface<State, Msg> {
     }
 }
 
-type DeferredPaint<State> = Box<dyn FnOnce(&mut Painter<'_, '_>, &State)>;
+type DeferredThunk<State> = Box<dyn FnOnce(&mut Painter<'_, '_>, &State)>;
+
+/// One closure registered through [`DeclareCtx::defer_paint`], with the
+/// viewport projection open where it was registered.
+struct DeferredPaint<State> {
+    layer: usize,
+    projection: Option<Viewport>,
+    paint: DeferredThunk<State>,
+}
 
 type PaintThunk<State> = Box<dyn FnOnce(&mut PaintCtx<'_, '_, State>)>;
 
@@ -800,11 +999,19 @@ type PaintThunk<State> = Box<dyn FnOnce(&mut PaintCtx<'_, '_, State>)>;
 /// component is queued where it opens, so its own paint precedes its
 /// descendants'.
 struct QueuedPaint<State> {
-    /// Index into `RenderPass::canvases`, or `None` to paint on the frame.
+    /// The surface fixed where the op was queued.
     /// Fixed where the op was queued, so an op belongs to the layer that was
     /// open at its declaration whatever is open at replay.
-    canvas: Option<usize>,
+    target: PaintDestination,
+    projection: Option<Viewport>,
     op: PaintOp<State>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaintDestination {
+    Frame,
+    Layer(usize),
+    Viewport(usize),
 }
 
 /// Every op names the node whose position it paints at, because that node is
@@ -826,6 +1033,11 @@ enum PaintOp<State> {
     /// layer's declaration closed — which is what keeps [`DeclareCtx::defer_paint`]
     /// above its layer's content.
     FlushDeferred { layer: usize },
+    /// Seed the visible logical cells with paint already present beneath the
+    /// viewport at this exact point in declaration order.
+    PrimeViewport { viewport: usize },
+    /// Copy a completed logical viewport canvas into its screen allocation.
+    CompositeViewport { viewport: usize },
 }
 
 impl<State> PaintOp<State> {
@@ -836,7 +1048,9 @@ impl<State> PaintOp<State> {
         match self {
             Self::Node { index, .. } => Some(*index),
             Self::Thunk { node, .. } => *node,
-            Self::FlushDeferred { .. } => None,
+            Self::FlushDeferred { .. }
+            | Self::PrimeViewport { .. }
+            | Self::CompositeViewport { .. } => None,
         }
     }
 }
@@ -866,6 +1080,56 @@ pub(crate) struct LayerCanvas {
     area: Rect,
     pub(crate) buffer: Buffer,
     painted: Vec<Rect>,
+    /// Set when a paint into this canvas unwinds. A poisoned canvas never
+    /// composites, so the frame keeps what was under it.
+    failed: bool,
+}
+
+/// Full logical content for one viewport. Widgets paint here with their
+/// original allocations; only the final copy is clipped to the viewport.
+pub(crate) struct ViewportCanvas {
+    viewport: Viewport,
+    pub(crate) buffer: Buffer,
+    painted: Vec<Rect>,
+    /// Set when a paint into this canvas unwinds. A poisoned canvas never
+    /// composites, so the frame keeps what was under it.
+    failed: bool,
+}
+
+impl ViewportCanvas {
+    fn new(viewport: Viewport) -> Self {
+        Self {
+            viewport,
+            buffer: Buffer::empty(viewport.content()),
+            painted: Vec::new(),
+            failed: false,
+        }
+    }
+
+    /// The part of `area` this canvas can hold. Paint outside the logical
+    /// content is clipped away.
+    pub(crate) fn clip(&self, area: Rect) -> Rect {
+        area.intersection(self.viewport.content())
+    }
+
+    /// Paint into this canvas, poisoning it if the closure unwinds. What was
+    /// painted is the caller's to record through [`Self::mark_painted`].
+    pub(crate) fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
+        let mut poison = PoisonCanvas {
+            failed: &mut self.failed,
+            armed: true,
+        };
+        let result = paint(&mut self.buffer);
+        poison.armed = false;
+        result
+    }
+
+    pub(crate) fn mark_painted(&mut self, area: Rect) {
+        let clipped = self.clip(area);
+        if !clipped.is_empty() {
+            self.painted.push(clipped);
+        }
+    }
 }
 
 impl LayerCanvas {
@@ -875,7 +1139,20 @@ impl LayerCanvas {
             area,
             buffer: Buffer::empty(area),
             painted: Vec::new(),
+            failed: false,
         }
+    }
+
+    /// Paint into this canvas, poisoning it if the closure unwinds. What was
+    /// painted is the caller's to record through [`Self::mark_painted`].
+    pub(crate) fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
+        let mut poison = PoisonCanvas {
+            failed: &mut self.failed,
+            armed: true,
+        };
+        let result = paint(&mut self.buffer);
+        poison.armed = false;
+        result
     }
 
     /// Record that `area` was painted, clipped to the canvas.
@@ -883,6 +1160,21 @@ impl LayerCanvas {
         let clipped = area.intersection(self.area);
         if clipped.width > 0 && clipped.height > 0 {
             self.painted.push(clipped);
+        }
+    }
+}
+
+/// Poisons one canvas when dropped by unwinding, so a paint panic a component
+/// catches still keeps that canvas off the frame.
+struct PoisonCanvas<'a> {
+    failed: &'a mut bool,
+    armed: bool,
+}
+
+impl Drop for PoisonCanvas<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            *self.failed = true;
         }
     }
 }
@@ -984,6 +1276,7 @@ impl NodeRole {
 }
 
 pub(crate) struct RenderPass<State, Msg> {
+    frame_area: Rect,
     surface: Surface<State, Msg>,
     parent_stack: Vec<usize>,
     /// The identity path of the open declaration chain, maintained in step
@@ -996,7 +1289,7 @@ pub(crate) struct RenderPass<State, Msg> {
     /// in: a layer's thunks flush into its canvas when the layer ends, the
     /// base layer's flush onto the frame after every canvas has composited,
     /// which is what makes root-level `defer_paint` the topmost slot.
-    deferred: Vec<(usize, DeferredPaint<State>)>,
+    deferred: Vec<DeferredPaint<State>>,
     /// Every paint this frame owes, in the order the declaration walk reached
     /// it, replayed by [`Self::replay_paint`] once the walk is over.
     paint_queue: Vec<QueuedPaint<State>>,
@@ -1020,8 +1313,15 @@ pub(crate) struct RenderPass<State, Msg> {
     layer_stack: Vec<usize>,
     /// One canvas per declared layer, in discovery order.
     canvases: Vec<LayerCanvas>,
-    /// Indices into `canvases` for the layers currently open, innermost last.
-    canvas_stack: Vec<usize>,
+    /// One canvas per declared viewport, in discovery order and indexed the
+    /// same as [`Surface::viewports`].
+    viewport_canvases: Vec<ViewportCanvas>,
+    /// The open viewport, indexing `viewport_canvases`. A viewport declared
+    /// while one is open panics, so there is at most one.
+    open_viewport: Option<usize>,
+    /// Paint destinations in declaration nesting order; the innermost decides
+    /// where the next paint belongs.
+    destination_stack: Vec<PaintDestination>,
 }
 
 /// Poisons the pass when dropped by unwinding. Drop runs while a panic
@@ -1042,8 +1342,9 @@ impl Drop for PoisonOnUnwind {
 }
 
 impl<State, Msg> RenderPass<State, Msg> {
-    fn new() -> Self {
+    fn new(frame_area: Rect) -> Self {
         Self {
+            frame_area,
             surface: Surface::default(),
             parent_stack: Vec::new(),
             path_cursor: Vec::new(),
@@ -1055,7 +1356,9 @@ impl<State, Msg> RenderPass<State, Msg> {
             layers_declared: 0,
             layer_stack: Vec::new(),
             canvases: Vec::new(),
-            canvas_stack: Vec::new(),
+            viewport_canvases: Vec::new(),
+            open_viewport: None,
+            destination_stack: Vec::new(),
         }
     }
 
@@ -1099,16 +1402,34 @@ impl<State, Msg> RenderPass<State, Msg> {
         self.path_cursor.pop();
     }
 
-    /// The canvas the ops queued right now belong to, or `None` for the
-    /// frame.
-    fn active_canvas(&self) -> Option<usize> {
-        self.canvas_stack.last().copied()
+    /// The innermost declaration destination, or the frame at the root.
+    fn active_target(&self) -> PaintDestination {
+        self.destination_stack
+            .last()
+            .copied()
+            .unwrap_or(PaintDestination::Frame)
     }
 
-    /// Queue an op for the layer currently being declared into.
+    /// Queue an op for the destination currently being declared into.
     fn queue(&mut self, op: PaintOp<State>) {
-        let canvas = self.active_canvas();
-        self.paint_queue.push(QueuedPaint { canvas, op });
+        let target = self.active_target();
+        // A layer inside a viewport escaped the clip but still paints where
+        // the offset puts it, so its ops carry the projection.
+        let projection = match target {
+            PaintDestination::Layer(_) => self.open_projection(),
+            PaintDestination::Frame | PaintDestination::Viewport(_) => None,
+        };
+        self.paint_queue.push(QueuedPaint {
+            target,
+            projection,
+            op,
+        });
+    }
+
+    /// The open viewport's projection, if one is open.
+    fn open_projection(&self) -> Option<Viewport> {
+        self.open_viewport
+            .map(|index| self.viewport_canvases[index].viewport)
     }
 
     /// Queue a closure registered through [`DeclareCtx::paint`], tagged with
@@ -1132,6 +1453,54 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// for the node itself but never for what it draws.
     fn queue_node(&mut self, index: usize, area: Rect) {
         self.queue(PaintOp::Node { index, area });
+    }
+
+    /// Open a viewport, declare its content through `declare`, and close it.
+    pub(crate) fn viewport(
+        &mut self,
+        screen: Rect,
+        content_height: u16,
+        offset: u16,
+        mut env: DeclarationEnv<'_, State>,
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+    ) {
+        self.guarded(|pass| {
+            assert!(
+                pass.open_viewport.is_none(),
+                "a viewport cannot be declared inside another viewport"
+            );
+            let cells = usize::from(screen.width) * usize::from(content_height);
+            assert!(
+                cells <= MAX_VIEWPORT_CELLS,
+                "viewport content is {cells} cells; the maximum is {MAX_VIEWPORT_CELLS}"
+            );
+            let viewport = Viewport {
+                screen,
+                content_height,
+                offset: offset.min(content_height.saturating_sub(screen.height)),
+            };
+            let index = pass.viewport_canvases.len();
+            pass.viewport_canvases.push(ViewportCanvas::new(viewport));
+            pass.surface.viewports.push(ViewportRecord {
+                viewport,
+                owner: pass.parent_stack.last().copied(),
+                layer: pass.current_layer(),
+            });
+            pass.queue(PaintOp::PrimeViewport { viewport: index });
+            pass.open_viewport = Some(index);
+            pass.destination_stack
+                .push(PaintDestination::Viewport(index));
+            env.area = viewport.content();
+            env.frame_area = viewport.logical_frame(pass.frame_area);
+            pass.with_declare_ctx(env, declare);
+            pass.open_viewport = None;
+            assert_eq!(
+                pass.destination_stack.pop(),
+                Some(PaintDestination::Viewport(index)),
+                "a declared viewport closes its own paint destination"
+            );
+            pass.queue(PaintOp::CompositeViewport { viewport: index });
+        });
     }
 
     /// Open a layer, declare its root subtree through `declare_root`, and
@@ -1159,8 +1528,12 @@ impl<State, Msg> RenderPass<State, Msg> {
         // not just the root.
         debug_assert_eq!(self.surface.layer_policies.len(), self.layers_declared);
         self.surface.layer_policies.push(kind.policy());
+        let area = self.open_projection().map_or(area, |viewport| {
+            viewport.project_rect(area, self.frame_area)
+        });
         self.canvases.push(LayerCanvas::new(kind, area));
-        self.canvas_stack.push(self.canvases.len() - 1);
+        let canvas = self.canvases.len() - 1;
+        self.destination_stack.push(PaintDestination::Layer(canvas));
     }
 
     /// Close the innermost layer, queueing its deferred paint behind
@@ -1173,9 +1546,13 @@ impl<State, Msg> RenderPass<State, Msg> {
         // Queued rather than run here: the layer's own content has only been
         // queued so far, and deferred paint has to land on top of it.
         self.queue(PaintOp::FlushDeferred { layer });
-        self.canvas_stack
-            .pop()
-            .expect("a declared layer opened a canvas");
+        assert!(
+            matches!(
+                self.destination_stack.pop(),
+                Some(PaintDestination::Layer(_))
+            ),
+            "a declared layer closes its own paint destination"
+        );
     }
 
     /// Run the deferred thunks registered in `layer` into its canvas.
@@ -1190,20 +1567,28 @@ impl<State, Msg> RenderPass<State, Msg> {
             let mut thunks = Vec::new();
             let mut index = 0;
             while index < pass.deferred.len() {
-                if pass.deferred[index].0 == layer {
-                    thunks.push(pass.deferred.remove(index).1);
+                if pass.deferred[index].layer == layer {
+                    thunks.push(pass.deferred.remove(index));
                 } else {
                     index += 1;
                 }
             }
-            for thunk in thunks {
-                let mut painter = Painter {
-                    target: PaintTarget::Canvas(&mut pass.canvases[canvas_index]),
-                    theme,
-                };
-                thunk(&mut painter, state);
+            for deferred in thunks {
+                let target =
+                    PaintTarget::Canvas(&mut pass.canvases[canvas_index], deferred.projection);
+                let mut painter = Painter { target, theme };
+                (deferred.paint)(&mut painter, state);
             }
         });
+    }
+
+    /// Whether anything this pass painted into unwound. A canvas poisons
+    /// itself even when component code catches the panic, so this is the one
+    /// question every commit and composite step asks.
+    fn poisoned(&self) -> bool {
+        self.failed.get()
+            || self.canvases.iter().any(|canvas| canvas.failed)
+            || self.viewport_canvases.iter().any(|canvas| canvas.failed)
     }
 
     /// Run `f` as one declaration region: if it unwinds — a panicking
@@ -1246,11 +1631,13 @@ impl<State, Msg> RenderPass<State, Msg> {
         );
         let index = self.surface.nodes.len();
         let layer = self.current_layer();
+        let viewport = self.open_viewport;
         self.surface.nodes.push(Node {
             id,
             parent,
             children: Vec::new(),
             area,
+            viewport,
             options,
             is_scope,
             self_focusable,
@@ -1378,12 +1765,24 @@ impl<State, Msg> RenderPass<State, Msg> {
             "a dismiss hook on a layer kind that never dismisses"
         );
         self.guarded(|pass| {
+            if matches!(kind, LayerKind::Popup | LayerKind::Hint)
+                && !pass.current_viewport_anchor_visible()
+            {
+                return;
+            }
             let area = env.area;
             pass.layer(kind, area, |pass, index| {
                 pass.scope(id, options, env, declare);
                 pass.surface.nodes[index].on_dismiss = on_dismiss;
             });
         });
+    }
+
+    /// Whether the declaration a popup or hint would anchor to is on screen.
+    fn current_viewport_anchor_visible(&self) -> bool {
+        self.parent_stack.last().is_none_or(|&parent| {
+            self.surface.viewport_visibility(parent) != ViewportVisibility::Hidden
+        })
     }
 
     pub(crate) fn scope(
@@ -1419,7 +1818,15 @@ impl<State, Msg> RenderPass<State, Msg> {
             transients,
             depth,
         } = env;
-        let hover_position = self.hover_position;
+        let hover_position = match (self.open_projection(), self.active_target()) {
+            (None, _) => self.hover_position,
+            (Some(viewport), PaintDestination::Viewport(_)) => self
+                .hover_position
+                .and_then(|position| viewport.visible_to_logical(position)),
+            (Some(viewport), PaintDestination::Frame | PaintDestination::Layer(_)) => self
+                .hover_position
+                .and_then(|position| viewport.to_logical(position)),
+        };
         self.guarded(|pass| {
             let mut ctx = DeclareCtx {
                 frame_area,
@@ -1439,7 +1846,11 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         paint: impl FnOnce(&mut Painter<'_, '_>, &State) + 'static,
     ) {
-        self.deferred.push((self.current_layer(), Box::new(paint)));
+        self.deferred.push(DeferredPaint {
+            layer: self.current_layer(),
+            projection: self.open_projection(),
+            paint: Box::new(paint),
+        });
     }
 
     /// Draw the frame: run every queued op in declaration order, each onto
@@ -1470,11 +1881,15 @@ impl<State, Msg> RenderPass<State, Msg> {
         // this is reached — and kept as the second half of the guarantee: it
         // is what would still hold if replay were ever moved ahead of the
         // checks.
-        if self.failed.get() {
+        if self.poisoned() {
             return;
         }
         for queued in std::mem::take(&mut self.paint_queue) {
-            let QueuedPaint { canvas, op } = queued;
+            let QueuedPaint {
+                target,
+                projection,
+                op,
+            } = queued;
             let frame = &mut *frame;
             self.guarded(|pass| {
                 // Read before the component borrow below, which needs the
@@ -1486,8 +1901,18 @@ impl<State, Msg> RenderPass<State, Msg> {
                 });
                 let (area, paint) = match op {
                     PaintOp::FlushDeferred { layer } => {
-                        let index = canvas.expect("a layer's flush names that layer's canvas");
+                        let PaintDestination::Layer(index) = target else {
+                            panic!("a layer's flush names that layer's canvas");
+                        };
                         pass.flush_deferred_for(layer, theme, state, index);
+                        return;
+                    }
+                    PaintOp::PrimeViewport { viewport } => {
+                        pass.prime_viewport(viewport, target, frame);
+                        return;
+                    }
+                    PaintOp::CompositeViewport { viewport } => {
+                        pass.composite_viewport(viewport, target, frame);
                         return;
                     }
                     PaintOp::Node { index, area } => {
@@ -1501,9 +1926,25 @@ impl<State, Msg> RenderPass<State, Msg> {
                     }
                     PaintOp::Thunk { area, paint, .. } => (area, PaintBody::Thunk(paint)),
                 };
-                let target = match canvas {
-                    Some(index) => PaintTarget::Canvas(&mut pass.canvases[index]),
-                    None => PaintTarget::Frame(frame),
+                let target = match target {
+                    PaintDestination::Frame => PaintTarget::Frame(frame, projection),
+                    PaintDestination::Layer(index) => {
+                        PaintTarget::Canvas(&mut pass.canvases[index], projection)
+                    }
+                    PaintDestination::Viewport(index) => {
+                        PaintTarget::Viewport(&mut pass.viewport_canvases[index])
+                    }
+                };
+                let hover_position = match (projection, &target) {
+                    (Some(viewport), _) => pass
+                        .hover_position
+                        .and_then(|position| viewport.to_logical(position)),
+                    (None, PaintTarget::Viewport(canvas)) => {
+                        let viewport = canvas.viewport;
+                        pass.hover_position
+                            .and_then(|position| viewport.visible_to_logical(position))
+                    }
+                    (None, _) => pass.hover_position,
                 };
                 let mut ctx = PaintCtx {
                     target,
@@ -1513,7 +1954,7 @@ impl<State, Msg> RenderPass<State, Msg> {
                     contains_focus: flags.contains_focus,
                     hovered: flags.hovered,
                     contains_hover: flags.contains_hover,
-                    hover_position: pass.hover_position,
+                    hover_position,
                     state,
                 };
                 match paint {
@@ -1521,6 +1962,86 @@ impl<State, Msg> RenderPass<State, Msg> {
                     PaintBody::Thunk(paint) => paint(&mut ctx),
                 }
             });
+            if self.poisoned() {
+                return;
+            }
+        }
+    }
+
+    fn prime_viewport(
+        &mut self,
+        viewport_index: usize,
+        target: PaintDestination,
+        frame: &mut Frame,
+    ) {
+        let viewport = self.viewport_canvases[viewport_index].viewport;
+        let destination_area = viewport.visible_content();
+        let source_area = Rect::new(
+            viewport.screen.x,
+            viewport.screen.y,
+            destination_area.width,
+            destination_area.height,
+        );
+        match target {
+            PaintDestination::Frame => {
+                let source = frame.buffer_mut();
+                let destination = &mut self.viewport_canvases[viewport_index].buffer;
+                copy_buffer(source, source_area, destination, destination_area);
+            }
+            PaintDestination::Layer(layer) => {
+                let (viewports, layers) = (&mut self.viewport_canvases, &self.canvases);
+                let source = &layers[layer].buffer;
+                let destination = &mut viewports[viewport_index].buffer;
+                copy_buffer(source, source_area, destination, destination_area);
+            }
+            PaintDestination::Viewport(_) => {
+                panic!("nested viewport priming is not supported")
+            }
+        }
+    }
+
+    fn composite_viewport(
+        &mut self,
+        viewport_index: usize,
+        target: PaintDestination,
+        frame: &mut Frame,
+    ) {
+        if self.viewport_canvases[viewport_index].failed {
+            return;
+        }
+        let viewport = self.viewport_canvases[viewport_index].viewport;
+        let visible = viewport.visible_content();
+        let painted = self.viewport_canvases[viewport_index]
+            .painted
+            .iter()
+            .filter_map(|area| {
+                let source = area.intersection(visible);
+                (!source.is_empty()).then(|| {
+                    let screen = viewport.project_rect(source, viewport.screen);
+                    (source, screen)
+                })
+            })
+            .collect::<Vec<_>>();
+        match target {
+            PaintDestination::Frame => {
+                for (source_area, screen) in painted {
+                    let source = &self.viewport_canvases[viewport_index].buffer;
+                    let destination = frame.buffer_mut();
+                    copy_buffer(source, source_area, destination, screen);
+                }
+            }
+            PaintDestination::Layer(layer) => {
+                for (source_area, screen) in painted {
+                    let (viewports, layers) = (&self.viewport_canvases, &mut self.canvases);
+                    let source = &viewports[viewport_index].buffer;
+                    let destination = &mut layers[layer];
+                    copy_buffer(source, source_area, &mut destination.buffer, screen);
+                    destination.mark_painted(screen);
+                }
+            }
+            PaintDestination::Viewport(_) => {
+                panic!("nested viewport composition is not supported")
+            }
         }
     }
 
@@ -1531,6 +2052,9 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// decoration slot (toast stacks, drag ghosts).
     fn finish_frame(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
         for canvas in &self.canvases {
+            if canvas.failed {
+                continue;
+            }
             if canvas.kind.policy().dims {
                 dim_background(frame.buffer_mut(), canvas.area, theme.background);
             }
@@ -1550,21 +2074,16 @@ impl<State, Msg> RenderPass<State, Msg> {
             }
         }
         self.guarded(|pass| {
-            let mut painter = Painter {
-                target: PaintTarget::Frame(frame),
-                theme,
-            };
-            for (_, thunk) in pass.deferred.drain(..) {
-                thunk(&mut painter, state);
+            for deferred in pass.deferred.drain(..) {
+                let target = PaintTarget::Frame(frame, deferred.projection);
+                let mut painter = Painter { target, theme };
+                (deferred.paint)(&mut painter, state);
             }
         });
     }
 
     fn assert_valid(&self) {
-        assert!(
-            !self.failed.get(),
-            "cannot commit a failed declaration pass"
-        );
+        assert!(!self.poisoned(), "cannot commit a failed declaration pass");
         assert!(
             self.parent_stack.is_empty() && self.layer_stack.is_empty(),
             "cannot commit a declaration pass with unclosed components or layers"
@@ -2013,7 +2532,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         // builds the tree and queues the paint it owes. Hover is the one
         // interaction fact that predates the pass, so the declaration may ask
         // for it — see [`DeclareCtx::pointer_within`].
-        let mut pass = RenderPass::new();
+        let mut pass = RenderPass::new(frame.area());
         pass.hover_position = self.pointer;
         pass.hover_path.clone_from(&self.hover);
         pass.with_declare_ctx(
@@ -2035,6 +2554,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let resolved_hover = self.resolve_hover(&pass.surface);
         pass.hover_path.clone_from(&resolved_hover);
         pass.replay_paint(frame, state, theme, &resolved_focus);
+        pass.assert_valid();
         pass.finish_frame(frame, state, theme);
         let next = pass.finish();
         self.commit_surface(next, resolved_hover);
@@ -2296,13 +2816,13 @@ impl<State, Msg> Ratcn<State, Msg> {
                     .surface
                     .next_focus(&focus, direction, &self.root_options)
                 {
-                    FocusAdvance::Move(next) => self.focus_result(next),
+                    FocusAdvance::Move(next) => self.focus_transition_result(next, &focus, state),
                     FocusAdvance::Consumed => EventResult::Consumed,
                     FocusAdvance::Ignored => EventResult::Ignored,
                 }
             }
             None => self
-                .focus_key_jump(key, &chain, &focus)
+                .focus_key_jump(key, &chain, &focus, state)
                 .unwrap_or(EventResult::Ignored),
         }
     }
@@ -2342,10 +2862,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// keeps a hotkey for a pane that is not currently declared inert instead
     /// of dead.
     fn focus_key_jump(
-        &self,
+        &mut self,
         key: &KeyEvent,
         chain: &[usize],
         focus: &FocusState,
+        state: &State,
     ) -> Option<EventResult<Msg>> {
         for scope in chain.iter().rev().copied().map(Some).chain([None]) {
             let options = scope.map_or(&self.root_options, |index| {
@@ -2360,11 +2881,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                 let Some(next) = self.surface.explicit_focus(&path) else {
                     continue;
                 };
-                return Some(if next == *focus {
-                    EventResult::Consumed
-                } else {
-                    self.focus_result(next)
-                });
+                return Some(self.focus_transition_result(next, focus, state));
             }
         }
         None
@@ -2647,11 +3164,35 @@ impl<State, Msg> Ratcn<State, Msg> {
             }
             let path = self.surface.path_of(index);
             let area = self.surface.nodes[index].area;
+            let viewport = self.surface.nodes[index]
+                .viewport
+                .map(|viewport| self.surface.viewports[viewport].viewport);
+            // Declaration-space for the component, screen-absolute for the
+            // gesture tracker `EventCtx::drag` keeps.
+            let projected = match (event, viewport) {
+                (Event::Mouse(mouse), Some(viewport)) => {
+                    Event::Mouse(viewport.mouse_to_logical(*mouse))
+                }
+                _ => event.clone(),
+            };
+            let screen_mouse = match event {
+                Event::Mouse(mouse) => Some(*mouse),
+                _ => None,
+            };
             let Some(component) = self.surface.nodes[index].component.as_mut() else {
                 continue;
             };
-            let mut ctx = EventCtx::at(&path, area, &mut self.transients, capture, capture_button);
-            let result = component.handle_event(event, state, &mut ctx);
+            let mut ctx = EventCtx::at(
+                &path,
+                area,
+                &mut self.transients,
+                PointerInputs {
+                    capture: Some(capture),
+                    button: capture_button,
+                    screen_mouse,
+                },
+            );
+            let result = component.handle_event(&projected, state, &mut ctx);
             if !matches!(result, EventResult::Ignored) {
                 return result;
             }
@@ -2810,11 +3351,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             self.surface.extend_to_edge(child, Step::Forward, &mut path);
         }
         let focus = FocusState::intent(path);
-        Some(if focus == current {
-            EventResult::Consumed
-        } else {
-            self.focus_result(focus)
-        })
+        Some(self.focus_transition_result(focus, &current, state))
     }
 
     /// The dismiss message of the topmost popup the press at `point` landed
@@ -2850,7 +3387,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let stored = self.stored_focus(state);
         let focus = self.surface.resolve_focus(&stored);
         let next = self.surface.hover_focus(path, &focus, &self.root_options)?;
-        Some(self.focus_result(next))
+        Some(self.focus_result(next, state))
     }
 
     /// Point hover at `path`. The event-time writer; a commit writes it from
@@ -2863,12 +3400,62 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
     }
 
-    fn focus_result(&self, focus: FocusState) -> EventResult<Msg> {
+    /// The app's focus message for `focus`, after any viewport clipping the
+    /// destination has been asked to reveal it.
+    ///
+    /// The reveal is a separate channel: it can add to what a focus change
+    /// does, and it never stands in for the message
+    /// [`Ratcn::focus`](Self::focus) bound.
+    fn focus_result(&mut self, focus: FocusState, state: &State) -> EventResult<Msg> {
+        self.reveal_focus(&focus, state);
         self.focus_binding
             .as_ref()
             .map_or(EventResult::Consumed, |binding| {
                 EventResult::Emit((binding.on_change)(focus))
             })
+    }
+
+    /// Ask the component that declared the viewport clipping `focus`'s
+    /// destination to bring it into view. A destination that is already fully
+    /// on screen, or that no viewport clips, reaches nobody.
+    fn reveal_focus(&mut self, focus: &FocusState, state: &State) {
+        let matched = self.surface.nodes_along_path(focus.path());
+        let Some(&target) = matched.last() else {
+            return;
+        };
+        if self.surface.viewport_visibility(target) == ViewportVisibility::Full {
+            return;
+        }
+        let Some(owner) = self
+            .surface
+            .clipping_viewport(target)
+            .and_then(|record| record.owner)
+        else {
+            return;
+        };
+        let reveal = self.surface.nodes[target].area;
+        let path = self.surface.path_of(owner);
+        let area = self.surface.nodes[owner].area;
+        let Some(component) = self.surface.nodes[owner].component.as_mut() else {
+            return;
+        };
+        let mut ctx = EventCtx::at(&path, area, &mut self.transients, PointerInputs::default());
+        component.reveal_in_viewport(reveal, state, &mut ctx);
+    }
+
+    /// The result of a focus step that resolved to `next`. A step that stays
+    /// where it is still reveals its destination.
+    fn focus_transition_result(
+        &mut self,
+        next: FocusState,
+        current: &FocusState,
+        state: &State,
+    ) -> EventResult<Msg> {
+        if next == *current {
+            self.reveal_focus(&next, state);
+            return EventResult::Consumed;
+        }
+        self.focus_result(next, state)
     }
 
     #[cfg(test)]
@@ -2881,6 +3468,27 @@ impl<State, Msg> Ratcn<State, Msg> {
         (0..self.surface.nodes.len())
             .map(|index| self.surface.path_of(index))
             .collect()
+    }
+}
+
+fn copy_buffer(source: &Buffer, source_area: Rect, destination: &mut Buffer, target_area: Rect) {
+    for row in 0..source_area.height.min(target_area.height) {
+        for column in 0..source_area.width.min(target_area.width) {
+            let source_position = (
+                source_area.x.saturating_add(column),
+                source_area.y.saturating_add(row),
+            );
+            let target_position = (
+                target_area.x.saturating_add(column),
+                target_area.y.saturating_add(row),
+            );
+            if let (Some(source_cell), Some(target_cell)) = (
+                source.cell(source_position),
+                destination.cell_mut(target_position),
+            ) {
+                *target_cell = source_cell.clone();
+            }
+        }
     }
 }
 
@@ -10755,5 +11363,385 @@ mod tests {
             ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 1, 0), &state),
             EventResult::Consumed
         );
+    }
+}
+
+/// The contract [`DeclareCtx::viewport`] holds to, independent of any
+/// component that opens one.
+#[cfg(test)]
+mod viewport_tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::Style,
+        widgets::{Paragraph, StatefulWidget, Widget},
+    };
+
+    use super::*;
+    use crate::runtime::{CellOffset, DragOptions, DragPhase, Modifiers, PopupOptions};
+
+    #[derive(Default)]
+    struct State;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Msg {
+        Pressed,
+        Dragged(CellOffset),
+    }
+
+    struct Driver {
+        terminal: Terminal<TestBackend>,
+        ratcn: Ratcn<State, Msg>,
+    }
+
+    impl Driver {
+        fn new(width: u16, height: u16) -> Self {
+            Self {
+                terminal: Terminal::new(TestBackend::new(width, height)).expect("terminal"),
+                ratcn: Ratcn::new(),
+            }
+        }
+
+        fn render(&mut self, declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>)) {
+            let theme = Theme::default_dark();
+            self.terminal
+                .draw(|frame| self.ratcn.render(frame, &State, &theme, declare))
+                .expect("draw");
+        }
+
+        fn event(&mut self, event: Event) -> EventResult<Msg> {
+            self.ratcn.handle_event(event, &State)
+        }
+
+        fn row(&self, row: u16) -> String {
+            let buffer = self.terminal.backend().buffer();
+            (0..buffer.area.width)
+                .map(|column| buffer.cell((column, row)).expect("cell").symbol())
+                .collect()
+        }
+    }
+
+    fn mouse(kind: MouseKind, column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: Modifiers::NONE,
+        })
+    }
+
+    fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+        panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn viewport_cell_limit_accepts_the_boundary_and_rejects_one_row_more() {
+        let mut boundary = Driver::new(1, 1);
+        boundary.render(|ctx| {
+            ctx.viewport(Rect::new(0, 0, 512, 1), 512, 0, |_| {});
+        });
+
+        let mut over = Driver::new(1, 1);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            over.render(|ctx| {
+                ctx.viewport(Rect::new(0, 0, 512, 1), 513, 0, |_| {});
+            });
+        }));
+        let panic = result.expect_err("a viewport above the cell limit must panic");
+        assert!(
+            panic_message(panic.as_ref()).contains("maximum is 262144"),
+            "{}",
+            panic_message(panic.as_ref())
+        );
+    }
+
+    /// `content_height` is app-computed over data that changes, so an
+    /// allocation one row too tall paints the rows that fit and the frame
+    /// carries on.
+    #[test]
+    fn paint_outside_the_logical_content_is_clipped() {
+        let mut driver = Driver::new(4, 2);
+        driver.render(|ctx| {
+            ctx.viewport(Rect::new(0, 0, 2, 1), 2, 0, |ctx| {
+                ctx.paint_widget(Paragraph::new("wide"), Rect::new(0, 0, 4, 1));
+            });
+        });
+
+        assert_eq!(driver.row(0), "wi  ");
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum CaughtViewportFailure {
+        Widget,
+        StatefulWidget,
+        WithBuffer,
+    }
+
+    struct Leaf;
+
+    impl Component<State, Msg> for Leaf {
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
+
+        fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, State>) {
+            ctx.widget(Paragraph::new("stable"), ctx.area());
+        }
+
+        fn handle_event(
+            &mut self,
+            event: &Event,
+            _state: &State,
+            _ctx: &mut EventCtx<'_>,
+        ) -> EventResult<Msg> {
+            match event {
+                Event::Mouse(mouse) if mouse.kind == MouseKind::Click(MouseButton::Left) => {
+                    EventResult::Emit(Msg::Pressed)
+                }
+                _ => EventResult::Ignored,
+            }
+        }
+
+        fn is_focusable(&self, _state: &State) -> bool {
+            true
+        }
+    }
+
+    struct PanicWidget;
+
+    impl Widget for PanicWidget {
+        fn render(self, _area: Rect, buf: &mut Buffer) {
+            buf[(0, 0)].set_symbol("X");
+            panic!("widget paint failed");
+        }
+    }
+
+    impl StatefulWidget for PanicWidget {
+        type State = ();
+
+        fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
+            Widget::render(self, area, buf);
+        }
+    }
+
+    /// A paint panic a component catches still poisons the pass, and the
+    /// viewport's own paint never reaches the frame.
+    #[test]
+    fn a_caught_viewport_paint_panic_keeps_the_previous_frame_and_surface() {
+        for failure in [
+            CaughtViewportFailure::Widget,
+            CaughtViewportFailure::StatefulWidget,
+            CaughtViewportFailure::WithBuffer,
+        ] {
+            let mut driver = Driver::new(10, 3);
+            driver.render(|ctx| {
+                ctx.component("stable", Leaf, Rect::new(0, 0, 6, 1));
+            });
+            let previous_frame = (0..3).map(|row| driver.row(row)).collect::<Vec<_>>();
+
+            driver
+                .terminal
+                .draw(|frame| {
+                    // The backend clears between draws, so the frame this pass
+                    // must leave alone is painted back first.
+                    frame.render_widget(Paragraph::new("stable"), Rect::new(0, 0, 6, 1));
+                    let failed = catch_unwind(AssertUnwindSafe(|| {
+                        driver
+                            .ratcn
+                            .render(frame, &State, &Theme::default_dark(), move |ctx| {
+                                ctx.viewport(Rect::new(0, 0, 2, 1), 2, 0, move |ctx| {
+                                    ctx.paint(move |ctx| {
+                                        let caught = catch_unwind(AssertUnwindSafe(|| {
+                                            let area = Rect::new(0, 0, 2, 1);
+                                            match failure {
+                                                CaughtViewportFailure::Widget => {
+                                                    ctx.widget(PanicWidget, area);
+                                                }
+                                                CaughtViewportFailure::StatefulWidget => {
+                                                    ctx.stateful_widget(PanicWidget, area, &mut ());
+                                                }
+                                                CaughtViewportFailure::WithBuffer => {
+                                                    ctx.with_buffer(|buffer| {
+                                                        buffer[(0, 0)].set_symbol("X");
+                                                        panic!("component paint failed");
+                                                    });
+                                                }
+                                            }
+                                        }));
+                                        assert!(caught.is_err());
+                                    });
+                                });
+                            });
+                    }));
+                    assert!(failed.is_err(), "{failure:?} must poison the render pass");
+                })
+                .expect("failed pass draw finishes");
+
+            assert_eq!(
+                (0..3).map(|row| driver.row(row)).collect::<Vec<_>>(),
+                previous_frame,
+                "{failure:?} let a poisoned viewport canvas reach the frame"
+            );
+            assert_eq!(
+                driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0)),
+                EventResult::Emit(Msg::Pressed),
+                "{failure:?} replaced the previous retained surface"
+            );
+        }
+    }
+
+    /// A layer canvas poisons on the same terms a viewport canvas does.
+    #[test]
+    fn a_caught_layer_paint_panic_keeps_the_previous_frame_and_surface() {
+        let mut driver = Driver::new(10, 3);
+        driver.render(|ctx| {
+            ctx.component("stable", Leaf, Rect::new(0, 0, 6, 1));
+        });
+        let previous_frame = (0..3).map(|row| driver.row(row)).collect::<Vec<_>>();
+
+        driver
+            .terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new("stable"), Rect::new(0, 0, 6, 1));
+                let failed = catch_unwind(AssertUnwindSafe(|| {
+                    driver
+                        .ratcn
+                        .render(frame, &State, &Theme::default_dark(), |ctx| {
+                            ctx.popup(
+                                "popup",
+                                PopupOptions::default(),
+                                Rect::new(0, 0, 4, 1),
+                                |ctx| {
+                                    ctx.paint(|ctx| {
+                                        let caught = catch_unwind(AssertUnwindSafe(|| {
+                                            ctx.widget(PanicWidget, Rect::new(0, 0, 4, 1));
+                                        }));
+                                        assert!(caught.is_err());
+                                    });
+                                },
+                            );
+                        });
+                }));
+                assert!(failed.is_err(), "a caught layer panic must poison the pass");
+            })
+            .expect("failed pass draw finishes");
+
+        assert_eq!(
+            (0..3).map(|row| driver.row(row)).collect::<Vec<_>>(),
+            previous_frame,
+            "a poisoned layer canvas reached the frame"
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0)),
+            EventResult::Emit(Msg::Pressed),
+            "a poisoned layer canvas replaced the retained surface"
+        );
+    }
+
+    struct DragProbe;
+
+    impl Component<State, Msg> for DragProbe {
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
+
+        fn handle_event(
+            &mut self,
+            event: &Event,
+            _state: &State,
+            ctx: &mut EventCtx<'_>,
+        ) -> EventResult<Msg> {
+            let Event::Mouse(mouse) = event else {
+                return EventResult::Ignored;
+            };
+            match ctx.drag(mouse, DragOptions::default()) {
+                DragPhase::Down | DragPhase::Ended { .. } => EventResult::Consumed,
+                DragPhase::Moved { offset, .. } => EventResult::Emit(Msg::Dragged(offset)),
+                DragPhase::Ignored => EventResult::Ignored,
+            }
+        }
+    }
+
+    fn render_drag_viewport(driver: &mut Driver, offset: u16) {
+        driver.render(|ctx| {
+            ctx.viewport(Rect::new(0, 0, 7, 3), 8, offset, |ctx| {
+                ctx.component("drag", DragProbe, Rect::new(0, 1, 7, 1));
+            });
+        });
+    }
+
+    #[test]
+    fn a_captured_drag_keeps_routing_after_leaving_the_viewport() {
+        let mut driver = Driver::new(8, 5);
+        render_drag_viewport(&mut driver, 0);
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1)),
+            EventResult::Consumed
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 1, 4)),
+            EventResult::Emit(Msg::Dragged(CellOffset::new(0, 3))),
+            "capture, not viewport hit-testing, owns the drag"
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 4)),
+            EventResult::Consumed
+        );
+    }
+
+    /// The drag anchor is screen-absolute, so scrolling under a held pointer
+    /// leaves the travel it measures alone.
+    #[test]
+    fn scrolling_during_a_captured_drag_leaves_its_offset_measuring_travel() {
+        let mut driver = Driver::new(8, 5);
+        render_drag_viewport(&mut driver, 0);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1)),
+            EventResult::Consumed
+        );
+
+        render_drag_viewport(&mut driver, 2);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 1, 2)),
+            EventResult::Emit(Msg::Dragged(CellOffset::new(0, 1)))
+        );
+    }
+
+    #[test]
+    fn a_captured_drag_reports_travel_at_the_coordinate_limit() {
+        let mut driver = Driver::new(2, 3);
+        driver.render(|ctx| {
+            ctx.viewport(Rect::new(0, 0, 1, 3), u16::MAX, u16::MAX, |ctx| {
+                ctx.component("drag", DragProbe, Rect::new(0, u16::MAX - 3, 1, 1));
+            });
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 0, 0)),
+            EventResult::Consumed
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 0, 4)),
+            EventResult::Emit(Msg::Dragged(CellOffset::new(0, 4)))
+        );
+    }
+
+    #[test]
+    fn deferred_paint_inside_a_viewport_projects_onto_the_frame() {
+        let mut driver = Driver::new(2, 6);
+        driver.render(|ctx| {
+            ctx.viewport(Rect::new(0, 0, 2, 3), u16::MAX, u16::MAX, |ctx| {
+                ctx.defer_paint(|painter, _| {
+                    painter.with_buffer(|buffer| {
+                        buffer.set_string(0, u16::MAX - 3, "D", Style::default());
+                    });
+                });
+            });
+        });
+
+        assert_eq!(&driver.row(0)[..1], "D");
     }
 }
