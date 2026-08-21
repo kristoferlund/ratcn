@@ -112,14 +112,15 @@ pub enum DragPhase {
         /// pointer has moved since the press. Unclamped — apply your own bound,
         /// such as [`clamp_offset`].
         offset: CellOffset,
-        /// Current pointer position, screen-absolute in cells.
+        /// Current pointer position, in the coordinate space the component was
+        /// declared with.
         position: Position,
     },
     /// The button was released and the gesture's internal state has been
     /// cleared.
     Ended {
-        /// Where the release happened, screen-absolute in cells — hit-test this
-        /// to find a drop target.
+        /// Where the release happened, in the coordinate space the component
+        /// was declared with — hit-test this to find a drop target.
         position: Position,
         /// False if the pointer never actually moved, which lets you treat the
         /// gesture as a click on the handle rather than as a drag.
@@ -165,6 +166,13 @@ impl EventCtx<'_> {
     /// is. Anything not part of that gesture comes back as
     /// [`DragPhase::Ignored`].
     ///
+    /// [`DragPhase`] positions are in the coordinate space the component was
+    /// declared with, matching [`EventCtx::area`](Self::area) and the
+    /// [`MouseEvent`] passed in. The anchor a gesture starts from is kept
+    /// internally in screen coordinates, so scrolling a
+    /// [`viewport`](super::DeclareCtx::viewport) mid-gesture leaves the offset
+    /// measuring pointer travel alone.
+    ///
     /// The gesture is tracked against the component's identity path, so it
     /// survives the component instance being rebuilt each frame. What it does
     /// not survive is the path itself disappearing: if a successful render no
@@ -181,12 +189,13 @@ impl EventCtx<'_> {
     /// keep an unrelated transient.
     pub fn drag(&mut self, mouse: &MouseEvent, options: DragOptions) -> DragPhase {
         let position = Position::new(mouse.column, mouse.row);
+        let screen = self.pointer.screen_mouse.unwrap_or(*mouse);
         match mouse.kind {
             MouseKind::Down(button) if button == options.button && options.can_start => {
                 self.capture_pointer(button);
                 *self.transient::<CapturedDrag>() = CapturedDrag(Some(ActiveDrag {
                     button,
-                    anchor: AnchorPoint::at(mouse.column, mouse.row, options.offset),
+                    anchor: AnchorPoint::at(screen.column, screen.row, options.offset),
                     moved: false,
                 }));
                 DragPhase::Down
@@ -201,7 +210,7 @@ impl EventCtx<'_> {
                 }
                 drag.moved = true;
                 DragPhase::Moved {
-                    offset: drag.anchor.offset_at(mouse.column, mouse.row),
+                    offset: drag.anchor.offset_at(screen.column, screen.row),
                     position,
                 }
             }
@@ -326,6 +335,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::runtime::component::PointerInputs;
     use crate::runtime::{ChildId, Modifiers};
 
     fn mouse(kind: MouseKind, column: u16, row: u16) -> MouseEvent {
@@ -346,8 +356,11 @@ mod tests {
             &path,
             Rect::ZERO,
             &mut transients,
-            &mut capture,
-            Some(MouseButton::Left),
+            PointerInputs {
+                capture: Some(&mut capture),
+                button: Some(MouseButton::Left),
+                screen_mouse: None,
+            },
         );
 
         assert_eq!(
@@ -360,7 +373,16 @@ mod tests {
         assert_eq!(capture, Some(path.to_vec()));
 
         let mut no_capture = None;
-        let mut ctx = EventCtx::at(&path, Rect::ZERO, &mut transients, &mut no_capture, None);
+        let mut ctx = EventCtx::at(
+            &path,
+            Rect::ZERO,
+            &mut transients,
+            PointerInputs {
+                capture: Some(&mut no_capture),
+                button: None,
+                screen_mouse: None,
+            },
+        );
         assert_eq!(
             ctx.drag(
                 &mouse(MouseKind::Up(MouseButton::Left), 2, 3),
@@ -383,8 +405,11 @@ mod tests {
             &path,
             Rect::ZERO,
             &mut transients,
-            &mut capture,
-            Some(MouseButton::Left),
+            PointerInputs {
+                capture: Some(&mut capture),
+                button: Some(MouseButton::Left),
+                screen_mouse: None,
+            },
         )
         .drag(
             &mouse(MouseKind::Down(MouseButton::Left), 5, 5),
@@ -392,7 +417,17 @@ mod tests {
         );
 
         let mut no_capture = None;
-        let phase = EventCtx::at(&path, Rect::ZERO, &mut transients, &mut no_capture, None).drag(
+        let phase = EventCtx::at(
+            &path,
+            Rect::ZERO,
+            &mut transients,
+            PointerInputs {
+                capture: Some(&mut no_capture),
+                button: None,
+                screen_mouse: None,
+            },
+        )
+        .drag(
             &mouse(MouseKind::Drag(MouseButton::Left), 9, 2),
             DragOptions::new(CellOffset::default()).start_if(false),
         );
@@ -414,8 +449,11 @@ mod tests {
             &path,
             Rect::ZERO,
             &mut transients,
-            &mut capture,
-            Some(MouseButton::Right),
+            PointerInputs {
+                capture: Some(&mut capture),
+                button: Some(MouseButton::Right),
+                screen_mouse: None,
+            },
         );
 
         assert_eq!(
@@ -442,8 +480,11 @@ mod tests {
             &path,
             Rect::ZERO,
             &mut transients,
-            &mut capture,
-            Some(MouseButton::Left),
+            PointerInputs {
+                capture: Some(&mut capture),
+                button: Some(MouseButton::Left),
+                screen_mouse: None,
+            },
         )
         .drag(
             &mouse(MouseKind::Down(MouseButton::Left), 5, 5),
@@ -451,7 +492,16 @@ mod tests {
         );
 
         let mut no_capture = None;
-        let mut ctx = EventCtx::at(&path, Rect::ZERO, &mut transients, &mut no_capture, None);
+        let mut ctx = EventCtx::at(
+            &path,
+            Rect::ZERO,
+            &mut transients,
+            PointerInputs {
+                capture: Some(&mut no_capture),
+                button: None,
+                screen_mouse: None,
+            },
+        );
         assert_eq!(
             ctx.drag(
                 &mouse(MouseKind::Drag(MouseButton::Right), 9, 2),

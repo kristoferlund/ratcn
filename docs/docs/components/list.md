@@ -150,6 +150,9 @@ index even when items occupy multiple terminal rows.
 List::new(items).scroll(|s: &AppState| s.scroll, Msg::ScrollChanged)
 ```
 
+To scroll something that is not a list — a form, a pane, a tile grid — see
+[ScrollArea](./scroll-area).
+
 `item_focus` calls its message constructor with both the target item and the
 resulting top-item offset. A bound-scroll app must store both in one update:
 

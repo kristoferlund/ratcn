@@ -12,7 +12,7 @@ use ratatui::widgets::{StatefulWidget, Widget};
 use crate::Theme;
 
 use super::engine::{DeclarationEnv, LayerKind, RenderPass};
-use super::{ChildId, Event, KeyChord, MouseButton, TabWrap};
+use super::{ChildId, Event, KeyChord, MouseButton, MouseEvent, TabWrap};
 
 /// What a component did with an event, and what should happen next.
 ///
@@ -193,6 +193,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// [`declare`](Component::declare) it means that component and its children,
     /// inside a [`scope`](Self::scope) it means the scope, and from the root
     /// closure it means "the pointer is on something declared at all".
+    /// Subtree identity is global across layers: an escaped popup belongs to
+    /// the component that declared it, wherever its geometry lands.
     ///
     /// # It answers with the last resolved hover
     ///
@@ -214,6 +216,22 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     #[must_use]
     pub fn pointer_within(&self) -> bool {
         self.pass.pointer_within_current()
+    }
+
+    /// Whether the pointer rests inside this declaration *and* on the
+    /// rectangle it was given.
+    ///
+    /// [`pointer_within`](Self::pointer_within) follows subtree identity
+    /// across layers, so an escaped popup keeps its owner's answer true wherever
+    /// the popup sits. This adds the geometric half, for a component whose own
+    /// rectangle can move out from under a still pointer — through reflow, or
+    /// because a [`viewport`](Self::viewport) scrolled it away.
+    #[must_use]
+    pub fn pointer_within_area(&self) -> bool {
+        self.pointer_within()
+            && self
+                .hover_position
+                .is_some_and(|position| self.area.contains(position))
     }
 
     /// Read the transient stored at the current declaration's identity path,
@@ -306,6 +324,41 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
             state: self.state,
         };
         declare(&mut ctx);
+    }
+
+    /// Declare descendants in a vertically scrollable coordinate space.
+    ///
+    /// `screen` is the visible rectangle. Descendants are declared against
+    /// logical content that shares its origin and width and is
+    /// `content_height` rows tall, with `offset` naming the first content row
+    /// on screen; a larger offset is clamped to the last one that fills the
+    /// rectangle. Every widget paints with its full logical allocation, and
+    /// the result is translated and clipped afterwards. Pointer input arrives
+    /// in the same logical coordinates, and paint outside the logical content
+    /// is clipped away.
+    ///
+    /// A popup, hint, modal, or [`defer_paint`](Self::defer_paint) closure
+    /// declared inside escapes the clip and is projected into screen
+    /// coordinates once.
+    ///
+    /// This is the mechanism behind [`ScrollArea`](crate::ScrollArea), and
+    /// what a component of your own builds a viewport from. The offset such a
+    /// component chooses on the runtime's behalf comes from
+    /// [`Component::reveal_in_viewport`].
+    ///
+    /// # Panics
+    ///
+    /// Panics when a viewport is declared inside another, and when the logical
+    /// content exceeds 262,144 cells.
+    pub fn viewport(
+        &mut self,
+        screen: Rect,
+        content_height: u16,
+        offset: u16,
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+    ) {
+        let (pass, env) = self.declaring(screen);
+        pass.viewport(screen, content_height, offset, env, declare);
     }
 
     /// The pass and the declaration environment for a child covering `area`.
@@ -620,45 +673,121 @@ impl<Msg> PopupOptions<Msg> {
 /// [`PaintCtx`] are the two public faces over it, and they differ in what
 /// else they carry rather than in where they write.
 pub(crate) enum PaintTarget<'a, 'frame> {
-    Frame(&'a mut Frame<'frame>),
-    Canvas(&'a mut super::engine::LayerCanvas),
+    /// The frame itself.
+    Frame(&'a mut Frame<'frame>, Option<super::engine::Viewport>),
+    /// A layer's canvas.
+    Canvas(
+        &'a mut super::engine::LayerCanvas,
+        Option<super::engine::Viewport>,
+    ),
+    /// A viewport's own logical canvas.
+    Viewport(&'a mut super::engine::ViewportCanvas),
 }
 
 impl PaintTarget<'_, '_> {
-    fn widget(&mut self, widget: impl Widget, area: Rect) {
+    /// Paint `area` through this target: `paint` receives the buffer to write
+    /// and the rectangle to write it in.
+    ///
+    /// The three write forms differ only in what they hand that closure, so
+    /// routing — which buffer, which clip, which projection, what counts as
+    /// painted — is settled once, here.
+    fn paint_at<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
         match self {
-            Self::Frame(frame) => frame.render_widget(widget, area),
-            Self::Canvas(canvas) => {
-                widget.render(area.intersection(canvas.buffer.area), &mut canvas.buffer);
-                canvas.mark_painted(area);
+            Self::Frame(frame, projection) => match *projection {
+                None => paint(area, frame.buffer_mut()),
+                Some(viewport) => {
+                    with_projected_buffer(frame.buffer_mut(), viewport, area, |buffer| {
+                        paint(area, buffer)
+                    })
+                }
+            },
+            Self::Canvas(canvas, projection) => match *projection {
+                None => {
+                    let clipped = area.intersection(canvas.buffer.area);
+                    let result = canvas.with_buffer(|buffer| paint(clipped, buffer));
+                    canvas.mark_painted(area);
+                    result
+                }
+                Some(viewport) => {
+                    let painted = viewport.project_rect(area, canvas.buffer.area);
+                    let result = canvas.with_buffer(|buffer| {
+                        with_projected_buffer(buffer, viewport, area, |buffer| paint(area, buffer))
+                    });
+                    canvas.mark_painted(painted);
+                    result
+                }
+            },
+            Self::Viewport(canvas) => {
+                let clipped = canvas.clip(area);
+                let result = canvas.with_buffer(|buffer| paint(clipped, buffer));
+                canvas.mark_painted(clipped);
+                result
             }
         }
+    }
+
+    /// The whole of what this target writes, in the coordinates its paint
+    /// closure uses — the allocation a free-form [`Self::with_buffer`] covers.
+    fn whole_area(&mut self) -> Rect {
+        match self {
+            Self::Frame(frame, projection) => {
+                let area = frame.area();
+                (*projection).map_or(area, |viewport| viewport.logical_frame(area))
+            }
+            Self::Canvas(canvas, projection) => {
+                let area = canvas.buffer.area;
+                (*projection).map_or(area, |viewport| viewport.logical_frame(area))
+            }
+            Self::Viewport(canvas) => canvas.buffer.area,
+        }
+    }
+
+    fn widget(&mut self, widget: impl Widget, area: Rect) {
+        self.paint_at(area, |area, buffer| widget.render(area, buffer));
     }
 
     fn stateful_widget<W: StatefulWidget>(&mut self, widget: W, area: Rect, state: &mut W::State) {
-        match self {
-            Self::Frame(frame) => frame.render_stateful_widget(widget, area, state),
-            Self::Canvas(canvas) => {
-                widget.render(
-                    area.intersection(canvas.buffer.area),
-                    &mut canvas.buffer,
-                    state,
-                );
-                canvas.mark_painted(area);
-            }
-        }
+        self.paint_at(area, |area, buffer| widget.render(area, buffer, state));
     }
 
     fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        match self {
-            Self::Frame(frame) => paint(frame.buffer_mut()),
-            Self::Canvas(canvas) => {
-                let area = canvas.buffer.area;
-                canvas.mark_painted(area);
-                paint(&mut canvas.buffer)
-            }
+        let area = self.whole_area();
+        self.paint_at(area, |_, buffer| paint(buffer))
+    }
+}
+
+/// Paint `logical` into `target` through `viewport`.
+///
+/// The closure sees a scratch buffer covering exactly the logical rectangle,
+/// so a widget lays out against its declared allocation; the rows that project
+/// onto the target are copied back afterwards.
+fn with_projected_buffer<R>(
+    target: &mut Buffer,
+    viewport: super::engine::Viewport,
+    logical: Rect,
+    paint: impl FnOnce(&mut Buffer) -> R,
+) -> R {
+    let mut scratch = Buffer::empty(logical);
+    for (logical_position, screen_position) in viewport.projected_positions(logical) {
+        if let (Some(source), Some(destination)) = (
+            target.cell(screen_position),
+            scratch.cell_mut(logical_position),
+        ) {
+            *destination = source.clone();
         }
     }
+
+    let result = paint(&mut scratch);
+
+    for (logical_position, screen_position) in viewport.projected_positions(logical) {
+        if let (Some(source), Some(destination)) = (
+            scratch.cell(logical_position),
+            target.cell_mut(screen_position),
+        ) {
+            *destination = source.clone();
+        }
+    }
+    result
 }
 
 /// Paint-only access to the active paint surface, handed to deferred paint
@@ -993,8 +1122,18 @@ pub struct EventCtx<'a> {
     /// [`transient`](Self::transient) without special-casing. Values live and
     /// die with this context, which is exactly what "no dispatch" means.
     detached_transients: Option<Box<TransientMap>>,
-    capture: Option<&'a mut Option<Vec<ChildId>>>,
-    capture_button: Option<MouseButton>,
+    pub(super) pointer: PointerInputs<'a>,
+}
+
+/// The pointer facts one dispatch carries into an [`EventCtx`].
+#[derive(Default)]
+pub(crate) struct PointerInputs<'a> {
+    /// Where a [`EventCtx::capture_pointer`] claim is recorded.
+    pub(crate) capture: Option<&'a mut Option<Vec<ChildId>>>,
+    /// The button holding the capture this event belongs to.
+    pub(crate) button: Option<MouseButton>,
+    /// The event as it arrived, before any declaration-space projection.
+    pub(crate) screen_mouse: Option<MouseEvent>,
 }
 
 impl fmt::Debug for EventCtx<'_> {
@@ -1002,7 +1141,8 @@ impl fmt::Debug for EventCtx<'_> {
         f.debug_struct("EventCtx")
             .field("path", &self.path)
             .field("transients_available", &self.transients.is_some())
-            .field("capture_button", &self.capture_button)
+            .field("capture_button", &self.pointer.button)
+            .field("screen_mouse", &self.pointer.screen_mouse)
             .finish()
     }
 }
@@ -1012,16 +1152,14 @@ impl<'a> EventCtx<'a> {
         path: &[ChildId],
         area: Rect,
         transients: &'a mut TransientMap,
-        capture: &'a mut Option<Vec<ChildId>>,
-        capture_button: Option<MouseButton>,
+        pointer: PointerInputs<'a>,
     ) -> Self {
         Self {
             path: path.to_vec(),
             area,
             transients: Some(transients),
             detached_transients: None,
-            capture: Some(capture),
-            capture_button,
+            pointer,
         }
     }
 
@@ -1061,6 +1199,11 @@ impl<'a> EventCtx<'a> {
 
     /// The area this component was declared with on the last successful
     /// render — the same rect the event was hit-tested against.
+    ///
+    /// Inside a [`viewport`](DeclareCtx::viewport) this is content geometry,
+    /// and the [`MouseEvent`] coordinates dispatched with it share that space.
+    /// So do [`DragPhase`](super::DragPhase) positions; see
+    /// [`drag`](Self::drag).
     ///
     /// Components that need event-time geometry (a dialog hit-testing its own
     /// border for a drag, say) read it from here instead of caching the area
@@ -1180,11 +1323,12 @@ impl<'a> EventCtx<'a> {
     /// gesture, not join one in progress.
     pub fn capture_pointer(&mut self, button: MouseButton) {
         assert_eq!(
-            self.capture_button,
+            self.pointer.button,
             Some(button),
             "EventCtx::capture_pointer({button:?}) requires the matching MouseKind::Down"
         );
         let capture = self
+            .pointer
             .capture
             .as_deref_mut()
             .expect("EventCtx::capture_pointer is unavailable outside Ratcn event dispatch");
@@ -1341,6 +1485,20 @@ pub trait Component<State, Msg> {
     ) -> EventResult<Msg> {
         EventResult::Ignored
     }
+
+    /// Bring `target` into view inside this component's
+    /// [`viewport`](DeclareCtx::viewport).
+    ///
+    /// The runtime calls this on the component that declared the viewport
+    /// whenever focus lands on a descendant the viewport is clipping, before
+    /// it emits the app's focus message. `target` is the descendant's logical
+    /// area, in the coordinates the viewport was declared with.
+    ///
+    /// The offset the component chooses belongs in an
+    /// [`EventCtx::transient`], which the next declaration reads. This adds to
+    /// a focus change: the app's focus message is emitted whatever happens
+    /// here.
+    fn reveal_in_viewport(&mut self, _target: Rect, _state: &State, _ctx: &mut EventCtx<'_>) {}
 
     /// Whether the component can hold focus, and so takes part in Tab
     /// traversal. Defaults to `false`; interactive leaves override it, often

@@ -273,18 +273,20 @@ mod key_chord_tests {
 
 /// A mouse event, normalized across backends.
 ///
-/// `column`/`row` are terminal cells, 0-based and screen-absolute — the same
-/// coordinate space as a component's rendered [`Rect`](ratatui::layout::Rect),
-/// so the runtime can hit-test events against children directly. (crossterm
-/// already speaks cells; the browser backend converts pixels to cells before
-/// constructing this.)
+/// `column`/`row` enter [`Ratcn`](super::Ratcn) as 0-based, screen-absolute
+/// terminal cells. A component receives them in the coordinate space it was
+/// declared with, which matches its
+/// [`EventCtx::area`](super::EventCtx::area): the same cells at the top
+/// level, and content coordinates inside a
+/// [`viewport`](super::DeclareCtx::viewport). (crossterm already speaks cells;
+/// the browser backend converts pixels to cells before constructing this.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseEvent {
     /// What the pointer did.
     pub kind: MouseKind,
-    /// Screen-absolute cell column, 0-based.
+    /// Cell column, 0-based, in the receiving component's declaration space.
     pub column: u16,
-    /// Screen-absolute cell row, 0-based.
+    /// Cell row, 0-based, in the receiving component's declaration space.
     pub row: u16,
     /// Ctrl/Alt/Shift state during the event.
     pub modifiers: Modifiers,

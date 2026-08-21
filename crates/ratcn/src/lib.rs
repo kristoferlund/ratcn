@@ -18,10 +18,10 @@
 //! - **There is no install command.** Each component module is self-contained
 //!   and meant to be copied into your own project, but copying is a manual file
 //!   copy today. A CLI is intended and does not exist.
-//! - **The component set is small and growing.** Eight ship today: [`Button`],
+//! - **The component set is small and growing.** Nine ship today: [`Button`],
 //!   [`List`], [`Select`], [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget),
-//!   [`BarChartWidget`], and [`Tooltip`]. Text input, a multi-line text area,
-//!   and a scroll area are planned next; there is no text entry component at
+//!   [`BarChartWidget`], [`Tooltip`], and [`ScrollArea`]. Text input and a
+//!   multi-line text area are planned next; there is no text entry component at
 //!   all right now.
 //!
 //! # Up to two halves, usable alone
@@ -142,6 +142,7 @@ pub use components::{
     button::{Button, ButtonRenderMode, ButtonSize, ButtonStyle, ButtonVariant, ButtonWidget},
     dialog::{Dialog, DialogStyle},
     list::{List, ListStyle, ListWidget},
+    scroll_area::{ScrollArea, ScrollAreaChange, ScrollAreaStyle},
     select::{Select, SelectStyle, SelectWidget},
     tabs::{Tab, TabLayout, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget, tab_layout},
     toast::{ToastPosition, ToasterStyle, ToasterWidget},

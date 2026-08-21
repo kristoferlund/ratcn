@@ -266,12 +266,12 @@ type TriggerFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
 ///   keyboard focus, which the component cannot observe on its own: focus
 ///   changes are the runtime's messages, not this component's events.
 ///
-/// Whichever decides it, the answer is read while declaring, so it is the
-/// hover the *previous* frame resolved. Pointer motion hides that: it returns
-/// a non-`Ignored` result, the host redraws, and the redraw sees the new
-/// hover. A hover change with no motion behind it — a modal opening over the
-/// trigger — is one frame late: that frame paints the trigger unhovered and
-/// still declares the bubble, which the frame after drops.
+/// Whichever decides it, the answer starts with the hover the *previous* frame
+/// resolved. The Tooltip also checks the pointer against the trigger's current
+/// declaration geometry, so reflow or scrolling that moves the trigger away
+/// closes the bubble on that redraw. Other identity changes with no pointer
+/// motion — a modal opening over the trigger, for example — can still settle
+/// one frame later.
 ///
 /// [`open`](Self::open) is the same reader plus a message, for an app that
 /// keeps a flag the Tooltip should change. It asks for two:
@@ -484,9 +484,9 @@ impl<S, M> Tooltip<S, M> {
 
 impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
-        // Read before the trigger declares: `pointer_within` asks about the
-        // declaration that is open right now, which is this Tooltip's.
-        self.pointer_within = ctx.pointer_within();
+        // Read before the trigger declares: the question is about this
+        // Tooltip's subtree, which is what is open right now.
+        self.pointer_within = ctx.pointer_within_area();
         let open = self.is_open(ctx.state());
         if let Some(trigger) = self.trigger.take() {
             trigger(ctx);

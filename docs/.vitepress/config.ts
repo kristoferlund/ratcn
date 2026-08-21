@@ -207,6 +207,7 @@ export default defineConfig({
             { text: 'Button', link: '/docs/components/button' },
             { text: 'Dialog', link: '/docs/components/dialog' },
             { text: 'List', link: '/docs/components/list' },
+            { text: 'ScrollArea', link: '/docs/components/scroll-area' },
             { text: 'Select', link: '/docs/components/select' },
             { text: 'Tabs', link: '/docs/components/tabs' },
             { text: 'Toast', link: '/docs/components/toast' },
