@@ -115,7 +115,7 @@ impl Component<AppState, Msg> for DraggableBlock {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) {
         let area = ctx.area();
         let theme = ctx.theme;
-        let background_color = if ctx.hovered {
+        let background_color = if ctx.hovered() {
             darken(theme.surface, HOVER_DARKEN_PERCENT)
         } else {
             theme.surface

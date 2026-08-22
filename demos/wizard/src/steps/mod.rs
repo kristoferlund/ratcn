@@ -28,9 +28,9 @@ pub fn declare_panel<S, M>(
     let title = title.map(ToOwned::to_owned);
     ctx.paint(move |ctx| {
         let theme = ctx.theme;
-        let border = if ctx.contains_focus {
+        let border = if ctx.contains_focus() {
             theme.ring
-        } else if ctx.contains_hover {
+        } else if ctx.contains_hover() {
             theme.primary
         } else {
             theme.border

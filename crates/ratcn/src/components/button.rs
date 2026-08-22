@@ -739,8 +739,8 @@ impl<S, M> Component<S, M> for Button<M> {
         let widget = ButtonWidget::new(&self.label)
             .style(style)
             .size(self.size)
-            .focused(ctx.focused)
-            .hovered(ctx.hovered)
+            .focused(ctx.focused())
+            .hovered(ctx.hovered())
             .disabled(self.disabled);
         ctx.widget(widget, area);
     }

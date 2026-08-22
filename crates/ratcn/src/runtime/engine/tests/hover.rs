@@ -18,7 +18,7 @@ impl Component<ModalPointerState, PointerMsg> for ModalHoverLeaf {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalPointerState>) {
         self.rendered
             .borrow_mut()
-            .push((ctx.hovered, ctx.contains_hover));
+            .push((ctx.hovered(), ctx.contains_hover()));
     }
 }
 
@@ -66,7 +66,7 @@ impl Component<PointerState, PointerMsg> for CapturingHoverLeaf {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
         self.rendered
             .borrow_mut()
-            .push((ctx.hovered, ctx.contains_hover));
+            .push((ctx.hovered(), ctx.contains_hover()));
     }
 
     fn handle_event(
@@ -807,7 +807,7 @@ fn hovered_and_contains_hover_are_distinct_at_the_leaf_and_its_ancestor() {
                     ctx.paint(move |ctx| {
                         scope_flags
                             .borrow_mut()
-                            .push((ctx.hovered, ctx.contains_hover));
+                            .push((ctx.hovered(), ctx.contains_hover()));
                     });
                     ctx.component(
                         ChildId::Static("leaf"),

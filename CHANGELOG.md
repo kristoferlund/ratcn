@@ -163,6 +163,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** the `PaintCtx` interaction flags are accessors: `ctx.focused`,
+  `ctx.contains_focus`, `ctx.hovered`, and `ctx.contains_hover` are
+  `ctx.focused()`, `ctx.contains_focus()`, `ctx.hovered()`, and
+  `ctx.contains_hover()`.
 - **Breaking:** the paint-only widgets address items by one noun.
   `ListWidget`'s `focused_row`/`selected_rows`/`disabled_rows`, `SelectWidget`'s
   `focused_option`/`selected_option`/`disabled_options`, and `TabsWidget`'s

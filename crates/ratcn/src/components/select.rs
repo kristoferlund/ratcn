@@ -1042,8 +1042,8 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
         let mut trigger = SelectWidget::new(value)
             .placeholder(&self.placeholder)
-            .focused(ctx.focused)
-            .hovered(ctx.hovered)
+            .focused(ctx.focused())
+            .hovered(ctx.hovered())
             .disabled(self.disabled)
             .style(style);
         if self.resolved_open {

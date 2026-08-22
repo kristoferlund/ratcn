@@ -30,9 +30,9 @@ pub fn declare_tile_panel_with_padding(
         // Every tile shares this chrome, so the accent choice lives here
         // rather than at each call site — that is what keeps the tiles
         // agreeing on what "focused" looks like.
-        let border = if ctx.contains_focus {
+        let border = if ctx.contains_focus() {
             ctx.theme.ring
-        } else if ctx.contains_hover {
+        } else if ctx.contains_hover() {
             ctx.theme.primary
         } else {
             ctx.theme.border

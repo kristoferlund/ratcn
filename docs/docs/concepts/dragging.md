@@ -127,7 +127,7 @@ impl Component<AppState, Msg> for DraggableBlock {
 ```
 
 The declaring side offsets the block's area with `offset_rect` before passing
-it to `ctx.component`, and `paint` styles it from `ctx.hovered`. Three details
+it to `ctx.component`, and `paint` styles it from `ctx.hovered()`. Three details
 worth noting:
 
 - **Gesture state follows identity.** `EventCtx::drag` stores its transient by

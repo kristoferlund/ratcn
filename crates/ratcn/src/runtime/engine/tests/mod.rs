@@ -166,7 +166,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusLeaf {
         if let Some(rendered) = &self.rendered {
             rendered
                 .borrow_mut()
-                .push((ctx.focused, ctx.contains_focus));
+                .push((ctx.focused(), ctx.contains_focus()));
         }
     }
 
@@ -298,7 +298,7 @@ impl Component<PointerState, PointerMsg> for HoverLeaf {
         if let Some(rendered) = &self.rendered {
             rendered
                 .borrow_mut()
-                .push((ctx.hovered, ctx.contains_hover));
+                .push((ctx.hovered(), ctx.contains_hover()));
         }
     }
 
