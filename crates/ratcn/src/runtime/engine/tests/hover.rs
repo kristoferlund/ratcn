@@ -9,7 +9,7 @@ struct ModalPointerState {
 }
 
 struct ModalHoverLeaf {
-    rendered: HoverRenderLog,
+    rendered: FocusRenderLog,
 }
 
 impl Component<ModalPointerState, PointerMsg> for ModalHoverLeaf {
@@ -57,7 +57,7 @@ impl Component<PointerState, PointerMsg> for EmittingHoverLeaf {
 /// with, so a test can watch what a frame does to a capturing node's
 /// hover.
 struct CapturingHoverLeaf {
-    rendered: HoverRenderLog,
+    rendered: FocusRenderLog,
 }
 
 impl Component<PointerState, PointerMsg> for CapturingHoverLeaf {
@@ -87,12 +87,12 @@ impl Component<PointerState, PointerMsg> for CapturingHoverLeaf {
 
 #[test]
 fn root_then_nested_hover_focus_attract_on_successive_moves() {
-    let mut state = HoverFocusState {
+    let mut state = FocusTestState {
         focus: FocusState::intent([ChildId::Static("left"), ChildId::Static("first")]),
     };
     let mut driver = Driver::with(
         Ratcn::new()
-            .focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus)
+            .focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus)
             .hover_focus(),
         12,
         2,
@@ -106,12 +106,12 @@ fn root_then_nested_hover_focus_attract_on_successive_moves() {
                 |ctx| {
                     ctx.component(
                         ChildId::Static("first"),
-                        HoverFocusLeaf::enabled(),
+                        FocusLeaf::enabled(),
                         Rect::new(x, 0, 3, 2),
                     );
                     ctx.component(
                         ChildId::Static("second"),
-                        HoverFocusLeaf::enabled(),
+                        FocusLeaf::enabled(),
                         Rect::new(x + 3, 0, 3, 2),
                     );
                 },
@@ -119,7 +119,7 @@ fn root_then_nested_hover_focus_attract_on_successive_moves() {
         }
     });
 
-    let EventResult::Emit(HoverFocusMsg::Focus(root_focus)) =
+    let EventResult::Emit(FocusTestMsg::Focus(root_focus)) =
         driver.event(mouse(MouseKind::Moved, 10, 0), &state)
     else {
         panic!("root boundary did not attract focus");
@@ -136,7 +136,7 @@ fn root_then_nested_hover_focus_attract_on_successive_moves() {
     );
     state.focus = root_focus;
 
-    let EventResult::Emit(HoverFocusMsg::Focus(nested_focus)) =
+    let EventResult::Emit(FocusTestMsg::Focus(nested_focus)) =
         driver.event(mouse(MouseKind::Moved, 10, 0), &state)
     else {
         panic!("nested boundary did not attract focus after the root");
@@ -157,31 +157,31 @@ fn root_then_nested_hover_focus_attract_on_successive_moves() {
 
 #[test]
 fn hover_focus_is_off_by_default_and_skips_disabled_targets_and_empty_space() {
-    let state = HoverFocusState {
+    let state = FocusTestState {
         focus: FocusState::intent([ChildId::Static("enabled")]),
     };
     let mut default = Driver::with(
-        Ratcn::new().focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus),
+        Ratcn::new().focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus),
         12,
         2,
     );
     let mut hover_focus = Driver::with(
         Ratcn::new()
-            .focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus)
+            .focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus)
             .hover_focus(),
         12,
         2,
     );
-    let render = |driver: &mut Driver<HoverFocusState, HoverFocusMsg>| {
+    let render = |driver: &mut Driver<FocusTestState, FocusTestMsg>| {
         driver.render(&state, |ctx| {
             ctx.component(
                 ChildId::Static("enabled"),
-                HoverFocusLeaf::enabled(),
+                FocusLeaf::enabled(),
                 Rect::new(0, 0, 3, 2),
             );
             ctx.component(
                 ChildId::Static("disabled"),
-                HoverFocusLeaf::disabled(),
+                FocusLeaf::disabled(),
                 Rect::new(4, 0, 3, 2),
             );
         });

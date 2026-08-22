@@ -16,7 +16,7 @@ use crate::linear_nav;
 use crate::list_core;
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
-    MouseButton, MouseKind, PaintCtx, Step,
+    MouseButton, MouseKind, PaintCtx, ScopeOptions, Step,
 };
 use crate::theme::resolve_style;
 
@@ -993,10 +993,12 @@ where
         fixed_height(area, self.height())
     }
 
-    fn is_focusable(&self) -> bool {
-        !self.disabled
-            && self.keyboard_enabled()
-            && linear_nav::has_enabled(self.items.len(), |index| self.disabled_at(index))
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(
+            !self.disabled
+                && self.keyboard_enabled()
+                && linear_nav::has_enabled(self.items.len(), |index| self.disabled_at(index)),
+        )
     }
 }
 
@@ -1343,7 +1345,7 @@ mod tests {
         ])
         .selection(|s: &State| Some(s.selected), Msg::Selected);
         let state = State::default();
-        assert!(!tabs.is_focusable());
+        assert!(!tabs.scope_options().focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default(),),
             EventResult::Ignored
@@ -1356,7 +1358,7 @@ mod tests {
             .item_focus(|_: &State| Some(Screen::A), Msg::Focused);
         let state = State::default();
 
-        assert!(!tabs.is_focusable());
+        assert!(!tabs.scope_options().focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored
@@ -1370,7 +1372,7 @@ mod tests {
                 .activation(TabsActivation::Automatic);
         let state = State::default();
 
-        assert!(!tabs.is_focusable());
+        assert!(!tabs.scope_options().focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored
@@ -1959,7 +1961,7 @@ mod tests {
         ]);
         let state = State::default();
 
-        assert!(!tabs.is_focusable());
+        assert!(!tabs.scope_options().focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default(),),
             EventResult::Ignored
@@ -1999,7 +2001,7 @@ mod tests {
         .selection(|state: &State| Some(state.selected), Msg::Selected);
         tabs.hits = tab_layout(Rect::new(0, 0, 30, 1), &["A", "B", "C"], TabsSize::Small, 0);
 
-        assert!(tabs.is_focusable());
+        assert!(tabs.scope_options().focusable);
         assert_eq!(
             tabs.handle_event(
                 &key(KeyCode::Right),
@@ -2038,7 +2040,7 @@ mod tests {
             Tab::new(Screen::B, "B").disabled(true),
             Tab::new(Screen::C, "C").disabled(true),
         ]);
-        assert!(!all_disabled.is_focusable());
+        assert!(!all_disabled.scope_options().focusable);
     }
 
     #[test]
@@ -2383,7 +2385,7 @@ mod tests {
                 ctx.scope(
                     ChildId::Static("decoy"),
                     decoy_area,
-                    ScopeOptions::default().focusable(),
+                    ScopeOptions::default().focusable(true),
                     |_| {},
                 );
                 ctx.component(ChildId::Static("tabs"), manual(), tabs_area);
@@ -2803,7 +2805,7 @@ mod tests {
         );
         let state = State::default();
 
-        assert!(!tabs.is_focusable());
+        assert!(!tabs.scope_options().focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored

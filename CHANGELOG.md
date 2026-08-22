@@ -184,11 +184,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `description_text`, `toast_kind`, and `toast_id`.
 - **Breaking:** `crossterm::InputModes::mouse_capture` and `bracketed_paste` are
   `mouse` and `paste`, the names `terminal::SessionOptions` uses.
+- **Breaking:** two `crossterm::InputModeGuard`s over the same mode no longer
+  compose. Each guard switches off exactly what its own `enable` call switched
+  on, so dropping either one switches the mode off.
 - **Breaking:** `list_core::WheelPark` is `WheelHold` and its `park` method is
   `hold`, so "park" names focus parking alone.
-- **Breaking:** `Component::is_focusable(&self)` drops its state parameter. A
-  component answers from the props it was declared with, and settles anything
-  state-dependent in `prepare`.
+- **Breaking:** `ScopeOptions::focusable` takes a `bool`, and is the one place a
+  focus claim is made: `Component::is_focusable` is gone, and a component
+  answers through `scope_options` from the props it was declared with, settling
+  anything state-dependent in `prepare`.
 - **Breaking:** `DeclareCtx::hint` and `DeclareCtx::popup` take
   `(id, area, options, declare)`, the order `scope` and `modal_scope` use.
 - **Breaking:** `ModalState::ids` returns
@@ -216,8 +220,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Option<Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>>`.
 - **Breaking:** `Component::render` is `Component::declare`. The hook is
   otherwise unchanged — it lays the component out, declares descendants, and
-  paints nothing. `prepare`, `paint`, `scope_options`, `interaction_area`,
-  `is_focusable`, and `handle_event` keep their names.
+  paints nothing. `prepare`, `paint`, `scope_options`, `interaction_area`, and
+  `handle_event` keep their names.
 - **Breaking:** `RenderCtx::render_component` is `DeclareCtx::component`, in the
   noun family it declares alongside: `scope`, `modal`, `modal_scope`, `popup`,
   `hint`, `in_area`.

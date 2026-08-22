@@ -21,135 +21,18 @@
 //! # }
 //! ```
 
-use std::{
-    io,
-    sync::{Condvar, Mutex, OnceLock},
-};
+use std::io;
 
 use ratatui::crossterm::{
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
 };
 
-#[derive(Debug, Clone, Copy)]
-enum Mode {
-    MouseCapture,
-    BracketedPaste,
-}
-
-#[derive(Debug, Default)]
-struct ModeState {
-    leases: usize,
-    transitioning: bool,
-}
-
-#[derive(Debug, Default)]
-struct ModeStates {
-    mouse_capture: ModeState,
-    bracketed_paste: ModeState,
-}
-
-impl ModeStates {
-    const fn get_mut(&mut self, mode: Mode) -> &mut ModeState {
-        match mode {
-            Mode::MouseCapture => &mut self.mouse_capture,
-            Mode::BracketedPaste => &mut self.bracketed_paste,
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct ModeRegistry {
-    states: Mutex<ModeStates>,
-    changed: Condvar,
-}
-
-impl ModeRegistry {
-    fn acquire(&self, mode: Mode, enable: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
-        let mut states = self.lock();
-        loop {
-            let state = states.get_mut(mode);
-            if state.transitioning {
-                states = self
-                    .changed
-                    .wait(states)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            } else if state.leases > 0 {
-                state.leases = state.leases.checked_add(1).ok_or_else(|| {
-                    io::Error::other("terminal input mode reference count overflow")
-                })?;
-                return Ok(());
-            } else {
-                state.transitioning = true;
-                break;
-            }
-        }
-        drop(states);
-
-        let result = enable();
-        let mut states = self.lock();
-        let state = states.get_mut(mode);
-        state.transitioning = false;
-        if result.is_ok() {
-            state.leases = 1;
-        }
-        self.changed.notify_all();
-        result
-    }
-
-    fn release(&self, mode: Mode, disable: impl FnOnce() -> io::Result<()>) {
-        let mut states = self.lock();
-        loop {
-            let state = states.get_mut(mode);
-            if state.transitioning {
-                states = self
-                    .changed
-                    .wait(states)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            } else if state.leases > 1 {
-                state.leases -= 1;
-                return;
-            } else if state.leases == 1 {
-                state.transitioning = true;
-                break;
-            } else {
-                return;
-            }
-        }
-        drop(states);
-
-        let _ = disable();
-        let mut states = self.lock();
-        let state = states.get_mut(mode);
-        state.leases = 0;
-        state.transitioning = false;
-        self.changed.notify_all();
-    }
-
-    #[cfg(test)]
-    fn leases(&self, mode: Mode) -> usize {
-        self.lock().get_mut(mode).leases
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, ModeStates> {
-        self.states
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-}
-
-fn mode_registry() -> &'static ModeRegistry {
-    static REGISTRY: OnceLock<ModeRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(ModeRegistry::default)
-}
-
 /// Which optional terminal input modes to switch on.
 ///
 /// Build one, call [`enable`](Self::enable), and keep the returned
 /// [`InputModeGuard`] alive for as long as the app reads terminal events —
 /// dropping it switches the modes back off.
-/// Multiple guards created through this API compose: a mode stays enabled until
-/// the last guard that requested it is dropped.
 ///
 /// Binding it to `_` rather than `_guard` is the classic mistake: `let _ =
 /// modes.enable()?;` drops the guard immediately and the modes never take
@@ -198,15 +81,11 @@ impl InputModes {
     pub fn enable(self) -> io::Result<InputModeGuard> {
         let mut guard = InputModeGuard::default();
         if self.mouse {
-            mode_registry().acquire(Mode::MouseCapture, || {
-                execute!(io::stdout(), EnableMouseCapture)
-            })?;
+            execute!(io::stdout(), EnableMouseCapture)?;
             guard.mouse_capture = true;
         }
         if self.paste {
-            mode_registry().acquire(Mode::BracketedPaste, || {
-                execute!(io::stdout(), EnableBracketedPaste)
-            })?;
+            execute!(io::stdout(), EnableBracketedPaste)?;
             guard.bracketed_paste = true;
         }
         Ok(guard)
@@ -228,23 +107,17 @@ pub struct InputModeGuard {
 impl Drop for InputModeGuard {
     fn drop(&mut self) {
         if self.bracketed_paste {
-            mode_registry().release(Mode::BracketedPaste, || {
-                execute!(io::stdout(), DisableBracketedPaste)
-            });
+            let _ = execute!(io::stdout(), DisableBracketedPaste);
         }
         if self.mouse_capture {
-            mode_registry().release(Mode::MouseCapture, || {
-                execute!(io::stdout(), DisableMouseCapture)
-            });
+            let _ = execute!(io::stdout(), DisableMouseCapture);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
-    use super::{InputModes, Mode, ModeRegistry};
+    use super::InputModes;
 
     #[test]
     fn mode_builders_select_only_the_requested_modes() {
@@ -253,51 +126,5 @@ mod tests {
         assert!(InputModes::new().paste().paste);
         let both = InputModes::new().mouse().paste();
         assert!(both.mouse && both.paste);
-    }
-
-    #[test]
-    fn overlapping_mode_leases_enable_once_and_disable_after_the_last_release() {
-        let enables = Cell::new(0);
-        let disables = Cell::new(0);
-        let registry = ModeRegistry::default();
-
-        registry
-            .acquire(Mode::MouseCapture, || {
-                enables.set(enables.get() + 1);
-                Ok(())
-            })
-            .expect("first lease");
-        registry
-            .acquire(Mode::MouseCapture, || {
-                enables.set(enables.get() + 1);
-                Ok(())
-            })
-            .expect("second lease");
-        registry.release(Mode::MouseCapture, || {
-            disables.set(disables.get() + 1);
-            Ok(())
-        });
-
-        assert_eq!(
-            (
-                registry.leases(Mode::MouseCapture),
-                enables.get(),
-                disables.get()
-            ),
-            (1, 1, 0)
-        );
-
-        registry.release(Mode::MouseCapture, || {
-            disables.set(disables.get() + 1);
-            Ok(())
-        });
-        assert_eq!(
-            (
-                registry.leases(Mode::MouseCapture),
-                enables.get(),
-                disables.get()
-            ),
-            (0, 1, 1)
-        );
     }
 }

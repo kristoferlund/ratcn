@@ -59,7 +59,7 @@ pub fn declare(index: usize, ctx: &mut DeclareCtx<'_, AppState, AppMsg>, area: R
     let options = if tile.has_controls {
         ScopeOptions::default().tab_wrap(TabWrap::Wrap)
     } else {
-        ScopeOptions::default().focusable()
+        ScopeOptions::default().focusable(true)
     };
     ctx.scope(tile.id, area, options, tile.declare);
 }

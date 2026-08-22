@@ -190,8 +190,8 @@ impl Component<FocusTestState, FocusTestMsg> for FocusLeaf {
         }
     }
 
-    fn is_focusable(&self) -> bool {
-        self.enabled
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(self.enabled)
     }
 }
 
@@ -212,38 +212,6 @@ enum PointerMsg {
     Transient(usize),
     Drag(DragPhase),
     Dismissed,
-}
-
-#[derive(Debug, Default)]
-struct HoverFocusState {
-    focus: FocusState,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum HoverFocusMsg {
-    Focus(FocusState),
-}
-
-struct HoverFocusLeaf {
-    enabled: bool,
-}
-
-impl HoverFocusLeaf {
-    fn enabled() -> Self {
-        Self { enabled: true }
-    }
-
-    fn disabled() -> Self {
-        Self { enabled: false }
-    }
-}
-
-impl Component<HoverFocusState, HoverFocusMsg> for HoverFocusLeaf {
-    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, HoverFocusState, HoverFocusMsg>) {}
-
-    fn is_focusable(&self) -> bool {
-        self.enabled
-    }
 }
 
 #[derive(Default)]
@@ -288,7 +256,7 @@ impl Component<PointerState, PointerMsg> for Draggable {
 
 struct HoverLeaf {
     consume_move: bool,
-    rendered: Option<HoverRenderLog>,
+    rendered: Option<FocusRenderLog>,
 }
 
 impl Component<PointerState, PointerMsg> for HoverLeaf {
@@ -323,8 +291,6 @@ impl Component<PointerState, PointerMsg> for HoverLeaf {
         }
     }
 }
-
-type HoverRenderLog = Rc<RefCell<Vec<(bool, bool)>>>;
 
 struct RouteLeaf(&'static str);
 
@@ -382,7 +348,7 @@ impl Component<FocusTestState, FocusTestMsg> for LoggingComponent {
         }
     }
 
-    fn is_focusable(&self) -> bool {
-        self.focusable
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(self.focusable)
     }
 }

@@ -45,9 +45,9 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
 /// Built twice per frame — once to measure, once to declare — so the width the
 /// layout reserves and the width that paints cannot disagree.
 ///
-/// The press handler is what makes the button focusable: `Button::is_focusable`
-/// is `!disabled && on_press.is_some()`, so without one the tile has no focus
-/// target and `alt+6` has nowhere to land.
+/// The press handler is what makes the button focusable: the button claims
+/// focus when `!disabled && on_press.is_some()`, so without one the tile has no
+/// focus target and `alt+6` has nowhere to land.
 fn button(disabled: bool) -> Button<AppMsg> {
     Button::new(LABEL)
         .variant(ButtonVariant::Outline)

@@ -14,7 +14,7 @@ use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, neare
 use crate::geometry::fixed_height;
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton,
-    MouseKind, PaintCtx,
+    MouseKind, PaintCtx, ScopeOptions,
 };
 use crate::theme::resolve_style;
 
@@ -775,8 +775,8 @@ impl<S, M> Component<S, M> for Button<M> {
         EventResult::Emit(on_press())
     }
 
-    fn is_focusable(&self) -> bool {
-        !self.disabled && self.on_press.is_some()
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(!self.disabled && self.on_press.is_some())
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
@@ -858,7 +858,7 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
 
-        assert!(!Component::<(), ()>::is_focusable(&button));
+        assert!(!Component::<(), ()>::scope_options(&button).focusable);
         for event in [
             Event::Key(crate::runtime::KeyEvent::new(KeyCode::Enter)),
             Event::Key(crate::runtime::KeyEvent::new(KeyCode::Char(' '))),

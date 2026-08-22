@@ -52,7 +52,7 @@ fn declare_panel_a(ctx: &mut DeclareCtx<'_, AppState, Msg>) {
 
 The runtime discovers the button on its own — focusability needs no
 announcement. A scope with nothing focusable inside — a chart, a read-out —
-uses `ScopeOptions::default().focusable()`, which makes the scope itself the
+uses `ScopeOptions::default().focusable(true)`, which makes the scope itself the
 Tab stop. [Focus, hover, and identity](./focus-hover-identity) covers this.
 
 The panel border is a plain Ratatui `Block`, painted from a `ctx.paint` closure

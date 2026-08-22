@@ -45,7 +45,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusComposite {
 
 struct EmptyComposite {
     rendered: FocusRenderLog,
-    self_focusable: bool,
+    focusable: bool,
 }
 
 impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
@@ -58,12 +58,7 @@ impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
     }
 
     fn scope_options(&self) -> ScopeOptions {
-        let options = ScopeOptions::default();
-        if self.self_focusable {
-            options.focusable()
-        } else {
-            options
-        }
+        ScopeOptions::default().focusable(self.focusable)
     }
 }
 
@@ -245,7 +240,7 @@ fn empty_composite_does_not_claim_sibling_focus_but_can_focus_itself() {
             ChildId::Static("empty"),
             EmptyComposite {
                 rendered: Rc::clone(&empty_rendered),
-                self_focusable: false,
+                focusable: false,
             },
             area,
         );
@@ -266,7 +261,7 @@ fn empty_composite_does_not_claim_sibling_focus_but_can_focus_itself() {
             ChildId::Static("empty"),
             EmptyComposite {
                 rendered: Rc::clone(&empty_rendered),
-                self_focusable: true,
+                focusable: true,
             },
             area,
         );
@@ -879,10 +874,10 @@ fn failed_render_keeps_the_previous_button_declaration_interactive() {
 
 struct HoverFocusComposite;
 
-impl Component<HoverFocusState, HoverFocusMsg> for HoverFocusComposite {
-    fn declare(&mut self, ctx: &mut DeclareCtx<'_, HoverFocusState, HoverFocusMsg>) {
+impl Component<FocusTestState, FocusTestMsg> for HoverFocusComposite {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
         let area = ctx.area();
-        ctx.component(ChildId::Static("leaf"), HoverFocusLeaf::enabled(), area);
+        ctx.component(ChildId::Static("leaf"), FocusLeaf::enabled(), area);
     }
 
     fn scope_options(&self) -> ScopeOptions {
@@ -893,26 +888,26 @@ impl Component<HoverFocusState, HoverFocusMsg> for HoverFocusComposite {
 #[test]
 fn focusable_decorative_scope_receives_mouse_focus_and_hover_context() {
     let rendered = Rc::new(RefCell::new(Vec::new()));
-    let state = HoverFocusState {
+    let state = FocusTestState {
         focus: FocusState::intent([ChildId::Static("other")]),
     };
     let mut driver = Driver::with(
-        Ratcn::new().focus(|state: &HoverFocusState| &state.focus, HoverFocusMsg::Focus),
+        Ratcn::new().focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus),
         8,
         2,
     );
-    let render = |driver: &mut Driver<HoverFocusState, HoverFocusMsg>, state: &HoverFocusState| {
+    let render = |driver: &mut Driver<FocusTestState, FocusTestMsg>, state: &FocusTestState| {
         driver.render(state, |ctx| {
             ctx.component(
                 ChildId::Static("other"),
-                HoverFocusLeaf::enabled(),
+                FocusLeaf::enabled(),
                 Rect::new(0, 0, 2, 2),
             );
             let rendered = Rc::clone(&rendered);
             ctx.scope(
                 ChildId::Static("decoration"),
                 Rect::new(3, 0, 5, 2),
-                ScopeOptions::default().focusable(),
+                ScopeOptions::default().focusable(true),
                 move |ctx| {
                     ctx.paint(move |ctx| {
                         rendered
@@ -936,7 +931,7 @@ fn focusable_decorative_scope_receives_mouse_focus_and_hover_context() {
     assert_eq!(*rendered.borrow(), [(false, false), (true, true)]);
     assert_eq!(
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 4, 0), &state),
-        EventResult::Emit(HoverFocusMsg::Focus(FocusState::intent([ChildId::Static(
+        EventResult::Emit(FocusTestMsg::Focus(FocusState::intent([ChildId::Static(
             "decoration"
         )])))
     );
@@ -954,8 +949,8 @@ impl Component<FocusTestState, FocusTestMsg> for ThunkProbe {
         });
     }
 
-    fn is_focusable(&self) -> bool {
-        true
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
     }
 }
 
@@ -1008,9 +1003,9 @@ fn a_scope_thunk_reports_focus_within_its_subtree() {
 
 #[test]
 fn focus_path_validates_latest_surface_focusability_and_scope_descent() {
-    let state = HoverFocusState::default();
+    let state = FocusTestState::default();
     let dynamic = ChildId::Dynamic(Arc::from("dynamic"));
-    let mut driver = Driver::<HoverFocusState, HoverFocusMsg>::new(8, 2);
+    let mut driver = Driver::<FocusTestState, FocusTestMsg>::new(8, 2);
     assert!(
         driver
             .ratcn
@@ -1024,15 +1019,11 @@ fn focus_path_validates_latest_surface_focusability_and_scope_descent() {
             Rect::ZERO,
             ScopeOptions::default(),
             |ctx| {
-                ctx.component(
-                    ChildId::Static("disabled"),
-                    HoverFocusLeaf::disabled(),
-                    area,
-                );
-                ctx.component(ChildId::Static("enabled"), HoverFocusLeaf::enabled(), area);
+                ctx.component(ChildId::Static("disabled"), FocusLeaf::disabled(), area);
+                ctx.component(ChildId::Static("enabled"), FocusLeaf::enabled(), area);
             },
         );
-        ctx.component(dynamic.clone(), HoverFocusLeaf::enabled(), area);
+        ctx.component(dynamic.clone(), FocusLeaf::enabled(), area);
     });
 
     assert_eq!(
@@ -1166,7 +1157,7 @@ fn zero_area_focusable_scope_groups_descendants_but_cannot_hold_focus_itself() {
         ctx.scope(
             ChildId::Static("empty"),
             Rect::ZERO,
-            ScopeOptions::default().focusable(),
+            ScopeOptions::default().focusable(true),
             |_| {},
         );
         ctx.component(ChildId::Static("visible"), FocusLeaf::enabled(), area);
@@ -1186,11 +1177,11 @@ fn zero_area_focusable_scope_groups_descendants_but_cannot_hold_focus_itself() {
 
 #[test]
 fn focus_path_rejects_inactive_layers_and_descends_in_active_modal() {
-    let state = HoverFocusState::default();
-    let mut driver = Driver::<HoverFocusState, HoverFocusMsg>::new(8, 2);
+    let state = FocusTestState::default();
+    let mut driver = Driver::<FocusTestState, FocusTestMsg>::new(8, 2);
     let area = driver.area();
     driver.render(&state, |ctx| {
-        ctx.component(ChildId::Static("base"), HoverFocusLeaf::enabled(), area);
+        ctx.component(ChildId::Static("base"), FocusLeaf::enabled(), area);
         ctx.modal(ChildId::Static("lower"), HoverFocusComposite, area);
         ctx.modal(ChildId::Static("top"), HoverFocusComposite, area);
     });

@@ -17,8 +17,8 @@ impl Component<ModalTestState, ModalTestMsg> for ModalRoute {
         EventResult::Emit(ModalTestMsg::Routed(self.0))
     }
 
-    fn is_focusable(&self) -> bool {
-        true
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
     }
 }
 
@@ -44,8 +44,8 @@ impl Component<ModalTestState, ModalTestMsg> for ModalFocusRoute {
         EventResult::Emit(ModalTestMsg::Routed("dialog"))
     }
 
-    fn is_focusable(&self) -> bool {
-        true
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
     }
 }
 
@@ -652,8 +652,8 @@ impl Component<ModalTestState, ModalTestMsg> for ModalFocusLeaf {
         }
     }
 
-    fn is_focusable(&self) -> bool {
-        true
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
     }
 }
 

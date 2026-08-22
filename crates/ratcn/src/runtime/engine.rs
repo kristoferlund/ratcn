@@ -344,7 +344,7 @@ struct LayerPolicy {
     hit_testable: bool,
     /// Anything inside this layer may hold focus. A layer that does not allow
     /// it is skipped by Tab and by every explicit focus request, whatever its
-    /// contents claim through [`Component::is_focusable`].
+    /// contents claim through [`ScopeOptions::focusable`].
     allows_focus: bool,
     /// A press outside this layer emits its dismiss hook.
     dismiss_on_outside_press: bool,
@@ -421,7 +421,6 @@ pub(crate) struct Node<State, Msg> {
     viewport: Option<usize>,
     options: ScopeOptions,
     is_scope: bool,
-    self_focusable: bool,
     component: Option<Box<dyn Component<State, Msg>>>,
     /// The canvas this node's paint lands on, indexing [`Surface::layer_roots`]
     /// and the pass's canvases. `None` outside any layer.
@@ -443,7 +442,6 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
             .field("viewport", &self.viewport)
             .field("options", &self.options)
             .field("is_scope", &self.is_scope)
-            .field("self_focusable", &self.self_focusable)
             .field("component", &self.component.is_some())
             .field("layer", &self.layer)
             .field("layer_kind", &self.layer_kind)
@@ -782,11 +780,11 @@ impl<State, Msg> Surface<State, Msg> {
 
     /// Whether this node can hold focus itself, right now.
     ///
-    /// The effective answer, not the claim: `Node::self_focusable` is only
-    /// what the declaration asked for, and it is the last of five conditions
-    /// checked here. The node must also still be part of the tree, have
-    /// hit geometry, sit inside the exclusive layer if one is open, and belong
-    /// to a layer that allows focus at all.
+    /// The effective answer, not the claim: [`ScopeOptions::focusable`] is
+    /// only what the declaration asked for, and it is the last of five
+    /// conditions checked here. The node must also still be part of the tree,
+    /// have hit geometry, sit inside the exclusive layer if one is open, and
+    /// belong to a layer that allows focus at all.
     ///
     /// See [`Self::focusable`] for the same question about a node *or any of
     /// its descendants*.
@@ -794,7 +792,7 @@ impl<State, Msg> Surface<State, Msg> {
         self.present(index)
             && self.interactive(index)
             && self.policy(self.nodes[index].layer).allows_focus
-            && self.nodes[index].self_focusable
+            && self.nodes[index].options.focusable
     }
 
     /// Whether focus can land anywhere in this subtree — on the node itself
@@ -1223,37 +1221,15 @@ impl<'a, State> DeclarationEnv<'a, State> {
     }
 }
 
-/// What a declaration adds to the tree, and what it is allowed to do there.
-///
-/// These three travel together because they are decided together. Keeping
-/// them in a named pair also stops the two signatures that carry them from
-/// drifting out of step.
+/// What a declaration adds to the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct NodeRole {
-    /// A scope: a node the tree keeps for its identity, with no geometry of
-    /// its own. A zero-area scope still parents descendants that have
-    /// geometry, where a zero-area component takes its whole subtree out of
-    /// interaction.
-    is_scope: bool,
-    /// This node can hold focus itself, rather than only parenting things that
-    /// can.
-    self_focusable: bool,
-}
-
-impl NodeRole {
-    fn scope(self_focusable: bool) -> Self {
-        Self {
-            is_scope: true,
-            self_focusable,
-        }
-    }
-
-    fn component(self_focusable: bool) -> Self {
-        Self {
-            is_scope: false,
-            self_focusable,
-        }
-    }
+pub(crate) enum NodeRole {
+    /// A node the tree keeps for its identity, with no geometry of its own. A
+    /// zero-area scope still parents descendants that have geometry, where a
+    /// zero-area component takes its whole subtree out of interaction.
+    Scope,
+    /// A node that occupies the area it was declared with.
+    Component,
 }
 
 pub(crate) struct RenderPass<State, Msg> {
@@ -1550,10 +1526,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         options: ScopeOptions,
         role: NodeRole,
     ) -> usize {
-        let NodeRole {
-            is_scope,
-            self_focusable,
-        } = role;
+        let is_scope = role == NodeRole::Scope;
         let parent = self.parent_stack.last().copied();
         let siblings = parent.map_or(self.surface.roots.as_slice(), |index| {
             self.surface.nodes[index].children.as_slice()
@@ -1582,7 +1555,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             viewport,
             options,
             is_scope,
-            self_focusable,
             component: None,
             layer,
             layer_kind,
@@ -1610,8 +1582,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             // pass, so none of it may depend on what painting produces.
             component.prepare(state);
             let options = component.scope_options();
-            let self_focusable = component.is_focusable();
-            let role = NodeRole::component(options.focusable || self_focusable);
             let area = env.area;
             let interaction_area = component.interaction_area(area);
             assert!(
@@ -1626,7 +1596,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             // The node hit-tests against `interaction_area`, but its children
             // are declared over the full paint `area`: a component may narrow
             // what it responds to without narrowing where it draws.
-            let index = pass.begin_node(id, interaction_area, options, role);
+            let index = pass.begin_node(id, interaction_area, options, NodeRole::Component);
             pass.enter_node(index);
             // Queued before the subtree declares, so the component's own
             // paint replays ahead of its descendants' — the paint-before-
@@ -1732,9 +1702,8 @@ impl<State, Msg> RenderPass<State, Msg> {
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         self.guarded(|pass| {
-            let role = NodeRole::scope(options.focusable);
             let area = env.area;
-            let index = pass.begin_node(id, area, options, role);
+            let index = pass.begin_node(id, area, options, NodeRole::Scope);
             pass.enter_node(index);
             pass.with_declare_ctx(env.nested(area), declare);
             pass.leave_node();

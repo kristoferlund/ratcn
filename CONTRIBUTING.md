@@ -34,12 +34,12 @@ Three of those need explaining.
 copied into someone else's project, so it has to compile as an external crate
 against `ratcn`'s public API alone. `crates/copy-fixture` makes that copy in its
 build script — `crate::` rewritten to `ratcn::`, the test module dropped — and
-compiles each component as its own binary target, so a reach at a private item
+compiles each component as its own example target, so a reach at a private item
 or at a sibling component fails there. `cargo test --workspace` above builds
-those targets, as does `cargo check -p copy-fixture` on its own. Nothing is
-generated into the repository and there is nothing to run by hand; edit a
-component and the next build re-copies it. Adding a component means adding
-`crates/copy-fixture/src/bin/<component>.rs`, two lines copied from its
+those targets, as does `cargo check -p copy-fixture --examples` on its own.
+Nothing is generated into the repository and there is nothing to run by hand;
+edit a component and the next build re-copies it. Adding a component means
+adding `crates/copy-fixture/examples/<component>.rs`, two lines copied from its
 neighbours — the build script fails with that instruction if you forget.
 
 **`--all-targets` matters.** Over half this crate's source is test code. Without
