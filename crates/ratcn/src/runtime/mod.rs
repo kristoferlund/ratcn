@@ -189,15 +189,14 @@ impl fmt::Display for ChildId {
 }
 
 pub use component::{
-    Component, DeclareCtx, EventCtx, EventResult, MeasuredComponent, PaintCtx, PopupOptions,
-    ScopeOptions, Step,
+    Component, DeclareCtx, EventCtx, MeasuredComponent, PaintCtx, PopupOptions, ScopeOptions, Step,
 };
 pub use drag::{CellOffset, DragOptions, DragPhase, clamp_offset, offset_rect};
 pub use engine::Ratcn;
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
 pub use event::BrowserEventError;
 pub use event::{
-    Event, KeyChord, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
+    Event, EventResult, KeyChord, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
     ScrollDirection, Unsupported,
 };
 pub use focus::{FocusState, TabWrap};

@@ -15,7 +15,7 @@
 
 use std::{
     any::{Any, type_name},
-    collections::{HashMap, hash_map::Entry},
+    collections::HashMap,
     fmt,
 };
 
@@ -27,32 +27,7 @@ use ratatui::widgets::{StatefulWidget, Widget};
 use crate::Theme;
 
 use super::engine::{DeclarationEnv, LayerKind, RenderPass};
-use super::{ChildId, Event, KeyChord, MouseButton, MouseEvent, TabWrap};
-
-/// What a component did with an event, and what should happen next.
-///
-/// Events travel from a component up through its ancestors. This value decides
-/// whether that continues: `Ignored` passes the event to the parent, while both
-/// `Consumed` and `Emit` stop it there.
-///
-/// The same enum comes back out of
-/// [`Ratcn::handle_event`](super::Ratcn::handle_event), so the app sees the
-/// final outcome after bubbling has finished.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EventResult<Msg> {
-    /// Not handled here. The parent gets a chance at it, and if nothing in the
-    /// chain handles it the app sees `Ignored` and can treat it as a global
-    /// hotkey.
-    Ignored,
-    /// Handled, with nothing for the app to do — a keypress that only moved an
-    /// internal cursor, for example.
-    Consumed,
-    /// Handled, and the app should apply this message. Implies consumed.
-    ///
-    /// Components never write app state themselves; this message is how a
-    /// change reaches the app's update function.
-    Emit(Msg),
-}
+use super::{ChildId, Event, EventResult, KeyChord, MouseButton, MouseEvent, TabWrap};
 
 /// Everything available while declaring one frame: how to declare children,
 /// and the geometry and state to declare them from.
@@ -1205,14 +1180,16 @@ impl fmt::Debug for EventCtx<'_> {
 }
 
 impl<'a> EventCtx<'a> {
+    /// The context one dispatch hands a component, taking over the identity
+    /// path the caller derived for it.
     pub(crate) fn at(
-        path: &[ChildId],
+        path: Vec<ChildId>,
         area: Rect,
         transients: &'a mut TransientMap,
         pointer: PointerInputs<'a>,
     ) -> Self {
         Self {
-            path: path.to_vec(),
+            path,
             area,
             transients: Some(transients),
             detached_transients: None,
@@ -1220,13 +1197,18 @@ impl<'a> EventCtx<'a> {
         }
     }
 
-    /// The transient store to read and write: the runtime's during dispatch,
-    /// otherwise a private one owned by this context.
-    fn transients_mut(&mut self) -> &mut TransientMap {
-        match &mut self.transients {
-            Some(transients) => transients,
+    /// The transient store to read and write, and this component's key into
+    /// it: the runtime's store during dispatch, otherwise a private one owned
+    /// by this context.
+    ///
+    /// Every transient access needs both, and the context already holds the
+    /// key, so the two are borrowed together.
+    fn transient_slot(&mut self) -> (&mut TransientMap, &[ChildId]) {
+        let store = match &mut self.transients {
+            Some(transients) => &mut **transients,
             None => self.detached_transients.get_or_insert_with(Box::default),
-        }
+        };
+        (store, &self.path)
     }
 
     /// Set the area this context reports, for a context built outside a
@@ -1303,25 +1285,32 @@ impl<'a> EventCtx<'a> {
     /// Panics if this path already stores a transient of a different type —
     /// one path holds one `T`.
     pub fn transient<T: Default + 'static>(&mut self) -> &mut T {
-        let path = self.path.clone();
-        let value = match self.transients_mut().entry(path.clone()) {
-            Entry::Vacant(entry) => entry.insert(TransientValue {
-                type_name: type_name::<T>(),
-                value: Box::<T>::default(),
-            }),
-            Entry::Occupied(entry) => entry.into_mut(),
-        };
-        value.expect_mut(&path)
+        let (store, path) = self.transient_slot();
+        // `entry` would want an owned key; the borrowed one is enough to look
+        // with, and only a first access stores a copy of it.
+        if !store.contains_key(path) {
+            store.insert(
+                path.to_vec(),
+                TransientValue {
+                    type_name: type_name::<T>(),
+                    value: Box::<T>::default(),
+                },
+            );
+        }
+        store
+            .get_mut(path)
+            .expect("the path holds a transient, stored just above if it did not")
+            .expect_mut(path)
     }
 
     pub(super) fn transient_if_present<T: 'static>(&mut self) -> Option<&mut T> {
-        let path = self.path.clone();
-        Some(self.transients_mut().get_mut(&path)?.expect_mut(&path))
+        let (store, path) = self.transient_slot();
+        Some(store.get_mut(path)?.expect_mut(path))
     }
 
     pub(super) fn take_transient<T: 'static>(&mut self) -> Option<T> {
-        let path = self.path.clone();
-        Some(self.transients_mut().remove(&path)?.expect_owned(&path))
+        let (store, path) = self.transient_slot();
+        Some(store.remove(path)?.expect_owned(path))
     }
 
     /// Send the rest of this button's gesture here, wherever the pointer goes.
@@ -1509,14 +1498,21 @@ pub trait Component<State, Msg> {
     /// [`viewport`](DeclareCtx::viewport).
     ///
     /// The runtime calls this on the component that declared the viewport
-    /// whenever focus lands on a descendant the viewport is clipping, before
-    /// it emits the app's focus message. `target` is the descendant's logical
-    /// area, in the coordinates the viewport was declared with.
+    /// whenever focus lands on a descendant the viewport is clipping, at the
+    /// start of a frame. Every way focus moves arrives here: Tab, a press, and
+    /// a path the app's update function stores. `target` is the descendant's
+    /// logical area, in the coordinates the viewport was declared with.
+    ///
+    /// The first frame whose retained surface can place the target reveals
+    /// it. Focus arriving together with the surface that first declares its
+    /// target — an app's startup focus, focus handed back as a modal closes, a
+    /// row declared for the first time — is answered one frame later, by the
+    /// render after that surface is retained.
     ///
     /// The offset the component chooses belongs in an
-    /// [`EventCtx::transient`], which the next declaration reads. This adds to
-    /// a focus change: the app's focus message is emitted whatever happens
-    /// here.
+    /// [`EventCtx::transient`], which the declaration that follows reads. The
+    /// reveal is a channel of its own: the app's focus message is emitted
+    /// whatever happens here.
     fn reveal_in_viewport(&mut self, _target: Rect, _state: &State, _ctx: &mut EventCtx<'_>) {}
 }
 

@@ -59,10 +59,12 @@ match msg {
 ## Focus
 
 Focus moving to a descendant the viewport is clipping scrolls that descendant
-into view on the same frame. Focus itself travels through
-`Ratcn::focus(read, on_change)` as it does everywhere else: Tab, BackTab, focus
-keys, and pointer focus all produce that message, and the area adds the reveal
-on top of it.
+into view on the same frame, however focus got there — a path the app stores
+from its own update function included. Focus that arrives with the frame that
+first declares the descendant scrolls on the frame after. Focus itself travels
+through `Ratcn::focus(read, on_change)` as it does everywhere else: Tab,
+BackTab, focus keys, and pointer focus all produce that message, and the area
+adds the reveal on top of it.
 
 ## Layout and clipping
 

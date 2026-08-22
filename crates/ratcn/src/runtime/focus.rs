@@ -40,14 +40,18 @@ pub struct FocusState {
     pub(crate) path: Vec<ChildId>,
 }
 
+/// The empty path, borrowable: what a runtime with no focus binding reads.
+pub(crate) static UNRESOLVED: FocusState = FocusState { path: Vec::new() };
+
 impl FocusState {
     /// Build a focus path directly, without checking that it exists.
     ///
-    /// Use this to move focus from your update function — jumping to a pane
-    /// after a hotkey, for instance. The path is resolved against the surface
-    /// later, at render and routing time, so nothing is validated here. A path
-    /// naming no declared component leaves focus parked on it; the runtime
-    /// never silently retargets to a nearby control.
+    /// The constructor for a path already in hand: an app jumping to a pane
+    /// after a hotkey, the runtime handing back a leaf it walked to. The path
+    /// is resolved against the surface later, at render and routing time, so
+    /// nothing is validated here. A path naming no declared component leaves
+    /// focus parked on it; the runtime never silently retargets to a nearby
+    /// control.
     ///
     /// Stopping the path at a container is fine and usual — the runtime
     /// descends from there to that container's first focusable leaf.
@@ -56,12 +60,6 @@ impl FocusState {
         Self {
             path: path.into_iter().map(Into::into).collect(),
         }
-    }
-
-    /// Focus on the path a surface resolved: a leaf the runtime walked to,
-    /// already checked against the tree it came from.
-    pub(crate) const fn at(path: Vec<ChildId>) -> Self {
-        Self { path }
     }
 
     /// True if `path` is a prefix of the focus path — the focused leaf is at or

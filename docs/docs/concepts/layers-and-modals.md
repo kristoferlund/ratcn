@@ -143,8 +143,15 @@ so a viewport inside one of those is nested and says so.
 
 When focus reaches a descendant the viewport is clipping, the runtime calls
 `Component::reveal_in_viewport` on the component that opened the viewport, with
-that descendant's logical area, before emitting the app's focus message. That
-is how a scrolled-away control comes into view as Tab arrives at it.
+that descendant's logical area. The call comes at the start of a frame, and it
+covers every way focus moves: Tab, a press, and a path the app stores from its
+own update function. That is how a scrolled-away control comes into view as
+focus arrives at it.
+
+The first frame whose retained surface can place the target reveals it. A focus
+change that arrives together with the surface that first declares its target —
+startup focus, focus handed back as a modal closes, a target declared for the
+first time — is answered on the frame after.
 
 [ScrollArea](../components/scroll-area) is this mechanism packaged with a
 scrollbar and wheel and key handling.

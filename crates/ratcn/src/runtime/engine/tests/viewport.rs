@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use super::*;
+use crate::test_support::{key, key_with};
 
 #[derive(Default)]
 struct State;
@@ -617,4 +618,330 @@ fn a_viewport_inside_a_popup_inside_a_viewport_is_still_nested() {
         "{}",
         panic_message(panic.as_ref())
     );
+}
+#[derive(Default)]
+struct RevealState {
+    focus: FocusState,
+    offset: u16,
+    /// Whether the row that appears late is declared this frame.
+    late: bool,
+    /// Whether a modal covers the area this frame.
+    modal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum RevealMsg {
+    Focus(FocusState),
+}
+
+type RevealLog = Rc<RefCell<Vec<Rect>>>;
+
+/// A viewport owner that records what it is asked to reveal. A real one
+/// scrolls; the engine's half of the contract is the call and the logical
+/// target it carries.
+struct RevealArea {
+    offset: u16,
+    log: RevealLog,
+}
+
+impl Component<RevealState, RevealMsg> for RevealArea {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, RevealState, RevealMsg>) {
+        let area = ctx.area();
+        let late = ctx.state().late;
+        ctx.viewport(area, 6, self.offset, move |ctx| {
+            ctx.component("top", RevealLeaf, Rect::new(0, 0, 4, 1));
+            ctx.component("bottom", RevealLeaf, Rect::new(0, 5, 4, 1));
+            if late {
+                ctx.component("late", RevealLeaf, Rect::new(0, 3, 4, 1));
+            }
+        });
+    }
+
+    fn reveal_in_viewport(&mut self, target: Rect, _state: &RevealState, _ctx: &mut EventCtx<'_>) {
+        self.log.borrow_mut().push(target);
+    }
+}
+
+struct RevealLeaf;
+
+impl Component<RevealState, RevealMsg> for RevealLeaf {
+    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, RevealState, RevealMsg>) {}
+
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
+    }
+}
+
+fn reveal_driver() -> Driver<RevealState, RevealMsg> {
+    Driver::with(
+        Ratcn::new().focus(|state: &RevealState| &state.focus, RevealMsg::Focus),
+        4,
+        3,
+    )
+}
+
+/// The same, with a hotkey bound to a row the viewport clips.
+fn reveal_driver_with_focus_key() -> Driver<RevealState, RevealMsg> {
+    Driver::with(
+        Ratcn::new()
+            .focus(|state: &RevealState| &state.focus, RevealMsg::Focus)
+            .focus_key(KeyChord::from('l').alt(), ["area", "bottom"]),
+        4,
+        3,
+    )
+}
+
+fn render_reveal(
+    driver: &mut Driver<RevealState, RevealMsg>,
+    state: &RevealState,
+    log: &RevealLog,
+) {
+    let area = RevealArea {
+        offset: state.offset,
+        log: Rc::clone(log),
+    };
+    let modal = state.modal;
+    driver.render(state, move |ctx| {
+        ctx.component("area", area, Rect::new(0, 0, 4, 3));
+        if modal {
+            ctx.modal("dialog", RevealLeaf, Rect::new(0, 0, 4, 1));
+        }
+    });
+}
+
+/// Focus the runtime moves itself reveals its destination: the app stores the
+/// path the focus message carried, and the frame that reads it back asks the
+/// viewport for it.
+#[test]
+fn a_focus_step_reveals_the_clipped_target_it_lands_on() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["area", "top"]),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        log.borrow().is_empty(),
+        "focus rests on a row the viewport already shows"
+    );
+
+    assert_eq!(
+        driver.event(key(KeyCode::Tab), &state),
+        EventResult::Emit(RevealMsg::Focus(FocusState::intent(["area", "bottom"])))
+    );
+    state.focus = FocusState::intent(["area", "bottom"]);
+    render_reveal(&mut driver, &state, &log);
+
+    assert_eq!(
+        log.borrow().as_slice(),
+        [Rect::new(0, 5, 4, 1)],
+        "the reveal names the target in the viewport's logical space"
+    );
+}
+
+/// The same for focus the app moved on its own — a hotkey handled in `update`,
+/// a path stored straight into [`FocusState`]. The runtime emitted no focus
+/// message, and the reveal owes nothing to one.
+#[test]
+fn focus_the_app_moves_itself_reveals_its_clipped_target() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState::default();
+    render_reveal(&mut driver, &state, &log);
+    assert!(log.borrow().is_empty());
+
+    state.focus = FocusState::intent(["area", "bottom"]);
+    render_reveal(&mut driver, &state, &log);
+
+    assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
+}
+
+/// A frame that changes nothing about focus asks for nothing, so a view the
+/// reader has scrolled away from stays where the reader put it.
+#[test]
+fn focus_that_stayed_put_is_not_revealed_again() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["area", "top"]),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+
+    state.focus = FocusState::intent(["area", "bottom"]);
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().len(), 1, "the change was revealed once");
+
+    state.offset = 3;
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(
+        log.borrow().len(),
+        1,
+        "focus stood still, so nothing asked the viewport to move again"
+    );
+}
+
+/// A focus the app is already holding when the first frame declares its target
+/// is revealed by the frame after: the reveal is answered by a surface, and
+/// the first frame opens with none.
+#[test]
+fn focus_held_before_its_target_was_ever_declared_reveals_one_frame_later() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let state = RevealState {
+        focus: FocusState::intent(["area", "bottom"]),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        log.borrow().is_empty(),
+        "the first frame opened with no surface to answer against"
+    );
+
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
+}
+
+/// The same when the target appears in the frame that focuses it: the surface
+/// that opens the frame has never declared it, so the frame after reveals it.
+#[test]
+fn focus_onto_a_target_declared_that_same_frame_reveals_one_frame_later() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["area", "top"]),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(log.borrow().is_empty());
+
+    state.late = true;
+    state.focus = FocusState::intent(["area", "late"]);
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        log.borrow().is_empty(),
+        "the row is declared for the first time by this very frame"
+    );
+
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
+}
+
+/// Focus handed back to a clipped row as a modal closes: the frame opens with
+/// the modal still retained, which resolves focus into the modal, so the
+/// reveal falls to the frame after.
+#[test]
+fn focus_returned_as_a_modal_closes_reveals_one_frame_later() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["dialog"]),
+        modal: true,
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(log.borrow().is_empty(), "the modal clips nothing");
+
+    state.modal = false;
+    state.focus = FocusState::intent(["area", "bottom"]);
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        log.borrow().is_empty(),
+        "the retained surface still holds the modal, which owns focus"
+    );
+
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
+}
+
+/// A focus path nothing declares whole parks, and a parked path names no
+/// geometry: the prefix of it the surface does declare is not what focus is
+/// on, so the viewport stays where it is.
+#[test]
+fn focus_parked_on_a_path_that_resolves_to_nothing_reveals_no_prefix_of_it() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["area", "top"]),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+
+    state.focus = FocusState::intent(["area", "bottom", "nowhere"]);
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+
+    assert!(
+        log.borrow().is_empty(),
+        "the parked path scrolled the viewport to the row it names a child of"
+    );
+}
+
+/// A focus request that lands where focus already is moves nothing, so no
+/// frame would notice a change — and it is still a request to see the target,
+/// answered by the frame after.
+#[test]
+fn a_focus_request_onto_the_focus_it_already_holds_asks_again() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver_with_focus_key();
+    let state = RevealState {
+        focus: FocusState::intent(["area", "bottom"]),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().len(), 1, "the stored focus was revealed once");
+
+    let jump = key_with(
+        KeyCode::Char('l'),
+        Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        },
+    );
+    assert_eq!(
+        driver.event(jump, &state),
+        EventResult::Consumed,
+        "focus did not change, so there is no focus message to send"
+    );
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().len(), 2, "the request reached the viewport");
+}
+
+/// The reveal waits for a surface that can place the target, however many
+/// frames that takes: a row the app focuses before anything declares it is
+/// revealed by the first frame that can find it.
+#[test]
+fn a_target_declared_frames_after_the_app_focused_it_is_revealed_when_it_appears() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["area", "top"]),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+
+    state.focus = FocusState::intent(["area", "late"]);
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        log.borrow().is_empty(),
+        "nothing declares the row, so nothing can place it"
+    );
+
+    state.late = true;
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        log.borrow().is_empty(),
+        "the surface that declares the row is only now retained"
+    );
+
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
 }
