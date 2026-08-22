@@ -411,6 +411,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   per frame; the options themselves are the caller's to build, so this is the
   smaller half of that cost.
 
+### Fixed
+
+- A modal declared from a row its viewport has scrolled out of sight opens on
+  screen, held against the top edge.
+- A `DeclareCtx::viewport` declared inside a modal that is itself inside a
+  viewport declares and paints.
+- A duplicate modal id nested inside another modal panics.
+
 ## [0.0.1]
 
 First public release.
