@@ -65,11 +65,10 @@
 use std::{cmp::Ordering, fmt, hash::Hash, sync::Arc};
 
 mod component;
-pub mod drag;
+mod drag;
 mod engine;
 mod event;
 mod focus;
-pub mod geometry;
 mod modal;
 
 /// The name a component is declared under, and half of how it is identified.
@@ -190,19 +189,16 @@ impl fmt::Display for ChildId {
 }
 
 pub use component::{
-    Component, DeclareCtx, EventCtx, EventResult, MeasuredComponent, PaintCtx, Painter,
-    PopupOptions, ScopeOptions, Step,
+    Component, DeclareCtx, EventCtx, EventResult, MeasuredComponent, PaintCtx, PopupOptions,
+    ScopeOptions, Step,
 };
 pub use drag::{CellOffset, DragOptions, DragPhase, clamp_offset, offset_rect};
 pub use engine::Ratcn;
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
 pub use event::BrowserEventError;
-/// Internal event normalization state owned by [`Ratcn`].
-pub(crate) use event::MouseTracker;
 pub use event::{
     Event, KeyChord, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
     ScrollDirection, Unsupported,
 };
 pub use focus::{FocusState, TabWrap};
-pub use geometry::{fixed_height, is_border, wrapped_height};
 pub use modal::{ModalOpenError, ModalState};

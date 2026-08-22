@@ -126,6 +126,7 @@ pub mod color;
 mod components;
 #[cfg(feature = "crossterm")]
 pub mod crossterm;
+pub mod geometry;
 pub mod linear_nav;
 pub mod list_core;
 pub mod runtime;

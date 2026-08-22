@@ -170,17 +170,6 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
         self.frame_area
     }
 
-    /// The pointer position from the most recent mouse event, if it is still
-    /// inside the terminal.
-    ///
-    /// Raw geometry, for a declaration that has to know *where* in itself the
-    /// pointer is rather than merely whether it is inside — which
-    /// [`pointer_within`](Self::pointer_within) answers with identity instead.
-    #[must_use]
-    pub const fn hover_position(&self) -> Option<Position> {
-        self.hover_position
-    }
-
     /// Whether the pointer rests on this declaration or on something inside
     /// it.
     ///
@@ -499,8 +488,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     pub fn hint(
         &mut self,
         id: impl Into<ChildId>,
-        options: ScopeOptions,
         area: Rect,
+        options: ScopeOptions,
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let (pass, env) = self.declaring(area);
@@ -537,8 +526,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     pub fn popup(
         &mut self,
         id: impl Into<ChildId>,
-        options: PopupOptions<Msg>,
         area: Rect,
+        options: PopupOptions<Msg>,
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let (pass, env) = self.declaring(area);
@@ -600,13 +589,16 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// ghosts live.
     ///
     /// Deferred paint is decoration only: it has no identity, geometry, focus,
-    /// hover, or hit target, and cannot be clicked.
+    /// hover, or hit target, and cannot be clicked. Its [`PaintCtx`] therefore
+    /// reports all four interaction flags as false, and
+    /// [`area`](PaintCtx::area) is the whole surface it writes to — the
+    /// layer's footprint inside a layer, the frame otherwise.
     ///
     /// Because the closure runs after the declaration pass has ended, it does
-    /// not get a `DeclareCtx`. It receives a [`Painter`] over the frame (which
-    /// carries the theme) and the app state the pass was declared with;
+    /// not get a `DeclareCtx`. It is `'static` and receives a [`PaintCtx`],
+    /// which carries the theme and the app state the pass was declared with;
     /// anything else it needs must be moved into the closure here.
-    pub fn defer_paint(&mut self, paint: impl FnOnce(&mut Painter<'_, '_>, &State) + 'static) {
+    pub fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static) {
         self.pass.defer_paint(paint);
     }
 }
@@ -669,19 +661,15 @@ impl<Msg> PopupOptions<Msg> {
 /// paint that belongs to that layer.
 ///
 /// The three write forms are implemented once, here, because routing is the
-/// only thing they do that the two paint contexts do not. [`Painter`] and
-/// [`PaintCtx`] are the two public faces over it, and they differ in what
-/// else they carry rather than in where they write.
+/// only thing they do that [`PaintCtx`] does not.
 pub(crate) enum PaintTarget<'a, 'frame> {
     /// The frame itself.
     Frame(&'a mut Frame<'frame>, Option<super::engine::Viewport>),
-    /// A layer's canvas.
+    /// A layer's or a viewport's canvas.
     Canvas(
-        &'a mut super::engine::LayerCanvas,
+        &'a mut super::engine::Canvas,
         Option<super::engine::Viewport>,
     ),
-    /// A viewport's own logical canvas.
-    Viewport(&'a mut super::engine::ViewportCanvas),
 }
 
 impl PaintTarget<'_, '_> {
@@ -703,32 +691,27 @@ impl PaintTarget<'_, '_> {
             },
             Self::Canvas(canvas, projection) => match *projection {
                 None => {
-                    let clipped = area.intersection(canvas.buffer.area);
-                    let result = canvas.with_buffer(|buffer| paint(clipped, buffer));
-                    canvas.mark_painted(area);
+                    let clipped = canvas.clip(area);
+                    let result = paint(clipped, &mut canvas.buffer);
+                    canvas.mark_painted(clipped);
                     result
                 }
                 Some(viewport) => {
                     let painted = viewport.project_rect(area, canvas.buffer.area);
-                    let result = canvas.with_buffer(|buffer| {
-                        with_projected_buffer(buffer, viewport, area, |buffer| paint(area, buffer))
-                    });
+                    let result =
+                        with_projected_buffer(&mut canvas.buffer, viewport, area, |buffer| {
+                            paint(area, buffer)
+                        });
                     canvas.mark_painted(painted);
                     result
                 }
             },
-            Self::Viewport(canvas) => {
-                let clipped = canvas.clip(area);
-                let result = canvas.with_buffer(|buffer| paint(clipped, buffer));
-                canvas.mark_painted(clipped);
-                result
-            }
         }
     }
 
     /// The whole of what this target writes, in the coordinates its paint
     /// closure uses — the allocation a free-form [`Self::with_buffer`] covers.
-    fn whole_area(&mut self) -> Rect {
+    pub(crate) fn whole_area(&mut self) -> Rect {
         match self {
             Self::Frame(frame, projection) => {
                 let area = frame.area();
@@ -738,7 +721,6 @@ impl PaintTarget<'_, '_> {
                 let area = canvas.buffer.area;
                 (*projection).map_or(area, |viewport| viewport.logical_frame(area))
             }
-            Self::Viewport(canvas) => canvas.buffer.area,
         }
     }
 
@@ -788,48 +770,6 @@ fn with_projected_buffer<R>(
         }
     }
     result
-}
-
-/// Paint-only access to the active paint surface, handed to deferred paint
-/// closures.
-///
-/// Deferred paint is decoration without identity, so this carries nothing but
-/// the surface and the theme — [`PaintCtx`] is the context for paint that
-/// belongs to a declaration. Paint deferred inside a modal or popup layer
-/// lands on that layer's canvas and composites with it.
-pub struct Painter<'a, 'frame> {
-    pub(crate) target: PaintTarget<'a, 'frame>,
-    /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
-    pub theme: &'a Theme,
-}
-
-impl fmt::Debug for Painter<'_, '_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Painter").finish_non_exhaustive()
-    }
-}
-
-impl Painter<'_, '_> {
-    /// Paint a ratatui widget onto the active paint surface.
-    pub fn widget(&mut self, widget: impl Widget, area: Rect) {
-        self.target.widget(widget, area);
-    }
-
-    /// Paint a ratatui stateful widget onto the active paint surface.
-    pub fn stateful_widget<W: StatefulWidget>(
-        &mut self,
-        widget: W,
-        area: Rect,
-        state: &mut W::State,
-    ) {
-        self.target.stateful_widget(widget, area, state);
-    }
-
-    /// Run a paint closure over the active paint surface's raw cell buffer.
-    /// Inside a layer, the whole layer footprint counts as painted.
-    pub fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        self.target.with_buffer(paint)
-    }
 }
 
 /// Everything painting one declaration needs: where to draw, what to draw
@@ -1068,39 +1008,45 @@ pub(crate) struct TransientValue {
 }
 
 impl TransientValue {
-    /// Immutable typed access for declaration-time reads. The mutable accessors on
-    /// [`EventCtx`] own the write paths and the type-establishing insert, so a
-    /// stored value always carries the type its writer declared.
-    /// The mutable counterpart of [`expect_ref`](Self::expect_ref), for
-    /// [`DeclareCtx::transient_mut`].
-    pub(crate) fn expect_mut<T: 'static>(&mut self, path: &[ChildId]) -> &mut T {
-        let requested = type_name::<T>();
-        let stored = self.type_name;
-        assert_eq!(
-            stored, requested,
-            "transient type mismatch at path {path:?}: stored `{stored}`, requested `{requested}`",
-        );
-        self.value.downcast_mut::<T>().unwrap_or_else(|| {
-            panic!(
-                "transient type metadata mismatch at path {path:?}: stored `{stored}`, requested `{requested}`",
-            )
-        })
+    /// The stored value as a `T`, borrowed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when this path stores another type: one path holds one `T`, and
+    /// reader and writer must agree on it. The same goes for
+    /// [`expect_mut`](Self::expect_mut) and
+    /// [`expect_owned`](Self::expect_owned).
+    pub(crate) fn expect_ref<T: 'static>(&self, path: &[ChildId]) -> &T {
+        match self.value.downcast_ref::<T>() {
+            Some(value) => value,
+            None => transient_mismatch::<T>(path, self.type_name),
+        }
     }
 
-    pub(crate) fn expect_ref<T: 'static>(&self, path: &[ChildId]) -> &T {
-        let requested = type_name::<T>();
-        assert_eq!(
-            self.type_name, requested,
-            "transient type mismatch at path {path:?}: stored `{}`, requested `{requested}`",
-            self.type_name
-        );
-        self.value.downcast_ref::<T>().unwrap_or_else(|| {
-            panic!(
-                "transient type metadata mismatch at path {path:?}: stored `{}`, requested `{requested}`",
-                self.type_name
-            )
-        })
+    /// The stored value as a `T`, borrowed mutably.
+    pub(crate) fn expect_mut<T: 'static>(&mut self, path: &[ChildId]) -> &mut T {
+        let stored = self.type_name;
+        match self.value.downcast_mut::<T>() {
+            Some(value) => value,
+            None => transient_mismatch::<T>(path, stored),
+        }
     }
+
+    /// The stored value as a `T`, taken out of the store.
+    pub(crate) fn expect_owned<T: 'static>(self, path: &[ChildId]) -> T {
+        let stored = self.type_name;
+        match self.value.downcast::<T>() {
+            Ok(value) => *value,
+            Err(_) => transient_mismatch::<T>(path, stored),
+        }
+    }
+}
+
+/// The one message for a transient read that names a type its path does not
+/// hold.
+fn transient_mismatch<T: 'static>(path: &[ChildId], stored: &'static str) -> ! {
+    let requested = type_name::<T>();
+    panic!("transient type mismatch at path {path:?}: stored `{stored}`, requested `{requested}`")
 }
 
 pub(crate) type TransientMap = HashMap<Vec<ChildId>, TransientValue>;
@@ -1247,60 +1193,25 @@ impl<'a> EventCtx<'a> {
     /// Panics if this path already stores a transient of a different type —
     /// one path holds one `T`.
     pub fn transient<T: Default + 'static>(&mut self) -> &mut T {
-        let requested = type_name::<T>();
         let path = self.path.clone();
         let value = match self.transients_mut().entry(path.clone()) {
             Entry::Vacant(entry) => entry.insert(TransientValue {
-                type_name: requested,
+                type_name: type_name::<T>(),
                 value: Box::<T>::default(),
             }),
-            Entry::Occupied(entry) => {
-                let stored = entry.get().type_name;
-                assert_eq!(
-                    stored, requested,
-                    "transient type mismatch at path {path:?}: stored `{stored}`, requested `{requested}`",
-                );
-                entry.into_mut()
-            }
+            Entry::Occupied(entry) => entry.into_mut(),
         };
-        let stored = value.type_name;
-        value.value.downcast_mut::<T>().unwrap_or_else(|| {
-            panic!(
-                "transient type metadata mismatch at path {path:?}: stored `{stored}`, requested `{requested}`",
-            )
-        })
+        value.expect_mut(&path)
     }
 
     pub(super) fn transient_if_present<T: 'static>(&mut self) -> Option<&mut T> {
         let path = self.path.clone();
-        let value = self.transients_mut().get_mut(&path)?;
-        let requested = type_name::<T>();
-        let stored = value.type_name;
-        assert_eq!(
-            stored, requested,
-            "transient type mismatch at path {path:?}: stored `{stored}`, requested `{requested}`",
-        );
-        Some(value.value.downcast_mut::<T>().unwrap_or_else(|| {
-            panic!(
-                "transient type metadata mismatch at path {path:?}: stored `{stored}`, requested `{requested}`",
-            )
-        }))
+        Some(self.transients_mut().get_mut(&path)?.expect_mut(&path))
     }
 
     pub(super) fn take_transient<T: 'static>(&mut self) -> Option<T> {
         let path = self.path.clone();
-        let value = self.transients_mut().remove(&path)?;
-        let requested = type_name::<T>();
-        let stored = value.type_name;
-        assert_eq!(
-            stored, requested,
-            "transient type mismatch at path {path:?}: stored `{stored}`, requested `{requested}`",
-        );
-        Some(*value.value.downcast::<T>().unwrap_or_else(|_| {
-            panic!(
-                "transient type metadata mismatch at path {path:?}: stored `{stored}`, requested `{requested}`",
-            )
-        }))
+        Some(self.transients_mut().remove(&path)?.expect_owned(&path))
     }
 
     /// Send the rest of this button's gesture here, wherever the pointer goes.
@@ -1389,10 +1300,9 @@ pub trait Component<State, Msg> {
     ///
     /// The runtime runs this once per declaration, before it reads any of
     /// [`scope_options`](Component::scope_options),
-    /// [`is_focusable`](Component::is_focusable),
-    /// [`focuses_on_click`](Component::focuses_on_click), or
+    /// [`is_focusable`](Component::is_focusable), or
     /// [`interaction_area`](Component::interaction_area) — so a component may
-    /// answer all four from state computed here.
+    /// answer all three from state computed here.
     ///
     /// That is what the hook is for: pinning declaration-time state once,
     /// rather than deriving it again in every answer.
@@ -1501,20 +1411,13 @@ pub trait Component<State, Msg> {
     fn reveal_in_viewport(&mut self, _target: Rect, _state: &State, _ctx: &mut EventCtx<'_>) {}
 
     /// Whether the component can hold focus, and so takes part in Tab
-    /// traversal. Defaults to `false`; interactive leaves override it, often
-    /// gated on state (e.g. a disabled button is not focusable). The runtime
-    /// also requires [`interaction_area`](Self::interaction_area) to return a
-    /// non-empty area.
-    fn is_focusable(&self, _state: &State) -> bool {
-        false
-    }
-
-    /// Whether a synthesized click (rather than a primary press) focuses this
-    /// component. Defaults to `false`: most components focus on `Down`. A
-    /// component returning `true` is not focused by `Down` and is instead
-    /// focused by its follow-up `Click`.
-    #[doc(hidden)]
-    fn focuses_on_click(&self, _state: &State) -> bool {
+    /// traversal. Defaults to `false`; interactive leaves answer from the
+    /// props they were declared with, so a disabled button says `false`.
+    /// Anything that has to be derived from app state is settled in
+    /// [`prepare`](Self::prepare) first. The runtime also requires
+    /// [`interaction_area`](Self::interaction_area) to return a non-empty
+    /// area.
+    fn is_focusable(&self) -> bool {
         false
     }
 }

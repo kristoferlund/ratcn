@@ -47,9 +47,9 @@ Backends deliver `Down`, `Up`, and `Moved` (crossterm may also deliver `Drag`).
 A **click** ("a press and release on the same component") and a **drag** ("a
 press, then a move with the button held") are higher-level — and synthesized for
 you.
-The `Ratcn` runtime owns one `MouseTracker`, so you feed the **raw** mouse events
-straight to `handle_event`, the same call you already use for keys — there is no
-separate tracker to own:
+The `Ratcn` runtime tracks each button's gesture, so you feed the **raw** mouse
+events straight to `handle_event`, the same call you already use for keys —
+there is no separate tracker to own:
 
 ```rust
 use ratcn::runtime::EventResult;
@@ -90,8 +90,8 @@ component — see
 
 ## What components do with it
 
-The normalized `MouseKind` is `Down`, `Up`, `Click`, `Drag`, `DragEnd`,
-`Moved`, `Exited`, and `Scroll`. Components opt into the ones they need:
+The `MouseKind`s a component is offered are `Down`, `Up`, `Click`, `Drag`,
+`DragEnd`, `Moved`, and `Scroll`. Components opt into the ones they need:
 
 - **Primary click** activates by default — a button presses and a list row is
   chosen.
@@ -140,10 +140,11 @@ The normalized `MouseKind` is `Down`, `Up`, `Click`, `Drag`, `DragEnd`,
   source apply its own drop-target hit test. See [Dragging](./dragging) for the
   full pattern; `EventCtx::drag` owns capture, path-transient gesture state,
   button matching, and release cleanup.
-- **Exit** (`Exited`) cancels an active browser pointer gesture and empties
-  hover until another pointer event arrives. It is runtime cleanup, not a
-  component event, so a release outside the terminal grid cannot leave a stale
-  drag or hover active when the pointer returns.
+`Exited` never reaches a component. A backend reports it when the pointer
+leaves the interactive grid, and the runtime answers for it by cancelling every
+tracked gesture and emptying hover until another pointer event arrives — so a
+release outside the terminal grid cannot leave a stale drag or hover active
+when the pointer returns.
 
 Only focus needs wiring at the root:
 

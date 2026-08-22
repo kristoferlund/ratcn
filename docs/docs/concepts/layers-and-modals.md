@@ -22,9 +22,10 @@ that does the job:
 | `modal` | A layer that takes over: dialogs | Dims, captures, holds focus, traps keys |
 
 Use `defer_paint` for passive overlays that must land on top of the current
-layer — a floating dragged card, say. The closure receives a `Painter` over the
-frame plus the app state; it has no identity and no hit target, so it cannot
-receive events, and it is not a way to defer an interactive component. A
+layer — a floating dragged card, say. The closure receives a `PaintCtx` over the
+frame, carrying the theme and the app state; it has no identity and no hit
+target, so its interaction flags are all false, it cannot receive events, and it
+is not a way to defer an interactive component. A
 `paint` closure in the right declaration position is simpler when ordering
 already works out.
 

@@ -11,9 +11,10 @@ use ratatui::{
 use crate::Theme;
 use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, shape_width};
 use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
+use crate::geometry::fixed_height;
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton,
-    MouseKind, PaintCtx, fixed_height,
+    MouseKind, PaintCtx,
 };
 use crate::theme::resolve_style;
 
@@ -776,7 +777,7 @@ impl<S, M> Component<S, M> for Button<M> {
         EventResult::Emit(on_press())
     }
 
-    fn is_focusable(&self, _state: &S) -> bool {
+    fn is_focusable(&self) -> bool {
         !self.disabled && self.on_press.is_some()
     }
 
@@ -860,7 +861,7 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
 
-        assert!(!Component::<(), ()>::is_focusable(&button, &()));
+        assert!(!Component::<(), ()>::is_focusable(&button));
         for event in [
             Event::Key(crate::runtime::KeyEvent::new(KeyCode::Enter)),
             Event::Key(crate::runtime::KeyEvent::new(KeyCode::Char(' '))),

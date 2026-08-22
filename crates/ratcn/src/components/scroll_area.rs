@@ -61,17 +61,17 @@ pub enum ScrollAreaChange {
 /// Event handling writes it and the next declaration reads it, which is what
 /// lets an unbound area scroll at all and what carries a reveal into the frame
 /// that follows a focus change.
-///
-/// `base` is the bound offset the hold was taken against, and `held` is what
-/// makes releasing permanent: the declaration drops the hold for good the
-/// moment a bound offset moves away from `base`, so an app that scrolls its own
-/// area keeps it, and returning to the offset the hold was taken at cannot
-/// revive it.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct ScrollPark {
-    offset: u16,
-    held: bool,
-    base: Option<u16>,
+enum ScrollPark {
+    /// Nothing is holding the view: the bound offset decides where it sits.
+    #[default]
+    Released,
+    /// The view is held at `offset`. `base` is the bound offset the hold was
+    /// taken against, and it is what makes releasing permanent: the
+    /// declaration drops the hold for good the moment a bound offset moves
+    /// away from `base`, so an app that scrolls its own area keeps it, and
+    /// returning to the offset the hold was taken at cannot revive it.
+    Held { offset: u16, base: Option<u16> },
 }
 
 type ReadOffsetFn<S> = Box<dyn Fn(&S) -> u16>;
@@ -217,10 +217,9 @@ impl<S, M> ScrollArea<S, M> {
 
     /// The offset in force: a standing hold, or the bound value.
     fn resolve(&self, area: Rect, bound: Option<u16>, park: ScrollPark) -> u16 {
-        let offset = if park.held && park.base == bound {
-            park.offset
-        } else {
-            bound.unwrap_or(0)
+        let offset = match park {
+            ScrollPark::Held { offset, base } if base == bound => offset,
+            _ => bound.unwrap_or(0),
         };
         offset.min(self.max_offset(area))
     }
@@ -232,10 +231,10 @@ impl<S, M> ScrollArea<S, M> {
     /// where a bound offset is read; and it is permanent, so an app that
     /// returns to the offset a hold was taken at does not revive it.
     fn settle(&self, ctx: &mut DeclareCtx<'_, S, M>, area: Rect, bound: Option<u16>) -> u16 {
-        let mut unheld = ScrollPark::default();
+        let mut unheld = ScrollPark::Released;
         let park = ctx.transient_mut::<ScrollPark>().unwrap_or(&mut unheld);
-        if park.held && park.base != bound {
-            *park = ScrollPark::default();
+        if matches!(*park, ScrollPark::Held { base, .. } if base != bound) {
+            *park = ScrollPark::Released;
         }
         self.resolve(area, bound, *park)
     }
@@ -256,9 +255,8 @@ impl<S, M> ScrollArea<S, M> {
         if offset == current {
             return None;
         }
-        *ctx.transient::<ScrollPark>() = ScrollPark {
+        *ctx.transient::<ScrollPark>() = ScrollPark::Held {
             offset,
-            held: true,
             base: bound,
         };
         Some(offset)
@@ -530,7 +528,7 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self, _state: &State) -> bool {
+        fn is_focusable(&self) -> bool {
             self.focusable
         }
     }
@@ -1266,7 +1264,7 @@ mod tests {
             ctx.paint_widget(Paragraph::new("OWNER"), anchor);
             if ctx.pointer_within() {
                 let popup = Rect::new(anchor.x, anchor.y + 2, 5, 1);
-                ctx.popup("popup", PopupOptions::default(), popup, move |ctx| {
+                ctx.popup("popup", popup, PopupOptions::default(), move |ctx| {
                     ctx.paint_widget(Paragraph::new("POPUP"), popup);
                     ctx.component("item", Probe::focusable("popup-item"), popup);
                 });
@@ -1288,12 +1286,12 @@ mod tests {
             let escaped = Rect::new(anchor.x, anchor.y + 2, 5, 1);
             match self.layer {
                 LayerExample::Hint => {
-                    ctx.hint("layer", ScopeOptions::default(), escaped, move |ctx| {
+                    ctx.hint("layer", escaped, ScopeOptions::default(), move |ctx| {
                         ctx.paint_widget(Paragraph::new("HINT"), escaped);
                     });
                 }
                 LayerExample::Popup => {
-                    ctx.popup("layer", PopupOptions::default(), escaped, move |ctx| {
+                    ctx.popup("layer", escaped, PopupOptions::default(), move |ctx| {
                         ctx.paint_widget(Paragraph::new("POPUP"), escaped);
                         ctx.component("item", Probe::focusable("item"), escaped);
                     });
@@ -1302,8 +1300,8 @@ mod tests {
                     ctx.modal("layer", ModalProbe, escaped);
                 }
                 LayerExample::Deferred => {
-                    ctx.defer_paint(move |painter, _| {
-                        painter.with_buffer(|buffer| {
+                    ctx.defer_paint(move |ctx| {
+                        ctx.with_buffer(|buffer| {
                             buffer.set_string(escaped.x, escaped.y, "DEFER", Style::default());
                         });
                     });
@@ -1350,7 +1348,7 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self, _state: &State) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -1409,8 +1407,8 @@ mod tests {
                 } else {
                     ctx.popup(
                         "outer",
-                        PopupOptions::default(),
                         Rect::new(0, 0, 10, 6),
+                        PopupOptions::default(),
                         declare_scroll_in_outer_layer,
                     );
                 }
@@ -1438,8 +1436,8 @@ mod tests {
             driver.render(&state, move |ctx| {
                 ctx.popup(
                     "outer",
-                    PopupOptions::default(),
                     Rect::new(0, 0, 6, 4),
+                    PopupOptions::default(),
                     move |ctx| {
                         ctx.paint_widget(
                             Paragraph::new("ABCDE\nFGHIJ").style(Style::new().bg(Color::Magenta)),
@@ -1485,8 +1483,8 @@ mod tests {
                 );
                 ctx.popup(
                     "outer",
-                    PopupOptions::default(),
                     Rect::new(0, 0, 6, 4),
+                    PopupOptions::default(),
                     move |ctx| {
                         ctx.component(
                             "scroll",
@@ -1704,12 +1702,12 @@ mod tests {
             let escaped = self.escaped;
             match self.layer {
                 LayerExample::Hint => {
-                    ctx.hint("layer", ScopeOptions::default(), escaped, move |ctx| {
+                    ctx.hint("layer", escaped, ScopeOptions::default(), move |ctx| {
                         ctx.paint_widget(Paragraph::new("LAYER"), escaped);
                     });
                 }
                 LayerExample::Popup => {
-                    ctx.popup("layer", PopupOptions::default(), escaped, move |ctx| {
+                    ctx.popup("layer", escaped, PopupOptions::default(), move |ctx| {
                         ctx.paint_widget(Paragraph::new("LAYER"), escaped);
                     });
                 }

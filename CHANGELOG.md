@@ -101,6 +101,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking:** `runtime::Painter`. `DeclareCtx::defer_paint` takes
+  `FnOnce(&mut PaintCtx<'_, '_, State>)`, which carries the theme and the app
+  state and reports every interaction flag as false.
+- **Breaking:** `DeclareCtx::hover_position` and `FocusState::is_path`.
+  `DeclareCtx::pointer_within_area` and `FocusState::contains_path` answer the
+  same questions.
+- **Breaking:** `runtime::drag` and `runtime::geometry` as public modules.
+  `CellOffset`, `DragOptions`, `DragPhase`, `clamp_offset`, and `offset_rect`
+  keep their `ratcn::runtime` paths; `fixed_height`, `is_border`, and
+  `wrapped_height` move to `ratcn::geometry`.
 - **Breaking:** `Ratcn::hover` and `runtime::HoverState`. Hover is the
   runtime's own state now: every pointer event records where the pointer is,
   every committed frame resolves hover from that position against the surface
@@ -147,6 +157,17 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `Component::is_focusable(&self)` drops its state parameter. A
+  component answers from the props it was declared with, and settles anything
+  state-dependent in `prepare`.
+- **Breaking:** `DeclareCtx::hint` and `DeclareCtx::popup` take
+  `(id, area, options, declare)`, the order `scope` and `modal_scope` use.
+- **Breaking:** `ModalState::open` clears the focus path rather than pointing
+  it at the modal root. The modal resolves focus to its own first focusable
+  leaf either way, and `close` restores the saved path as before.
+- **Breaking:** a paint panic a component catches leaves the declaration pass
+  to finish and commit. A layer or viewport canvas composites only what was
+  recorded as painted, so cells written before the panic stay off the frame.
 - **Breaking:** `MouseEvent` coordinates and `DragPhase` positions are in the
   coordinate space the receiving component was declared with, matching
   `EventCtx::area`. Outside a viewport that is the screen.

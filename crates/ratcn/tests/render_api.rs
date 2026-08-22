@@ -45,7 +45,7 @@ impl Component<State, Msg> for Probe {
         }
     }
 
-    fn is_focusable(&self, _state: &State) -> bool {
+    fn is_focusable(&self) -> bool {
         true
     }
 }

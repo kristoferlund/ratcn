@@ -22,9 +22,9 @@ use ratatui::{
 };
 
 use crate::Theme;
+use crate::geometry::wrapped_height;
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MouseKind, ScopeOptions,
-    wrapped_height,
 };
 use crate::text_width::{display_width_u16, wrap_to_width};
 use crate::theme::resolve_style;
@@ -507,7 +507,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
         let text = self.text.clone();
         // A hint layer: painted above everything, and inert. The press it
         // floats over still reaches the trigger underneath.
-        ctx.hint(BUBBLE_ID, ScopeOptions::default(), area, move |ctx| {
+        ctx.hint(BUBBLE_ID, area, ScopeOptions::default(), move |ctx| {
             ctx.paint(move |ctx| {
                 ctx.widget(TooltipWidget::new(&text).style(style), area);
             });

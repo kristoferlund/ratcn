@@ -27,11 +27,16 @@ use super::{ChildId, FocusState};
 /// considers closed.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModalState {
-    ids: Vec<ChildId>,
-    /// One entry per open modal, index-aligned with `ids`: the focus that was
-    /// current when that modal opened. `open` and `close` push and pop both
-    /// together, and nothing else touches either.
-    return_focus: Vec<FocusState>,
+    /// One entry per open modal, innermost last: its id and the focus that was
+    /// current when it opened.
+    open: Vec<OpenModal>,
+}
+
+/// One open modal: its id, and the focus to restore when it closes.
+#[derive(Debug, Clone, PartialEq)]
+struct OpenModal {
+    id: ChildId,
+    return_focus: FocusState,
 }
 
 impl ModalState {
@@ -39,9 +44,8 @@ impl ModalState {
     ///
     /// `focus` is your app's focus state, taken by `&mut` because this does two
     /// things with it: it copies the current path into this modal's saved
-    /// history, then overwrites it with a path pointing at the modal root, so
-    /// the newly opened layer starts focused. [`close`](Self::close) reverses
-    /// both.
+    /// history, then clears it, so the newly opened layer resolves focus to
+    /// its own first focusable leaf. [`close`](Self::close) reverses both.
     ///
     /// Re-opening whatever is already on top is a no-op — it will not overwrite
     /// the focus that modal saved when it first opened.
@@ -58,16 +62,17 @@ impl ModalState {
         focus: &mut FocusState,
     ) -> Result<(), ModalOpenError> {
         let id = id.into();
-        if self.ids.last() == Some(&id) {
+        if self.top() == Some(&id) {
             return Ok(());
         }
-        if self.ids.contains(&id) {
+        if self.is_open(&id) {
             return Err(ModalOpenError { id });
         }
 
-        self.return_focus.push(focus.clone());
-        *focus = FocusState::intent([id.clone()]);
-        self.ids.push(id);
+        self.open.push(OpenModal {
+            return_focus: std::mem::take(focus),
+            id,
+        });
         Ok(())
     }
 
@@ -79,37 +84,29 @@ impl ModalState {
     ///
     /// Returns the closed modal id, or `None` when the stack is already empty,
     /// in which case `focus` is left alone.
-    ///
-    /// # Panics
-    ///
-    /// Only on an internal inconsistency between this type's two private
-    /// stacks, which the public API cannot produce.
     pub fn close(&mut self, focus: &mut FocusState) -> Option<ChildId> {
-        let id = self.ids.pop()?;
-        *focus = self
-            .return_focus
-            .pop()
-            .expect("modal ids and return-focus history stay aligned");
-        Some(id)
+        let closed = self.open.pop()?;
+        *focus = closed.return_focus;
+        Some(closed.id)
     }
 
     /// Whether `id` is present anywhere in the modal stack.
     #[must_use]
     pub fn is_open(&self, id: impl AsRef<str>) -> bool {
         let id = id.as_ref();
-        self.ids.iter().any(|open| open.as_str() == id)
+        self.open.iter().any(|open| open.id.as_str() == id)
     }
 
     /// The top modal id, if any.
     #[must_use]
     pub fn top(&self) -> Option<&ChildId> {
-        self.ids.last()
+        Some(&self.open.last()?.id)
     }
 
     /// Modal ids in declaration order, from the lowest layer to the top.
     #[must_use]
-    pub fn ids(&self) -> &[ChildId] {
-        &self.ids
+    pub fn ids(&self) -> impl ExactSizeIterator<Item = &ChildId> + Clone {
+        self.open.iter().map(|open| &open.id)
     }
 }
 
@@ -155,7 +152,7 @@ mod tests {
         modals
             .open(ChildId::Static("dialog"), &mut focus)
             .expect("open dialog");
-        assert_eq!(focus, FocusState::intent([ChildId::Static("dialog")]));
+        assert_eq!(focus, FocusState::default());
         assert_eq!(modals.close(&mut focus), Some(ChildId::Static("dialog")));
         assert_eq!(focus, original);
     }
@@ -171,8 +168,8 @@ mod tests {
         focus = lower.clone();
         modals.open("top", &mut focus).expect("open top");
         assert_eq!(
-            modals.ids(),
-            [ChildId::Static("lower"), ChildId::Static("top")]
+            modals.ids().collect::<Vec<_>>(),
+            [&ChildId::Static("lower"), &ChildId::Static("top")]
         );
 
         assert_eq!(modals.close(&mut focus), Some(ChildId::Static("top")));
@@ -190,7 +187,10 @@ mod tests {
         modals.open("lower", &mut focus).expect("open lower");
         focus = FocusState::intent([ChildId::Static("lower"), ChildId::Static("field")]);
         modals.open("lower", &mut focus).expect("same top is valid");
-        assert_eq!(modals.ids(), [ChildId::Static("lower")]);
+        assert_eq!(
+            modals.ids().collect::<Vec<_>>(),
+            [&ChildId::Static("lower")]
+        );
         modals.open("top", &mut focus).expect("open top");
 
         let error = modals
@@ -198,8 +198,8 @@ mod tests {
             .expect_err("duplicate nesting");
         assert_eq!(error.id(), &ChildId::Static("lower"));
         assert_eq!(
-            modals.ids(),
-            [ChildId::Static("lower"), ChildId::Static("top")]
+            modals.ids().collect::<Vec<_>>(),
+            [&ChildId::Static("lower"), &ChildId::Static("top")]
         );
 
         let _ = modals.close(&mut focus);

@@ -18,8 +18,8 @@
 //! [`offset_rect`] cover the most common bound — keep the dragged box inside a
 //! containing area.
 //!
-//! General rect geometry ([`is_border`](super::geometry::is_border) and
-//! friends) lives in [`geometry`](super::geometry); this module is dragging
+//! General rect geometry ([`is_border`](crate::geometry::is_border) and
+//! friends) lives in [`geometry`](crate::geometry); this module is dragging
 //! only.
 
 use ratatui::layout::{Position, Rect};
@@ -132,18 +132,13 @@ pub enum DragPhase {
     Ignored,
 }
 
-/// The transient [`EventCtx::drag`] keeps at the component's identity path.
-///
-/// A drag is either running or it is not, so one discriminant says so and the
-/// facts that only mean something while it runs live inside it. The wrapper
-/// exists because the transient store inserts a default before the press fills
-/// it in; a gesture is never *observed* in that empty state, and the release
-/// removes the transient rather than emptying it.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct CapturedDrag(Option<ActiveDrag>);
-
 /// A drag under way: the button holding it, where it started from, and
 /// whether it has moved since.
+///
+/// [`EventCtx::drag`] keeps `Option<ActiveDrag>` at the component's identity
+/// path: the transient store inserts a default before the press fills it in, a
+/// gesture is never observed in that empty state, and the release removes the
+/// transient rather than emptying it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ActiveDrag {
     /// Only this button's movement and release continue the gesture.
@@ -193,15 +188,21 @@ impl EventCtx<'_> {
         match mouse.kind {
             MouseKind::Down(button) if button == options.button && options.can_start => {
                 self.capture_pointer(button);
-                *self.transient::<CapturedDrag>() = CapturedDrag(Some(ActiveDrag {
+                *self.transient::<Option<ActiveDrag>>() = Some(ActiveDrag {
                     button,
-                    anchor: AnchorPoint::at(screen.column, screen.row, options.offset),
+                    anchor: AnchorPoint {
+                        column: screen.column,
+                        row: screen.row,
+                        offset: options.offset,
+                    },
                     moved: false,
-                }));
+                });
                 DragPhase::Down
             }
             MouseKind::Drag(button) => {
-                let Some(CapturedDrag(Some(drag))) = self.transient_if_present::<CapturedDrag>()
+                let Some(drag) = self
+                    .transient_if_present::<Option<ActiveDrag>>()
+                    .and_then(Option::as_mut)
                 else {
                     return DragPhase::Ignored;
                 };
@@ -215,8 +216,10 @@ impl EventCtx<'_> {
                 }
             }
             MouseKind::Up(button) => {
-                let Some(CapturedDrag(Some(drag))) =
-                    self.transient_if_present::<CapturedDrag>().copied()
+                let Some(drag) = self
+                    .transient_if_present::<Option<ActiveDrag>>()
+                    .copied()
+                    .flatten()
                 else {
                     return DragPhase::Ignored;
                 };
@@ -225,7 +228,7 @@ impl EventCtx<'_> {
                 }
                 // The gesture is over: drop the stored state and report from
                 // the copy taken above.
-                self.take_transient::<CapturedDrag>();
+                self.take_transient::<Option<ActiveDrag>>();
                 DragPhase::Ended {
                     position,
                     moved: drag.moved,
@@ -250,16 +253,6 @@ struct AnchorPoint {
 }
 
 impl AnchorPoint {
-    /// Anchor a drag to the pressed cell and the offset current at that
-    /// moment.
-    const fn at(column: u16, row: u16, offset: CellOffset) -> Self {
-        Self {
-            column,
-            row,
-            offset,
-        }
-    }
-
     /// The offset for the pointer now at `(column, row)`, anchored to where the
     /// drag began. The component clamps the result however it likes (see
     /// [`clamp_offset`]).
@@ -537,7 +530,11 @@ mod tests {
     #[test]
     fn drag_tracks_delta_from_the_anchor_offset() {
         // Anchored at cell (5, 5) with the offset (2, -1) current there.
-        let anchor = AnchorPoint::at(5, 5, CellOffset::new(2, -1));
+        let anchor = AnchorPoint {
+            column: 5,
+            row: 5,
+            offset: CellOffset::new(2, -1),
+        };
 
         // Move to (8, 4): delta (+3, -1) on top of the anchor (2, -1).
         assert_eq!(anchor.offset_at(8, 4), CellOffset::new(5, -2));

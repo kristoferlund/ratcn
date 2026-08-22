@@ -1,6 +1,6 @@
 //! Generic rect geometry components share: border hit-testing, the fixed-height
 //! interaction crop, and wrapped-text height. None of it is specific to any one
-//! component — see [`drag`](super::drag) for dragging-specific geometry.
+//! component.
 //!
 //! Anything ratatui already answers stays with ratatui: shrinking an area by a
 //! margin is `Rect::inner(Margin::new(x, y))`, not a helper here.
@@ -15,7 +15,7 @@ use crate::text_width::wrap_to_width;
 /// False for anything outside `area` and for a zero-width or zero-height area.
 #[must_use]
 pub fn is_border(area: Rect, column: u16, row: u16) -> bool {
-    if !area.contains(Position { x: column, y: row }) || area.width == 0 || area.height == 0 {
+    if !area.contains(Position { x: column, y: row }) {
         return false;
     }
     let right = area.x.saturating_add(area.width.saturating_sub(1));

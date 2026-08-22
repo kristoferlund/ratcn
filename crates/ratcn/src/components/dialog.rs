@@ -8,10 +8,11 @@ use ratatui::{
 };
 
 use crate::Theme;
+use crate::geometry::{is_border, wrapped_height};
 use crate::runtime::{
     CellOffset, ChildId, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx,
     EventResult, KeyChord, KeyCode, MeasuredComponent, PaintCtx, ScopeOptions, TabWrap,
-    clamp_offset, is_border, offset_rect, wrapped_height,
+    clamp_offset, offset_rect,
 };
 use crate::text_width::{display_width_u16, wrap_to_width};
 use crate::theme::resolve_style;
@@ -880,7 +881,7 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self, _state: &State) -> bool {
+        fn is_focusable(&self) -> bool {
             !self.disabled
         }
     }

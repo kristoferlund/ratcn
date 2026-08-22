@@ -1004,7 +1004,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         }
     }
 
-    fn is_focusable(&self, _state: &S) -> bool {
+    fn is_focusable(&self) -> bool {
         self.focused_item.is_some()
             && !self.disabled
             && linear_nav::has_enabled(self.items.len(), |i| self.disabled_at(i))
@@ -2260,7 +2260,7 @@ mod tests {
             item(Task::E, "E").disabled(true),
             item(Task::F, "F"),
         ];
-        driver.render(&state, items.clone());
+        driver.render(&state, items);
 
         assert_eq!(
             driver.event(key(KeyCode::Home), &state),
