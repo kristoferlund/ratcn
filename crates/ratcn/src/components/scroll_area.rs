@@ -371,17 +371,15 @@ mod tests {
     };
 
     use ratatui::{
-        Terminal,
-        backend::TestBackend,
         text::Text,
         widgets::{Block, Paragraph},
     };
 
     use super::*;
     use crate::runtime::{
-        ChildId, FocusState, KeyChord, KeyEvent, Modifiers, MouseButton, MouseEvent, PopupOptions,
-        Ratcn,
+        ChildId, FocusState, KeyChord, Modifiers, MouseButton, PopupOptions, Ratcn,
     };
+    use crate::test_support::{Driver, key, key_with, mouse};
     use crate::{Button, ListItem, Select, Tooltip};
 
     #[derive(Default)]
@@ -406,36 +404,13 @@ mod tests {
         ModalClosed,
     }
 
-    struct Driver {
-        terminal: Terminal<TestBackend>,
-        ratcn: Ratcn<State, Msg>,
-    }
-
-    impl Driver {
-        fn new(width: u16, height: u16) -> Self {
-            Self {
-                terminal: Terminal::new(TestBackend::new(width, height)).expect("terminal"),
-                ratcn: Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
-            }
-        }
-
-        fn render(&mut self, state: &State, declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>)) {
-            let theme = Theme::default_dark();
-            self.terminal
-                .draw(|frame| self.ratcn.render(frame, state, &theme, declare))
-                .expect("draw");
-        }
-
-        fn event(&mut self, event: Event, state: &State) -> EventResult<Msg> {
-            self.ratcn.handle_event(event, state)
-        }
-
-        fn row(&self, row: u16) -> String {
-            let buffer = self.terminal.backend().buffer();
-            (0..buffer.area.width)
-                .map(|column| buffer.cell((column, row)).expect("cell").symbol())
-                .collect()
-        }
+    /// A driver whose focus lives in the test state.
+    fn driver(width: u16, height: u16) -> Driver<State, Msg> {
+        Driver::with(
+            Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
+            width,
+            height,
+        )
     }
 
     fn scroll_area(
@@ -445,19 +420,6 @@ mod tests {
         ScrollArea::new(content_height)
             .scroll(|state: &State| state.offset, Msg::Area)
             .content(content)
-    }
-
-    fn key(code: KeyCode) -> Event {
-        Event::Key(KeyEvent::new(code))
-    }
-
-    fn mouse(kind: MouseKind, column: u16, row: u16) -> Event {
-        Event::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: Modifiers::NONE,
-        })
     }
 
     #[derive(Debug)]
@@ -520,7 +482,7 @@ mod tests {
 
     #[test]
     fn ordinary_paint_uses_full_logical_allocation_then_translates_and_clips() {
-        let mut driver = Driver::new(8, 5);
+        let mut driver = driver(8, 5);
         let state = State {
             offset: 2,
             ..State::default()
@@ -560,7 +522,7 @@ mod tests {
     #[test]
     fn empty_and_sparse_viewports_preserve_earlier_frame_cells() {
         for sparse in [false, true] {
-            let mut driver = Driver::new(6, 2);
+            let mut driver = driver(6, 2);
             let state = State::default();
             driver.render(&state, move |ctx| {
                 ctx.paint_widget(
@@ -593,7 +555,7 @@ mod tests {
 
     #[test]
     fn partially_visible_fixed_height_control_keeps_its_real_allocation() {
-        let mut driver = Driver::new(8, 4);
+        let mut driver = driver(8, 4);
         let state = State {
             offset: 2,
             ..State::default()
@@ -628,7 +590,7 @@ mod tests {
 
     #[test]
     fn pointer_routing_inverse_translates_visible_hits_and_clips_offscreen_hits() {
-        let mut driver = Driver::new(8, 5);
+        let mut driver = driver(8, 5);
         let state = State {
             offset: 2,
             ..State::default()
@@ -669,12 +631,12 @@ mod tests {
     /// arrives with it.
     #[test]
     fn tab_into_an_offscreen_descendant_emits_the_focus_message_and_reveals_it() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         let mut state = State {
             focus: FocusState::intent(["scroll", "first"]),
             ..State::default()
         };
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -708,12 +670,12 @@ mod tests {
     /// at must not scroll the reveal back in.
     #[test]
     fn a_bound_offset_takes_the_area_back_for_good() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         let mut state = State {
             focus: FocusState::intent(["scroll", "first"]),
             ..State::default()
         };
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -756,12 +718,12 @@ mod tests {
     /// nothing else.
     #[test]
     fn an_unbound_area_reveals_without_asking_the_app_for_an_offset() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         let mut state = State {
             focus: FocusState::intent(["scroll", "first"]),
             ..State::default()
         };
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -786,7 +748,7 @@ mod tests {
 
     #[test]
     fn backtab_and_focus_keys_minimally_reveal_their_destination() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         driver.ratcn = std::mem::take(&mut driver.ratcn)
             .focus_key(KeyChord::from('l').alt(), ["scroll", "last"]);
         let mut state = State {
@@ -794,7 +756,7 @@ mod tests {
             offset: 4,
             ..State::default()
         };
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -820,13 +782,13 @@ mod tests {
             "the top edge is the minimal reveal for a target above the view"
         );
 
-        let jump = Event::Key(KeyEvent {
-            code: KeyCode::Char('l'),
-            modifiers: Modifiers {
+        let jump = key_with(
+            KeyCode::Char('l'),
+            Modifiers {
                 alt: true,
                 ..Modifiers::NONE
             },
-        });
+        );
         assert_eq!(
             driver.event(jump, &state),
             EventResult::Emit(Msg::Focus(FocusState::intent(["scroll", "last"])))
@@ -842,14 +804,14 @@ mod tests {
 
     #[test]
     fn focus_key_reveals_an_already_focused_offscreen_descendant() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         driver.ratcn = std::mem::take(&mut driver.ratcn)
             .focus_key(KeyChord::from('l').alt(), ["scroll", "last"]);
         let state = State {
             focus: FocusState::intent(["scroll", "last"]),
             ..State::default()
         };
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -864,13 +826,13 @@ mod tests {
 
         assert_eq!(
             driver.event(
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('l'),
-                    modifiers: Modifiers {
+                key_with(
+                    KeyCode::Char('l'),
+                    Modifiers {
                         alt: true,
                         ..Modifiers::NONE
                     },
-                }),
+                ),
                 &state,
             ),
             EventResult::Consumed,
@@ -882,12 +844,12 @@ mod tests {
 
     #[test]
     fn wrapped_traversal_reveals_its_same_offscreen_target() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         let state = State {
             focus: FocusState::intent(["scroll", "wrap", "only"]),
             ..State::default()
         };
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -922,7 +884,7 @@ mod tests {
 
     #[test]
     fn repeated_controlled_events_read_current_app_offset_before_redraw() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         let mut state = State::default();
         driver.render(&state, |ctx| {
             ctx.component("scroll", scroll_area(12, |_| {}), Rect::new(0, 0, 8, 3));
@@ -955,9 +917,9 @@ mod tests {
     /// redraw, with nothing emitted.
     #[test]
     fn an_unbound_area_scrolls_itself_on_the_wheel() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         let state = State::default();
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -995,7 +957,7 @@ mod tests {
     /// Home, End, or a page key dies whenever focus rests in a scroll area.
     #[test]
     fn scroll_keys_and_wheel_clamp_and_bubble_at_the_edges() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         let mut state = State {
             offset: 5,
             ..State::default()
@@ -1033,13 +995,13 @@ mod tests {
         );
         assert_eq!(
             driver.event(
-                Event::Key(KeyEvent {
-                    code: KeyCode::End,
-                    modifiers: Modifiers {
+                key_with(
+                    KeyCode::End,
+                    Modifiers {
                         ctrl: true,
                         ..Modifiers::NONE
                     },
-                }),
+                ),
                 &state
             ),
             EventResult::Ignored
@@ -1049,7 +1011,7 @@ mod tests {
     /// The same keys in an area that has nothing to scroll.
     #[test]
     fn an_area_that_cannot_scroll_leaves_its_keys_to_the_app() {
-        let mut driver = Driver::new(8, 5);
+        let mut driver = driver(8, 5);
         let state = State::default();
         driver.render(&state, |ctx| {
             ctx.component("scroll", scroll_area(2, |_| {}), Rect::new(0, 0, 8, 5));
@@ -1078,7 +1040,7 @@ mod tests {
 
     #[test]
     fn focused_descendant_gets_scroll_keys_before_the_area() {
-        let mut driver = Driver::new(8, 3);
+        let mut driver = driver(8, 3);
         let state = State {
             focus: FocusState::intent(["scroll", "sink"]),
             ..State::default()
@@ -1101,7 +1063,7 @@ mod tests {
 
     #[test]
     fn reserved_gutter_uses_the_configured_ratatui_scrollbar_style() {
-        let mut driver = Driver::new(6, 4);
+        let mut driver = driver(6, 4);
         let state = State::default();
         driver.render(&state, |ctx| {
             ctx.component(
@@ -1129,9 +1091,9 @@ mod tests {
 
     #[test]
     fn scrollbar_thumb_reaches_both_offset_endpoints() {
-        let mut driver = Driver::new(6, 4);
+        let mut driver = driver(6, 4);
         let mut state = State::default();
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -1143,7 +1105,7 @@ mod tests {
                 );
             });
         };
-        let thumb_rows = |driver: &Driver| {
+        let thumb_rows = |driver: &Driver<State, Msg>| {
             (0..4)
                 .filter(|&row| {
                     driver
@@ -1168,9 +1130,9 @@ mod tests {
     /// both ends of the gutter.
     #[test]
     fn a_single_row_of_overflow_still_reaches_both_scrollbar_endpoints() {
-        let mut driver = Driver::new(6, 4);
+        let mut driver = driver(6, 4);
         let mut state = State::default();
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -1182,7 +1144,7 @@ mod tests {
                 );
             });
         };
-        let thumb_rows = |driver: &Driver| {
+        let thumb_rows = |driver: &Driver<State, Msg>| {
             (0..4)
                 .filter(|&row| {
                     driver
@@ -1210,7 +1172,7 @@ mod tests {
     #[test]
     fn zero_sized_viewports_are_inert_without_dropping_declarations() {
         for area in [Rect::new(0, 0, 0, 3), Rect::new(0, 0, 4, 0)] {
-            let mut driver = Driver::new(4, 3);
+            let mut driver = driver(4, 3);
             let state = State::default();
             driver.render(&state, move |ctx| {
                 ctx.component(
@@ -1338,7 +1300,7 @@ mod tests {
         }
     }
 
-    fn render_layer_example(driver: &mut Driver, state: &State, layer: LayerExample) {
+    fn render_layer_example(driver: &mut Driver<State, Msg>, state: &State, layer: LayerExample) {
         driver.render(state, move |ctx| {
             ctx.component(
                 "scroll",
@@ -1380,7 +1342,7 @@ mod tests {
             ..State::default()
         };
         for modal in [false, true] {
-            let mut driver = Driver::new(10, 6);
+            let mut driver = driver(10, 6);
             driver.render(&state, move |ctx| {
                 if modal {
                     ctx.modal_scope(
@@ -1416,7 +1378,7 @@ mod tests {
     #[test]
     fn viewport_paint_preserves_earlier_enclosing_layer_cells() {
         for sparse in [false, true] {
-            let mut driver = Driver::new(6, 4);
+            let mut driver = driver(6, 4);
             let state = State::default();
             driver.render(&state, move |ctx| {
                 ctx.popup(
@@ -1459,7 +1421,7 @@ mod tests {
     #[test]
     fn sparse_viewport_in_a_layer_does_not_cover_lower_layer_cells() {
         for sparse in [false, true] {
-            let mut driver = Driver::new(6, 4);
+            let mut driver = driver(6, 4);
             let state = State::default();
             driver.render(&state, move |ctx| {
                 ctx.paint_widget(
@@ -1511,7 +1473,7 @@ mod tests {
             (LayerExample::Modal, "MODAL"),
             (LayerExample::Deferred, "DEFER"),
         ] {
-            let mut driver = Driver::new(8, 6);
+            let mut driver = driver(8, 6);
             render_layer_example(&mut driver, &state, layer);
             assert!(
                 driver.row(3).contains(expected),
@@ -1523,7 +1485,7 @@ mod tests {
 
     #[test]
     fn popup_and_modal_keep_existing_escape_routing() {
-        let mut popup = Driver::new(8, 6);
+        let mut popup = driver(8, 6);
         let popup_state = State {
             focus: FocusState::intent(["scroll", "host"]),
             offset: 2,
@@ -1536,7 +1498,7 @@ mod tests {
             "Esc crosses a popup root to its declaring component"
         );
 
-        let mut modal = Driver::new(8, 6);
+        let mut modal = driver(8, 6);
         let modal_state = State {
             offset: 2,
             ..State::default()
@@ -1551,9 +1513,9 @@ mod tests {
 
     #[test]
     fn pointer_within_keeps_an_owner_open_while_the_pointer_is_in_its_escaped_popup() {
-        let mut driver = Driver::new(10, 8);
+        let mut driver = driver(10, 8);
         let state = State::default();
-        let render = |driver: &mut Driver| {
+        let render = |driver: &mut Driver<State, Msg>| {
             driver.render(&state, |ctx| {
                 ctx.component(
                     "scroll",
@@ -1585,7 +1547,7 @@ mod tests {
 
     #[test]
     fn select_popup_inside_scrolled_content_inverse_projects_option_events() {
-        let mut driver = Driver::new(16, 8);
+        let mut driver = driver(16, 8);
         let state = State {
             offset: 3,
             select_open: true,
@@ -1634,7 +1596,7 @@ mod tests {
         let state = State::default();
         for layer in [LayerExample::Hint, LayerExample::Popup] {
             let escaped = Rect::new(0, 1, 5, 1);
-            let mut visible = Driver::new(8, 6);
+            let mut visible = driver(8, 6);
             visible.render(&state, move |ctx| {
                 ctx.component(
                     "scroll",
@@ -1653,7 +1615,7 @@ mod tests {
                 "a visible {layer:?} anchor must keep its layer"
             );
 
-            let mut offscreen = Driver::new(8, 6);
+            let mut offscreen = driver(8, 6);
             offscreen.render(&state, move |ctx| {
                 ctx.component(
                     "scroll",
@@ -1703,7 +1665,7 @@ mod tests {
 
     #[test]
     fn nested_scroll_areas_are_rejected() {
-        let mut driver = Driver::new(8, 4);
+        let mut driver = driver(8, 4);
         let state = State::default();
         let result = catch_unwind(AssertUnwindSafe(|| {
             driver.render(&state, |ctx| {
@@ -1759,10 +1721,10 @@ mod tests {
 
     #[test]
     fn scrolling_a_captured_descendant_offscreen_clears_its_hover() {
-        let mut driver = Driver::new(8, 4);
+        let mut driver = driver(8, 4);
         let mut state = State::default();
         let hovered = Rc::new(Cell::new(false));
-        let render = |driver: &mut Driver, state: &State, hovered: &Rc<Cell<bool>>| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State, hovered: &Rc<Cell<bool>>| {
             let hovered = Rc::clone(hovered);
             driver.render(state, move |ctx| {
                 ctx.component(
@@ -1795,9 +1757,9 @@ mod tests {
 
     #[test]
     fn wheel_scrolling_a_tooltip_trigger_away_closes_it_on_the_resulting_redraw() {
-        let mut driver = Driver::new(12, 8);
+        let mut driver = driver(12, 8);
         let mut state = State::default();
-        let render = |driver: &mut Driver, state: &State| {
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
             driver.render(state, |ctx| {
                 ctx.component(
                     "scroll",

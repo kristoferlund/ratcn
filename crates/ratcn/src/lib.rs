@@ -143,6 +143,8 @@ pub mod runtime;
 pub mod selection_indicator;
 #[cfg(feature = "termina")]
 pub mod terminal;
+#[cfg(test)]
+mod test_support;
 pub mod text_width;
 pub mod theme;
 pub mod toast;

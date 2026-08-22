@@ -611,11 +611,10 @@ const fn clamp(start: u16, size: u16, low: u16, high: u16) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend};
-
     use super::*;
     use crate::Button;
-    use crate::runtime::{FocusState, KeyEvent, Modifiers, MouseButton, MouseEvent, Ratcn};
+    use crate::runtime::{FocusState, KeyEvent, MouseButton, Ratcn};
+    use crate::test_support::{Driver, mouse};
 
     const TIP: &str = "Save the file";
 
@@ -642,94 +641,59 @@ mod tests {
             })
     }
 
-    struct Driver {
-        terminal: Terminal<TestBackend>,
-        ratcn: Ratcn<State, Msg>,
+    /// A driver whose focus lives in the test state.
+    fn driver(width: u16, height: u16) -> Driver<State, Msg> {
+        Driver::with(
+            Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
+            width,
+            height,
+        )
     }
 
-    impl Driver {
-        fn new(width: u16, height: u16) -> Self {
-            Self {
-                terminal: Terminal::new(TestBackend::new(width, height)).expect("terminal"),
-                ratcn: Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
-            }
-        }
-
-        fn render(&mut self, state: &State, area: Rect, side: TooltipSide) {
-            let theme = Theme::default_dark();
-            self.terminal
-                .draw(|frame| {
-                    self.ratcn.render(frame, state, &theme, |ctx| {
-                        // A focusable sibling declared first, so startup focus
-                        // has somewhere to land that is not the tooltip.
-                        ctx.component(
-                            "before",
-                            Button::new("Open").on_press(|| Msg::Pressed),
-                            Rect::new(0, 0, 6, 1),
-                        );
-                        ctx.component("tip", tooltip(side), area);
-                    });
-                })
-                .expect("draw");
-        }
-
-        fn event(&mut self, event: Event, state: &State) -> EventResult<Msg> {
-            self.ratcn.handle_event(event, state)
-        }
-
-        fn row(&self, row: u16) -> String {
-            let buffer = self.terminal.backend().buffer();
-            (0..buffer.area.width)
-                .map(|column| buffer.cell((column, row)).expect("cell").symbol())
-                .collect()
-        }
-    }
-
-    fn mouse(kind: MouseKind, column: u16, row: u16) -> Event {
-        Event::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: Modifiers::NONE,
-        })
+    /// One frame: the tooltip at `area`, and a focusable sibling declared
+    /// first so startup focus has somewhere to land that is not the tooltip.
+    fn render_tooltip(
+        driver: &mut Driver<State, Msg>,
+        state: &State,
+        area: Rect,
+        side: TooltipSide,
+    ) {
+        driver.render(state, |ctx| {
+            ctx.component(
+                "before",
+                Button::new("Open").on_press(|| Msg::Pressed),
+                Rect::new(0, 0, 6, 1),
+            );
+            ctx.component("tip", tooltip(side), area);
+        });
     }
 
     /// The read-only binding is the recommended shape: the app derives
     /// showing from state it already keeps, so the component emits nothing.
     #[test]
     fn a_read_only_binding_shows_the_bubble_and_emits_nothing() {
-        let mut driver = Driver::new(30, 10);
+        let mut driver = driver(30, 10);
         let state = State {
             open: true,
             ..State::default()
         };
-        let theme = Theme::default_dark();
-        driver
-            .terminal
-            .draw(|frame| {
-                driver.ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        "before",
-                        Button::new("Open").on_press(|| Msg::Pressed),
-                        Rect::new(0, 0, 6, 1),
-                    );
-                    ctx.component(
-                        "tip",
-                        Tooltip::new(TIP)
-                            .open_when(|state: &State, _| state.open)
-                            .trigger(|ctx| {
-                                let area = ctx.area();
-                                ctx.component(
-                                    "save",
-                                    Button::new("Save").on_press(|| Msg::Pressed),
-                                    area,
-                                );
-                            }),
-                        Rect::new(2, 5, 8, 3),
-                    );
-                });
-            })
-            .expect("draw");
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "before",
+                Button::new("Open").on_press(|| Msg::Pressed),
+                Rect::new(0, 0, 6, 1),
+            );
+            ctx.component(
+                "tip",
+                Tooltip::new(TIP)
+                    .open_when(|state: &State, _| state.open)
+                    .trigger(|ctx| {
+                        let area = ctx.area();
+                        ctx.component("save", Button::new("Save").on_press(|| Msg::Pressed), area);
+                    }),
+                Rect::new(2, 5, 8, 3),
+            );
+        });
 
         assert!(
             (0..10).any(|row| driver.row(row).contains(TIP)),
@@ -753,31 +717,25 @@ mod tests {
     /// the trigger.
     #[test]
     fn an_open_reader_overrides_the_hover_default() {
-        let mut driver = Driver::new(30, 10);
+        let mut driver = driver(30, 10);
         let state = State::default();
-        let theme = Theme::default_dark();
-        let render = |driver: &mut Driver| {
-            driver
-                .terminal
-                .draw(|frame| {
-                    driver.ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.component(
-                            "tip",
-                            Tooltip::new(TIP)
-                                .open_when(|_: &State, _| false)
-                                .trigger(|ctx| {
-                                    let area = ctx.area();
-                                    ctx.component(
-                                        "save",
-                                        Button::new("Save").on_press(|| Msg::Pressed),
-                                        area,
-                                    );
-                                }),
-                            Rect::new(2, 5, 8, 3),
-                        );
-                    });
-                })
-                .expect("draw");
+        let render = |driver: &mut Driver<State, Msg>| {
+            driver.render(&state, |ctx| {
+                ctx.component(
+                    "tip",
+                    Tooltip::new(TIP)
+                        .open_when(|_: &State, _| false)
+                        .trigger(|ctx| {
+                            let area = ctx.area();
+                            ctx.component(
+                                "save",
+                                Button::new("Save").on_press(|| Msg::Pressed),
+                                area,
+                            );
+                        }),
+                    Rect::new(2, 5, 8, 3),
+                );
+            });
         };
 
         render(&mut driver);
@@ -793,9 +751,9 @@ mod tests {
     // pointer arriving, and it must ask the app rather than store the flag.
     #[test]
     fn pointer_over_the_trigger_asks_to_open_once() {
-        let mut driver = Driver::new(30, 10);
+        let mut driver = driver(30, 10);
         let mut state = State::default();
-        driver.render(&state, Rect::new(2, 5, 8, 3), TooltipSide::Top);
+        render_tooltip(&mut driver, &state, Rect::new(2, 5, 8, 3), TooltipSide::Top);
 
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 4, 6), &state),
@@ -817,29 +775,19 @@ mod tests {
     // so it is the runtime's hover that closes the bubble again.
     #[test]
     fn an_unbound_tooltip_opens_and_closes_with_the_pointer() {
-        let mut driver = Driver::new(30, 10);
+        let mut driver = driver(30, 10);
         let state = State::default();
-        let theme = Theme::default_dark();
-        let render = |driver: &mut Driver| {
-            driver
-                .terminal
-                .draw(|frame| {
-                    driver.ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.component(
-                            "tip",
-                            Tooltip::new(TIP).trigger(|ctx| {
-                                let area = ctx.area();
-                                ctx.component(
-                                    "save",
-                                    Button::new("Save").on_press(|| Msg::Pressed),
-                                    area,
-                                );
-                            }),
-                            Rect::new(2, 5, 8, 3),
-                        );
-                    });
-                })
-                .expect("draw");
+        let render = |driver: &mut Driver<State, Msg>| {
+            driver.render(&state, |ctx| {
+                ctx.component(
+                    "tip",
+                    Tooltip::new(TIP).trigger(|ctx| {
+                        let area = ctx.area();
+                        ctx.component("save", Button::new("Save").on_press(|| Msg::Pressed), area);
+                    }),
+                    Rect::new(2, 5, 8, 3),
+                );
+            });
         };
 
         render(&mut driver);
@@ -875,12 +823,12 @@ mod tests {
     // a keyboard user can dismiss an explanation without touching the mouse.
     #[test]
     fn escape_while_open_asks_to_close() {
-        let mut driver = Driver::new(30, 10);
+        let mut driver = driver(30, 10);
         let state = State {
             open: true,
             focus: FocusState::intent(["tip", "save"]),
         };
-        driver.render(&state, Rect::new(2, 5, 8, 3), TooltipSide::Top);
+        render_tooltip(&mut driver, &state, Rect::new(2, 5, 8, 3), TooltipSide::Top);
 
         assert_eq!(
             driver.event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
@@ -943,9 +891,9 @@ mod tests {
     // and startup focus has to resolve straight through it to the trigger.
     #[test]
     fn the_tooltip_is_never_a_focus_stop() {
-        let mut driver = Driver::new(30, 10);
+        let mut driver = driver(30, 10);
         let state = State::default();
-        driver.render(&state, Rect::new(2, 5, 8, 3), TooltipSide::Top);
+        render_tooltip(&mut driver, &state, Rect::new(2, 5, 8, 3), TooltipSide::Top);
 
         assert_eq!(
             driver.event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state),
@@ -962,12 +910,12 @@ mod tests {
         // on top of the trigger it explains.
         let frame = Rect::new(0, 0, 30, 4);
         let trigger = Rect::new(2, 1, 20, 1);
-        let mut driver = Driver::new(frame.width, frame.height);
+        let mut driver = driver(frame.width, frame.height);
         let state = State {
             open: true,
             ..State::default()
         };
-        driver.render(&state, trigger, TooltipSide::Top);
+        render_tooltip(&mut driver, &state, trigger, TooltipSide::Top);
 
         let width = TooltipWidget::new(TIP).width();
         let bubble = bubble_area(trigger, frame, TooltipSide::Top, width, 3).expect("bubble");
@@ -991,12 +939,12 @@ mod tests {
     // composites over the frame.
     #[test]
     fn the_bubble_paints_above_everything_else() {
-        let mut driver = Driver::new(30, 10);
+        let mut driver = driver(30, 10);
         let state = State {
             open: true,
             ..State::default()
         };
-        driver.render(&state, Rect::new(2, 5, 8, 1), TooltipSide::Top);
+        render_tooltip(&mut driver, &state, Rect::new(2, 5, 8, 1), TooltipSide::Top);
         assert!(driver.row(3).contains(TIP), "{}", driver.row(3));
         assert!(driver.row(2).contains('╭'), "{}", driver.row(2));
     }

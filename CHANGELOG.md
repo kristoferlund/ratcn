@@ -414,6 +414,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   into it. Declaring an open hundred-option select drops from 30 µs to 28 µs
   per frame; the options themselves are the caller's to build, so this is the
   smaller half of that cost.
+- The crate's tests share one harness: a terminal-backed `Driver` with `mouse`,
+  `key`, and `key_with`. The engine's tests sit in per-concern modules under
+  `runtime/engine/tests/`, leaving `engine.rs` its production code. 1,300 test
+  lines fewer, same tests.
 
 ## [0.0.1]
 
