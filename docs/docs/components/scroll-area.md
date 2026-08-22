@@ -128,10 +128,10 @@ let scroll = ScrollArea::new(100).style(|theme| ScrollAreaStyle {
 
 ## Limits
 
-A `ScrollArea` inside another `ScrollArea` panics. Each viewport is backed by a
-content-sized Ratatui buffer, and content above 262,144 cells panics; for
-larger data sets, window the rows yourself and give the area the height of the
-window.
+A `ScrollArea` inside another `ScrollArea` panics. So does content above
+262,144 cells, and so does a single paint inside one covering more than that.
+For larger data sets, window the rows yourself and give the area the height of
+the window.
 
 ## See also
 

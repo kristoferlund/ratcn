@@ -15,8 +15,10 @@ use super::{
     component::{InteractionFlags, PaintTarget, PointerInputs, TransientMap},
 };
 
-// The per-viewport paint canvas holds one Ratatui cell per logical content cell.
-const MAX_VIEWPORT_CELLS: usize = 262_144;
+// The largest rectangle a viewport declares as its content, and the largest a
+// single paint inside one covers: each becomes a scratch buffer of one Ratatui
+// cell per cell.
+pub(crate) const MAX_VIEWPORT_CELLS: u32 = 262_144;
 
 struct FocusBinding<State, Msg> {
     read: Box<dyn Fn(&State) -> &FocusState>,
@@ -61,6 +63,17 @@ impl Viewport {
         )
     }
 
+    /// The part of the screen rectangle the content covers. Content shorter
+    /// than the rectangle leaves the rows past its end to what is beneath.
+    fn visible_screen(self) -> Rect {
+        Rect::new(
+            self.screen.x,
+            self.screen.y,
+            self.screen.width,
+            self.screen.height.min(self.content_height),
+        )
+    }
+
     /// The logical rows the screen rectangle shows at this offset.
     fn visible_content(self) -> Rect {
         Rect::new(
@@ -96,14 +109,6 @@ impl Viewport {
             .unwrap_or_else(|| Position::new(point.x, u16::MAX))
     }
 
-    /// [`Self::to_logical`] for points inside the visible screen rectangle.
-    fn visible_to_logical(self, point: Position) -> Option<Position> {
-        self.screen
-            .contains(point)
-            .then(|| self.to_logical(point))
-            .flatten()
-    }
-
     fn mouse_to_logical(self, mouse: MouseEvent) -> MouseEvent {
         let point = self.to_logical_clamped(Position::new(mouse.column, mouse.row));
         MouseEvent {
@@ -115,7 +120,7 @@ impl Viewport {
 
     /// A logical rectangle in screen coordinates, clipped to `clip`. Rows that
     /// project above the screen are dropped.
-    pub(crate) fn project_rect(self, area: Rect, clip: Rect) -> Rect {
+    fn project_rect(self, area: Rect, clip: Rect) -> Rect {
         let above = self.offset.saturating_sub(area.y);
         if above >= area.height {
             return Rect::ZERO;
@@ -135,30 +140,82 @@ impl Viewport {
         }
     }
 
-    /// A logical row in screen coordinates, `None` when it sits above the
-    /// screen.
-    const fn to_screen_row(self, row: u16) -> Option<u16> {
-        row.checked_sub(self.offset)
-    }
-
-    /// Every cell of `logical` paired with the screen cell it projects onto.
-    pub(crate) fn projected_positions(
-        self,
-        logical: Rect,
-    ) -> impl Iterator<Item = (Position, Position)> {
-        (logical.y..logical.bottom()).flat_map(move |y| {
-            let screen_y = self.to_screen_row(y);
-            (logical.x..logical.right())
-                .filter_map(move |x| Some((Position::new(x, y), Position::new(x, screen_y?))))
-        })
-    }
-
     /// The frame rectangle in this viewport's logical coordinates.
-    pub(crate) fn logical_frame(self, frame: Rect) -> Rect {
+    fn logical_frame(self, frame: Rect) -> Rect {
         Rect {
             y: frame.y.saturating_add(self.offset),
             ..frame
         }
+    }
+}
+
+/// A viewport as one paint carries it: the logical rectangle that paint may
+/// address, and the screen rectangle its result may reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Projection {
+    /// Content declared inside the viewport. It addresses the whole logical
+    /// content and reaches the rows the viewport shows.
+    Clipped(Viewport),
+    /// Paint that escaped the clip — a layer opened inside the viewport, or a
+    /// closure deferred from inside it. It addresses the surface it paints
+    /// on, read in logical coordinates, and reaches all of it.
+    Escaped { viewport: Viewport, area: Rect },
+}
+
+impl Projection {
+    const fn viewport(self) -> Viewport {
+        match self {
+            Self::Clipped(viewport) | Self::Escaped { viewport, .. } => viewport,
+        }
+    }
+
+    /// The screen rectangle paint carrying this reaches.
+    fn clip(self) -> Rect {
+        match self {
+            Self::Clipped(viewport) => viewport.visible_screen(),
+            Self::Escaped { area, .. } => area,
+        }
+    }
+
+    /// The whole logical rectangle paint carrying this may write in.
+    pub(crate) fn allocation(self) -> Rect {
+        match self {
+            Self::Clipped(viewport) => viewport.content(),
+            Self::Escaped { viewport, area } => viewport.logical_frame(area),
+        }
+    }
+
+    /// A logical rectangle in screen coordinates, clipped.
+    pub(crate) fn project_rect(self, area: Rect) -> Rect {
+        self.viewport().project_rect(area, self.clip())
+    }
+
+    /// `point` in logical coordinates. Content counts only where the viewport
+    /// shows it; paint that escaped the clip counts wherever the pointer is.
+    fn to_logical(self, point: Position) -> Option<Position> {
+        match self {
+            Self::Clipped(viewport) => viewport
+                .visible_screen()
+                .contains(point)
+                .then(|| viewport.to_logical(point))
+                .flatten(),
+            Self::Escaped { viewport, .. } => viewport.to_logical(point),
+        }
+    }
+
+    /// Every cell of `logical` this projection carries, paired with the
+    /// screen cell it lands on.
+    pub(crate) fn projected_positions(
+        self,
+        logical: Rect,
+    ) -> impl Iterator<Item = (Position, Position)> {
+        let offset = self.viewport().offset;
+        self.project_rect(logical).positions().map(move |screen| {
+            (
+                Position::new(screen.x, screen.y.saturating_add(offset)),
+                screen,
+            )
+        })
     }
 }
 
@@ -841,11 +898,12 @@ impl<State, Msg> Surface<State, Msg> {
         let Some(record) = node.viewport.map(|index| &self.viewports[index]) else {
             return Some(point);
         };
-        if record.layer == node.layer {
-            record.viewport.visible_to_logical(point)
-        } else {
-            record.viewport.to_logical(point)
+        // Content the viewport clips counts only where the viewport shows it;
+        // a layer that escaped the clip counts wherever it painted.
+        if record.layer == node.layer && !record.viewport.visible_screen().contains(point) {
+            return None;
         }
+        record.viewport.to_logical(point)
     }
 
     fn next_focus(
@@ -941,11 +999,10 @@ impl<State, Msg> Surface<State, Msg> {
 
 type PaintThunk<State> = Box<dyn FnOnce(&mut PaintCtx<'_, '_, State>)>;
 
-/// One closure registered through [`DeclareCtx::defer_paint`], with the
-/// viewport projection open where it was registered.
+/// One closure registered through [`DeclareCtx::defer_paint`], with the slot
+/// it was registered in.
 struct DeferredPaint<State> {
-    layer: Option<usize>,
-    projection: Option<Viewport>,
+    slot: PaintSlot,
     paint: PaintThunk<State>,
 }
 
@@ -968,15 +1025,9 @@ struct QueuedPaint<State> {
 /// was open at its declaration whatever is open at replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PaintSlot {
-    destination: PaintDestination,
-    projection: Option<Viewport>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PaintDestination {
-    Frame,
-    Layer(usize),
-    Viewport(usize),
+    /// The layer canvas the op paints onto, `None` for the frame.
+    destination: Option<usize>,
+    projection: Option<Projection>,
 }
 
 /// What the queue owes at one point in declaration order.
@@ -988,11 +1039,6 @@ enum PaintOp<State> {
     /// at the point that layer's declaration closed — which is what keeps
     /// [`DeclareCtx::defer_paint`] above its layer's content.
     FlushDeferred { canvas: usize },
-    /// Seed the visible logical cells with paint already present beneath the
-    /// viewport at this exact point in declaration order.
-    PrimeViewport { viewport: usize },
-    /// Copy a completed logical viewport canvas into its screen allocation.
-    CompositeViewport { viewport: usize },
 }
 
 /// One declaration's own paint.
@@ -1034,15 +1080,12 @@ enum PaintBody<'a, State, Msg> {
 
 /// A private paint surface: a buffer, and the rectangles written into it.
 ///
-/// Two things paint somewhere other than the frame. A layer subtree is
-/// declared inline, wherever its owner lives in the tree, but must paint
-/// *above* everything declared outside it — including siblings declared
-/// later. A viewport's content is declared at its full logical height and
-/// only afterwards translated and clipped to the rectangle on screen. Both
-/// paint here and composite once the pass is over: `painted` records the
-/// rects paint wrote through, only those rects blit — so a modal declared
-/// over the full screen composites just the box it painted — and each rect
-/// composites opaquely, unwritten cells included.
+/// A layer subtree is declared inline, wherever its owner lives in the tree,
+/// and paints *above* everything declared outside it — including siblings
+/// declared later. It paints here and composites once the pass is over:
+/// `painted` records the rects paint wrote through, only those rects blit —
+/// so a modal declared over the full screen composites just the box it
+/// painted — and each rect composites opaquely, unwritten cells included.
 pub(crate) struct Canvas {
     pub(crate) buffer: Buffer,
     painted: Vec<Rect>,
@@ -1194,15 +1237,12 @@ pub(crate) struct RenderPass<State, Msg> {
     failed: bool,
     /// One canvas per declared layer, in discovery order.
     canvases: Vec<Canvas>,
-    /// One canvas per declared viewport, in discovery order and indexed the
-    /// same as [`Surface::viewports`].
-    viewport_canvases: Vec<Canvas>,
-    /// The open viewport, indexing `viewport_canvases`. A viewport declared
-    /// while one is open panics, so there is at most one.
+    /// The open viewport, indexing [`Surface::viewports`]. A viewport
+    /// declared while one is open panics, so there is at most one.
     open_viewport: Option<usize>,
-    /// Paint destinations in declaration nesting order; the innermost decides
-    /// where the next paint belongs.
-    destination_stack: Vec<PaintDestination>,
+    /// The layer canvases open in declaration nesting order; the innermost
+    /// decides where the next paint belongs.
+    layer_stack: Vec<usize>,
 }
 
 impl<State, Msg> RenderPass<State, Msg> {
@@ -1218,22 +1258,15 @@ impl<State, Msg> RenderPass<State, Msg> {
             hover_path: Vec::new(),
             failed: false,
             canvases: Vec::new(),
-            viewport_canvases: Vec::new(),
             open_viewport: None,
-            destination_stack: Vec::new(),
+            layer_stack: Vec::new(),
         }
     }
 
     /// The layer currently being declared into, named by its canvas index.
     /// `None` outside any layer.
     fn current_layer(&self) -> Option<usize> {
-        self.destination_stack
-            .iter()
-            .rev()
-            .find_map(|destination| match destination {
-                PaintDestination::Layer(canvas) => Some(*canvas),
-                PaintDestination::Frame | PaintDestination::Viewport(_) => None,
-            })
+        self.layer_stack.last().copied()
     }
 
     /// The identity path of the declaration currently being declared into —
@@ -1271,14 +1304,6 @@ impl<State, Msg> RenderPass<State, Msg> {
         self.path_cursor.pop();
     }
 
-    /// The innermost declaration destination, or the frame at the root.
-    fn active_target(&self) -> PaintDestination {
-        self.destination_stack
-            .last()
-            .copied()
-            .unwrap_or(PaintDestination::Frame)
-    }
-
     /// Queue an op for the slot currently being declared into.
     fn queue(&mut self, op: PaintOp<State>) {
         self.paint_queue.push(QueuedPaint {
@@ -1287,41 +1312,55 @@ impl<State, Msg> RenderPass<State, Msg> {
         });
     }
 
-    /// The slot the destination currently being declared into paints in. A
-    /// layer inside a viewport escaped the clip but still paints where the
-    /// offset puts it, so it carries a projection; the viewport's own canvas
-    /// is already in logical coordinates and carries none.
+    /// The slot the destination currently being declared into paints in.
+    /// Content declared inside the open viewport is clipped to what the
+    /// viewport shows; a layer opened inside one escaped that clip and paints
+    /// where the offset puts it.
     fn active_slot(&self) -> PaintSlot {
-        let destination = self.active_target();
-        let projection = match destination {
-            PaintDestination::Layer(_) => self.open_projection(),
-            PaintDestination::Frame | PaintDestination::Viewport(_) => None,
-        };
+        let destination = self.current_layer();
         PaintSlot {
             destination,
-            projection,
+            projection: self.open_viewport.map(|index| {
+                let record = &self.surface.viewports[index];
+                if destination == record.layer {
+                    Projection::Clipped(record.viewport)
+                } else {
+                    Projection::Escaped {
+                        viewport: record.viewport,
+                        area: self.destination_area(destination),
+                    }
+                }
+            }),
         }
     }
 
-    /// Where the pointer is in the coordinates paint or declaration into
-    /// `slot` uses. Inside the viewport itself the pointer counts only where
-    /// the viewport is on screen; content that escaped the clip carries the
-    /// projection and translates unconditionally.
+    /// The slot paint registered through [`DeclareCtx::defer_paint`] runs in:
+    /// the destination being declared into, and a projection that escapes the
+    /// open viewport's clip.
+    fn escaped_slot(&self) -> PaintSlot {
+        let destination = self.current_layer();
+        PaintSlot {
+            destination,
+            projection: self.open_viewport.map(|index| Projection::Escaped {
+                viewport: self.surface.viewports[index].viewport,
+                area: self.destination_area(destination),
+            }),
+        }
+    }
+
+    /// The rectangle the destination `layer` names writes into.
+    fn destination_area(&self, layer: Option<usize>) -> Rect {
+        layer.map_or(self.frame_area, |index| self.canvases[index].buffer.area)
+    }
+
+    /// Where the pointer is in the coordinates `slot` paints in, and `None`
+    /// where the projection it carries does not reach it.
     fn hover_in(&self, slot: PaintSlot) -> Option<Position> {
         let position = self.hover_position?;
-        match (slot.projection, slot.destination) {
-            (Some(viewport), _) => viewport.to_logical(position),
-            (None, PaintDestination::Viewport(index)) => self.surface.viewports[index]
-                .viewport
-                .visible_to_logical(position),
-            (None, _) => Some(position),
+        match slot.projection {
+            Some(projection) => projection.to_logical(position),
+            None => Some(position),
         }
-    }
-
-    /// The open viewport's projection, if one is open.
-    fn open_projection(&self) -> Option<Viewport> {
-        self.open_viewport
-            .map(|index| self.surface.viewports[index].viewport)
     }
 
     /// Queue a closure registered through [`DeclareCtx::paint`], tagged with
@@ -1361,7 +1400,7 @@ impl<State, Msg> RenderPass<State, Msg> {
                 pass.open_viewport.is_none(),
                 "a viewport cannot be declared inside another viewport"
             );
-            let cells = usize::from(screen.width) * usize::from(content_height);
+            let cells = u32::from(screen.width) * u32::from(content_height);
             assert!(
                 cells <= MAX_VIEWPORT_CELLS,
                 "viewport content is {cells} cells; the maximum is {MAX_VIEWPORT_CELLS}"
@@ -1371,27 +1410,16 @@ impl<State, Msg> RenderPass<State, Msg> {
                 content_height,
                 offset: offset.min(content_height.saturating_sub(screen.height)),
             };
-            let index = pass.viewport_canvases.len();
-            pass.viewport_canvases.push(Canvas::new(viewport.content()));
+            pass.open_viewport = Some(pass.surface.viewports.len());
             pass.surface.viewports.push(ViewportRecord {
                 viewport,
                 owner: pass.parent_stack.last().copied(),
                 layer: pass.current_layer(),
             });
-            pass.queue(PaintOp::PrimeViewport { viewport: index });
-            pass.open_viewport = Some(index);
-            pass.destination_stack
-                .push(PaintDestination::Viewport(index));
             env.area = viewport.content();
             env.frame_area = viewport.logical_frame(pass.frame_area);
             pass.with_declare_ctx(env, declare);
             pass.open_viewport = None;
-            assert_eq!(
-                pass.destination_stack.pop(),
-                Some(PaintDestination::Viewport(index)),
-                "a declared viewport closes its own paint destination"
-            );
-            pass.queue(PaintOp::CompositeViewport { viewport: index });
         });
     }
 
@@ -1414,47 +1442,45 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Open a layer: subsequent declarations carry its tag, and their paint
     /// lands on a fresh canvas composited after the frame.
     fn begin_layer(&mut self, area: Rect) {
-        let area = self.open_projection().map_or(area, |viewport| {
-            viewport.project_rect(area, self.frame_area)
-        });
+        let area = self
+            .open_viewport
+            .map(|index| self.surface.viewports[index].viewport)
+            .map_or(area, |viewport| {
+                viewport.project_rect(area, self.frame_area)
+            });
         self.canvases.push(Canvas::new(area));
-        let canvas = self.canvases.len() - 1;
-        self.destination_stack.push(PaintDestination::Layer(canvas));
+        self.layer_stack.push(self.canvases.len() - 1);
     }
 
     /// Close the innermost layer, queueing its deferred paint behind
     /// everything the layer declared.
     fn end_layer(&mut self) {
-        let PaintDestination::Layer(canvas) = self.active_target() else {
+        let Some(canvas) = self.current_layer() else {
             panic!("a declared layer closes its own paint destination");
         };
         // Queued rather than run here: the layer's own content has only been
         // queued so far, and deferred paint has to land on top of it.
         self.queue(PaintOp::FlushDeferred { canvas });
-        self.destination_stack.pop();
+        self.layer_stack.pop();
     }
 
     /// Run the deferred thunks registered in the layer `canvas_index` belongs
     /// to into that canvas.
     fn flush_deferred_for(&mut self, canvas_index: usize, theme: &Theme, state: &State) {
-        let layer = Some(canvas_index);
         self.guarded(|pass| {
             let mut thunks = Vec::new();
             let mut index = 0;
             while index < pass.deferred.len() {
-                if pass.deferred[index].layer == layer {
+                if pass.deferred[index].slot.destination == Some(canvas_index) {
                     thunks.push(pass.deferred.remove(index));
                 } else {
                     index += 1;
                 }
             }
             for deferred in thunks {
-                let hover_position = pass.hover_in(PaintSlot {
-                    destination: PaintDestination::Layer(canvas_index),
-                    projection: deferred.projection,
-                });
+                let hover_position = pass.hover_in(deferred.slot);
                 let target =
-                    PaintTarget::Canvas(&mut pass.canvases[canvas_index], deferred.projection);
+                    PaintTarget::Canvas(&mut pass.canvases[canvas_index], deferred.slot.projection);
                 paint_deferred(target, theme, hover_position, state, deferred.paint);
             }
         });
@@ -1705,8 +1731,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static,
     ) {
         self.deferred.push(DeferredPaint {
-            layer: self.current_layer(),
-            projection: self.open_projection(),
+            slot: self.escaped_slot(),
             paint: Box::new(paint),
         });
     }
@@ -1739,12 +1764,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             let frame = &mut *frame;
             self.guarded(|pass| match op {
                 PaintOp::FlushDeferred { canvas } => pass.flush_deferred_for(canvas, theme, state),
-                PaintOp::PrimeViewport { viewport } => {
-                    pass.prime_viewport(viewport, slot.destination, frame);
-                }
-                PaintOp::CompositeViewport { viewport } => {
-                    pass.composite_viewport(viewport, slot.destination, frame);
-                }
                 PaintOp::Paint(op) => pass.paint_op(op, slot, frame, state, theme, focus),
             });
         }
@@ -1780,17 +1799,9 @@ impl<State, Msg> RenderPass<State, Msg> {
             }
             DeclaredPaint::Thunk { area, paint, .. } => (area, PaintBody::Thunk(paint)),
         };
-        // Every surface takes the projection its op was queued with. A
-        // viewport canvas is already in logical coordinates and is queued
-        // with none.
         let target = match slot.destination {
-            PaintDestination::Frame => PaintTarget::Frame(frame, slot.projection),
-            PaintDestination::Layer(index) => {
-                PaintTarget::Canvas(&mut self.canvases[index], slot.projection)
-            }
-            PaintDestination::Viewport(index) => {
-                PaintTarget::Canvas(&mut self.viewport_canvases[index], slot.projection)
-            }
+            None => PaintTarget::Frame(frame, slot.projection),
+            Some(index) => PaintTarget::Canvas(&mut self.canvases[index], slot.projection),
         };
         let mut ctx = PaintCtx {
             target,
@@ -1809,80 +1820,6 @@ impl<State, Msg> RenderPass<State, Msg> {
         }
     }
 
-    fn prime_viewport(
-        &mut self,
-        viewport_index: usize,
-        target: PaintDestination,
-        frame: &mut Frame,
-    ) {
-        let viewport = self.surface.viewports[viewport_index].viewport;
-        let destination_area = viewport.visible_content();
-        let source_area = Rect::new(
-            viewport.screen.x,
-            viewport.screen.y,
-            destination_area.width,
-            destination_area.height,
-        );
-        match target {
-            PaintDestination::Frame => {
-                let source = frame.buffer_mut();
-                let destination = &mut self.viewport_canvases[viewport_index].buffer;
-                copy_buffer(source, source_area, destination, destination_area);
-            }
-            PaintDestination::Layer(layer) => {
-                let (viewports, layers) = (&mut self.viewport_canvases, &self.canvases);
-                let source = &layers[layer].buffer;
-                let destination = &mut viewports[viewport_index].buffer;
-                copy_buffer(source, source_area, destination, destination_area);
-            }
-            PaintDestination::Viewport(_) => {
-                panic!("nested viewport priming is not supported")
-            }
-        }
-    }
-
-    fn composite_viewport(
-        &mut self,
-        viewport_index: usize,
-        target: PaintDestination,
-        frame: &mut Frame,
-    ) {
-        let viewport = self.surface.viewports[viewport_index].viewport;
-        let visible = viewport.visible_content();
-        let painted = self.viewport_canvases[viewport_index]
-            .painted
-            .iter()
-            .filter_map(|area| {
-                let source = area.intersection(visible);
-                (!source.is_empty()).then(|| {
-                    let screen = viewport.project_rect(source, viewport.screen);
-                    (source, screen)
-                })
-            })
-            .collect::<Vec<_>>();
-        match target {
-            PaintDestination::Frame => {
-                for (source_area, screen) in painted {
-                    let source = &self.viewport_canvases[viewport_index].buffer;
-                    let destination = frame.buffer_mut();
-                    copy_buffer(source, source_area, destination, screen);
-                }
-            }
-            PaintDestination::Layer(layer) => {
-                for (source_area, screen) in painted {
-                    let (viewports, layers) = (&self.viewport_canvases, &mut self.canvases);
-                    let source = &viewports[viewport_index].buffer;
-                    let destination = &mut layers[layer];
-                    copy_buffer(source, source_area, &mut destination.buffer, screen);
-                    destination.mark_painted(screen);
-                }
-            }
-            PaintDestination::Viewport(_) => {
-                panic!("nested viewport composition is not supported")
-            }
-        }
-    }
-
     /// Finish the frame's painting: composite every layer canvas over
     /// the frame in discovery order — a modal dims what is beneath it first —
     /// then flush the base declaration's deferred thunks on top of the
@@ -1896,17 +1833,14 @@ impl<State, Msg> RenderPass<State, Msg> {
             let frame_area = frame.area();
             for &rect in &canvas.painted {
                 let rect = rect.intersection(frame_area);
-                copy_buffer(&canvas.buffer, rect, frame.buffer_mut(), rect);
+                copy_rect(&canvas.buffer, frame.buffer_mut(), rect);
             }
         }
         let deferred = std::mem::take(&mut self.deferred);
         self.guarded(|pass| {
             for entry in deferred {
-                let hover_position = pass.hover_in(PaintSlot {
-                    destination: PaintDestination::Frame,
-                    projection: entry.projection,
-                });
-                let target = PaintTarget::Frame(&mut *frame, entry.projection);
+                let hover_position = pass.hover_in(entry.slot);
+                let target = PaintTarget::Frame(&mut *frame, entry.slot.projection);
                 paint_deferred(target, theme, hover_position, state, entry.paint);
             }
         });
@@ -1915,7 +1849,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     fn assert_valid(&self) {
         assert!(!self.failed, "cannot commit a failed declaration pass");
         assert!(
-            self.parent_stack.is_empty() && self.destination_stack.is_empty(),
+            self.parent_stack.is_empty() && self.layer_stack.is_empty(),
             "cannot commit a declaration pass with unclosed components or layers"
         );
         assert!(
@@ -3436,23 +3370,12 @@ fn paint_deferred<State>(
     paint(&mut ctx);
 }
 
-fn copy_buffer(source: &Buffer, source_area: Rect, destination: &mut Buffer, target_area: Rect) {
-    for row in 0..source_area.height.min(target_area.height) {
-        for column in 0..source_area.width.min(target_area.width) {
-            let source_position = (
-                source_area.x.saturating_add(column),
-                source_area.y.saturating_add(row),
-            );
-            let target_position = (
-                target_area.x.saturating_add(column),
-                target_area.y.saturating_add(row),
-            );
-            if let (Some(source_cell), Some(target_cell)) = (
-                source.cell(source_position),
-                destination.cell_mut(target_position),
-            ) {
-                *target_cell = source_cell.clone();
-            }
+/// Copy `area` out of `source` and into `destination`, cell for cell.
+fn copy_rect(source: &Buffer, destination: &mut Buffer, area: Rect) {
+    for position in area.positions() {
+        if let (Some(cell), Some(target)) = (source.cell(position), destination.cell_mut(position))
+        {
+            *target = cell.clone();
         }
     }
 }
@@ -11540,6 +11463,36 @@ mod viewport_tests {
         assert_eq!(driver.row(0), "wi  ");
     }
 
+    /// Content shorter than the rectangle showing it leaves the rows past its
+    /// end to whatever is painted beneath.
+    #[test]
+    fn paint_below_the_logical_content_is_clipped() {
+        let mut driver = Driver::new(4, 3);
+        driver.render(|ctx| {
+            ctx.paint_widget(Paragraph::new("keep"), Rect::new(0, 2, 4, 1));
+            ctx.viewport(Rect::new(0, 0, 4, 3), 2, 0, |ctx| {
+                ctx.paint_widget(Paragraph::new("over"), Rect::new(0, 2, 4, 1));
+            });
+        });
+
+        assert_eq!(driver.row(2), "keep");
+    }
+
+    /// A paint inside a viewport starts from what is already on the surface
+    /// beneath it, so the cells its widget leaves alone keep what was there.
+    #[test]
+    fn paint_inside_a_viewport_keeps_the_cells_its_widget_leaves_alone() {
+        let mut driver = Driver::new(4, 1);
+        driver.render(|ctx| {
+            ctx.paint_widget(Paragraph::new("keep"), Rect::new(0, 0, 4, 1));
+            ctx.viewport(Rect::new(0, 0, 4, 1), 1, 0, |ctx| {
+                ctx.paint_widget(Paragraph::new("X"), Rect::new(0, 0, 4, 1));
+            });
+        });
+
+        assert_eq!(driver.row(0), "Xeep");
+    }
+
     #[derive(Debug, Clone, Copy)]
     enum CaughtViewportFailure {
         Widget,
@@ -11593,11 +11546,11 @@ mod viewport_tests {
     }
 
     /// A paint panic a component catches is the component's own business: the
-    /// pass finishes and commits. What the panicking paint wrote into the
-    /// viewport canvas still never reaches the frame, because the write is
-    /// recorded as painted only once it returns.
+    /// pass finishes and commits. What the panicking paint wrote still never
+    /// reaches the frame, because a paint inside a viewport lays out in a
+    /// scratch buffer that is copied back only once it returns.
     #[test]
-    fn a_caught_viewport_paint_panic_composites_nothing_and_commits() {
+    fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
         for failure in [
             CaughtViewportFailure::Widget,
             CaughtViewportFailure::StatefulWidget,
@@ -11656,7 +11609,8 @@ mod viewport_tests {
         }
     }
 
-    /// A layer canvas behaves the same as a viewport canvas does.
+    /// A layer canvas holds the same guarantee: a write the panic left
+    /// unrecorded composites nowhere.
     #[test]
     fn a_caught_layer_paint_panic_composites_nothing_and_commits() {
         let mut driver = Driver::new(10, 3);
@@ -11801,5 +11755,100 @@ mod viewport_tests {
         });
 
         assert_eq!(&driver.row(0)[..1], "D");
+    }
+
+    /// A viewport's clip travels with its content's paint: rows declared
+    /// below the ones on screen land nowhere, leaving what is painted beneath
+    /// the scroll area alone.
+    #[test]
+    fn content_below_the_visible_rows_leaves_the_frame_beneath_it_alone() {
+        let mut driver = Driver::new(4, 4);
+        driver.render(|ctx| {
+            ctx.paint_widget(Paragraph::new("keep"), Rect::new(0, 2, 4, 1));
+            ctx.viewport(Rect::new(0, 0, 4, 2), 4, 0, |ctx| {
+                ctx.paint_widget(Paragraph::new("in"), Rect::new(0, 0, 2, 1));
+                ctx.paint_widget(Paragraph::new("out"), Rect::new(0, 2, 3, 1));
+            });
+        });
+
+        assert_eq!(driver.row(0), "in  ");
+        assert_eq!(
+            driver.row(2),
+            "keep",
+            "content past the viewport rows bled out"
+        );
+    }
+
+    /// A free-form paint inside a viewport covers the whole logical content,
+    /// so it may address rows the viewport is not showing.
+    #[test]
+    fn with_buffer_inside_a_viewport_covers_the_whole_logical_content() {
+        let mut driver = Driver::new(4, 2);
+        driver.render(|ctx| {
+            ctx.viewport(Rect::new(0, 0, 4, 2), 6, 4, |ctx| {
+                ctx.paint(|ctx| {
+                    ctx.with_buffer(|buffer| {
+                        buffer.set_string(0, 0, "hi", Style::default());
+                        buffer.set_string(0, 4, "ok", Style::default());
+                    });
+                });
+            });
+        });
+
+        assert_eq!(driver.row(0), "ok  ");
+    }
+
+    /// A layer opened inside a viewport escaped that clip, and paints where
+    /// the offset puts it however far past the viewport's own rows that is.
+    #[test]
+    fn a_popup_declared_inside_a_viewport_paints_past_the_viewport_rows() {
+        let mut driver = Driver::new(4, 4);
+        driver.render(|ctx| {
+            ctx.viewport(Rect::new(0, 0, 4, 2), 4, 0, |ctx| {
+                ctx.popup(
+                    "pop",
+                    Rect::new(0, 3, 3, 1),
+                    PopupOptions::default(),
+                    |ctx| {
+                        ctx.paint_widget(Paragraph::new("pop"), Rect::new(0, 3, 3, 1));
+                    },
+                );
+            });
+        });
+
+        assert_eq!(driver.row(3), "pop ");
+    }
+
+    /// Paint inside a viewport keeps the frame's order: a later declaration
+    /// covers an earlier one, and every layer covers both.
+    #[test]
+    fn paint_inside_a_viewport_keeps_declaration_order_under_its_layers() {
+        let mut driver = Driver::new(4, 2);
+        driver.render(|ctx| {
+            ctx.viewport(Rect::new(0, 0, 4, 2), 2, 0, |ctx| {
+                ctx.paint_widget(Paragraph::new("aaaa"), Rect::new(0, 0, 4, 1));
+                ctx.paint_widget(Paragraph::new("bb"), Rect::new(0, 0, 2, 1));
+                ctx.popup(
+                    "pop",
+                    Rect::new(0, 1, 2, 1),
+                    PopupOptions::default(),
+                    |ctx| {
+                        ctx.paint_widget(Paragraph::new("PP"), Rect::new(0, 1, 2, 1));
+                    },
+                );
+                ctx.paint_widget(Paragraph::new("cccc"), Rect::new(0, 1, 4, 1));
+            });
+        });
+
+        assert_eq!(
+            driver.row(0),
+            "bbaa",
+            "a later declaration paints over an earlier"
+        );
+        assert_eq!(
+            driver.row(1),
+            "PPcc",
+            "a layer paints over the content around it"
+        );
     }
 }

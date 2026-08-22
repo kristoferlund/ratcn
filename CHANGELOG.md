@@ -193,9 +193,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   focus to its own first focusable leaf. `close` writes the saved path back and
   returns `None` on an empty stack, leaving `focus` alone.
 - **Breaking:** a paint panic a component catches leaves the declaration pass
-  to finish and commit. A layer or viewport canvas composites only the rects
-  paint recorded, so a widget that panicked part-way through its own area
-  contributes nothing.
+  to finish and commit. A layer canvas composites only the rects paint
+  recorded, and a paint inside a viewport reaches the frame only once it
+  returns, so a widget that panicked part-way through its own area contributes
+  nothing.
+- A widget declared inside a `ScrollArea` lays out against its own rectangle,
+  whatever part of it the viewport shows: a block overhanging the viewport
+  keeps its own borders, and the viewport clips them.
 - **Breaking:** `MouseEvent` coordinates and `DragPhase` positions are in the
   coordinate space the receiving component was declared with, matching
   `EventCtx::area`. Outside a viewport that is the screen.
