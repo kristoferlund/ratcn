@@ -69,6 +69,7 @@ mod drag;
 mod engine;
 mod event;
 mod focus;
+mod gesture;
 mod modal;
 
 /// The name a component is declared under, and half of how it is identified.

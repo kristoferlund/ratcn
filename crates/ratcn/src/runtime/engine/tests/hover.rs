@@ -345,7 +345,13 @@ fn a_captured_gesture_freezes_hover_until_it_ends() {
     assert_eq!(driver.ratcn.hover_path(), [ChildId::Static("left")]);
 
     driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
-    assert!(driver.ratcn.capture_path(MouseButton::Left).is_some());
+    assert!(
+        driver
+            .ratcn
+            .gestures
+            .capture_path(MouseButton::Left)
+            .is_some()
+    );
     driver.event(mouse(MouseKind::Moved, 11, 1), &state);
     assert_eq!(
         driver.ratcn.hover_path(),
@@ -394,7 +400,11 @@ fn a_held_press_freezes_hover_against_a_moving_redraw() {
     driver.event(mouse(MouseKind::Moved, 1, 0), &state);
     driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
     assert!(
-        !driver.ratcn.any_capture(),
+        driver
+            .ratcn
+            .gestures
+            .capture_path(MouseButton::Left)
+            .is_none(),
         "nothing claimed this gesture — the freeze is not about captures"
     );
 
@@ -441,7 +451,13 @@ fn a_frame_that_cancels_a_gesture_unhovers_its_target() {
     render(&mut driver, false);
     driver.event(mouse(MouseKind::Moved, 1, 0), &state);
     driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
-    assert!(driver.ratcn.capture_path(MouseButton::Left).is_some());
+    assert!(
+        driver
+            .ratcn
+            .gestures
+            .capture_path(MouseButton::Left)
+            .is_some()
+    );
     driver.event(mouse(MouseKind::Drag(MouseButton::Left), 8, 1), &state);
     render(&mut driver, false);
     assert_eq!(
