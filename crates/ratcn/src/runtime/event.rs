@@ -294,7 +294,7 @@ pub struct MouseEvent {
 /// What a [`MouseEvent`] is.
 ///
 /// [`Click`](MouseKind::Click) and [`DragEnd`](MouseKind::DragEnd) are
-/// synthesized by [`Ratcn`](super::Ratcn)'s internal mouse tracker.
+/// synthesized by [`Ratcn`](super::Ratcn)'s gesture tracking.
 /// [`Exited`](MouseKind::Exited) is a browser backend notification; the other
 /// kinds are backend input or normalized drag motion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

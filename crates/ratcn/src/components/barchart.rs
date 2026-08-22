@@ -252,7 +252,7 @@ impl<'a> BarChartWidget<'a> {
     ///
     /// Horizontal charts size their bar lengths from the supplied paint area, so
     /// this returns zero for them. Group labels and value text can require more
-    /// space on the other axis and are intentionally not guessed here.
+    /// space on the other axis; this measures the bar axis alone.
     #[must_use]
     pub fn width(&self) -> u16 {
         if self.direction == Direction::Vertical {
@@ -266,7 +266,7 @@ impl<'a> BarChartWidget<'a> {
     ///
     /// Vertical charts size their bar lengths from the supplied paint area, so
     /// this returns zero for them. Group labels and value text can require more
-    /// space on the other axis and are intentionally not guessed here.
+    /// space on the other axis; this measures the bar axis alone.
     #[must_use]
     pub fn height(&self) -> u16 {
         if self.direction == Direction::Horizontal {

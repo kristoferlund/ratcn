@@ -1097,7 +1097,7 @@ mod tests {
     }
 
     /// The rows one item of a two-row-per-item list occupies, so a click's
-    /// screen row and its item index deliberately disagree.
+    /// screen row and its item index differ.
     const TALL_ROW_HEIGHT: u16 = 2;
 
     /// One frame: a two-row-per-item list filling the terminal.
@@ -1221,8 +1221,8 @@ mod tests {
         )
     }
 
-    // A fixed selected fill used to match the resting backdrop but not the
-    // focused one, so focusing the list left the selected row a dark band.
+    // A selected row carries the fill the whole list wears — resting,
+    // focused, or hovered — and shows the selection in its foreground.
     #[test]
     fn a_selected_row_keeps_the_rest_focus_or_hover_backdrop() {
         let items = [Text::from("selected"), Text::from("other")];

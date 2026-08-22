@@ -107,6 +107,8 @@ The concept pages each cover one idea in depth. Roughly in reading order:
 - [Focus, hover, and identity](./concepts/focus-hover-identity) — how components
   get stable identities, how Tab traversal works, why focus lives in your state
   and hover lives in the runtime.
+- [Keyboard](./concepts/keyboard) — every key the components respond to, and
+  the rules that decide which one claims a key.
 - [Layers and modals](./concepts/layers-and-modals) — dialogs, overlays, and
   paint ordering.
 - [Themes](./concepts/themes) — built-in presets and authoring your own palette.

@@ -35,6 +35,18 @@ impl Component<AppState, Msg> for MyComponent {
     fn is_focusable(&self) -> bool { ... }
 
     fn interaction_area(&self, area: Rect) -> Rect { ... }
+
+    // Optional, like everything but `declare`, and reached for less often:
+    fn prepare(&mut self, state: &AppState) { ... }
+
+    fn scope_options(&self) -> ScopeOptions { ... }
+
+    fn reveal_in_viewport(
+        &mut self,
+        target: Rect,
+        state: &AppState,
+        ctx: &mut EventCtx<'_>,
+    ) { ... }
 }
 ```
 
@@ -68,6 +80,9 @@ composites (below). `prepare` runs once per declaration, before any of those
 answers are read, so all of them may be computed from what it pins: `Select`
 resolves its open flag there, and `List`, `Select`, and `Tabs` use it to fail
 loud when two items carry the same value.
+`reveal_in_viewport` is called on the component that declared a viewport when
+focus lands on a descendant the viewport clips, so it can scroll that
+descendant into view.
 `MeasuredComponent` adds a `measure` method so containers such as the Dialog
 action row can size a component before declaring it.
 

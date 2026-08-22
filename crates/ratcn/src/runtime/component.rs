@@ -1,3 +1,18 @@
+//! Components, and the three contexts a frame hands them.
+//!
+//! [`Component`] is what an interactive piece implements. A fresh instance is
+//! built from app state every frame: it declares its area and its
+//! descendants, paints once focus has resolved, and answers input with an
+//! [`EventResult`] the app matches on.
+//!
+//! Each phase carries its own context, and what the context holds is what the
+//! phase may read. [`DeclareCtx`] builds the tree — child declarations,
+//! layers, scopes, viewports — and knows nothing of focus. [`PaintCtx`] writes
+//! cells, with the theme and the interaction flags. [`EventCtx`] routes one
+//! event against the retained tree, and holds pointer capture and the
+//! transient values a gesture keeps between events. [`ScopeOptions`] shapes
+//! how focus travels through a subtree.
+
 use std::{
     any::{Any, type_name},
     collections::{HashMap, hash_map::Entry},
@@ -1285,7 +1300,8 @@ pub enum Step {
 ///
 /// # What happens each frame
 ///
-/// 1. [`prepare`](Self::prepare) — prepare from the declaring state.
+/// 1. [`prepare`](Self::prepare) — pin what the steps below read out of app
+///    state.
 /// 2. [`scope_options`](Self::scope_options) and
 ///    [`is_focusable`](Self::is_focusable) — read *before* any painting,
 ///    because focus for the whole frame is decided in one pass.
@@ -1309,10 +1325,10 @@ pub trait Component<State, Msg> {
     ///
     /// That is what the hook is for: pinning declaration-time state once,
     /// rather than deriving it again in every answer.
-    /// [`Tooltip`](crate::Tooltip) and [`Select`](crate::Select) resolve here
-    /// whether they are open. It is also where the built-ins fail loud on a
-    /// malformed declaration — [`List`](crate::List), [`Select`](crate::Select),
-    /// and [`Tabs`](crate::Tabs) assert their item values are unique — so the
+    /// [`Select`](crate::Select) resolves here whether it is open. It is also
+    /// where the built-ins fail loud on a malformed declaration —
+    /// [`List`](crate::List), [`Select`](crate::Select), and
+    /// [`Tabs`](crate::Tabs) assert their item values are unique — so the
     /// panic names the declaring component rather than surfacing later as a
     /// routing oddity. Put a check whose answer changes only with the props
     /// behind `cfg!(debug_assertions)`: every frame declares a fresh instance,

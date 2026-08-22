@@ -11,14 +11,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `ratcn::geometry`, the crate-root module holding the rect helpers components
-  share: `fixed_height`, `is_border`, and `wrapped_height`.
+  share: `is_border`, `wrapped_height`, and `fixed_height` — an area cropped to
+  exactly the rows a fixed-height shape occupies, or empty when it cannot hold
+  them, which `Button` and `Tabs` derive their interaction area from.
 - `FocusState` implements `Eq`.
 - `ScrollArea`, with `ScrollAreaStyle`: a vertical viewport for arbitrary
   interactive descendants. Paint and pointer input are clipped to the visible
-  rows while descendants keep their full logical allocations, and focus landing
-  on a clipped descendant scrolls it into view. `scroll(read, on_change)` binds
-  the first visible content row to app state, handing `on_change` each new
-  offset as a `u16`.
+  rows while descendants lay out against their own full rectangles — a block
+  overhanging the viewport keeps its borders, and the viewport clips them.
+  Focus on a clipped descendant scrolls it into view. `scroll(read, on_change)`
+  binds the first visible content row to app state as a `u16`.
 - `DeclareCtx::viewport`, the runtime mechanism behind `ScrollArea`, and
   `Component::reveal_in_viewport`, which the runtime calls on the component
   that declared a viewport when focus lands on a descendant it clips.
@@ -88,9 +90,6 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `selection_indicator::marker_line`, the default row of a selection control:
   the marker, colored, then the label, uncolored. `List` and `Select` drew the
   identical line separately.
-- `geometry::fixed_height`: an area
-  cropped to exactly the rows a fixed-height shape occupies, or empty when it
-  cannot hold them. `Button` and `Tabs` derive their interaction area from it.
 - `linear_nav::has_enabled`, the focusability question every item control asks:
   is there any index a cursor could land on?
 
@@ -177,7 +176,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** `List::render_item` and `Select::render_item` are `paint_item`,
   and `ButtonRenderMode` is `ButtonFill`. Both name cell writing.
 - **Breaking:** `Toast` builders are `with_description`, `with_kind`, and
-  `with_id`; the readers for those values are `description`, `kind`, and `id`.
+  `with_id`; their readers are `description`, `kind`, and `id`, where 0.0.1 had
+  `description_text`, `toast_kind`, and `toast_id`.
 - **Breaking:** `crossterm::InputModes::mouse_capture` and `bracketed_paste` are
   `mouse` and `paste`, the names `terminal::SessionOptions` uses.
 - **Breaking:** `list_core::WheelPark` is `WheelHold` and its `park` method is
@@ -197,9 +197,6 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recorded, and a paint inside a viewport reaches the frame only once it
   returns, so a widget that panicked part-way through its own area contributes
   nothing.
-- A widget declared inside a `ScrollArea` lays out against its own rectangle,
-  whatever part of it the viewport shows: a block overhanging the viewport
-  keeps its own borders, and the viewport clips them.
 - **Breaking:** `MouseEvent` coordinates and `DragPhase` positions are in the
   coordinate space the receiving component was declared with, matching
   `EventCtx::area`. Outside a viewport that is the screen.
@@ -221,9 +218,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   noun family it declares alongside: `scope`, `modal`, `modal_scope`, `popup`,
   `hint`, `in_area`.
 - **Breaking:** `PaintCtx::render_widget` and `PaintCtx::render_stateful_widget`
-  are `PaintCtx::widget` and `PaintCtx::stateful_widget`, and the same two
-  methods on `Painter` are `Painter::widget` and `Painter::stateful_widget`.
-  `with_buffer` is unchanged on both.
+  are `PaintCtx::widget` and `PaintCtx::stateful_widget`. `with_buffer` keeps
+  its name.
 - **Breaking:** the declaration context loses its frame lifetime:
   `DeclareCtx<'a, State, Msg>`, where the 0.0.1 type was
   `RenderCtx<'a, 'frame, State, Msg>` — one migration with the rename above.
@@ -414,10 +410,6 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   into it. Declaring an open hundred-option select drops from 30 µs to 28 µs
   per frame; the options themselves are the caller's to build, so this is the
   smaller half of that cost.
-- The crate's tests share one harness: a terminal-backed `Driver` with `mouse`,
-  `key`, and `key_with`. The engine's tests sit in per-concern modules under
-  `runtime/engine/tests/`, leaving `engine.rs` its production code. 1,300 test
-  lines fewer, same tests.
 
 ## [0.0.1]
 

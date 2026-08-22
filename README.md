@@ -17,9 +17,9 @@ it:
   structured, not yet in tooling. Copying a component into your project is a
   manual file copy today. A CLI is intended, but it does not exist.
 - **The component set is small and growing.** Nine components ship today:
-  `Button`, `List`, `Select`, `Tabs`, `Dialog`, `Toast`, `BarChart`, `Tooltip`,
-  and `ScrollArea`. Notably missing and planned next are **text input** and a
-  **multi-line text area**.
+  `Button`, `List`, `Select`, `Tabs`, `Dialog`, `ToasterWidget`,
+  `BarChartWidget`, `Tooltip`, and `ScrollArea`. Notably missing and planned
+  next are **text input** and a **multi-line text area**.
 
 If you want specific components, patterns, or features, please
 [open an issue](https://github.com/kristoferlund/ratcn/issues).
@@ -70,8 +70,8 @@ A copied module still depends on:
 - the `ratcn` runtime — the `Component` trait, `DeclareCtx`/`EventCtx`,
   `EventResult`, and the normalized event types;
 - the theme types (`Theme`, and `BorderStyle` where a border is painted), plus
-  the crate's small helper modules the component uses (such as color math, text
-  width, linear navigation, and the toast state module);
+  the copy-support modules: `button_shape`, `geometry`, `linear_nav`,
+  `list_core`, `selection_indicator`, and `text_width`;
 - `ratatui` itself.
 
 Components never depend on sibling components, so each module copies alone.

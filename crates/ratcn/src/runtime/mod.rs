@@ -32,9 +32,9 @@
 //! hit-tested leaf and bubble upward if unhandled, and anything the app must
 //! act on comes back as a returned message, never as a mutation.
 //!
-//! # Declaring and drawing are two walks
+//! # Declaring and painting are two walks
 //!
-//! [`Ratcn::render`] runs the closure once, and that run draws nothing: it
+//! [`Ratcn::render`] runs the closure once, and that run paints nothing: it
 //! builds the tree and queues the paint each declaration owes. Focus resolves
 //! against the finished tree, and only then does the queue run — which is why
 //! [`PaintCtx`] carries the interaction flags and [`DeclareCtx`] does not.

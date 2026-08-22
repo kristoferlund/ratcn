@@ -190,8 +190,9 @@ frame.render_widget(
 );
 ```
 
-For writing your own renderer against `entries()`, `Toast` and `ToastEntry`
-expose read accessors: `title`, `description`, `kind`, `id`, `is_bordered`,
+For writing your own renderer against `entries()`, `ToastEntry::toast()`
+hands you the toast it wraps, and `Toast` and `ToastEntry` expose read
+accessors: `title`, `description`, `kind`, `id`, `is_bordered`,
 `is_expired_after`, `created_at`, `age`, and `is_expired`. The builders that
 set those values are `with_description`, `with_kind`, and `with_id`.
 
