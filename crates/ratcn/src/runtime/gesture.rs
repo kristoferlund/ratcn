@@ -38,7 +38,11 @@
 //! component going undeclared — calls it off with
 //! [`cancel`](Gestures::cancel) or
 //! [`cancel_lost_claims`](Gestures::cancel_lost_claims), which keeps the
-//! entry so its release is still swallowed and still closes it.
+//! entry so its release is still swallowed and still closes it. A modal that
+//! has just opened takes the shorter turn
+//! [`Ratcn::consume_mouse_without_routing`](super::Ratcn::consume_mouse_without_routing)
+//! runs: cancel, normalize, swallow the press, end the release — the surface
+//! the event was aimed at is gone, so nothing is delivered.
 
 use super::{ChildId, MouseButton, MouseEvent, MouseKind};
 

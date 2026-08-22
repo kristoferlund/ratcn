@@ -79,6 +79,7 @@ jobs:
         run: |
           cargo doc -p ratcn --all-features --no-deps --locked
           cargo doc -p shared --no-deps --locked
+          cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
       - name: Package
