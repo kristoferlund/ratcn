@@ -513,8 +513,9 @@ fn paint_inside_a_viewport_keeps_declaration_order_under_its_layers() {
     );
 }
 
-/// A modal escapes the viewport it was declared in: the scroll is undone
-/// once over its area, and a row carried above the top edge is held there.
+/// A modal escapes the viewport it was declared in: the scroll is undone once
+/// over its area, and a row carried above the viewport's top edge is held
+/// there.
 /// A modal opened from content scrolled out of sight is on screen, exclusive
 /// and visible together.
 #[test]
@@ -537,9 +538,40 @@ fn a_modal_declared_from_a_scrolled_off_row_opens_on_the_screen() {
     assert_eq!(driver.row(0), "MODAL ");
 }
 
-/// A modal leaves its viewport only while it is being declared. What the same
-/// declaration says afterwards is projected by that viewport as before, which
-/// is why the offset is put back rather than dropped.
+/// The edge a scrolled-past row is held against is the viewport's own top, so
+/// a viewport that starts partway down the screen keeps the modal inside it.
+#[test]
+fn a_modal_held_against_the_top_lands_on_the_viewport_not_the_screen() {
+    let mut driver = Driver::<State, Msg>::new(6, 5);
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 2, 6, 3), 20, 17, |ctx| {
+            ctx.modal_scope(
+                "dialog",
+                Rect::new(0, 3, 6, 1),
+                ScopeOptions::default(),
+                |ctx| {
+                    let area = ctx.area();
+                    ctx.paint_widget(Paragraph::new("MODAL"), area);
+                },
+            );
+        });
+    });
+
+    assert_eq!(
+        driver.row(2),
+        "MODAL ",
+        "held against the viewport's top row"
+    );
+    assert_eq!(
+        driver.row(0),
+        "      ",
+        "the rows above the viewport are free"
+    );
+}
+
+/// A modal leaves its viewport only while it is being declared. The offset is
+/// put back when the modal's declaration ends, so what the same declaration
+/// says afterwards is projected by that viewport as before.
 #[test]
 fn content_declared_after_a_modal_is_still_projected_by_its_viewport() {
     let mut driver = Driver::<State, Msg>::new(4, 3);

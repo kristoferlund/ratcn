@@ -22,8 +22,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Focus on a clipped descendant scrolls it into view. `scroll(read, on_change)`
   binds the first visible content row to app state as a `u16`.
 - `DeclareCtx::viewport`, the runtime mechanism behind `ScrollArea`, and
-  `Component::reveal_in_viewport`, which the runtime calls on the component
-  that declared a viewport when focus lands on a descendant it clips.
+  `Component::reveal_in_viewport`, which the runtime calls at the start of a
+  frame when focus lands on a descendant a viewport clips, however focus got
+  there — a path the app's own update function stores included.
+- A `modal` declared inside a `viewport` is screen-level: it opens at the place
+  on screen its area names, held against the viewport's top edge for a row
+  scrolled past, and declares in screen coordinates from there, so it may hold
+  a viewport of its own.
 - `DeclareCtx::pointer_within_area`, `pointer_within` narrowed to the
   declaration's own rectangle.
 - `terminal::Session` (feature `termina`) opens the terminal — raw mode, the
@@ -59,9 +64,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is declared and focus has resolved, so it runs once per frame and a
   component draws before its own descendants. It defaults to drawing nothing.
 - `runtime::PaintCtx`, the context `paint` receives: the paint surface
-  (`widget`, `stateful_widget`, `with_buffer`), the theme, the
-  declared area, the app state, the pointer position, and the four interaction
-  flags.
+  (`widget`, `stateful_widget`, `with_buffer`), the theme, the declared area,
+  the app state, the pointer position, and the four interaction flags as
+  accessors — `focused()`, `contains_focus()`, `hovered()`, `contains_hover()`.
 - `DeclareCtx::paint`, the app-level counterpart for chrome with no component
   of its own. It queues a `'static` closure at the point it is reached.
 - `DeclareCtx::paint_widget`, the shorthand for a paint op that is one write:
@@ -163,10 +168,6 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Breaking:** the `PaintCtx` interaction flags are accessors: `ctx.focused`,
-  `ctx.contains_focus`, `ctx.hovered`, and `ctx.contains_hover` are
-  `ctx.focused()`, `ctx.contains_focus()`, `ctx.hovered()`, and
-  `ctx.contains_hover()`.
 - **Breaking:** the paint-only widgets address items by one noun.
   `ListWidget`'s `focused_row`/`selected_rows`/`disabled_rows`, `SelectWidget`'s
   `focused_option`/`selected_option`/`disabled_options`, and `TabsWidget`'s
@@ -184,7 +185,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `description_text`, `toast_kind`, and `toast_id`.
 - **Breaking:** `crossterm::InputModes::mouse_capture` and `bracketed_paste` are
   `mouse` and `paste`, the names `terminal::SessionOptions` uses.
-- **Breaking:** two `crossterm::InputModeGuard`s over the same mode no longer
+- **Breaking:** two `crossterm::InputModeGuard`s over the same mode do not
   compose. Each guard switches off exactly what its own `enable` call switched
   on, so dropping either one switches the mode off.
 - **Breaking:** `list_core::WheelPark` is `WheelHold` and its `park` method is
@@ -421,13 +422,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- A modal declared from a row its viewport has scrolled out of sight opens on
-  screen, held against the top edge.
-- A `DeclareCtx::viewport` declared inside a modal that is itself inside a
-  viewport declares and paints.
-- A duplicate modal id nested inside another modal panics.
-- Focus the app moves itself — a path its update function stores, a
-  `Ratcn::focus_path` result — scrolls the viewport clipping it into view.
+- A duplicate modal id panics wherever the modal is declared, nested inside
+  another modal included.
 
 ## [0.0.1]
 

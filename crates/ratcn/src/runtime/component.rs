@@ -448,7 +448,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// `area` is in the coordinates of the declaration that gave it, as every
     /// layer's is, and the modal opens at the place on screen those
     /// coordinates name; a row the viewport has scrolled past the top names
-    /// the top edge. From there the modal is screen-level: its
+    /// the viewport's top edge. From there the modal is screen-level: its
     /// [`area`](Self::area), its [`frame_area`](Self::frame_area), and
     /// anything it declares are in screen coordinates, and it may open a
     /// viewport of its own.
