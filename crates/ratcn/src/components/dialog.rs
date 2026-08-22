@@ -774,19 +774,20 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::RefCell,
         panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicUsize, Ordering},
         },
     };
 
-    use ratatui::{Terminal, backend::TestBackend, layout::Size};
+    use ratatui::layout::Size;
 
     use super::*;
-    use crate::runtime::{
-        FocusState, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind, Ratcn,
-    };
+    use crate::runtime::{FocusState, KeyEvent, Modifiers, MouseButton, MouseKind, Ratcn};
+    use crate::test_support::{Driver, key_with, mouse};
 
     #[derive(Default)]
     struct State {
@@ -806,53 +807,42 @@ mod tests {
         Third,
     }
 
-    fn mouse(kind: MouseKind, column: u16, row: u16) -> Event {
-        Event::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: Modifiers::NONE,
-        })
+    /// A driver whose focus lives in the test state.
+    fn driver(width: u16, height: u16) -> Driver<State, Msg> {
+        Driver::with(
+            Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
+            width,
+            height,
+        )
     }
 
-    fn render_dialog(
-        ratcn: &mut Ratcn<State, Msg>,
-        terminal: &mut Terminal<TestBackend>,
-        state: &State,
-        fail: bool,
-    ) {
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new()
-                            .offset(state.offset)
-                            .on_offset_change(Msg::Moved)
-                            .on_dismiss(|| Msg::Dismissed)
-                            .title("Confirm"),
-                        area,
-                    );
-                    assert!(!fail, "failed pass");
-                });
-            })
-            .expect("draw");
+    fn render_dialog(driver: &mut Driver<State, Msg>, state: &State, fail: bool) {
+        let area = driver.area();
+        driver.render(state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new()
+                    .offset(state.offset)
+                    .on_offset_change(Msg::Moved)
+                    .on_dismiss(|| Msg::Dismissed)
+                    .title("Confirm"),
+                area,
+            );
+            assert!(!fail, "failed pass");
+        });
     }
 
     struct MeasuredProbe {
         marker: Msg,
         size: Size,
         disabled: bool,
-        rendered: Arc<Mutex<Vec<(Msg, Rect)>>>,
+        rendered: Rc<RefCell<Vec<(Msg, Rect)>>>,
     }
 
     impl Component<State, Msg> for MeasuredProbe {
         fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>) {
             self.rendered
-                .lock()
-                .expect("render record lock")
+                .borrow_mut()
                 .push((self.marker.clone(), ctx.area()));
         }
 
@@ -884,25 +874,24 @@ mod tests {
         marker: Msg,
         width: u16,
         disabled: bool,
-        rendered: &Arc<Mutex<Vec<(Msg, Rect)>>>,
+        rendered: &Rc<RefCell<Vec<(Msg, Rect)>>>,
     ) -> MeasuredProbe {
         MeasuredProbe {
             marker,
             size: Size::new(width, 1),
             disabled,
-            rendered: Arc::clone(rendered),
+            rendered: Rc::clone(rendered),
         }
     }
 
     #[test]
     fn esc_emits_the_dismiss_message_when_wired() {
         let state = State::default();
-        let mut ratcn = Ratcn::new().focus(|s: &State| &s.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        render_dialog(&mut ratcn, &mut terminal, &state, false);
+        let mut driver = driver(60, 10);
+        render_dialog(&mut driver, &state, false);
 
         assert_eq!(
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
             EventResult::Emit(Msg::Dismissed)
         );
     }
@@ -913,12 +902,11 @@ mod tests {
             focus: FocusState::intent([ChildId::Static("gone")]),
             ..State::default()
         };
-        let mut ratcn = Ratcn::new().focus(|s: &State| &s.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        render_dialog(&mut ratcn, &mut terminal, &state, false);
+        let mut driver = driver(60, 10);
+        render_dialog(&mut driver, &state, false);
 
         assert_eq!(
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
             EventResult::Emit(Msg::Dismissed)
         );
     }
@@ -926,19 +914,18 @@ mod tests {
     #[test]
     fn modified_esc_does_not_dismiss_and_is_absorbed_instead() {
         let state = State::default();
-        let mut ratcn = Ratcn::new().focus(|s: &State| &s.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        render_dialog(&mut ratcn, &mut terminal, &state, false);
+        let mut driver = driver(60, 10);
+        render_dialog(&mut driver, &state, false);
 
-        let ctrl_esc = Event::Key(KeyEvent {
-            code: KeyCode::Esc,
-            modifiers: Modifiers {
+        let ctrl_esc = key_with(
+            KeyCode::Esc,
+            Modifiers {
                 ctrl: true,
                 ..Modifiers::NONE
             },
-        });
+        );
         assert_eq!(
-            ratcn.handle_event(ctrl_esc, &state),
+            driver.event(ctrl_esc, &state),
             EventResult::Consumed,
             "a modified Esc is not the dismiss chord; the modal absorbs it"
         );
@@ -947,26 +934,20 @@ mod tests {
     #[test]
     fn dismiss_key_replaces_esc_as_the_dismiss_chord() {
         let state = State::default();
-        let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::new().focus(|s: &State| &s.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new()
-                            .on_dismiss(|| Msg::Dismissed)
-                            .dismiss_key(KeyChord::from('w').ctrl()),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = driver(60, 10);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new()
+                    .on_dismiss(|| Msg::Dismissed)
+                    .dismiss_key(KeyChord::from('w').ctrl()),
+                area,
+            );
+        });
 
         assert_eq!(
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
             EventResult::Consumed,
             "Esc is no longer the dismiss chord once overridden"
         );
@@ -978,7 +959,7 @@ mod tests {
             },
         });
         assert_eq!(
-            ratcn.handle_event(ctrl_w, &state),
+            driver.event(ctrl_w, &state),
             EventResult::Emit(Msg::Dismissed)
         );
     }
@@ -986,20 +967,14 @@ mod tests {
     #[test]
     fn unhandled_event_is_absorbed_by_the_modal_layer() {
         let state = State::default();
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(ChildId::Static("dialog"), Dialog::new(), area);
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::<State, Msg>::new(60, 10);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(ChildId::Static("dialog"), Dialog::new(), area);
+        });
 
         assert_eq!(
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
             EventResult::Consumed
         );
     }
@@ -1007,29 +982,23 @@ mod tests {
     #[test]
     fn non_modal_dialog_routes_clicks_outside_its_box_to_a_button() {
         let state = State::default();
-        let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("outside"),
-                        crate::Button::new("Outside").on_press(|| Msg::Activated),
-                        Rect::new(0, 0, 11, 1),
-                    );
-                    ctx.component(
-                        ChildId::Static("dialog"),
-                        Dialog::new().title("Confirm"),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::<State, Msg>::new(60, 10);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("outside"),
+                crate::Button::new("Outside").on_press(|| Msg::Activated),
+                Rect::new(0, 0, 11, 1),
+            );
+            ctx.component(
+                ChildId::Static("dialog"),
+                Dialog::new().title("Confirm"),
+                area,
+            );
+        });
 
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Click(MouseButton::Left), 1, 0), &state),
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0), &state),
             EventResult::Emit(Msg::Activated),
             "the dialog only participates in hit-testing over its painted box"
         );
@@ -1128,22 +1097,17 @@ mod tests {
         let state = State::default();
         let theme = Theme::default_dark();
         let title = "日".repeat(22); // 44 cells → a 50-cell box at x 25..75.
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new().title(title.clone()),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::<State, Msg>::new(100, 20);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new().title(title.clone()),
+                area,
+            );
+        });
 
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         let framed = |x: u16| {
             (0..20).any(|y| buffer.cell((x, y)).expect("frame column cell").fg == theme.ring)
         };
@@ -1157,22 +1121,17 @@ mod tests {
     fn dialog_visual_frame_uses_the_ring_and_surface() {
         let state = State::default();
         let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new().title("Confirm"),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::<State, Msg>::new(60, 10);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new().title("Confirm"),
+                area,
+            );
+        });
 
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         let border_cell = buffer.cell((6, 3)).expect("top-left border");
         let title_cell = buffer.cell((8, 3)).expect("title text");
         let body_cell = buffer.cell((7, 4)).expect("dialog body");
@@ -1185,30 +1144,24 @@ mod tests {
     #[test]
     fn custom_dialog_style_paints_every_configurable_color() {
         let state = State::default();
-        let theme = Theme::default_dark();
         let style = DialogStyle {
             border: Color::Red,
             title_foreground: Color::Green,
             background: Color::Blue,
             description_foreground: Color::Yellow,
         };
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("dialog"),
-                        Dialog::new()
-                            .title("Confirm")
-                            .description("Description")
-                            .style(move |_| style),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::<State, Msg>::new(60, 10);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("dialog"),
+                Dialog::new()
+                    .title("Confirm")
+                    .description("Description")
+                    .style(move |_| style),
+                area,
+            );
+        });
 
         let dims = DialogDims {
             title: "Confirm",
@@ -1220,7 +1173,7 @@ mod tests {
             footer_width: 0,
         };
         let layout = dialog_layout(Rect::new(0, 0, 60, 10), CellOffset::default(), &dims);
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         assert_eq!(
             buffer
                 .cell((layout.box_area.x, layout.box_area.y))
@@ -1254,18 +1207,17 @@ mod tests {
     #[test]
     fn dragging_the_dialog_border_moves_it_live() {
         let mut state = State::default();
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        render_dialog(&mut ratcn, &mut terminal, &state, false);
+        let mut driver = driver(60, 10);
+        render_dialog(&mut driver, &state, false);
 
         // Press on the box's top-left border (it is centered at column 6, row 3).
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 6, 3), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 6, 3), &state),
             EventResult::Consumed
         );
         // The drag emits the new offset live (every step), not on release; apply
         // it the way the app's `update` would.
-        match ratcn.handle_event(mouse(MouseKind::Moved, 10, 5), &state) {
+        match driver.event(mouse(MouseKind::Moved, 10, 5), &state) {
             EventResult::Emit(Msg::Moved(offset)) => {
                 assert_eq!(offset, CellOffset::new(4, 2));
                 state.offset = offset;
@@ -1275,20 +1227,12 @@ mod tests {
 
         // Once the offset is in state, the box renders shifted: its top-left
         // border now sits at the dragged corner.
-        render_dialog(&mut ratcn, &mut terminal, &state, false);
-        assert_eq!(
-            terminal
-                .backend()
-                .buffer()
-                .cell((10, 5))
-                .expect("dragged border")
-                .fg,
-            Theme::default_dark().ring
-        );
+        render_dialog(&mut driver, &state, false);
+        assert_eq!(driver.cell(10, 5).fg, Theme::default_dark().ring);
 
         // Release ends the drag without emitting again.
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 59, 9), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 59, 9), &state),
             EventResult::Consumed
         );
     }
@@ -1325,17 +1269,16 @@ mod tests {
     #[test]
     fn events_keep_the_rendered_offset_until_the_next_frame() {
         let mut state = State::default();
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        render_dialog(&mut ratcn, &mut terminal, &state, false);
+        let mut driver = Driver::new(60, 10);
+        render_dialog(&mut driver, &state, false);
         state.offset = CellOffset::new(4, 2);
 
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 6, 3), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 6, 3), &state),
             EventResult::Consumed
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Moved, 7, 3), &state),
+            driver.event(mouse(MouseKind::Moved, 7, 3), &state),
             EventResult::Emit(Msg::Moved(CellOffset::new(1, 0)))
         );
     }
@@ -1343,22 +1286,21 @@ mod tests {
     #[test]
     fn failed_pass_preserves_the_rendered_offset_and_geometry() {
         let mut state = State::default();
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        render_dialog(&mut ratcn, &mut terminal, &state, false);
+        let mut driver = Driver::new(60, 10);
+        render_dialog(&mut driver, &state, false);
         state.offset = CellOffset::new(4, 2);
 
         let failed = catch_unwind(AssertUnwindSafe(|| {
-            render_dialog(&mut ratcn, &mut terminal, &state, true);
+            render_dialog(&mut driver, &state, true);
         }));
 
         assert!(failed.is_err());
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 6, 3), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 6, 3), &state),
             EventResult::Consumed
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Moved, 7, 3), &state),
+            driver.event(mouse(MouseKind::Moved, 7, 3), &state),
             EventResult::Emit(Msg::Moved(CellOffset::new(1, 0)))
         );
     }
@@ -1398,37 +1340,31 @@ mod tests {
             ]),
             ..State::default()
         };
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(30, 8)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    let child_resolves = Arc::clone(&child_resolves);
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new().footer(1, move |ctx| {
-                            let area = ctx.area();
-                            ctx.component(
-                                ChildId::Static("composite"),
-                                PreparedComposite {
-                                    resolves: Arc::clone(&child_resolves),
-                                },
-                                area,
-                            );
-                        }),
+        let mut driver = driver(30, 8);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            let child_resolves = Arc::clone(&child_resolves);
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new().footer(1, move |ctx| {
+                    let area = ctx.area();
+                    ctx.component(
+                        ChildId::Static("composite"),
+                        PreparedComposite {
+                            resolves: Arc::clone(&child_resolves),
+                        },
                         area,
                     );
-                });
-            })
-            .expect("draw");
+                }),
+                area,
+            );
+        });
 
         // Once: the frame declares once, so a body closure hands its child
         // over exactly one time.
         assert_eq!(resolves.load(Ordering::SeqCst), 1);
         assert_eq!(
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(Msg::Activated)
         );
     }
@@ -1465,31 +1401,21 @@ mod tests {
             ]),
             ..State::default()
         };
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(30, 8)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new().footer(1, |ctx| {
-                            let area = ctx.area();
-                            ctx.component(
-                                ChildId::Static("option-focusable"),
-                                OptionFocusable,
-                                area,
-                            );
-                        }),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = driver(30, 8);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new().footer(1, |ctx| {
+                    let area = ctx.area();
+                    ctx.component(ChildId::Static("option-focusable"), OptionFocusable, area);
+                }),
+                area,
+            );
+        });
 
         assert_eq!(
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(Msg::Activated)
         );
     }
@@ -1497,30 +1423,20 @@ mod tests {
     #[test]
     fn dynamic_custom_focusability_tracks_conditional_children() {
         let mut state = State::default();
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        let theme = Theme::default_dark();
+        let mut driver = driver(60, 10);
 
         for enabled in [false, true, false] {
             state.custom_enabled = enabled;
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        let dialog = Dialog::<State, Msg>::new().content(2, |ctx| {
-                            if ctx.state().custom_enabled {
-                                let area = ctx.area();
-                                ctx.component(
-                                    ChildId::Static("conditional"),
-                                    OptionFocusable,
-                                    area,
-                                );
-                            }
-                        });
-                        ctx.modal(ChildId::Static("dialog"), dialog, area);
-                    });
-                })
-                .expect("draw");
+            let area = driver.area();
+            driver.render(&state, |ctx| {
+                let dialog = Dialog::<State, Msg>::new().content(2, |ctx| {
+                    if ctx.state().custom_enabled {
+                        let area = ctx.area();
+                        ctx.component(ChildId::Static("conditional"), OptionFocusable, area);
+                    }
+                });
+                ctx.modal(ChildId::Static("dialog"), dialog, area);
+            });
         }
     }
 
@@ -1528,56 +1444,43 @@ mod tests {
     fn custom_body_can_consume_owned_data_once() {
         let state = State::default();
         let owned = vec!["alpha", "beta"];
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        let theme = Theme::default_dark();
+        let mut driver = Driver::<State, Msg>::new(60, 10);
 
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    // Each pass constructs a fresh dialog and a fresh body
-                    // closure; the body consumes its own pass's copy.
-                    let owned = owned.clone();
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new().content(1, move |_| drop(owned)),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            // Each pass constructs a fresh dialog and a fresh body
+            // closure; the body consumes its own pass's copy.
+            let owned = owned.clone();
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new().content(1, move |_| drop(owned)),
+                area,
+            );
+        });
     }
 
     #[test]
     fn content_replaces_the_description_in_either_call_order() {
         for description_first in [true, false] {
             let state = State::default();
-            let theme = Theme::default_dark();
-            let content_area = Arc::new(Mutex::new(None));
-            let mut ratcn = Ratcn::<State, Msg>::new();
-            let mut terminal = Terminal::new(TestBackend::new(60, 12)).expect("terminal");
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        let observed = Arc::clone(&content_area);
-                        let content = move |ctx: &mut DeclareCtx<'_, State, Msg>| {
-                            *observed.lock().expect("content area lock") = Some(ctx.area());
-                        };
-                        let dialog = if description_first {
-                            Dialog::new().description("ignored").content(3, content)
-                        } else {
-                            Dialog::new().content(3, content).description("ignored")
-                        };
-                        ctx.modal(ChildId::Static("dialog"), dialog, area);
-                    });
-                })
-                .expect("draw");
+            let content_area = Rc::new(RefCell::new(None));
+            let mut driver = Driver::<State, Msg>::new(60, 12);
+            let area = driver.area();
+            driver.render(&state, |ctx| {
+                let observed = Rc::clone(&content_area);
+                let content = move |ctx: &mut DeclareCtx<'_, State, Msg>| {
+                    *observed.borrow_mut() = Some(ctx.area());
+                };
+                let dialog = if description_first {
+                    Dialog::new().description("ignored").content(3, content)
+                } else {
+                    Dialog::new().content(3, content).description("ignored")
+                };
+                ctx.modal(ChildId::Static("dialog"), dialog, area);
+            });
 
             let main_area = content_area
-                .lock()
-                .expect("content area lock")
+                .borrow()
                 .expect("the content closure owns the main area");
             assert_eq!(
                 main_area.height, 3,
@@ -1590,23 +1493,18 @@ mod tests {
     fn an_empty_description_leaves_the_main_area_unpainted() {
         let state = State::default();
         let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 12)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new()
-                            .title("Confirm")
-                            .outer_height(8)
-                            .description(""),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::<State, Msg>::new(60, 12);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new()
+                    .title("Confirm")
+                    .outer_height(8)
+                    .description(""),
+                area,
+            );
+        });
 
         let dims = DialogDims {
             title: "Confirm",
@@ -1623,12 +1521,7 @@ mod tests {
             "the main area has rows a paragraph could have covered"
         );
         assert_ne!(
-            terminal
-                .backend()
-                .buffer()
-                .cell((layout.main_area.x, layout.main_area.y))
-                .expect("main area cell")
-                .fg,
+            driver.cell(layout.main_area.x, layout.main_area.y).fg,
             theme.muted_foreground,
             "an empty description paints no paragraph over the box"
         );
@@ -1637,32 +1530,22 @@ mod tests {
     #[test]
     fn custom_children_use_runtime_duplicate_id_validation() {
         let state = State::default();
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        let theme = Theme::default_dark();
+        let mut driver = Driver::<State, Msg>::new(60, 10);
 
         let failed = catch_unwind(AssertUnwindSafe(|| {
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.modal(
-                            ChildId::Static("dialog"),
-                            Dialog::new().footer(1, |ctx| {
-                                let area = ctx.area();
-                                for _ in 0..2 {
-                                    ctx.component(
-                                        ChildId::Static("duplicate"),
-                                        OptionFocusable,
-                                        area,
-                                    );
-                                }
-                            }),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
+            let area = driver.area();
+            driver.render(&state, |ctx| {
+                ctx.modal(
+                    ChildId::Static("dialog"),
+                    Dialog::new().footer(1, |ctx| {
+                        let area = ctx.area();
+                        for _ in 0..2 {
+                            ctx.component(ChildId::Static("duplicate"), OptionFocusable, area);
+                        }
+                    }),
+                    area,
+                );
+            });
         }));
 
         assert!(failed.is_err());
@@ -1671,32 +1554,26 @@ mod tests {
     #[test]
     fn custom_content_and_standard_actions_share_the_dialog_id_namespace() {
         let state = State::default();
-        let rendered = Arc::new(Mutex::new(Vec::new()));
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        let theme = Theme::default_dark();
+        let rendered = Rc::new(RefCell::new(Vec::new()));
+        let mut driver = Driver::<State, Msg>::new(60, 10);
 
         let failed = catch_unwind(AssertUnwindSafe(|| {
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.modal(
-                            ChildId::Static("dialog"),
-                            Dialog::new()
-                                .content(2, |ctx| {
-                                    ctx.component(
-                                        ChildId::Static("duplicate"),
-                                        OptionFocusable,
-                                        ctx.area(),
-                                    );
-                                })
-                                .action("duplicate", probe(Msg::Activated, 8, false, &rendered)),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
+            let area = driver.area();
+            driver.render(&state, |ctx| {
+                ctx.modal(
+                    ChildId::Static("dialog"),
+                    Dialog::new()
+                        .content(2, |ctx| {
+                            ctx.component(
+                                ChildId::Static("duplicate"),
+                                OptionFocusable,
+                                ctx.area(),
+                            );
+                        })
+                        .action("duplicate", probe(Msg::Activated, 8, false, &rendered)),
+                    area,
+                );
+            });
         }));
 
         assert!(failed.is_err());
@@ -1704,30 +1581,24 @@ mod tests {
 
     #[test]
     fn standard_action_visual_order_matches_tab_order() {
-        let rendered = Arc::new(Mutex::new(Vec::new()));
+        let rendered = Rc::new(RefCell::new(Vec::new()));
         let mut state = State {
             focus: FocusState::intent([ChildId::Static("dialog"), ChildId::Static("first")]),
             ..State::default()
         };
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new()
-                            .action("first", probe(Msg::First, 7, false, &rendered))
-                            .action("second", probe(Msg::Second, 9, false, &rendered)),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = driver(60, 10);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new()
+                    .action("first", probe(Msg::First, 7, false, &rendered))
+                    .action("second", probe(Msg::Second, 9, false, &rendered)),
+                area,
+            );
+        });
 
-        let rendered = rendered.lock().expect("render record lock");
+        let rendered = rendered.borrow();
         assert_eq!(rendered.len(), 2);
         assert_eq!(rendered[0].0, Msg::First);
         assert_eq!(rendered[1].0, Msg::Second);
@@ -1735,11 +1606,11 @@ mod tests {
         drop(rendered);
 
         assert_eq!(
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(Msg::First)
         );
         let EventResult::Emit(Msg::Focus(focus)) =
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state)
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state)
         else {
             panic!("Tab should move to the second action");
         };
@@ -1749,36 +1620,30 @@ mod tests {
         );
         state.focus = focus;
         assert_eq!(
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(Msg::Second)
         );
     }
 
     #[test]
     fn action_row_is_end_aligned_at_measured_widths_with_standard_spacing() {
-        let rendered = Arc::new(Mutex::new(Vec::new()));
+        let rendered = Rc::new(RefCell::new(Vec::new()));
         let state = State::default();
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new()
-                            .action("first", probe(Msg::First, 7, false, &rendered))
-                            .action("second", probe(Msg::Second, 9, false, &rendered)),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::<State, Msg>::new(60, 10);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new()
+                    .action("first", probe(Msg::First, 7, false, &rendered))
+                    .action("second", probe(Msg::Second, 9, false, &rendered)),
+                area,
+            );
+        });
 
         // The 48-cell box spans columns 6..54, so the footer strip runs
         // 8..52 and the row is flushed against its right edge.
-        let rendered = rendered.lock().expect("render record lock");
+        let rendered = rendered.borrow();
         assert_eq!(
             rendered[0],
             (Msg::First, Rect::new(34, 5, 7, 1)),
@@ -1793,38 +1658,32 @@ mod tests {
 
     #[test]
     fn disabled_standard_action_is_laid_out_but_skipped_by_tab() {
-        let rendered = Arc::new(Mutex::new(Vec::new()));
+        let rendered = Rc::new(RefCell::new(Vec::new()));
         let state = State {
             focus: FocusState::intent([ChildId::Static("dialog"), ChildId::Static("first")]),
             ..State::default()
         };
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new()
-                            .action("first", probe(Msg::First, 7, false, &rendered))
-                            .action("disabled", probe(Msg::Second, 8, true, &rendered))
-                            .action("third", probe(Msg::Third, 7, false, &rendered)),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = driver(60, 10);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new()
+                    .action("first", probe(Msg::First, 7, false, &rendered))
+                    .action("disabled", probe(Msg::Second, 8, true, &rendered))
+                    .action("third", probe(Msg::Third, 7, false, &rendered)),
+                area,
+            );
+        });
 
-        let rendered = rendered.lock().expect("render record lock");
+        let rendered = rendered.borrow();
         assert_eq!(rendered.len(), 3);
         assert!(rendered[0].1.x < rendered[1].1.x);
         assert!(rendered[1].1.x < rendered[2].1.x);
         drop(rendered);
 
         let EventResult::Emit(Msg::Focus(focus)) =
-            ratcn.handle_event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state)
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state)
         else {
             panic!("Tab should skip the disabled action");
         };
@@ -1838,26 +1697,20 @@ mod tests {
     fn standard_actions_handle_narrow_and_short_areas() {
         for (width, height) in [(8, 5), (3, 2)] {
             let state = State::default();
-            let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-            let theme = Theme::default_dark();
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.modal(
-                            ChildId::Static("dialog"),
-                            Dialog::new()
-                                .action(
-                                    "cancel",
-                                    crate::Button::new("Cancel").on_press(|| Msg::Second),
-                                )
-                                .action("save", crate::Button::new("Save").on_press(|| Msg::First)),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
+            let mut driver = driver(width, height);
+            let area = driver.area();
+            driver.render(&state, |ctx| {
+                ctx.modal(
+                    ChildId::Static("dialog"),
+                    Dialog::new()
+                        .action(
+                            "cancel",
+                            crate::Button::new("Cancel").on_press(|| Msg::Second),
+                        )
+                        .action("save", crate::Button::new("Save").on_press(|| Msg::First)),
+                    area,
+                );
+            });
         }
     }
 
@@ -1880,57 +1733,44 @@ mod tests {
 
     #[test]
     fn custom_footer_receives_configured_height() {
-        let footer_area = Arc::new(Mutex::new(Rect::ZERO));
-        let observed = Arc::clone(&footer_area);
+        let footer_area = Rc::new(RefCell::new(Rect::ZERO));
+        let observed = Rc::clone(&footer_area);
         let state = State::default();
-        let mut ratcn = Ratcn::<State, Msg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(60, 12)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    let observed = Arc::clone(&observed);
-                    ctx.modal(
-                        ChildId::Static("dialog"),
-                        Dialog::new().footer(3, move |ctx| {
-                            *observed.lock().expect("footer area lock") = ctx.area();
-                        }),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::<State, Msg>::new(60, 12);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            let observed = Rc::clone(&observed);
+            ctx.modal(
+                ChildId::Static("dialog"),
+                Dialog::new().footer(3, move |ctx| {
+                    *observed.borrow_mut() = ctx.area();
+                }),
+                area,
+            );
+        });
 
-        assert_eq!(footer_area.lock().expect("footer area lock").height, 3);
+        assert_eq!(footer_area.borrow().height, 3);
     }
 
     #[test]
     fn dialog_with_content_renders_into_a_short_area_without_panicking() {
         let state = State::default();
-        let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("terminal");
+        let mut driver = driver(40, 6);
 
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    let dialog =
-                        Dialog::new()
-                            .title("Confirm")
-                            .content(2, |_| {})
-                            .footer(1, |ctx| {
-                                let area = ctx.area();
-                                ctx.component(
-                                    ChildId::Static("ok"),
-                                    crate::Button::new("OK").on_press(|| Msg::Activated),
-                                    area,
-                                );
-                            });
-                    ctx.modal(ChildId::Static("dialog"), dialog, area);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            let dialog = Dialog::new()
+                .title("Confirm")
+                .content(2, |_| {})
+                .footer(1, |ctx| {
+                    let area = ctx.area();
+                    ctx.component(
+                        ChildId::Static("ok"),
+                        crate::Button::new("OK").on_press(|| Msg::Activated),
+                        area,
+                    );
                 });
-            })
-            .expect("draw");
+            ctx.modal(ChildId::Static("dialog"), dialog, area);
+        });
     }
 }

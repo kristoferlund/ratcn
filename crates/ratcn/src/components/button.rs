@@ -794,10 +794,9 @@ impl<S, M> MeasuredComponent<S, M> for Button<M> {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use ratatui::{Terminal, backend::TestBackend};
-
     use super::*;
     use crate::runtime::{ChildId, FocusState, Modifiers, MouseEvent, Ratcn};
+    use crate::test_support::Driver;
 
     #[test]
     fn message_factory_runs_for_each_accepted_press_with_non_clone_message() {
@@ -1309,10 +1308,6 @@ mod tests {
 
     #[test]
     fn style_override_replaces_the_variant_style() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        use crate::runtime::Ratcn;
-
         let theme = Theme::default_dark();
         // Built inside the declaration closure. No `on_press`, so the button
         // is not a focus candidate and this paints in its base state.
@@ -1324,23 +1319,13 @@ mod tests {
             })
         };
 
-        let mut ratcn: Ratcn<(), ()> = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(10, 3)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &(), &theme, |ctx| {
-                    ctx.component(ChildId::Static("button"), button(), area);
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::new(10, 3);
+        let area = driver.area();
+        driver.render(&(), |ctx| {
+            ctx.component(ChildId::Static("button"), button(), area);
+        });
 
-        let cell = terminal
-            .backend()
-            .buffer()
-            .cell((1, 0))
-            .expect("content cell");
-        assert_eq!(cell.bg, theme.accent);
+        assert_eq!(driver.cell(1, 0).bg, theme.accent);
     }
 
     #[test]
@@ -1361,31 +1346,28 @@ mod tests {
             focus: FocusState::intent([ChildId::Static("other")]),
             ..State::default()
         };
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("terminal");
-        let theme = Theme::default_dark();
-        let render =
-            |ratcn: &mut Ratcn<State, Msg>, terminal: &mut Terminal<TestBackend>, state: &State| {
-                terminal
-                    .draw(|frame| {
-                        let area = frame.area();
-                        ratcn.render(frame, state, &theme, |ctx| {
-                            ctx.component(
-                                ChildId::Static("other"),
-                                Button::<Msg>::new("Other").on_press(|| Msg::Pressed),
-                                Rect::new(0, 0, 10, 1),
-                            );
-                            ctx.component(
-                                ChildId::Static("button"),
-                                Button::new("Save")
-                                    .disabled(state.disabled)
-                                    .on_press(|| Msg::Pressed),
-                                Rect::new(10, 0, area.width.saturating_sub(10), 1),
-                            );
-                        });
-                    })
-                    .expect("draw");
-            };
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
+            20,
+            1,
+        );
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            let area = driver.area();
+            driver.render(state, |ctx| {
+                ctx.component(
+                    ChildId::Static("other"),
+                    Button::<Msg>::new("Other").on_press(|| Msg::Pressed),
+                    Rect::new(0, 0, 10, 1),
+                );
+                ctx.component(
+                    ChildId::Static("button"),
+                    Button::new("Save")
+                        .disabled(state.disabled)
+                        .on_press(|| Msg::Pressed),
+                    Rect::new(10, 0, area.width.saturating_sub(10), 1),
+                );
+            });
+        };
         let mouse = |kind| {
             Event::Mouse(MouseEvent {
                 kind,
@@ -1395,28 +1377,28 @@ mod tests {
             })
         };
 
-        render(&mut ratcn, &mut terminal, &state);
+        render(&mut driver, &state);
         state.disabled = true;
         let EventResult::Emit(Msg::Focus(focus)) =
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left)), &state)
+            driver.event(mouse(MouseKind::Down(MouseButton::Left)), &state)
         else {
             panic!("retained enabled button should focus on press");
         };
         state.focus = focus;
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left)), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left)), &state),
             EventResult::Emit(Msg::Pressed)
         );
 
-        render(&mut ratcn, &mut terminal, &state);
+        render(&mut driver, &state);
         state.disabled = false;
         state.focus = FocusState::intent([ChildId::Static("other")]);
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left)), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left)), &state),
             EventResult::Ignored
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left)), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left)), &state),
             EventResult::Ignored
         );
     }
@@ -1437,25 +1419,23 @@ mod tests {
         let mut state = State {
             focus: FocusState::intent([ChildId::Static("other")]),
         };
-        let mut ratcn = Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("other"),
-                        Button::<Msg>::new("Other").on_press(|| Msg::Pressed),
-                        Rect::new(0, 0, 8, 1),
-                    );
-                    ctx.component(
-                        ChildId::Static("button"),
-                        Button::new("Save").on_press(|| Msg::Pressed),
-                        Rect::new(10, 0, 10, 4),
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
+            20,
+            4,
+        );
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("other"),
+                Button::<Msg>::new("Other").on_press(|| Msg::Pressed),
+                Rect::new(0, 0, 8, 1),
+            );
+            ctx.component(
+                ChildId::Static("button"),
+                Button::new("Save").on_press(|| Msg::Pressed),
+                Rect::new(10, 0, 10, 4),
+            );
+        });
         let mouse = |kind, row| {
             Event::Mouse(MouseEvent {
                 kind,
@@ -1466,23 +1446,23 @@ mod tests {
         };
 
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 2), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 2), &state),
             EventResult::Ignored
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 2), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 2), &state),
             EventResult::Ignored
         );
         assert_eq!(state.focus, FocusState::intent([ChildId::Static("other")]));
 
         let EventResult::Emit(Msg::Focus(focus)) =
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 0), &state)
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 0), &state)
         else {
             panic!("the painted button row should focus");
         };
         state.focus = focus;
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 0), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 0), &state),
             EventResult::Emit(Msg::Pressed)
         );
     }

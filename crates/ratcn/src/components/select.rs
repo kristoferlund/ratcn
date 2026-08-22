@@ -1287,14 +1287,11 @@ const fn frame_area() -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{
-        Terminal,
-        backend::TestBackend,
-        text::{Line, Span},
-    };
+    use ratatui::text::{Line, Span};
 
     use super::*;
     use crate::runtime::{FocusState, Modifiers, Ratcn, ScopeOptions};
+    use crate::test_support::{Driver, mouse};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Fruit {
@@ -1383,63 +1380,40 @@ mod tests {
             .selection(|state: &State| state.selected, Msg::Selected)
     }
 
-    struct Driver {
-        terminal: Terminal<TestBackend>,
-        ratcn: Ratcn<State, Msg>,
+    /// A driver whose focus lives in the test state.
+    fn driver(width: u16, height: u16) -> Driver<State, Msg> {
+        Driver::with(
+            Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
+            width,
+            height,
+        )
     }
 
-    impl Driver {
-        fn new(width: u16, height: u16) -> Self {
-            Self {
-                terminal: Terminal::new(TestBackend::new(width, height)).expect("terminal"),
-                ratcn: Ratcn::new().focus(|state: &State| &state.focus, Msg::Focus),
-            }
-        }
-
-        fn render(&mut self, state: &State, area: Rect, items: &[ListItem<Fruit>]) {
-            let theme = Theme::default_dark();
-            self.terminal
-                .draw(|frame| {
-                    self.ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.component("fruit", select(items.to_vec()), area);
-                        ctx.paint(|ctx| {
-                            ctx.widget(Line::from("later sibling"), Rect::new(0, 4, 20, 1));
-                        });
-                    });
-                })
-                .expect("draw");
-        }
-
-        fn event(&mut self, event: Event, state: &State) -> EventResult<Msg> {
-            self.ratcn.handle_event(event, state)
-        }
-
-        fn row(&self, row: u16) -> String {
-            let buffer = self.terminal.backend().buffer();
-            (0..buffer.area.width)
-                .map(|column| buffer.cell((column, row)).expect("cell").symbol())
-                .collect()
-        }
-    }
-
-    fn mouse(kind: MouseKind, column: u16, row: u16) -> Event {
-        Event::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: Modifiers::NONE,
-        })
+    /// One frame: the select at `area`, and a later sibling to paint over.
+    fn render_select(
+        driver: &mut Driver<State, Msg>,
+        state: &State,
+        area: Rect,
+        items: &[ListItem<Fruit>],
+    ) {
+        let items = items.to_vec();
+        driver.render(state, |ctx| {
+            ctx.component("fruit", select(items), area);
+            ctx.paint(|ctx| {
+                ctx.widget(Line::from("later sibling"), Rect::new(0, 4, 20, 1));
+            });
+        });
     }
 
     #[test]
     fn popup_starts_above_the_trigger_and_layers_above_later_paint() {
-        let mut driver = Driver::new(20, 10);
+        let mut driver = driver(20, 10);
         let state = State {
             open: true,
             selected: Some(Fruit::Papaya),
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 4, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
         assert!(driver.row(3).contains("╭"), "{}", driver.row(3));
         assert!(driver.row(4).contains("Mango"), "{}", driver.row(4));
         assert!(!driver.row(4).contains("later sibling"));
@@ -1448,44 +1422,29 @@ mod tests {
 
     #[test]
     fn popup_composites_only_the_panel_area() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 8)).expect("terminal");
-        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut driver = Driver::<State, Msg>::new(20, 8);
         let state = State {
             open: true,
             ..State::default()
         };
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component("fruit", select(items()), Rect::new(0, 0, 20, 1));
-                    ctx.paint(|ctx| {
-                        ctx.widget(Line::from("outside panel"), Rect::new(0, 7, 20, 1));
-                    });
-                });
-            })
-            .expect("draw");
-        let row: String = (0..20)
-            .map(|column| {
-                terminal
-                    .backend()
-                    .buffer()
-                    .cell((column, 7))
-                    .expect("cell")
-                    .symbol()
-            })
-            .collect();
+        driver.render(&state, |ctx| {
+            ctx.component("fruit", select(items()), Rect::new(0, 0, 20, 1));
+            ctx.paint(|ctx| {
+                ctx.widget(Line::from("outside panel"), Rect::new(0, 7, 20, 1));
+            });
+        });
+        let row = driver.row(7);
         assert!(row.contains("outside panel"), "{row}");
     }
 
     #[test]
     fn panel_shifts_inside_the_frame_when_default_position_does_not_fit() {
-        let mut driver = Driver::new(20, 8);
+        let mut driver = driver(20, 8);
         let state = State {
             open: true,
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 7, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 7, 20, 1), &items());
         assert!(driver.row(3).contains("Mango"), "{}", driver.row(3));
         assert!(driver.row(7).contains("╯"), "{}", driver.row(7));
     }
@@ -1503,13 +1462,13 @@ mod tests {
 
     #[test]
     fn keys_navigate_select_and_first_tab_closes() {
-        let mut driver = Driver::new(20, 8);
+        let mut driver = driver(20, 8);
         let state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 0, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
         assert_eq!(
             driver.event(Event::Key(KeyEvent::new(KeyCode::Down)), &state),
             EventResult::Emit(Msg::Focused(Fruit::Papaya))
@@ -1599,13 +1558,13 @@ mod tests {
 
     #[test]
     fn paging_moves_the_cursor_by_the_painted_viewport() {
-        let mut driver = Driver::new(20, 4);
+        let mut driver = driver(20, 4);
         let state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 0, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
 
         assert_eq!(
             driver.event(Event::Key(KeyEvent::new(KeyCode::PageDown)), &state),
@@ -1616,13 +1575,13 @@ mod tests {
 
     #[test]
     fn wheel_scrolls_the_view_and_the_offset_survives_redraw() {
-        let mut driver = Driver::new(20, 4);
+        let mut driver = driver(20, 4);
         let mut state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 0, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
         assert!(driver.row(1).contains("Mango"), "{}", driver.row(1));
 
         assert_eq!(
@@ -1633,7 +1592,7 @@ mod tests {
             EventResult::Consumed,
             "the wheel scrolls the view without emitting a cursor move"
         );
-        driver.render(&state, Rect::new(0, 0, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
         assert!(
             driver.row(1).contains("Lychee") && driver.row(2).contains("Durian"),
             "the wheeled offset survives the redraw, cursor off-screen: {} / {}",
@@ -1648,7 +1607,7 @@ mod tests {
             EventResult::Emit(Msg::Focused(Fruit::Papaya))
         );
         state.cursor = Some(Fruit::Papaya);
-        driver.render(&state, Rect::new(0, 0, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
         assert!(
             driver.row(1).contains("Papaya"),
             "the cursor scrolls back into view: {}",
@@ -1658,14 +1617,14 @@ mod tests {
 
     #[test]
     fn hover_moves_the_cursor_and_reopening_reanchors_the_view() {
-        let mut driver = Driver::new(20, 4);
+        let mut driver = driver(20, 4);
         let mut state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
         let area = Rect::new(0, 0, 20, 1);
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
 
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 3, 2), &state),
@@ -1683,12 +1642,12 @@ mod tests {
             ),
             EventResult::Consumed
         );
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         assert!(driver.row(1).contains("Lychee"), "{}", driver.row(1));
         state.open = false;
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         state.open = true;
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         assert!(
             driver.row(1).contains("Mango"),
             "a reopened panel anchors to the cursor: {}",
@@ -1698,42 +1657,36 @@ mod tests {
 
     #[test]
     fn custom_option_rows_preserve_explicit_span_colors() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 6)).expect("terminal");
-        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut driver = Driver::<State, Msg>::new(20, 6);
         let state = State {
             open: true,
             selected: Some(Fruit::Mango),
             ..State::default()
         };
-        let theme = Theme::default_dark();
         let mut style = SelectStyle::fallback();
         style.option_foreground = Color::Yellow;
         style.panel_background = Color::Blue;
 
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        "fruit",
-                        select(items())
-                            .paint_item(|_: &State, row| {
-                                if row.selected {
-                                    Text::from(Span::styled(
-                                        row.label.to_string(),
-                                        Style::new().fg(Color::Magenta).bg(Color::Green),
-                                    ))
-                                } else {
-                                    Text::from(row.label.to_string())
-                                }
-                            })
-                            .style(move |_| style),
-                        Rect::new(0, 0, 20, 1),
-                    );
-                });
-            })
-            .expect("draw");
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "fruit",
+                select(items())
+                    .paint_item(|_: &State, row| {
+                        if row.selected {
+                            Text::from(Span::styled(
+                                row.label.to_string(),
+                                Style::new().fg(Color::Magenta).bg(Color::Green),
+                            ))
+                        } else {
+                            Text::from(row.label.to_string())
+                        }
+                    })
+                    .style(move |_| style),
+                Rect::new(0, 0, 20, 1),
+            );
+        });
 
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         let explicit = buffer.cell((1, 1)).expect("explicitly colored span");
         assert_eq!(explicit.fg, Color::Magenta, "explicit colors win");
         assert_eq!(explicit.bg, Color::Green);
@@ -1750,65 +1703,47 @@ mod tests {
     /// a scrolled panel's rows still belong to the options beneath them.
     #[test]
     fn a_scrolled_panel_builds_custom_rows_for_the_options_on_screen() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
-        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut driver = Driver::<State, Msg>::new(20, 4);
         let state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
-        let theme = Theme::default_dark();
         let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
         let area = Rect::new(0, 0, 20, 1);
-        let draw = |terminal: &mut Terminal<TestBackend>,
-                    ratcn: &mut Ratcn<State, Msg>,
+        let draw = |driver: &mut Driver<State, Msg>,
                     recorded: Rc<std::cell::RefCell<Vec<usize>>>| {
-            terminal
-                .draw(|frame| {
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.component(
-                            "fruit",
-                            select(items()).paint_item(
-                                move |_: &State, row: ListItemState<'_, Fruit>| {
-                                    recorded.borrow_mut().push(row.index);
-                                    Text::from(row.label.to_string())
-                                },
-                            ),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
+            driver.render(&state, |ctx| {
+                ctx.component(
+                    "fruit",
+                    select(items()).paint_item(move |_: &State, row: ListItemState<'_, Fruit>| {
+                        recorded.borrow_mut().push(row.index);
+                        Text::from(row.label.to_string())
+                    }),
+                    area,
+                );
+            });
         };
 
-        draw(&mut terminal, &mut ratcn, Rc::clone(&seen));
+        draw(&mut driver, Rc::clone(&seen));
         assert_eq!(*seen.borrow(), vec![0, 1], "two options fit in the panel");
 
         assert_eq!(
-            ratcn.handle_event(
+            driver.event(
                 mouse(MouseKind::Scroll(ScrollDirection::Down), 3, 1),
                 &state
             ),
             EventResult::Consumed
         );
         seen.borrow_mut().clear();
-        draw(&mut terminal, &mut ratcn, Rc::clone(&seen));
+        draw(&mut driver, Rc::clone(&seen));
 
         assert_eq!(
             *seen.borrow(),
             vec![2, 3],
             "the scrolled window keeps the options' own indices"
         );
-        let row: String = (0..20)
-            .map(|column| {
-                terminal
-                    .backend()
-                    .buffer()
-                    .cell((column, 1))
-                    .expect("cell")
-                    .symbol()
-            })
-            .collect();
+        let row = driver.row(1);
         assert!(row.contains("Lychee"), "{row}");
     }
 
@@ -1816,19 +1751,19 @@ mod tests {
     /// held view — the same rule `List` follows.
     #[test]
     fn a_released_wheel_hold_never_revives() {
-        let mut driver = Driver::new(20, 4);
+        let mut driver = driver(20, 4);
         let mut state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
         let area = Rect::new(0, 0, 20, 1);
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         driver.event(
             mouse(MouseKind::Scroll(ScrollDirection::Down), 3, 1),
             &state,
         );
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         assert!(driver.row(1).contains("Lychee"), "{}", driver.row(1));
 
         assert_eq!(
@@ -1836,7 +1771,7 @@ mod tests {
             EventResult::Emit(Msg::Focused(Fruit::Papaya))
         );
         state.cursor = Some(Fruit::Papaya);
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         assert!(driver.row(1).contains("Papaya"), "{}", driver.row(1));
 
         assert_eq!(
@@ -1844,7 +1779,7 @@ mod tests {
             EventResult::Emit(Msg::Focused(Fruit::Mango))
         );
         state.cursor = Some(Fruit::Mango);
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         assert!(
             driver.row(1).contains("Mango"),
             "returning to the wheel anchor must not re-take the hold: {}",
@@ -1857,19 +1792,19 @@ mod tests {
     /// index puts a different option under the cursor, so the hold ends.
     #[test]
     fn replacing_the_anchored_option_releases_the_wheel_hold() {
-        let mut driver = Driver::new(20, 4);
+        let mut driver = driver(20, 4);
         let mut state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
         let area = Rect::new(0, 0, 20, 1);
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         driver.event(
             mouse(MouseKind::Scroll(ScrollDirection::Down), 3, 1),
             &state,
         );
-        driver.render(&state, area, &items());
+        render_select(&mut driver, &state, area, &items());
         assert!(
             driver.row(1).contains("Lychee"),
             "the wheel held the view away from the cursor: {}",
@@ -1879,7 +1814,7 @@ mod tests {
         let mut swapped = items();
         swapped[0] = ListItem::new(Fruit::Guava, "Guava");
         state.cursor = Some(Fruit::Guava);
-        driver.render(&state, area, &swapped);
+        render_select(&mut driver, &state, area, &swapped);
 
         assert!(
             driver.row(1).contains("Guava"),
@@ -1963,28 +1898,22 @@ mod tests {
     /// behavior for the same binding combination.
     #[test]
     fn clicking_without_a_selection_binding_moves_the_cursor() {
-        let mut driver = Driver::new(20, 6);
+        let mut driver = driver(20, 6);
         let state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
-        let theme = Theme::default_dark();
         let area = Rect::new(0, 0, 20, 1);
-        driver
-            .terminal
-            .draw(|frame| {
-                driver.ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        "fruit",
-                        Select::new(items())
-                            .open(|state: &State| state.open, Msg::Open)
-                            .item_focus(|state: &State| state.cursor, Msg::Focused),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "fruit",
+                Select::new(items())
+                    .open(|state: &State| state.open, Msg::Open)
+                    .item_focus(|state: &State| state.cursor, Msg::Focused),
+                area,
+            );
+        });
 
         assert_eq!(
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 3, 2), &state),
@@ -2019,13 +1948,13 @@ mod tests {
 
     #[test]
     fn panel_pointer_hit_testing_uses_painted_viewport() {
-        let mut driver = Driver::new(20, 6);
+        let mut driver = driver(20, 6);
         let state = State {
             open: true,
             cursor: Some(Fruit::Durian),
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 0, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
         assert!(driver.row(2).contains("Papaya"), "{}", driver.row(2));
         assert_eq!(
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 3, 2), &state),
@@ -2035,12 +1964,12 @@ mod tests {
 
     #[test]
     fn outside_press_uses_the_open_bindings_close_message() {
-        let mut driver = Driver::new(20, 8);
+        let mut driver = driver(20, 8);
         let state = State {
             open: true,
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 0, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
         assert_eq!(
             driver.event(mouse(MouseKind::Down(MouseButton::Left), 19, 7), &state),
             EventResult::Emit(Msg::Open(false))
@@ -2049,12 +1978,12 @@ mod tests {
 
     #[test]
     fn clicking_the_first_option_selects_it_where_the_panel_overlays_the_trigger() {
-        let mut driver = Driver::new(20, 12);
+        let mut driver = driver(20, 12);
         let state = State {
             open: true,
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 4, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
 
         assert_eq!(
             driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 4), &state),
@@ -2069,12 +1998,12 @@ mod tests {
 
     #[test]
     fn closing_selection_cannot_commit_twice_before_redraw() {
-        let mut driver = Driver::new(20, 12);
+        let mut driver = driver(20, 12);
         let mut state = State {
             open: true,
             ..State::default()
         };
-        driver.render(&state, Rect::new(0, 4, 20, 1), &items());
+        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
         let click = mouse(MouseKind::Click(MouseButton::Left), 3, 4);
 
         assert_eq!(
@@ -2091,35 +2020,20 @@ mod tests {
 
     #[test]
     fn popup_layers_above_content_inside_a_modal() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 8)).expect("terminal");
-        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut driver = Driver::<State, Msg>::new(20, 8);
         let state = State {
             open: true,
             ..State::default()
         };
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.modal_scope("modal", frame_area(), ScopeOptions::default(), |ctx| {
-                        ctx.component("fruit", select(items()), Rect::new(0, 0, 20, 1));
-                        ctx.paint(|ctx| {
-                            ctx.widget(Line::from("modal sibling"), Rect::new(0, 2, 20, 1));
-                        });
-                    });
+        driver.render(&state, |ctx| {
+            ctx.modal_scope("modal", frame_area(), ScopeOptions::default(), |ctx| {
+                ctx.component("fruit", select(items()), Rect::new(0, 0, 20, 1));
+                ctx.paint(|ctx| {
+                    ctx.widget(Line::from("modal sibling"), Rect::new(0, 2, 20, 1));
                 });
-            })
-            .expect("draw");
-        let row: String = (0..20)
-            .map(|column| {
-                terminal
-                    .backend()
-                    .buffer()
-                    .cell((column, 2))
-                    .expect("cell")
-                    .symbol()
-            })
-            .collect();
+            });
+        });
+        let row = driver.row(2);
         assert!(row.contains("Papaya"), "{row}");
         assert!(!row.contains("modal sibling"));
     }
@@ -2240,24 +2154,18 @@ mod tests {
 
     #[test]
     fn custom_multi_row_options_render_at_the_declared_row_height() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 12)).expect("terminal");
-        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut driver = Driver::<State, Msg>::new(20, 12);
         let state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component("fruit", tall_select(items()), Rect::new(0, 4, 20, 1));
-                });
-            })
-            .expect("draw");
+        driver.render(&state, |ctx| {
+            ctx.component("fruit", tall_select(items()), Rect::new(0, 4, 20, 1));
+        });
 
         let row = |y: u16| -> String {
-            let buffer = terminal.backend().buffer();
+            let buffer = driver.buffer();
             (0..20)
                 .map(|x| buffer.cell((x, y)).expect("cell").symbol())
                 .collect()
@@ -2271,31 +2179,25 @@ mod tests {
 
     #[test]
     fn multi_row_click_hit_testing_divides_by_row_height() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 12)).expect("terminal");
-        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut driver = Driver::<State, Msg>::new(20, 12);
         let state = State {
             open: true,
             cursor: Some(Fruit::Mango),
             ..State::default()
         };
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component("fruit", tall_select(items()), Rect::new(0, 4, 20, 1));
-                });
-            })
-            .expect("draw");
+        driver.render(&state, |ctx| {
+            ctx.component("fruit", tall_select(items()), Rect::new(0, 4, 20, 1));
+        });
 
         // The first option occupies two rows; a click on its second row still
         // selects it, and the next option starts two rows down.
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Click(MouseButton::Left), 3, 4), &state),
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 3, 4), &state),
             EventResult::Emit(Msg::Selected(Fruit::Mango)),
             "the second line belongs to the first option"
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Click(MouseButton::Left), 3, 5), &state),
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 3, 5), &state),
             EventResult::Emit(Msg::Selected(Fruit::Papaya))
         );
     }

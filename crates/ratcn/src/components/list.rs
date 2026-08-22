@@ -1034,11 +1034,12 @@ fn default_item_line<T>(
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use ratatui::{Terminal, backend::TestBackend, style::Modifier, text::Line};
+    use ratatui::{style::Modifier, text::Line};
 
     use super::*;
     use crate::list_core::fit_to_height;
-    use crate::runtime::{ChildId, MouseButton, MouseEvent, Ratcn};
+    use crate::runtime::{ChildId, MouseButton, Ratcn};
+    use crate::test_support::{Driver, key, key_with, mouse};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Task {
@@ -1070,113 +1071,55 @@ mod tests {
         component_focus: crate::runtime::FocusState,
     }
 
-    /// Drives a retained `Ratcn` surface through a `TestBackend`.
-    struct TestBackendDriver {
-        terminal: Terminal<TestBackend>,
-        ratcn: Ratcn<State, Msg>,
-    }
-
-    impl TestBackendDriver {
-        fn new(width: u16, height: u16) -> Self {
-            Self {
-                terminal: Terminal::new(TestBackend::new(width, height)).expect("terminal"),
-                ratcn: Ratcn::new(),
-            }
-        }
-
-        fn render(&mut self, state: &State, items: impl IntoIterator<Item = ListItem<Task>>) {
-            let items: Vec<_> = items.into_iter().collect();
-            let theme = Theme::default_dark();
-            self.terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    self.ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.component(
-                            ChildId::Static("list"),
-                            List::new(items.clone())
-                                .item_focus(|state: &State| state.focused, Msg::Focused)
-                                .selection(|state: &State| state.selected, Msg::Selected)
-                                .scroll(|state: &State| state.scroll, Msg::Scrolled)
-                                .focus_symbol(">"),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
-        }
-
-        fn event(&mut self, event: Event, state: &State) -> EventResult<Msg> {
-            self.ratcn.handle_event(event, state)
-        }
-
-        fn row(&self, row: u16) -> String {
-            let buffer = self.terminal.backend().buffer();
-            let width = usize::from(buffer.area.width);
-            buffer.content[usize::from(row) * width..]
-                .iter()
-                .take(width)
-                .map(ratatui::buffer::Cell::symbol)
-                .collect()
-        }
-
-        fn cell(&self, column: u16, row: u16) -> &ratatui::buffer::Cell {
-            self.terminal
-                .backend()
-                .buffer()
-                .cell((column, row))
-                .expect("cell")
-        }
+    /// One frame: the whole terminal filled with a list of `items`.
+    fn render_list(
+        driver: &mut Driver<State, Msg>,
+        state: &State,
+        items: impl IntoIterator<Item = ListItem<Task>>,
+    ) {
+        let items: Vec<_> = items.into_iter().collect();
+        let area = driver.area();
+        driver.render(state, |ctx| {
+            ctx.component(
+                ChildId::Static("list"),
+                List::new(items)
+                    .item_focus(|state: &State| state.focused, Msg::Focused)
+                    .selection(|state: &State| state.selected, Msg::Selected)
+                    .scroll(|state: &State| state.scroll, Msg::Scrolled)
+                    .focus_symbol(">"),
+                area,
+            );
+        });
     }
 
     fn item(value: Task, label: &str) -> ListItem<Task> {
         ListItem::new(value, label)
     }
 
-    /// Renders a two-row-per-item list, so a click's screen row and its item
-    /// index deliberately disagree.
-    struct TallListDriver {
-        terminal: Terminal<TestBackend>,
-        ratcn: Ratcn<State, Msg>,
-    }
+    /// The rows one item of a two-row-per-item list occupies, so a click's
+    /// screen row and its item index deliberately disagree.
+    const TALL_ROW_HEIGHT: u16 = 2;
 
-    impl TallListDriver {
-        const ROW_HEIGHT: u16 = 2;
-
-        fn new(width: u16, height: u16) -> Self {
-            Self {
-                terminal: Terminal::new(TestBackend::new(width, height)).expect("terminal"),
-                ratcn: Ratcn::new(),
-            }
-        }
-
-        fn render(&mut self, state: &State, items: &[ListItem<Task>]) {
-            let theme = Theme::default_dark();
-            self.terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    self.ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.component(
-                            ChildId::Static("list"),
-                            List::new(items.to_vec())
-                                .item_focus(|state: &State| state.focused, Msg::Focused)
-                                .selection(|state: &State| state.selected, Msg::Selected)
-                                .row_height(Self::ROW_HEIGHT)
-                                .paint_item(|_state: &State, row| {
-                                    Text::from(vec![
-                                        Line::from(row.label.to_string()),
-                                        Line::from("  subtitle"),
-                                    ])
-                                }),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
-        }
-
-        fn event(&mut self, event: Event, state: &State) -> EventResult<Msg> {
-            self.ratcn.handle_event(event, state)
-        }
+    /// One frame: a two-row-per-item list filling the terminal.
+    fn render_tall_list(driver: &mut Driver<State, Msg>, state: &State, items: &[ListItem<Task>]) {
+        let items = items.to_vec();
+        let area = driver.area();
+        driver.render(state, |ctx| {
+            ctx.component(
+                ChildId::Static("list"),
+                List::new(items)
+                    .item_focus(|state: &State| state.focused, Msg::Focused)
+                    .selection(|state: &State| state.selected, Msg::Selected)
+                    .row_height(TALL_ROW_HEIGHT)
+                    .paint_item(|_state: &State, row| {
+                        Text::from(vec![
+                            Line::from(row.label.to_string()),
+                            Line::from("  subtitle"),
+                        ])
+                    }),
+                area,
+            );
+        });
     }
 
     // A two-line row means screen row 1 still belongs to item 0. Dividing by the
@@ -1186,8 +1129,8 @@ mod tests {
     fn clicking_a_second_line_selects_the_item_that_owns_it() {
         let state = State::default();
         let items = vec![item(Task::A, "Alpha"), item(Task::B, "Bravo")];
-        let mut driver = TallListDriver::new(20, 6);
-        driver.render(&state, &items);
+        let mut driver = Driver::new(20, 6);
+        render_tall_list(&mut driver, &state, &items);
 
         assert_eq!(
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 1), &state),
@@ -1209,8 +1152,8 @@ mod tests {
             item(Task::B, "Bravo"),
             item(Task::C, "Charlie"),
         ];
-        let mut driver = TallListDriver::new(20, 5);
-        driver.render(&state, &items);
+        let mut driver = Driver::new(20, 5);
+        render_tall_list(&mut driver, &state, &items);
 
         assert_eq!(
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 4), &state),
@@ -1234,8 +1177,8 @@ mod tests {
             item(Task::D, "Delta"),
             item(Task::E, "Echo"),
         ];
-        let mut driver = TallListDriver::new(20, 6);
-        driver.render(&state, &items);
+        let mut driver = Driver::new(20, 6);
+        render_tall_list(&mut driver, &state, &items);
 
         assert_eq!(
             driver.event(key(KeyCode::PageDown), &state),
@@ -1267,25 +1210,15 @@ mod tests {
         let list: List<Task, State, Msg> = List::new([item(Task::A, "Alpha")]).row_height(0);
         assert_eq!(list.viewport.rows_per_item(), 1);
     }
-    fn key(code: KeyCode) -> Event {
-        Event::Key(KeyEvent::new(code))
-    }
+    /// A Ctrl-held character key.
     fn ctrl_key(ch: char) -> Event {
-        Event::Key(KeyEvent {
-            code: KeyCode::Char(ch),
-            modifiers: crate::runtime::Modifiers {
+        key_with(
+            KeyCode::Char(ch),
+            crate::runtime::Modifiers {
                 ctrl: true,
                 ..crate::runtime::Modifiers::NONE
             },
-        })
-    }
-    fn mouse(kind: MouseKind, column: u16, row: u16) -> Event {
-        Event::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: crate::runtime::Modifiers::NONE,
-        })
+        )
     }
 
     // A fixed selected fill used to match the resting backdrop but not the
@@ -1384,26 +1317,20 @@ mod tests {
         style.unselected_marker = Color::Magenta;
         style.selected_foreground = Color::Red;
         style.foreground = Color::Cyan;
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
-        let theme = Theme::default_dark();
+        let mut driver = Driver::new(10, 2);
 
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        "list",
-                        List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
-                            .selection(|state: &State| state.selected, Msg::Selected)
-                            .style(move |_| style),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "list",
+                List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
+                    .selection(|state: &State| state.selected, Msg::Selected)
+                    .style(move |_| style),
+                area,
+            );
+        });
 
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         assert_eq!(
             buffer.cell((1, 0)).expect("selected marker").fg,
             Color::Yellow
@@ -1425,43 +1352,37 @@ mod tests {
         style.background = Color::Blue;
         style.disabled_foreground = Color::DarkGray;
         style.disabled_background = Color::Red;
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
-        let theme = Theme::default_dark();
+        let mut driver = Driver::new(10, 2);
 
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        "list",
-                        List::new([
-                            item(Task::A, "selected"),
-                            item(Task::B, "disabled").disabled(true),
-                        ])
-                        .selection(|state: &State| state.selected, Msg::Selected)
-                        .paint_item(|_: &State, row| {
-                            let modifier = if row.selected {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::ITALIC
-                            };
-                            Text::from(Span::styled(
-                                row.label.to_string(),
-                                Style::default()
-                                    .fg(Color::Magenta)
-                                    .bg(Color::Green)
-                                    .add_modifier(modifier),
-                            ))
-                        })
-                        .style(move |_| style),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "list",
+                List::new([
+                    item(Task::A, "selected"),
+                    item(Task::B, "disabled").disabled(true),
+                ])
+                .selection(|state: &State| state.selected, Msg::Selected)
+                .paint_item(|_: &State, row| {
+                    let modifier = if row.selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::ITALIC
+                    };
+                    Text::from(Span::styled(
+                        row.label.to_string(),
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .bg(Color::Green)
+                            .add_modifier(modifier),
+                    ))
+                })
+                .style(move |_| style),
+                area,
+            );
+        });
 
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         let selected = buffer.cell((0, 0)).expect("selected custom span");
         assert_eq!(selected.fg, Color::Magenta);
         assert_eq!(selected.bg, Color::Green);
@@ -1511,13 +1432,14 @@ mod tests {
 
     #[test]
     fn reorder_preserves_focused_and_selected_values() {
-        let mut driver = TestBackendDriver::new(20, 3);
+        let mut driver = Driver::new(20, 3);
         let state = State {
             focused: Some(Task::B),
             selected: Some(Task::B),
             ..State::default()
         };
-        driver.render(
+        render_list(
+            &mut driver,
             &state,
             [
                 item(Task::A, "Alpha"),
@@ -1525,7 +1447,8 @@ mod tests {
                 item(Task::C, "Charlie"),
             ],
         );
-        driver.render(
+        render_list(
+            &mut driver,
             &state,
             [
                 item(Task::C, "Charlie"),
@@ -1543,14 +1466,19 @@ mod tests {
 
     #[test]
     fn filtering_a_focused_value_parks_without_highlighting_or_emitting() {
-        let mut driver = TestBackendDriver::new(20, 2);
+        let mut driver = Driver::new(20, 2);
         let state = State {
             focused: Some(Task::B),
             selected: Some(Task::B),
             ..State::default()
         };
-        driver.render(&state, [item(Task::A, "Alpha"), item(Task::B, "Bravo")]);
-        driver.render(
+        render_list(
+            &mut driver,
+            &state,
+            [item(Task::A, "Alpha"), item(Task::B, "Bravo")],
+        );
+        render_list(
+            &mut driver,
             &state,
             [
                 item(Task::A, "Alpha").disabled(true),
@@ -1574,27 +1502,22 @@ mod tests {
     /// the last item agree, so a short list shows no seam.
     #[test]
     fn a_disabled_list_paints_one_backdrop_past_its_last_item() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
-        let mut ratcn = Ratcn::<State, Msg>::new();
+        let mut driver = Driver::<State, Msg>::new(20, 4);
         let state = State::default();
         let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("list"),
-                        List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
-                            .item_focus(|state: &State| state.focused, Msg::Focused)
-                            .disabled(true),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("list"),
+                List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
+                    .item_focus(|state: &State| state.focused, Msg::Focused)
+                    .disabled(true),
+                area,
+            );
+        });
 
         let disabled = ListStyle::from_theme(&theme).disabled_background;
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         for row in 0..4 {
             assert_eq!(
                 buffer.cell((3, row)).expect("cell").bg,
@@ -1606,9 +1529,10 @@ mod tests {
 
     #[test]
     fn disabled_items_are_dimmed_and_ignore_primary_clicks() {
-        let mut driver = TestBackendDriver::new(20, 2);
+        let mut driver = Driver::new(20, 2);
         let state = State::default();
-        driver.render(
+        render_list(
+            &mut driver,
             &state,
             [
                 item(Task::A, "Alpha"),
@@ -1644,36 +1568,34 @@ mod tests {
             Selected(Task),
         }
 
-        let theme = Theme::default_dark();
         let state = RoutedState {
             focus: crate::runtime::FocusState::intent([ChildId::Static("other")]),
             ..RoutedState::default()
         };
-        let mut ratcn = Ratcn::new().focus(|state: &RoutedState| &state.focus, RoutedMsg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("other"),
-                        crate::Button::<RoutedMsg>::new("Other"),
-                        Rect::new(0, 0, 20, 1),
-                    );
-                    ctx.component(
-                        ChildId::Static("list"),
-                        List::new([
-                            item(Task::A, "Alpha"),
-                            item(Task::B, "Bravo").disabled(true),
-                        ])
-                        .selection(|state: &RoutedState| state.selected, RoutedMsg::Selected),
-                        Rect::new(0, 1, 20, 2),
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &RoutedState| &state.focus, RoutedMsg::Focus),
+            20,
+            3,
+        );
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("other"),
+                crate::Button::<RoutedMsg>::new("Other"),
+                Rect::new(0, 0, 20, 1),
+            );
+            ctx.component(
+                ChildId::Static("list"),
+                List::new([
+                    item(Task::A, "Alpha"),
+                    item(Task::B, "Bravo").disabled(true),
+                ])
+                .selection(|state: &RoutedState| state.selected, RoutedMsg::Selected),
+                Rect::new(0, 1, 20, 2),
+            );
+        });
 
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 2), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 2), &state),
             EventResult::Consumed
         );
         assert_eq!(
@@ -1681,12 +1603,12 @@ mod tests {
             crate::runtime::FocusState::intent([ChildId::Static("other")])
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 1, 2), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 2), &state),
             EventResult::Ignored
         );
 
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state),
             EventResult::Ignored
         );
         assert_eq!(
@@ -1694,7 +1616,7 @@ mod tests {
             crate::runtime::FocusState::intent([ChildId::Static("other")])
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state),
             EventResult::Emit(RoutedMsg::Selected(Task::A))
         );
     }
@@ -1712,12 +1634,12 @@ mod tests {
 
     #[test]
     fn the_wheel_scrolls_the_view_and_leaves_the_cursor_behind() {
-        let mut driver = TestBackendDriver::new(20, 3);
+        let mut driver = Driver::new(20, 3);
         let mut state = State {
             focused: Some(Task::A),
             ..State::default()
         };
-        driver.render(&state, six_items());
+        render_list(&mut driver, &state, six_items());
         assert!(driver.row(0).contains("Alpha"), "{}", driver.row(0));
 
         // One notch scrolls the view by the wheel step. The cursor stays on
@@ -1730,7 +1652,7 @@ mod tests {
             EventResult::Emit(Msg::Scrolled(3))
         );
         state.scroll = 3;
-        driver.render(&state, six_items());
+        render_list(&mut driver, &state, six_items());
         assert!(
             driver.row(0).contains("Delta"),
             "the wheeled offset survives the redraw: {}",
@@ -1746,20 +1668,20 @@ mod tests {
         );
         state.focused = Some(Task::B);
         state.scroll = 1;
-        driver.render(&state, six_items());
+        render_list(&mut driver, &state, six_items());
         assert!(driver.row(0).contains("Bravo"), "{}", driver.row(0));
     }
 
     #[test]
     fn wheeling_against_a_stale_app_offset_synchronizes_it() {
-        let mut driver = TestBackendDriver::new(20, 3);
+        let mut driver = Driver::new(20, 3);
         let state = State {
             // Render must scroll Foxtrot into view, so the painted offset is
             // 3 while the app still holds 0.
             focused: Some(Task::F),
             ..State::default()
         };
-        driver.render(&state, six_items());
+        render_list(&mut driver, &state, six_items());
         assert!(driver.row(0).contains("Delta"), "{}", driver.row(0));
 
         // Wheeling up lands on the offset the app already holds, so there is
@@ -1768,7 +1690,7 @@ mod tests {
             driver.event(mouse(MouseKind::Scroll(ScrollDirection::Up), 2, 0), &state),
             EventResult::Consumed
         );
-        driver.render(&state, six_items());
+        render_list(&mut driver, &state, six_items());
         assert!(
             driver.row(0).contains("Alpha"),
             "the held view is painted even though the cursor is off-screen: {}",
@@ -1788,12 +1710,13 @@ mod tests {
 
     #[test]
     fn focus_and_scroll_move_atomically_across_the_viewport_without_redraw() {
-        let mut driver = TestBackendDriver::new(20, 3);
+        let mut driver = Driver::new(20, 3);
         let mut state = State {
             focused: Some(Task::C),
             ..State::default()
         };
-        driver.render(
+        render_list(
+            &mut driver,
             &state,
             [
                 item(Task::A, "Alpha"),
@@ -1834,47 +1757,33 @@ mod tests {
             focused: Some(Task::A),
             ..State::default()
         };
-        let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
-        let draw = |terminal: &mut Terminal<TestBackend>, ratcn: &mut Ratcn<State, Msg>| {
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.component(
-                            ChildId::Static("list"),
-                            List::new(six_items())
-                                .item_focus(|state: &State| state.focused, Msg::Focused),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
+        let mut driver = Driver::new(20, 3);
+        let draw = |driver: &mut Driver<State, Msg>| {
+            let area = driver.area();
+            driver.render(&state, |ctx| {
+                ctx.component(
+                    ChildId::Static("list"),
+                    List::new(six_items()).item_focus(|state: &State| state.focused, Msg::Focused),
+                    area,
+                );
+            });
         };
-        let row = |terminal: &Terminal<TestBackend>, row: u16| -> String {
-            let buffer = terminal.backend().buffer();
-            (0..buffer.area.width)
-                .map(|column| buffer.cell((column, row)).expect("cell").symbol())
-                .collect()
-        };
-
-        draw(&mut terminal, &mut ratcn);
-        assert!(row(&terminal, 0).contains("Alpha"), "{}", row(&terminal, 0));
+        draw(&mut driver);
+        assert!(driver.row(0).contains("Alpha"), "{}", driver.row(0));
 
         assert_eq!(
-            ratcn.handle_event(
+            driver.event(
                 mouse(MouseKind::Scroll(ScrollDirection::Down), 2, 0),
                 &state
             ),
             EventResult::Consumed,
             "there is no scroll binding, so nothing is emitted"
         );
-        draw(&mut terminal, &mut ratcn);
+        draw(&mut driver);
         assert!(
-            row(&terminal, 0).contains("Delta"),
+            driver.row(0).contains("Delta"),
             "the wheel scrolled the view and the offset survived the redraw: {}",
-            row(&terminal, 0)
+            driver.row(0)
         );
     }
 
@@ -1886,61 +1795,46 @@ mod tests {
             focused: Some(Task::A),
             ..State::default()
         };
-        let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
-        let draw =
-            |terminal: &mut Terminal<TestBackend>, ratcn: &mut Ratcn<State, Msg>, state: &State| {
-                terminal
-                    .draw(|frame| {
-                        let area = frame.area();
-                        ratcn.render(frame, state, &theme, |ctx| {
-                            ctx.component(
-                                ChildId::Static("list"),
-                                List::new(six_items())
-                                    .item_focus(|state: &State| state.focused, Msg::Focused),
-                                area,
-                            );
-                        });
-                    })
-                    .expect("draw");
-            };
-        let row = |terminal: &Terminal<TestBackend>, row: u16| -> String {
-            let buffer = terminal.backend().buffer();
-            (0..buffer.area.width)
-                .map(|column| buffer.cell((column, row)).expect("cell").symbol())
-                .collect()
+        let mut driver = Driver::new(20, 3);
+        let draw = |driver: &mut Driver<State, Msg>, state: &State| {
+            let area = driver.area();
+            driver.render(state, |ctx| {
+                ctx.component(
+                    ChildId::Static("list"),
+                    List::new(six_items()).item_focus(|state: &State| state.focused, Msg::Focused),
+                    area,
+                );
+            });
         };
-
-        draw(&mut terminal, &mut ratcn, &state);
-        ratcn.handle_event(
+        draw(&mut driver, &state);
+        driver.event(
             mouse(MouseKind::Scroll(ScrollDirection::Down), 2, 0),
             &state,
         );
-        draw(&mut terminal, &mut ratcn, &state);
-        assert!(row(&terminal, 0).contains("Delta"), "{}", row(&terminal, 0));
+        draw(&mut driver, &state);
+        assert!(driver.row(0).contains("Delta"), "{}", driver.row(0));
 
         // Move the cursor off the anchor: the view follows it back.
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Down), &state),
+            driver.event(key(KeyCode::Down), &state),
             EventResult::Emit(Msg::Focused(Task::B, 1))
         );
         state.focused = Some(Task::B);
-        draw(&mut terminal, &mut ratcn, &state);
-        assert!(row(&terminal, 0).contains("Bravo"), "{}", row(&terminal, 0));
+        draw(&mut driver, &state);
+        assert!(driver.row(0).contains("Bravo"), "{}", driver.row(0));
 
         // Move it back onto the anchor. The hold is spent, so the cursor
         // stays visible instead of the stale held view returning.
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Up), &state),
+            driver.event(key(KeyCode::Up), &state),
             EventResult::Emit(Msg::Focused(Task::A, 0))
         );
         state.focused = Some(Task::A);
-        draw(&mut terminal, &mut ratcn, &state);
+        draw(&mut driver, &state);
         assert!(
-            row(&terminal, 0).contains("Alpha"),
+            driver.row(0).contains("Alpha"),
             "returning to the wheel anchor must not re-take the hold: {}",
-            row(&terminal, 0)
+            driver.row(0)
         );
     }
 
@@ -1949,12 +1843,12 @@ mod tests {
     /// under the cursor, so the hold ends and the new item is scrolled in.
     #[test]
     fn replacing_the_anchored_item_releases_the_wheel_hold() {
-        let mut driver = TestBackendDriver::new(20, 3);
+        let mut driver = Driver::new(20, 3);
         let mut state = State {
             focused: Some(Task::A),
             ..State::default()
         };
-        driver.render(&state, six_items());
+        render_list(&mut driver, &state, six_items());
 
         assert_eq!(
             driver.event(
@@ -1964,7 +1858,7 @@ mod tests {
             EventResult::Emit(Msg::Scrolled(3))
         );
         state.scroll = 3;
-        driver.render(&state, six_items());
+        render_list(&mut driver, &state, six_items());
         assert!(
             driver.row(0).contains("Delta"),
             "the wheel held the view away from the cursor: {}",
@@ -1974,7 +1868,7 @@ mod tests {
         let mut items = six_items().to_vec();
         items[0] = item(Task::G, "Golf");
         state.focused = Some(Task::G);
-        driver.render(&state, items);
+        render_list(&mut driver, &state, items);
 
         assert!(
             driver.row(0).contains("Golf"),
@@ -1987,12 +1881,12 @@ mod tests {
     /// paint round-trip first, exactly as it does over a `Select` panel.
     #[test]
     fn the_first_hover_motion_moves_the_cursor() {
-        let mut driver = TestBackendDriver::new(20, 3);
+        let mut driver = Driver::new(20, 3);
         let state = State {
             focused: Some(Task::A),
             ..State::default()
         };
-        driver.render(&state, six_items());
+        render_list(&mut driver, &state, six_items());
 
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 2, 1), &state),
@@ -2021,65 +1915,53 @@ mod tests {
 
     #[test]
     fn cursorless_list_is_not_a_keyboard_stop_and_ignores_keys() {
-        let theme = Theme::default_dark();
         let state = State::default();
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        "list",
-                        List::new([item(Task::A, "Alpha")])
-                            .selection(|state: &State| state.selected, Msg::Selected),
-                        Rect::new(0, 0, 20, 1),
-                    );
-                    ctx.component(
-                        "button",
-                        crate::Button::new("Next").on_press(|| Msg::Pressed),
-                        Rect::new(0, 1, 20, 1),
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::new(20, 2);
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "list",
+                List::new([item(Task::A, "Alpha")])
+                    .selection(|state: &State| state.selected, Msg::Selected),
+                Rect::new(0, 0, 20, 1),
+            );
+            ctx.component(
+                "button",
+                crate::Button::new("Next").on_press(|| Msg::Pressed),
+                Rect::new(0, 1, 20, 1),
+            );
+        });
 
-        assert_eq!(ratcn.focus_path(&[ChildId::Static("list")]), None);
+        assert_eq!(driver.ratcn.focus_path(&[ChildId::Static("list")]), None);
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Enter), &state),
+            driver.event(key(KeyCode::Enter), &state),
             EventResult::Emit(Msg::Pressed)
         );
     }
 
     #[test]
     fn no_selection_mode_draws_neutral_rows_and_reports_unselected_custom_state() {
-        let theme = Theme::default_dark();
         let state = State {
             focused: Some(Task::A),
             ..State::default()
         };
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        "plain",
-                        List::new([item(Task::A, "Alpha")])
-                            .item_focus(|state: &State| state.focused, Msg::Focused),
-                        Rect::new(0, 0, 20, 1),
-                    );
-                    ctx.component(
-                        "custom",
-                        List::new([item(Task::B, "Bravo")]).paint_item(|_, row| {
-                            Line::from(format!("{} selected={}", row.label, row.selected))
-                        }),
-                        Rect::new(0, 1, 20, 1),
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::new(20, 2);
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "plain",
+                List::new([item(Task::A, "Alpha")])
+                    .item_focus(|state: &State| state.focused, Msg::Focused),
+                Rect::new(0, 0, 20, 1),
+            );
+            ctx.component(
+                "custom",
+                List::new([item(Task::B, "Bravo")]).paint_item(|_, row| {
+                    Line::from(format!("{} selected={}", row.label, row.selected))
+                }),
+                Rect::new(0, 1, 20, 1),
+            );
+        });
 
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         let row = |y: usize| {
             buffer.content[y * 20..(y + 1) * 20]
                 .iter()
@@ -2093,63 +1975,53 @@ mod tests {
 
     #[test]
     fn hovered_list_paints_pointer_moved_item_focus_without_keyboard_focus() {
-        let theme = Theme::default_dark();
         let mut state = State {
             focused: Some(Task::A),
             component_focus: crate::runtime::FocusState::intent(["other"]),
             ..State::default()
         };
-        let mut ratcn =
-            Ratcn::new().focus(|state: &State| &state.component_focus, Msg::ComponentFocus);
-        let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
-        let render =
-            |terminal: &mut Terminal<TestBackend>, ratcn: &mut Ratcn<State, Msg>, state: &State| {
-                terminal
-                    .draw(|frame| {
-                        ratcn.render(frame, state, &theme, |ctx| {
-                            ctx.component(
-                                "other",
-                                crate::Button::<Msg>::new("Other"),
-                                Rect::new(0, 0, 20, 1),
-                            );
-                            ctx.component(
-                                "list",
-                                List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
-                                    .item_focus(|state: &State| state.focused, Msg::Focused)
-                                    .paint_item(|_, row| {
-                                        Line::from(format!(
-                                            "{} {}",
-                                            if row.focused { "focused" } else { "idle" },
-                                            row.label
-                                        ))
-                                    })
-                                    .focus_symbol(">"),
-                                Rect::new(0, 1, 20, 2),
-                            );
-                        });
-                    })
-                    .expect("draw");
-            };
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &State| &state.component_focus, Msg::ComponentFocus),
+            20,
+            3,
+        );
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    "other",
+                    crate::Button::<Msg>::new("Other"),
+                    Rect::new(0, 0, 20, 1),
+                );
+                ctx.component(
+                    "list",
+                    List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
+                        .item_focus(|state: &State| state.focused, Msg::Focused)
+                        .paint_item(|_, row| {
+                            Line::from(format!(
+                                "{} {}",
+                                if row.focused { "focused" } else { "idle" },
+                                row.label
+                            ))
+                        })
+                        .focus_symbol(">"),
+                    Rect::new(0, 1, 20, 2),
+                );
+            });
+        };
 
-        render(&mut terminal, &mut ratcn, &state);
+        render(&mut driver, &state);
         // One motion does both halves: the runtime writes its own hover as the
         // pointer enters, and the same event still reaches the List, whose
         // cursor follows it.
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Moved, 2, 2), &state),
+            driver.event(mouse(MouseKind::Moved, 2, 2), &state),
             EventResult::Emit(Msg::Focused(Task::B, 0))
         );
         state.focused = Some(Task::B);
-        render(&mut terminal, &mut ratcn, &state);
+        render(&mut driver, &state);
 
-        assert!(
-            terminal
-                .backend()
-                .buffer()
-                .cell((0, 2))
-                .is_some_and(|cell| cell.symbol() == ">")
-        );
-        let buffer = terminal.backend().buffer();
+        assert_eq!(driver.cell(0, 2).symbol(), ">");
+        let buffer = driver.buffer();
         let painted_row: String = buffer.content[40..60]
             .iter()
             .map(ratatui::buffer::Cell::symbol)
@@ -2217,26 +2089,23 @@ mod tests {
         // Driven through the runtime with focus stored on the list, which is
         // how a real app reaches it: a stored path routes keys to the component
         // it names whether or not that component would accept new focus.
-        let theme = Theme::default_dark();
-        let mut ratcn =
-            Ratcn::new().focus(|state: &State| &state.component_focus, Msg::ComponentFocus);
-        let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        "list",
-                        List::new(all_disabled())
-                            .item_focus(|state: &State| state.focused, Msg::Focused)
-                            .selection(|state: &State| state.selected, Msg::Selected),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &State| &state.component_focus, Msg::ComponentFocus),
+            20,
+            3,
+        );
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "list",
+                List::new(all_disabled())
+                    .item_focus(|state: &State| state.focused, Msg::Focused)
+                    .selection(|state: &State| state.selected, Msg::Selected),
+                area,
+            );
+        });
         for event in keys() {
             assert_eq!(
-                ratcn.handle_event(event.clone(), &state),
+                driver.event(event.clone(), &state),
                 EventResult::Ignored,
                 "{event:?} routed through the runtime"
             );
@@ -2245,7 +2114,7 @@ mod tests {
 
     #[test]
     fn home_end_and_page_keys_skip_disabled_items_using_rendered_height() {
-        let mut driver = TestBackendDriver::new(20, 3);
+        let mut driver = Driver::new(20, 3);
         let state = State {
             focused: Some(Task::C),
             ..State::default()
@@ -2258,7 +2127,7 @@ mod tests {
             item(Task::E, "E").disabled(true),
             item(Task::F, "F"),
         ];
-        driver.render(&state, items);
+        render_list(&mut driver, &state, items);
 
         assert_eq!(
             driver.event(key(KeyCode::Home), &state),
@@ -2285,7 +2154,7 @@ mod tests {
             item(Task::E, "E").disabled(true),
             item(Task::F, "F"),
         ];
-        driver.render(&state, leap_items);
+        render_list(&mut driver, &state, leap_items);
         assert_eq!(
             driver.event(key(KeyCode::Down), &state),
             EventResult::Emit(Msg::Focused(Task::F, 3)),
@@ -2339,25 +2208,19 @@ mod tests {
 
     #[test]
     fn conflicting_selection_modes_fail_during_declaration() {
-        let mut driver = TestBackendDriver::new(20, 1);
+        let mut driver = Driver::new(20, 1);
         let state = State::default();
         let panic = catch_unwind(AssertUnwindSafe(|| {
-            let theme = Theme::default_dark();
-            driver
-                .terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    driver.ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.component(
-                            "list",
-                            List::new([item(Task::A, "Alpha")])
-                                .selection(|_: &State| None, Msg::Selected)
-                                .multi_selection(|_, _| false, Msg::Toggled),
-                            area,
-                        );
-                    });
-                })
-                .expect("draw");
+            let area = driver.area();
+            driver.render(&state, |ctx| {
+                ctx.component(
+                    "list",
+                    List::new([item(Task::A, "Alpha")])
+                        .selection(|_: &State| None, Msg::Selected)
+                        .multi_selection(|_, _| false, Msg::Toggled),
+                    area,
+                );
+            });
         }))
         .expect_err("conflicting modes must panic");
         let message = panic.downcast_ref::<String>().map_or_else(
@@ -2407,7 +2270,7 @@ mod tests {
     // keys, and go out through the same item-focus message.
     #[test]
     fn vim_and_readline_keys_step_the_cursor_like_the_arrows() {
-        let mut driver = TestBackendDriver::new(20, 6);
+        let mut driver = Driver::new(20, 6);
         let state = State {
             focused: Some(Task::B),
             ..State::default()
@@ -2419,7 +2282,7 @@ mod tests {
                 item(Task::C, "Charlie"),
             ]
         };
-        driver.render(&state, items());
+        render_list(&mut driver, &state, items());
 
         for down in [key(KeyCode::Char('j')), ctrl_key('n')] {
             assert_eq!(
@@ -2439,12 +2302,16 @@ mod tests {
 
     #[test]
     fn a_letter_that_is_not_a_navigation_key_bubbles_as_an_app_hotkey() {
-        let mut driver = TestBackendDriver::new(20, 6);
+        let mut driver = Driver::new(20, 6);
         let state = State {
             focused: Some(Task::A),
             ..State::default()
         };
-        driver.render(&state, [item(Task::A, "Alpha"), item(Task::B, "Bravo")]);
+        render_list(
+            &mut driver,
+            &state,
+            [item(Task::A, "Alpha"), item(Task::B, "Bravo")],
+        );
 
         assert_eq!(
             driver.event(key(KeyCode::Char('a')), &state),
@@ -2525,28 +2392,22 @@ mod tests {
             .map(|index| ListItem::new(index, format!("Item {index}")))
             .collect();
         let state = BigState { scroll: 40 };
-        let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::<BigState, BigMsg>::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 5)).expect("terminal");
+        let mut driver = Driver::<BigState, BigMsg>::new(20, 5);
 
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("list"),
-                        List::new(items)
-                            .scroll(|state: &BigState| state.scroll, BigMsg::Scrolled)
-                            .selection(|_: &BigState| None, BigMsg::Chose)
-                            .paint_item(move |_: &BigState, row: ListItemState<'_, usize>| {
-                                recorded.borrow_mut().push(row.index);
-                                Line::from(row.label.to_string())
-                            }),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("list"),
+                List::new(items)
+                    .scroll(|state: &BigState| state.scroll, BigMsg::Scrolled)
+                    .selection(|_: &BigState| None, BigMsg::Chose)
+                    .paint_item(move |_: &BigState, row: ListItemState<'_, usize>| {
+                        recorded.borrow_mut().push(row.index);
+                        Line::from(row.label.to_string())
+                    }),
+                area,
+            );
+        });
 
         assert_eq!(
             *seen.borrow(),
@@ -2554,7 +2415,7 @@ mod tests {
             "one screenful of rows is built, whatever the list's length"
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Click(MouseButton::Left), 2, 2), &state),
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 2), &state),
             EventResult::Emit(BigMsg::Chose(42)),
             "the third painted row is the forty-third item"
         );
@@ -2562,7 +2423,7 @@ mod tests {
 
     #[test]
     fn events_before_the_first_render_are_ignored() {
-        let mut driver = TestBackendDriver::new(20, 2);
+        let mut driver = Driver::<State, Msg>::new(20, 2);
         assert_eq!(
             driver.event(key(KeyCode::PageDown), &State::default()),
             EventResult::Ignored

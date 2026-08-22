@@ -1208,10 +1208,9 @@ fn tab_rects(area: Rect, labels: &[&str], size: TabsSize) -> Vec<Rect> {
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use ratatui::{Terminal, backend::TestBackend};
-
     use super::*;
-    use crate::runtime::{ChildId, Modifiers, MouseEvent, Ratcn};
+    use crate::runtime::{ChildId, Modifiers, Ratcn};
+    use crate::test_support::{Driver, key, key_with, mouse};
     use crate::text_width::display_width;
 
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1270,58 +1269,36 @@ mod tests {
         .selection(|s: &State| Some(s.selected), Msg::Selected)
     }
 
-    fn key(code: KeyCode) -> Event {
-        Event::Key(KeyEvent::new(code))
-    }
-
+    /// A Ctrl-held character key.
     fn ctrl_key(ch: char) -> Event {
-        Event::Key(KeyEvent {
-            code: KeyCode::Char(ch),
-            modifiers: Modifiers {
+        key_with(
+            KeyCode::Char(ch),
+            Modifiers {
                 ctrl: true,
                 ..Modifiers::NONE
             },
-        })
+        )
     }
 
-    fn mouse(kind: MouseKind, column: u16, row: u16) -> Event {
-        Event::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: Modifiers::NONE,
-        })
-    }
-
-    fn render_runtime(
-        ratcn: &mut Ratcn<State, Msg>,
-        terminal: &mut Terminal<TestBackend>,
-        state: &State,
-        fail: bool,
-    ) {
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("tabs"),
-                        Tabs::new([
-                            Tab::new(Screen::A, "A"),
-                            Tab::new(Screen::B, "B").disabled(state.disable_b),
-                            Tab::new(Screen::C, "C"),
-                        ])
-                        .item_focus(
-                            |state: &State| Some(state.focused.unwrap_or(state.selected)),
-                            Msg::Focused,
-                        )
-                        .selection(|state: &State| Some(state.selected), Msg::Selected),
-                        area,
-                    );
-                    assert!(!fail, "failed pass");
-                });
-            })
-            .expect("draw");
+    fn render_runtime(driver: &mut Driver<State, Msg>, state: &State, fail: bool) {
+        let area = driver.area();
+        driver.render(state, |ctx| {
+            ctx.component(
+                ChildId::Static("tabs"),
+                Tabs::new([
+                    Tab::new(Screen::A, "A"),
+                    Tab::new(Screen::B, "B").disabled(state.disable_b),
+                    Tab::new(Screen::C, "C"),
+                ])
+                .item_focus(
+                    |state: &State| Some(state.focused.unwrap_or(state.selected)),
+                    Msg::Focused,
+                )
+                .selection(|state: &State| Some(state.selected), Msg::Selected),
+                area,
+            );
+            assert!(!fail, "failed pass");
+        });
     }
 
     #[test]
@@ -1646,31 +1623,24 @@ mod tests {
             selected: Screen::E,
             ..State::default()
         };
-        let theme = Theme::default_dark();
-        let mut ratcn = Ratcn::new();
         let area = Rect::new(0, 0, 18, TabsSize::Small.height());
-        let mut terminal =
-            Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal");
+        let mut driver = Driver::new(area.width, area.height);
 
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("tabs"),
-                        Tabs::new([
-                            Tab::new(Screen::A, "A"),
-                            Tab::new(Screen::B, "B"),
-                            Tab::new(Screen::C, "C"),
-                            Tab::new(Screen::D, "D"),
-                            Tab::new(Screen::E, "E"),
-                            Tab::new(Screen::F, "F"),
-                        ])
-                        .selection(|s: &State| Some(s.selected), Msg::Selected),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("tabs"),
+                Tabs::new([
+                    Tab::new(Screen::A, "A"),
+                    Tab::new(Screen::B, "B"),
+                    Tab::new(Screen::C, "C"),
+                    Tab::new(Screen::D, "D"),
+                    Tab::new(Screen::E, "E"),
+                    Tab::new(Screen::F, "F"),
+                ])
+                .selection(|s: &State| Some(s.selected), Msg::Selected),
+                area,
+            );
+        });
 
         // The same layout the render just computed: `must_show` is the selected
         // tab when no manual cursor is bound.
@@ -1682,7 +1652,7 @@ mod tests {
             .expect("tab F should be visible after the window shifts");
 
         assert_eq!(
-            ratcn.handle_event(
+            driver.event(
                 mouse(
                     MouseKind::Click(MouseButton::Left),
                     tab_f.x + tab_f.width / 2,
@@ -1736,32 +1706,25 @@ mod tests {
         // The same marker click, but delivered through `Ratcn::handle_event`
         // against the geometry retained by a real render — automatic
         // activation, so the step selects the hidden neighbor directly.
-        let mut ratcn = Ratcn::new();
-        let mut terminal =
-            Terminal::new(TestBackend::new(18, TabsSize::Small.height())).expect("terminal");
-        let theme = Theme::default_dark();
+        let mut driver = Driver::new(18, TabsSize::Small.height());
         let state = State::default(); // selected A
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("tabs"),
-                        Tabs::new([
-                            Tab::new(Screen::A, "A"),
-                            Tab::new(Screen::B, "B"),
-                            Tab::new(Screen::C, "C"),
-                            Tab::new(Screen::D, "D"),
-                            Tab::new(Screen::E, "E"),
-                            Tab::new(Screen::F, "F"),
-                        ])
-                        .selection(|state: &State| Some(state.selected), Msg::Selected)
-                        .activation(TabsActivation::Automatic),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("tabs"),
+                Tabs::new([
+                    Tab::new(Screen::A, "A"),
+                    Tab::new(Screen::B, "B"),
+                    Tab::new(Screen::C, "C"),
+                    Tab::new(Screen::D, "D"),
+                    Tab::new(Screen::E, "E"),
+                    Tab::new(Screen::F, "F"),
+                ])
+                .selection(|state: &State| Some(state.selected), Msg::Selected)
+                .activation(TabsActivation::Automatic),
+                area,
+            );
+        });
         let marker = tab_layout(
             Rect::new(0, 0, 18, TabsSize::Small.height()),
             &["A", "B", "C", "D", "E", "F"],
@@ -1772,7 +1735,7 @@ mod tests {
         .expect("hidden right tabs get a marker");
 
         assert_eq!(
-            ratcn.handle_event(
+            driver.event(
                 mouse(MouseKind::Click(MouseButton::Left), marker.x, marker.y),
                 &state,
             ),
@@ -1815,41 +1778,39 @@ mod tests {
             Selected(Screen),
         }
 
-        let theme = Theme::default_dark();
         let mut state = RoutedState {
             focus: crate::runtime::FocusState::intent([ChildId::Static("other")]),
             ..RoutedState::default()
         };
-        let mut ratcn = Ratcn::new().focus(|state: &RoutedState| &state.focus, RoutedMsg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("other"),
-                        crate::Button::<RoutedMsg>::new("Other")
-                            .on_press(|| RoutedMsg::Selected(Screen::A)),
-                        Rect::new(0, 0, 20, 1),
-                    );
-                    ctx.component(
-                        ChildId::Static("tabs"),
-                        Tabs::new([
-                            Tab::new(Screen::A, "A"),
-                            Tab::new(Screen::B, "B").disabled(true),
-                        ])
-                        .selection(
-                            |state: &RoutedState| Some(state.selected),
-                            RoutedMsg::Selected,
-                        )
-                        .activation(TabsActivation::Automatic),
-                        Rect::new(0, 1, 20, 1),
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &RoutedState| &state.focus, RoutedMsg::Focus),
+            20,
+            2,
+        );
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("other"),
+                crate::Button::<RoutedMsg>::new("Other")
+                    .on_press(|| RoutedMsg::Selected(Screen::A)),
+                Rect::new(0, 0, 20, 1),
+            );
+            ctx.component(
+                ChildId::Static("tabs"),
+                Tabs::new([
+                    Tab::new(Screen::A, "A"),
+                    Tab::new(Screen::B, "B").disabled(true),
+                ])
+                .selection(
+                    |state: &RoutedState| Some(state.selected),
+                    RoutedMsg::Selected,
+                )
+                .activation(TabsActivation::Automatic),
+                Rect::new(0, 1, 20, 1),
+            );
+        });
 
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 8, 1), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 8, 1), &state),
             EventResult::Consumed
         );
         assert_eq!(
@@ -1857,18 +1818,18 @@ mod tests {
             crate::runtime::FocusState::intent([ChildId::Static("other")])
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 8, 1), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 8, 1), &state),
             EventResult::Ignored
         );
 
         let EventResult::Emit(RoutedMsg::Focus(focus)) =
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 2, 1), &state)
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 2, 1), &state)
         else {
             panic!("an enabled tab should receive runtime focus");
         };
         state.focus = focus;
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 2, 1), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 2, 1), &state),
             EventResult::Emit(RoutedMsg::Selected(Screen::A))
         );
     }
@@ -1887,42 +1848,40 @@ mod tests {
             Selected(Screen),
         }
 
-        let theme = Theme::default_dark();
         let mut state = RoutedState {
             focus: crate::runtime::FocusState::intent([ChildId::Static("other")]),
             ..RoutedState::default()
         };
-        let mut ratcn = Ratcn::new().focus(|state: &RoutedState| &state.focus, RoutedMsg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(20, 4)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("tabs"),
-                        Tabs::new([Tab::new(Screen::A, "A"), Tab::new(Screen::B, "B")])
-                            .selection(
-                                |state: &RoutedState| Some(state.selected),
-                                RoutedMsg::Selected,
-                            )
-                            .activation(TabsActivation::Automatic),
-                        Rect::new(0, 0, 20, 4),
-                    );
-                    ctx.component(
-                        ChildId::Static("other"),
-                        crate::Button::<RoutedMsg>::new("Other")
-                            .on_press(|| RoutedMsg::Selected(Screen::A)),
-                        Rect::new(0, 3, 8, 1),
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &RoutedState| &state.focus, RoutedMsg::Focus),
+            20,
+            4,
+        );
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("tabs"),
+                Tabs::new([Tab::new(Screen::A, "A"), Tab::new(Screen::B, "B")])
+                    .selection(
+                        |state: &RoutedState| Some(state.selected),
+                        RoutedMsg::Selected,
+                    )
+                    .activation(TabsActivation::Automatic),
+                Rect::new(0, 0, 20, 4),
+            );
+            ctx.component(
+                ChildId::Static("other"),
+                crate::Button::<RoutedMsg>::new("Other")
+                    .on_press(|| RoutedMsg::Selected(Screen::A)),
+                Rect::new(0, 3, 8, 1),
+            );
+        });
 
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 2, 2), &state),
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 2, 2), &state),
             EventResult::Ignored
         );
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 2, 2), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 2, 2), &state),
             EventResult::Ignored
         );
         assert_eq!(
@@ -1931,13 +1890,13 @@ mod tests {
         );
 
         let EventResult::Emit(RoutedMsg::Focus(focus)) =
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 2, 0), &state)
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 2, 0), &state)
         else {
             panic!("the painted tabs row should focus");
         };
         state.focus = focus;
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 2, 0), &state),
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 2, 0), &state),
             EventResult::Emit(RoutedMsg::Selected(Screen::A))
         );
     }
@@ -2084,135 +2043,117 @@ mod tests {
 
     #[test]
     fn disabled_bits_remain_from_the_last_successful_runtime_render() {
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("terminal");
+        let mut driver = Driver::new(20, 1);
         let mut state = State::default();
-        render_runtime(&mut ratcn, &mut terminal, &state, false);
+        render_runtime(&mut driver, &state, false);
         state.disable_b = true;
 
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Right), &state),
+            driver.event(key(KeyCode::Right), &state),
             EventResult::Emit(Msg::Focused(Screen::B))
         );
 
-        render_runtime(&mut ratcn, &mut terminal, &state, false);
+        render_runtime(&mut driver, &state, false);
         state.disable_b = false;
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Right), &state),
+            driver.event(key(KeyCode::Right), &state),
             EventResult::Emit(Msg::Focused(Screen::C))
         );
     }
 
     #[test]
     fn failed_runtime_pass_preserves_previous_disabled_bits() {
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("terminal");
+        let mut driver = Driver::new(20, 1);
         let mut state = State::default();
-        render_runtime(&mut ratcn, &mut terminal, &state, false);
+        render_runtime(&mut driver, &state, false);
         state.disable_b = true;
 
         let failed = catch_unwind(AssertUnwindSafe(|| {
-            render_runtime(&mut ratcn, &mut terminal, &state, true);
+            render_runtime(&mut driver, &state, true);
         }));
 
         assert!(failed.is_err());
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Right), &state),
+            driver.event(key(KeyCode::Right), &state),
             EventResult::Emit(Msg::Focused(Screen::B))
         );
     }
 
     #[test]
     fn focused_and_selected_bindings_are_current_between_renders() {
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("terminal");
+        let mut driver = Driver::new(20, 1);
         let mut state = State::default();
-        render_runtime(&mut ratcn, &mut terminal, &state, false);
+        render_runtime(&mut driver, &state, false);
         state.focused = Some(Screen::B);
         state.selected = Screen::C;
 
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Right), &state),
+            driver.event(key(KeyCode::Right), &state),
             EventResult::Emit(Msg::Focused(Screen::C))
         );
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Enter), &state),
+            driver.event(key(KeyCode::Enter), &state),
             EventResult::Emit(Msg::Selected(Screen::B))
         );
     }
 
     #[test]
     fn consecutive_automatic_navigation_uses_current_selection_without_redraw() {
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("terminal");
-        let theme = Theme::default_dark();
+        let mut driver = Driver::new(20, 1);
         let mut state = State::default();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("tabs"),
-                        Tabs::new([
-                            Tab::new(Screen::A, "A"),
-                            Tab::new(Screen::B, "B"),
-                            Tab::new(Screen::C, "C"),
-                        ])
-                        .selection(|state: &State| Some(state.selected), Msg::Selected)
-                        .activation(TabsActivation::Automatic),
-                        area,
-                    );
-                });
-            })
-            .expect("draw");
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("tabs"),
+                Tabs::new([
+                    Tab::new(Screen::A, "A"),
+                    Tab::new(Screen::B, "B"),
+                    Tab::new(Screen::C, "C"),
+                ])
+                .selection(|state: &State| Some(state.selected), Msg::Selected)
+                .activation(TabsActivation::Automatic),
+                area,
+            );
+        });
 
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Right), &state),
+            driver.event(key(KeyCode::Right), &state),
             EventResult::Emit(Msg::Selected(Screen::B))
         );
         state.selected = Screen::B;
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Right), &state),
+            driver.event(key(KeyCode::Right), &state),
             EventResult::Emit(Msg::Selected(Screen::C))
         );
     }
 
     #[test]
     fn hit_window_survives_semantic_changes_and_a_failed_pass() {
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(18, 1)).expect("terminal");
-        let theme = Theme::default_dark();
+        let mut driver = Driver::new(18, 1);
         let mut state = State {
             selected: Screen::E,
             ..State::default()
         };
-        let render = |ratcn: &mut Ratcn<State, Msg>,
-                      terminal: &mut Terminal<TestBackend>,
-                      state: &State,
-                      fail: bool| {
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    ratcn.render(frame, state, &theme, |ctx| {
-                        ctx.component(
-                            ChildId::Static("tabs"),
-                            Tabs::new([
-                                Tab::new(Screen::A, "A"),
-                                Tab::new(Screen::B, "B"),
-                                Tab::new(Screen::C, "C"),
-                                Tab::new(Screen::D, "D"),
-                                Tab::new(Screen::E, "E"),
-                                Tab::new(Screen::F, "F"),
-                            ])
-                            .selection(|state: &State| Some(state.selected), Msg::Selected),
-                            area,
-                        );
-                        assert!(!fail, "failed pass");
-                    });
-                })
-                .expect("draw");
+        let render = |driver: &mut Driver<State, Msg>, state: &State, fail: bool| {
+            let area = driver.area();
+            driver.render(state, |ctx| {
+                ctx.component(
+                    ChildId::Static("tabs"),
+                    Tabs::new([
+                        Tab::new(Screen::A, "A"),
+                        Tab::new(Screen::B, "B"),
+                        Tab::new(Screen::C, "C"),
+                        Tab::new(Screen::D, "D"),
+                        Tab::new(Screen::E, "E"),
+                        Tab::new(Screen::F, "F"),
+                    ])
+                    .selection(|state: &State| Some(state.selected), Msg::Selected),
+                    area,
+                );
+                assert!(!fail, "failed pass");
+            });
         };
-        render(&mut ratcn, &mut terminal, &state, false);
+        render(&mut driver, &state, false);
         let (_, tab_f) = tab_layout(
             Rect::new(0, 0, 18, 1),
             &["A", "B", "C", "D", "E", "F"],
@@ -2227,12 +2168,12 @@ mod tests {
         state.selected = Screen::A;
         state.focused = Some(Screen::A);
         let failed = catch_unwind(AssertUnwindSafe(|| {
-            render(&mut ratcn, &mut terminal, &state, true);
+            render(&mut driver, &state, true);
         }));
 
         assert!(failed.is_err());
         assert_eq!(
-            ratcn.handle_event(
+            driver.event(
                 mouse(
                     MouseKind::Click(MouseButton::Left),
                     tab_f.x + tab_f.width / 2,
@@ -2284,19 +2225,14 @@ mod tests {
         };
         // The tab strip is the only focus candidate, so startup focus resolves
         // onto it and it paints focused.
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(18, 1)).expect("terminal");
+        let mut driver = Driver::new(18, 1);
 
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(ChildId::Static("tabs"), automatic_with_item_focus(), area);
-                });
-            })
-            .expect("draw");
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(ChildId::Static("tabs"), automatic_with_item_focus(), area);
+        });
 
-        let buffer = terminal.backend().buffer();
+        let buffer = driver.buffer();
         assert_eq!(
             buffer.cell((2, 0)).expect("selected A label cell").bg,
             style.selected_focused_background
@@ -2391,49 +2327,34 @@ mod tests {
         let style = TabsStyle::from_theme(&theme);
         let state = State::default();
         let tabs_area = Rect::new(0, 0, 18, TabsSize::Small.height());
-        let mut ratcn = Ratcn::new();
-        let mut terminal = Terminal::new(TestBackend::new(18, tabs_area.height)).expect("terminal");
-        let draw = |ratcn: &mut Ratcn<State, Msg>, terminal: &mut Terminal<TestBackend>| {
-            terminal
-                .draw(|frame| {
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.component(ChildId::Static("tabs"), manual(), tabs_area);
-                    });
-                })
-                .expect("draw");
+        let mut driver = Driver::new(18, tabs_area.height);
+        let draw = |driver: &mut Driver<State, Msg>| {
+            driver.render(&state, |ctx| {
+                ctx.component(ChildId::Static("tabs"), manual(), tabs_area);
+            });
         };
 
-        draw(&mut ratcn, &mut terminal);
+        draw(&mut driver);
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Moved, 14, 0), &state),
+            driver.event(mouse(MouseKind::Moved, 14, 0), &state),
             EventResult::Consumed,
             "arriving on the row"
         );
-        draw(&mut ratcn, &mut terminal);
-        let hovered_item = terminal
-            .backend()
-            .buffer()
-            .cell((14, 0))
-            .expect("hovered label cell")
-            .bg;
+        draw(&mut driver);
+        let hovered_item = driver.cell(14, 0).bg;
         assert_eq!(hovered_item, style.hovered_background);
 
         // The empty end of the row is inside the tabs component but on no tab,
         // so nothing handles the motion. Hover does not move either — the
         // pointer is on the same component — yet the frame is now wrong.
         assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Moved, 17, 0), &state),
+            driver.event(mouse(MouseKind::Moved, 17, 0), &state),
             EventResult::Consumed,
             "a motion nothing handled is still the redraw signal"
         );
-        draw(&mut ratcn, &mut terminal);
+        draw(&mut driver);
         assert_ne!(
-            terminal
-                .backend()
-                .buffer()
-                .cell((14, 0))
-                .expect("label cell")
-                .bg,
+            driver.cell(14, 0).bg,
             style.hovered_background,
             "the tab under the old pointer position stopped being highlighted"
         );
@@ -2452,43 +2373,33 @@ mod tests {
         };
         let tabs_area = Rect::new(0, 0, 18, TabsSize::Small.height());
         let decoy_area = Rect::new(0, tabs_area.height, 18, 1);
-        let mut ratcn = Ratcn::new();
-        let mut terminal =
-            Terminal::new(TestBackend::new(18, tabs_area.height + 1)).expect("terminal");
+        let mut driver = Driver::new(18, tabs_area.height + 1);
 
         // The decoy scope is declared first, so startup focus lands there and
         // the tab strip paints unfocused — which is what lets the hover shift
         // be told apart from the focus shift below.
-        let draw = |ratcn: &mut Ratcn<State, Msg>, terminal: &mut Terminal<TestBackend>| {
-            terminal
-                .draw(|frame| {
-                    ratcn.render(frame, &state, &theme, |ctx| {
-                        ctx.scope(
-                            ChildId::Static("decoy"),
-                            decoy_area,
-                            ScopeOptions::default().focusable(),
-                            |_| {},
-                        );
-                        ctx.component(ChildId::Static("tabs"), manual(), tabs_area);
-                    });
-                })
-                .expect("draw");
+        let draw = |driver: &mut Driver<State, Msg>| {
+            driver.render(&state, |ctx| {
+                ctx.scope(
+                    ChildId::Static("decoy"),
+                    decoy_area,
+                    ScopeOptions::default().focusable(),
+                    |_| {},
+                );
+                ctx.component(ChildId::Static("tabs"), manual(), tabs_area);
+            });
         };
 
         // Hover position comes from a real pointer event, and events need a
         // surface to route against — so this is render, move, render.
-        draw(&mut ratcn, &mut terminal);
-        ratcn.handle_event(mouse(MouseKind::Moved, 14, 0), &state);
-        draw(&mut ratcn, &mut terminal);
+        draw(&mut driver);
+        driver.event(mouse(MouseKind::Moved, 14, 0), &state);
+        draw(&mut driver);
 
         // C is the cursor tab. Pointing at the row gives it the hover colors, not
         // the focus ones — hover and focus are distinct so a style can express
         // both, and so pointing at an already-focused tab still changes something.
-        let cursor = terminal
-            .backend()
-            .buffer()
-            .cell((14, 0))
-            .expect("cursor label cell");
+        let cursor = driver.cell(14, 0);
         assert_eq!(cursor.bg, style.hovered_background);
         assert_ne!(
             style.hovered_background, style.focused_background,
@@ -2950,36 +2861,34 @@ mod tests {
             Pressed,
         }
 
-        let theme = Theme::default_dark();
         let state = RoutedState::default();
-        let mut ratcn = Ratcn::new().focus(|state: &RoutedState| &state.focus, RoutedMsg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("tabs"),
-                        Tabs::new([Tab::new(Screen::A, "A"), Tab::new(Screen::B, "B")])
-                            .selection(
-                                |state: &RoutedState| Some(state.selected),
-                                RoutedMsg::Selected,
-                            )
-                            .activation(TabsActivation::Automatic)
-                            .disabled(true),
-                        Rect::new(0, 0, 20, 1),
-                    );
-                    ctx.component(
-                        ChildId::Static("button"),
-                        crate::Button::new("Next").on_press(|| RoutedMsg::Pressed),
-                        Rect::new(0, 1, 20, 1),
-                    );
-                });
-            })
-            .expect("draw");
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &RoutedState| &state.focus, RoutedMsg::Focus),
+            20,
+            2,
+        );
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("tabs"),
+                Tabs::new([Tab::new(Screen::A, "A"), Tab::new(Screen::B, "B")])
+                    .selection(
+                        |state: &RoutedState| Some(state.selected),
+                        RoutedMsg::Selected,
+                    )
+                    .activation(TabsActivation::Automatic)
+                    .disabled(true),
+                Rect::new(0, 0, 20, 1),
+            );
+            ctx.component(
+                ChildId::Static("button"),
+                crate::Button::new("Next").on_press(|| RoutedMsg::Pressed),
+                Rect::new(0, 1, 20, 1),
+            );
+        });
 
         // Startup focus resolves past the disabled row onto the button.
         assert_eq!(
-            ratcn.handle_event(key(KeyCode::Enter), &state),
+            driver.event(key(KeyCode::Enter), &state),
             EventResult::Emit(RoutedMsg::Pressed)
         );
     }
