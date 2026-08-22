@@ -23,7 +23,8 @@ use ratatui::{
 };
 use ratcn::{
     Button, ButtonSize, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, wrapped_height},
+    geometry::wrapped_height,
+    runtime::{Event, EventResult, FocusState, Ratcn},
 };
 
 /// How often to look for a completion while a fetch is in flight. The channel

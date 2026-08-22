@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashMap, fmt, rc::Rc};
+use std::{collections::HashMap, fmt};
 
 use ratatui::{
     Frame,
@@ -11,8 +11,7 @@ use crate::backdrop::dim_background;
 
 use super::{
     ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyCode, KeyEvent,
-    ModalState, MouseButton, MouseEvent, MouseKind, MouseTracker, PaintCtx, Painter, ScopeOptions,
-    Step, TabWrap,
+    ModalState, MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
     component::{InteractionFlags, PaintTarget, PointerInputs, TransientMap},
 };
 
@@ -166,11 +165,12 @@ impl Viewport {
 /// One declared viewport, and where it sits in the tree being built.
 struct ViewportRecord {
     viewport: Viewport,
-    /// The declaration that opened it, once one is open.
+    /// The declaration that opened it. `None` when the root closure declared
+    /// it, which no component owns and so nothing can be asked to scroll.
     owner: Option<usize>,
     /// The layer open at declaration. A descendant on another layer escaped
     /// the clip.
-    layer: usize,
+    layer: Option<usize>,
 }
 
 enum FocusAdvance {
@@ -290,9 +290,10 @@ pub(crate) struct Node<State, Msg> {
     options: ScopeOptions,
     is_scope: bool,
     self_focusable: bool,
-    focuses_on_click: bool,
     component: Option<Box<dyn Component<State, Msg>>>,
-    layer: usize,
+    /// The canvas this node's paint lands on, indexing [`Surface::layer_roots`]
+    /// and the pass's canvases. `None` outside any layer.
+    layer: Option<usize>,
     /// `Some` exactly on layer roots, naming the kind this subtree is.
     layer_kind: Option<LayerKind>,
     /// Set on dismissible layer roots: the message emitted when a press lands
@@ -311,7 +312,6 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
             .field("options", &self.options)
             .field("is_scope", &self.is_scope)
             .field("self_focusable", &self.self_focusable)
-            .field("focuses_on_click", &self.focuses_on_click)
             .field("component", &self.component.is_some())
             .field("layer", &self.layer)
             .field("layer_kind", &self.layer_kind)
@@ -323,12 +323,10 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
 pub(crate) struct Surface<State, Msg> {
     nodes: Vec<Node<State, Msg>>,
     roots: Vec<usize>,
-    /// Every layer root, in declaration order. A layer declared inside
-    /// another lands after it, so the last entry is always the innermost.
+    /// Every layer root, indexed by the canvas number nodes carry. A layer
+    /// declared inside another lands after it, so the last entry is always the
+    /// innermost.
     layer_roots: Vec<usize>,
-    /// The policy of each layer, indexed by the layer number nodes carry.
-    /// Index 0 is the base layer.
-    layer_policies: Vec<LayerPolicy>,
     /// Every viewport declared this pass, in declaration order.
     viewports: Vec<ViewportRecord>,
 }
@@ -339,7 +337,6 @@ impl<State, Msg> Default for Surface<State, Msg> {
             nodes: Vec::new(),
             roots: Vec::new(),
             layer_roots: Vec::new(),
-            layer_policies: vec![LayerPolicy::base()],
             viewports: Vec::new(),
         }
     }
@@ -351,7 +348,6 @@ impl<State, Msg> fmt::Debug for Surface<State, Msg> {
             .field("nodes", &self.nodes.len())
             .field("roots", &self.roots.len())
             .field("layer_roots", &self.layer_roots.len())
-            .field("layer_policies", &self.layer_policies.len())
             .field("viewports", &self.viewports.len())
             .finish()
     }
@@ -363,9 +359,8 @@ impl<State, Msg> Surface<State, Msg> {
     /// Building it allocates, so it belongs to the consumers that need a path
     /// as a value — panic messages, the paths handed to components, the
     /// runtime's own hover path and app-held focus. Structural questions have
-    /// non-allocating answers instead: [`Self::is_ancestor_or_self`] for
-    /// containment, [`Self::path_is_prefix_of`] for testing a node against a
-    /// stored path.
+    /// non-allocating answers instead: [`Self::inside`] for containment,
+    /// [`Self::path_is_prefix_of`] for testing a node against a stored path.
     fn path_of(&self, index: usize) -> Vec<ChildId> {
         let mut path = Vec::with_capacity(self.depth(index));
         let mut current = Some(index);
@@ -412,8 +407,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// Whether `index`'s identity path is `path` or a prefix of it — the
     /// question `path.starts_with(node_path)` asks, without building either.
     fn path_is_prefix_of(&self, index: usize, path: &[ChildId]) -> bool {
-        let depth = self.depth(index);
-        depth <= path.len() && self.path_is(index, &path[..depth])
+        self.path_match(index, path).1
     }
 
     /// Where `index` sits in this frame's focus and hover — the four flags
@@ -457,30 +451,30 @@ impl<State, Msg> Surface<State, Msg> {
         (within && depth == path.len(), within)
     }
 
-    /// Whether `node` is `ancestor` or one of its descendants.
-    ///
-    /// Identity paths are unique, so walking parent indices answers this
-    /// exactly as comparing paths would, and without touching an id.
-    fn is_ancestor_or_self(&self, ancestor: usize, node: usize) -> bool {
-        let mut current = Some(node);
-        while let Some(index) = current {
-            if index == ancestor {
-                return true;
-            }
-            current = self.nodes[index].parent;
-        }
-        false
-    }
-
     fn has_hit_geometry(&self, index: usize) -> bool {
-        let area = self.nodes[index].area;
-        area.width > 0 && area.height > 0
+        !self.nodes[index].area.is_empty()
     }
 
     fn participates(&self, index: usize) -> bool {
         let node = &self.nodes[index];
         (node.is_scope || self.has_hit_geometry(index))
             && node.parent.is_none_or(|parent| self.participates(parent))
+    }
+
+    /// Whether `index` takes part in this frame's interaction at all: it and
+    /// every ancestor are still declared, and it has geometry to occupy.
+    fn present(&self, index: usize) -> bool {
+        self.participates(index) && self.has_hit_geometry(index)
+    }
+
+    /// Whether the pointer can land on `index`: present, inside the exclusive
+    /// layer, on a layer the pointer reaches, and not scrolled out of its
+    /// viewport. The one eligibility test behind hit-testing and hover.
+    fn hittable(&self, index: usize) -> bool {
+        self.present(index)
+            && self.interactive(index)
+            && self.policy(self.nodes[index].layer).hit_testable
+            && self.viewport_visibility(index) != ViewportVisibility::Hidden
     }
 
     fn children(&self, parent: Option<usize>) -> &[usize] {
@@ -503,44 +497,36 @@ impl<State, Msg> Surface<State, Msg> {
             .is_none_or(|root| self.inside(index, root))
     }
 
-    /// The policy of the layer `layer` names. Unknown numbers cannot occur —
-    /// every layer registers its policy as it opens — but fall back to the
-    /// base policy rather than panicking on a paint-only concern.
-    fn policy(&self, layer: usize) -> LayerPolicy {
-        self.layer_policies
-            .get(layer)
-            .copied()
-            .unwrap_or_else(LayerPolicy::base)
+    /// What the layer `layer` names does to interaction. The kind its root
+    /// carries is the one fact, read here; `None` is the base layer everything
+    /// outside any layer is declared into.
+    fn policy(&self, layer: Option<usize>) -> LayerPolicy {
+        layer
+            .and_then(|index| self.layer_roots.get(index))
+            .and_then(|&root| self.nodes[root].layer_kind)
+            .map_or_else(LayerPolicy::base, LayerKind::policy)
     }
 
-    /// The innermost open layer root whose policy satisfies `wants`.
+    /// The innermost open layer root whose policy and index satisfy `wants`.
     ///
     /// `layer_roots` is in declaration order and nesting appends, so scanning
     /// backwards finds the innermost first — the one on top.
-    fn top_layer_root(&self, wants: impl Fn(LayerPolicy) -> bool) -> Option<usize> {
-        self.layer_roots
-            .iter()
+    fn top_layer_root(&self, wants: impl Fn(LayerPolicy, usize) -> bool) -> Option<usize> {
+        (0..self.layer_roots.len())
             .rev()
-            .copied()
-            .find(|&root| wants(self.layer_kind_policy(root)))
-    }
-
-    /// The policy of the layer rooted at `root`.
-    fn layer_kind_policy(&self, root: usize) -> LayerPolicy {
-        self.nodes[root]
-            .layer_kind
-            .map_or_else(LayerPolicy::base, LayerKind::policy)
+            .map(|layer| self.layer_roots[layer])
+            .find(|&root| wants(self.policy(self.nodes[root].layer), root))
     }
 
     /// The layer that has taken interaction over, if one is open: everything
     /// outside it is inert.
     fn exclusive_root(&self) -> Option<usize> {
-        self.top_layer_root(|policy| policy.exclusive)
+        self.top_layer_root(|policy, _| policy.exclusive)
     }
 
     /// The layer that owns focus, if one is open.
     fn focus_root(&self) -> Option<usize> {
-        self.top_layer_root(|policy| policy.holds_focus)
+        self.top_layer_root(|policy, _| policy.holds_focus)
     }
 
     /// Every modal root, outermost first — what `Ratcn::modals` validates the
@@ -554,11 +540,20 @@ impl<State, Msg> Surface<State, Msg> {
 
     /// Whether `index` is `root` or one of its descendants.
     ///
-    /// The one containment test. Layer numbers order paint and must never be
-    /// used to answer this: a layer declared after another takes a higher
-    /// number without being inside it.
+    /// The one containment test, answered by walking parent indices: identity
+    /// paths are unique, so this is what comparing paths would say, without
+    /// touching an id. Layer numbers order paint and must never be used to
+    /// answer it — a layer declared after another takes a higher number
+    /// without being inside it.
     fn inside(&self, index: usize, root: usize) -> bool {
-        self.is_ancestor_or_self(root, index)
+        let mut current = Some(index);
+        while let Some(node) = current {
+            if node == root {
+                return true;
+            }
+            current = self.nodes[node].parent;
+        }
+        false
     }
 
     /// The roots focus traversal works across: the topmost focus-holding layer
@@ -569,10 +564,14 @@ impl<State, Msg> Surface<State, Msg> {
             .map_or_else(|| self.roots.clone(), |root| vec![root])
     }
 
-    /// Whether some node's identity path is exactly `path`. The empty path
-    /// names no node: every declaration has at least its own id.
-    fn contains_declared_path(&self, path: &[ChildId]) -> bool {
-        !path.is_empty() && self.nodes_along_path(path).len() == path.len()
+    /// The node `path` names, or `None` when this surface does not declare it
+    /// whole. The empty path names no node: every declaration has at least its
+    /// own id.
+    fn leaf_of(&self, path: &[ChildId]) -> Option<usize> {
+        let matched = self.nodes_along_path(path);
+        (matched.len() == path.len())
+            .then(|| matched.last().copied())
+            .flatten()
     }
 
     /// The node indices along `path`, outermost first, stopping at the first
@@ -600,22 +599,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// participating, with hit geometry, and not shut out by an exclusive
     /// layer. The question [`Ratcn::resolve_hover`] asks of a frozen path.
     fn contains_hit_path(&self, path: &[ChildId]) -> bool {
-        let matched = self.nodes_along_path(path);
-        matched.len() == path.len()
-            && matched.last().is_some_and(|&index| {
-                self.participates(index)
-                    && self.has_hit_geometry(index)
-                    && self.interactive(index)
-                    && self.viewport_visibility(index) != ViewportVisibility::Hidden
-            })
-    }
-
-    fn contains_participating_path(&self, path: &[ChildId]) -> bool {
-        let matched = self.nodes_along_path(path);
-        matched.len() == path.len()
-            && matched
-                .last()
-                .is_some_and(|&index| self.participates(index))
+        self.leaf_of(path).is_some_and(|index| self.hittable(index))
     }
 
     /// The topmost interactive node under `point`, across all layers at or
@@ -623,12 +607,9 @@ impl<State, Msg> Surface<State, Msg> {
     /// This is target *selection* — an event never falls through geometry to a
     /// lower layer; it routes to this one node and bubbles up its ancestors.
     fn hit_index(&self, point: Position) -> Option<usize> {
-        let mut best: Option<(usize, usize)> = None;
+        let mut best: Option<(Option<usize>, usize)> = None;
         for (index, node) in self.nodes.iter().enumerate() {
-            if self.policy(node.layer).hit_testable
-                && self.interactive(index)
-                && self.participates(index)
-                && self.has_hit_geometry(index)
+            if self.hittable(index)
                 && self
                     .logical_point(index, point)
                     .is_some_and(|point| node.area.contains(point))
@@ -654,15 +635,14 @@ impl<State, Msg> Surface<State, Msg> {
     /// innermost enclosing layer root down to the hit node. A layer confines
     /// its pointer events — they are consumed at its root rather than
     /// delivered to the occluded content beneath or to the component that
-    /// declared the layer. The bool reports whether such a boundary exists.
-    fn mouse_bubble_chain(&self, path: &[ChildId]) -> (Vec<usize>, bool) {
+    /// declared the layer. Such a chain starts at that root, which is how
+    /// [`Ratcn::route_mouse`] recognizes the boundary.
+    fn mouse_bubble_chain(&self, path: &[ChildId]) -> Vec<usize> {
         let mut matched = self.nodes_along_path(path);
         if let Some(position) = matched.iter().rposition(|&index| self.is_layer_root(index)) {
             matched.drain(..position);
-            (matched, true)
-        } else {
-            (matched, false)
         }
+        matched
     }
 
     /// Whether this node can hold focus itself, right now.
@@ -676,8 +656,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// See [`Self::focusable`] for the same question about a node *or any of
     /// its descendants*.
     fn takes_focus(&self, index: usize) -> bool {
-        self.participates(index)
-            && self.has_hit_geometry(index)
+        self.present(index)
             && self.interactive(index)
             && self.policy(self.nodes[index].layer).allows_focus
             && self.nodes[index].self_focusable
@@ -740,7 +719,7 @@ impl<State, Msg> Surface<State, Msg> {
             .parent
             .map_or_else(Vec::new, |parent| self.path_of(parent));
         self.extend_to_edge(index, direction, &mut path)
-            .then(|| FocusState::intent(path))
+            .then(|| FocusState::at(path))
     }
 
     /// Resolve an app-held focus path against this surface's actual structure
@@ -766,17 +745,10 @@ impl<State, Msg> Surface<State, Msg> {
         if let Some(root) = self.focus_root()
             && !self.path_is_prefix_of(root, stored.path())
         {
-            // `ModalState::open` records its focus intent as the modal's
-            // bare id; that intent resolves into the modal wherever the
-            // modal was declared.
-            let open_intent = stored.path() == [self.nodes[root].id.clone()];
-            // Beyond that, the layer steals focus from an empty path and
-            // from paths it occludes — but an absent path stays parked,
-            // so render and routing keep agreeing on it.
-            if !open_intent
-                && !stored.path().is_empty()
-                && !self.contains_declared_path(stored.path())
-            {
+            // The layer steals focus from an empty path and from paths it
+            // occludes — but an absent path stays parked, so render and
+            // routing keep agreeing on it.
+            if !stored.path().is_empty() && self.leaf_of(stored.path()).is_none() {
                 return stored.clone();
             }
             return self.descend_focus(root, Step::Forward).unwrap_or_else(|| {
@@ -790,19 +762,11 @@ impl<State, Msg> Surface<State, Msg> {
         if stored.path().is_empty() {
             return self.edge_focus(None, Step::Forward).unwrap_or_default();
         }
-        let matched = self.nodes_along_path(stored.path());
-        if matched.len() != stored.path().len() {
-            return stored.clone();
-        }
-        let Some(&target) = matched.last() else {
+        let Some(target) = self.leaf_of(stored.path()) else {
             return stored.clone();
         };
-        let Some(child) = self.edge_child(Some(target), Step::Forward) else {
-            return stored.clone();
-        };
-        let mut path = stored.path().to_vec();
-        self.extend_to_edge(child, Step::Forward, &mut path);
-        FocusState::intent(path)
+        self.edge_focus(Some(target), Step::Forward)
+            .unwrap_or_else(|| stored.clone())
     }
 
     fn explicit_focus(&self, path: &[ChildId]) -> Option<FocusState> {
@@ -814,13 +778,7 @@ impl<State, Msg> Surface<State, Msg> {
         if !matched.iter().all(|&index| self.focusable(index)) {
             return None;
         }
-        let mut focus = path.to_vec();
-        if let Some(child) = self.edge_child(Some(target), Step::Forward) {
-            self.extend_to_edge(child, Step::Forward, &mut focus);
-        } else if !self.takes_focus(target) {
-            return None;
-        }
-        Some(FocusState::intent(focus))
+        self.descend_focus(target, Step::Forward)
     }
 
     fn hover_focus(
@@ -945,11 +903,10 @@ impl<State, Msg> Surface<State, Msg> {
                 Step::Forward => &siblings[position + 1..],
                 Step::Backward => &siblings[..position],
             };
-            let next = self.find_focusable(remaining, direction);
-            if let Some(next) = next {
-                let mut path = parent.map_or_else(Vec::new, |index| self.path_of(index));
-                self.extend_to_edge(next, direction, &mut path);
-                return FocusAdvance::Move(FocusState::intent(path));
+            if let Some(next) = self.find_focusable(remaining, direction)
+                && let Some(focus) = self.descend_focus(next, direction)
+            {
+                return FocusAdvance::Move(focus);
             }
 
             // A focus-holding layer root traps Tab regardless of where it sits
@@ -962,13 +919,9 @@ impl<State, Msg> Surface<State, Msg> {
                 })
             };
             if tab_wrap == TabWrap::Wrap {
-                let Some(next) = self.edge_child(parent, direction) else {
-                    return FocusAdvance::Consumed;
-                };
-                let mut path = parent.map_or_else(Vec::new, |index| self.path_of(index));
-                self.extend_to_edge(next, direction, &mut path);
-                let next = FocusState::intent(path);
-                return FocusAdvance::Move(next);
+                return self
+                    .edge_focus(parent, direction)
+                    .map_or(FocusAdvance::Consumed, FocusAdvance::Move);
             }
             let Some(parent) = parent else {
                 return FocusAdvance::Ignored;
@@ -978,17 +931,15 @@ impl<State, Msg> Surface<State, Msg> {
     }
 }
 
-type DeferredThunk<State> = Box<dyn FnOnce(&mut Painter<'_, '_>, &State)>;
+type PaintThunk<State> = Box<dyn FnOnce(&mut PaintCtx<'_, '_, State>)>;
 
 /// One closure registered through [`DeclareCtx::defer_paint`], with the
 /// viewport projection open where it was registered.
 struct DeferredPaint<State> {
-    layer: usize,
+    layer: Option<usize>,
     projection: Option<Viewport>,
-    paint: DeferredThunk<State>,
+    paint: PaintThunk<State>,
 }
-
-type PaintThunk<State> = Box<dyn FnOnce(&mut PaintCtx<'_, '_, State>)>;
 
 /// One entry of the frame's paint queue: what to draw, and where it lands.
 ///
@@ -1029,10 +980,10 @@ enum PaintOp<State> {
         area: Rect,
         paint: PaintThunk<State>,
     },
-    /// Run the deferred thunks registered in `layer`, at the point that
-    /// layer's declaration closed — which is what keeps [`DeclareCtx::defer_paint`]
-    /// above its layer's content.
-    FlushDeferred { layer: usize },
+    /// Run the deferred thunks registered in the layer this op is queued for,
+    /// at the point that layer's declaration closed — which is what keeps
+    /// [`DeclareCtx::defer_paint`] above its layer's content.
+    FlushDeferred,
     /// Seed the visible logical cells with paint already present beneath the
     /// viewport at this exact point in declaration order.
     PrimeViewport { viewport: usize },
@@ -1048,133 +999,55 @@ impl<State> PaintOp<State> {
         match self {
             Self::Node { index, .. } => Some(*index),
             Self::Thunk { node, .. } => *node,
-            Self::FlushDeferred { .. }
-            | Self::PrimeViewport { .. }
-            | Self::CompositeViewport { .. } => None,
+            Self::FlushDeferred | Self::PrimeViewport { .. } | Self::CompositeViewport { .. } => {
+                None
+            }
         }
     }
 }
 
 /// The two things replay can hand a [`PaintCtx`] to, once the op that named
-/// them has been resolved against the pass. Exists so both are given the
-/// context by one piece of code rather than two.
+/// them has been resolved against the pass.
 enum PaintBody<'a, State, Msg> {
     Component(&'a mut dyn Component<State, Msg>),
     Thunk(PaintThunk<State>),
 }
 
-/// One layer's private paint surface.
+/// A private paint surface: a buffer, and the rectangles written into it.
 ///
-/// A layer subtree is declared inline, wherever its owner lives in the tree,
-/// but must paint *above* everything declared outside it — including siblings
-/// declared later. So its widgets paint into this canvas instead of the
-/// frame, and the canvases composite onto the frame in discovery order once
-/// the whole pass has painted. `painted` records the areas the layer's
-/// widgets declared; only those rects blit — so a modal declared over the
-/// full screen composites just the box it painted — and each rect composites
-/// opaquely, unwritten cells included.
-pub(crate) struct LayerCanvas {
-    /// The kind, not its policy: policy is derived wherever it is read, so
-    /// this stays one fact rather than a copy that could go stale.
-    kind: LayerKind,
-    area: Rect,
+/// Two things paint somewhere other than the frame. A layer subtree is
+/// declared inline, wherever its owner lives in the tree, but must paint
+/// *above* everything declared outside it — including siblings declared
+/// later. A viewport's content is declared at its full logical height and
+/// only afterwards translated and clipped to the rectangle on screen. Both
+/// paint here and composite once the pass is over: `painted` records the
+/// areas widgets declared, only those rects blit — so a modal declared over
+/// the full screen composites just the box it painted — and each rect
+/// composites opaquely, unwritten cells included.
+pub(crate) struct Canvas {
     pub(crate) buffer: Buffer,
     painted: Vec<Rect>,
-    /// Set when a paint into this canvas unwinds. A poisoned canvas never
-    /// composites, so the frame keeps what was under it.
-    failed: bool,
 }
 
-/// Full logical content for one viewport. Widgets paint here with their
-/// original allocations; only the final copy is clipped to the viewport.
-pub(crate) struct ViewportCanvas {
-    viewport: Viewport,
-    pub(crate) buffer: Buffer,
-    painted: Vec<Rect>,
-    /// Set when a paint into this canvas unwinds. A poisoned canvas never
-    /// composites, so the frame keeps what was under it.
-    failed: bool,
-}
-
-impl ViewportCanvas {
-    fn new(viewport: Viewport) -> Self {
+impl Canvas {
+    fn new(area: Rect) -> Self {
         Self {
-            viewport,
-            buffer: Buffer::empty(viewport.content()),
-            painted: Vec::new(),
-            failed: false,
-        }
-    }
-
-    /// The part of `area` this canvas can hold. Paint outside the logical
-    /// content is clipped away.
-    pub(crate) fn clip(&self, area: Rect) -> Rect {
-        area.intersection(self.viewport.content())
-    }
-
-    /// Paint into this canvas, poisoning it if the closure unwinds. What was
-    /// painted is the caller's to record through [`Self::mark_painted`].
-    pub(crate) fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        let mut poison = PoisonCanvas {
-            failed: &mut self.failed,
-            armed: true,
-        };
-        let result = paint(&mut self.buffer);
-        poison.armed = false;
-        result
-    }
-
-    pub(crate) fn mark_painted(&mut self, area: Rect) {
-        let clipped = self.clip(area);
-        if !clipped.is_empty() {
-            self.painted.push(clipped);
-        }
-    }
-}
-
-impl LayerCanvas {
-    fn new(kind: LayerKind, area: Rect) -> Self {
-        Self {
-            kind,
-            area,
             buffer: Buffer::empty(area),
             painted: Vec::new(),
-            failed: false,
         }
     }
 
-    /// Paint into this canvas, poisoning it if the closure unwinds. What was
-    /// painted is the caller's to record through [`Self::mark_painted`].
-    pub(crate) fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        let mut poison = PoisonCanvas {
-            failed: &mut self.failed,
-            armed: true,
-        };
-        let result = paint(&mut self.buffer);
-        poison.armed = false;
-        result
+    /// The part of `area` this canvas can hold. Paint outside it is clipped
+    /// away.
+    pub(crate) fn clip(&self, area: Rect) -> Rect {
+        area.intersection(self.buffer.area)
     }
 
     /// Record that `area` was painted, clipped to the canvas.
     pub(crate) fn mark_painted(&mut self, area: Rect) {
-        let clipped = area.intersection(self.area);
-        if clipped.width > 0 && clipped.height > 0 {
+        let clipped = self.clip(area);
+        if !clipped.is_empty() {
             self.painted.push(clipped);
-        }
-    }
-}
-
-/// Poisons one canvas when dropped by unwinding, so a paint panic a component
-/// catches still keeps that canvas off the frame.
-struct PoisonCanvas<'a> {
-    failed: &'a mut bool,
-    armed: bool,
-}
-
-impl Drop for PoisonCanvas<'_> {
-    fn drop(&mut self) {
-        if self.armed {
-            *self.failed = true;
         }
     }
 }
@@ -1244,33 +1117,28 @@ impl<'a, State> DeclarationEnv<'a, State> {
 /// drifting out of step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NodeRole {
-    /// A scope rather than a component: it sits *behind* its descendants when
-    /// hit-testing, so a press only reaches it when nothing inside was hit.
+    /// A scope rather than a component. It keeps its place in the tree with no
+    /// geometry of its own, so a zero-area scope still parents descendants
+    /// that have geometry, where a zero-area component takes its subtree out
+    /// of interaction with it.
     is_scope: bool,
     /// This node can hold focus itself, rather than only parenting things that
     /// can.
     self_focusable: bool,
-    /// Focus arrives on the `Click` rather than on the `Down`.
-    focuses_on_click: bool,
 }
 
 impl NodeRole {
-    /// A scope. It never focuses on click: that policy belongs to controls,
-    /// and a scope is a grouping, not a control.
     fn scope(self_focusable: bool) -> Self {
         Self {
             is_scope: true,
             self_focusable,
-            focuses_on_click: false,
         }
     }
 
-    /// A component, which decides both of its own flags.
-    fn component(self_focusable: bool, focuses_on_click: bool) -> Self {
+    fn component(self_focusable: bool) -> Self {
         Self {
             is_scope: false,
             self_focusable,
-            focuses_on_click,
         }
     }
 }
@@ -1304,41 +1172,18 @@ pub(crate) struct RenderPass<State, Msg> {
     /// Set when any declaration region unwinds — see [`Self::guarded`]. A
     /// poisoned pass can keep declaring (a component may have caught the
     /// panic) but can never commit.
-    failed: Rc<Cell<bool>>,
-    /// Layer ids handed out so far this pass. 0 is the base layer; each layer
-    /// declaration takes the next id, so discovery order is stacking order.
-    layers_declared: usize,
-    /// The layer currently being declared into, innermost last. Empty means
-    /// the base layer.
-    layer_stack: Vec<usize>,
+    failed: bool,
     /// One canvas per declared layer, in discovery order.
-    canvases: Vec<LayerCanvas>,
+    canvases: Vec<Canvas>,
     /// One canvas per declared viewport, in discovery order and indexed the
     /// same as [`Surface::viewports`].
-    viewport_canvases: Vec<ViewportCanvas>,
+    viewport_canvases: Vec<Canvas>,
     /// The open viewport, indexing `viewport_canvases`. A viewport declared
     /// while one is open panics, so there is at most one.
     open_viewport: Option<usize>,
     /// Paint destinations in declaration nesting order; the innermost decides
     /// where the next paint belongs.
     destination_stack: Vec<PaintDestination>,
-}
-
-/// Poisons the pass when dropped by unwinding. Drop runs while a panic
-/// unwinds even when an ancestor catches it, which is what keeps a
-/// declaration panic caught by component code from committing a half-built
-/// surface.
-struct PoisonOnUnwind {
-    failed: Rc<Cell<bool>>,
-    armed: bool,
-}
-
-impl Drop for PoisonOnUnwind {
-    fn drop(&mut self) {
-        if self.armed {
-            self.failed.set(true);
-        }
-    }
 }
 
 impl<State, Msg> RenderPass<State, Msg> {
@@ -1352,9 +1197,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             paint_queue: Vec::new(),
             hover_position: None,
             hover_path: Vec::new(),
-            failed: Rc::new(Cell::new(false)),
-            layers_declared: 0,
-            layer_stack: Vec::new(),
+            failed: false,
             canvases: Vec::new(),
             viewport_canvases: Vec::new(),
             open_viewport: None,
@@ -1362,9 +1205,16 @@ impl<State, Msg> RenderPass<State, Msg> {
         }
     }
 
-    /// The layer currently being declared into; 0 is the base layer.
-    fn current_layer(&self) -> usize {
-        self.layer_stack.last().copied().unwrap_or(0)
+    /// The layer currently being declared into, named by its canvas index.
+    /// `None` outside any layer.
+    fn current_layer(&self) -> Option<usize> {
+        self.destination_stack
+            .iter()
+            .rev()
+            .find_map(|destination| match destination {
+                PaintDestination::Layer(canvas) => Some(*canvas),
+                PaintDestination::Frame | PaintDestination::Viewport(_) => None,
+            })
     }
 
     /// The identity path of the declaration currently being declared into —
@@ -1413,23 +1263,43 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Queue an op for the destination currently being declared into.
     fn queue(&mut self, op: PaintOp<State>) {
         let target = self.active_target();
-        // A layer inside a viewport escaped the clip but still paints where
-        // the offset puts it, so its ops carry the projection.
-        let projection = match target {
-            PaintDestination::Layer(_) => self.open_projection(),
-            PaintDestination::Frame | PaintDestination::Viewport(_) => None,
-        };
         self.paint_queue.push(QueuedPaint {
             target,
-            projection,
+            projection: self.projection_for(target),
             op,
         });
+    }
+
+    /// The projection paint into `target` carries. A layer inside a viewport
+    /// escaped the clip but still paints where the offset puts it, so it
+    /// carries one; the viewport's own canvas is already in logical
+    /// coordinates and does not.
+    fn projection_for(&self, target: PaintDestination) -> Option<Viewport> {
+        match target {
+            PaintDestination::Layer(_) => self.open_projection(),
+            PaintDestination::Frame | PaintDestination::Viewport(_) => None,
+        }
+    }
+
+    /// Where the pointer is in the coordinates paint or declaration into
+    /// `target` uses. Inside the viewport itself the pointer counts only
+    /// where the viewport is on screen; content that escaped the clip carries
+    /// the projection and translates unconditionally.
+    fn hover_in(&self, target: PaintDestination, projection: Option<Viewport>) -> Option<Position> {
+        let position = self.hover_position?;
+        match (projection, target) {
+            (Some(viewport), _) => viewport.to_logical(position),
+            (None, PaintDestination::Viewport(index)) => self.surface.viewports[index]
+                .viewport
+                .visible_to_logical(position),
+            (None, _) => Some(position),
+        }
     }
 
     /// The open viewport's projection, if one is open.
     fn open_projection(&self) -> Option<Viewport> {
         self.open_viewport
-            .map(|index| self.viewport_canvases[index].viewport)
+            .map(|index| self.surface.viewports[index].viewport)
     }
 
     /// Queue a closure registered through [`DeclareCtx::paint`], tagged with
@@ -1480,7 +1350,7 @@ impl<State, Msg> RenderPass<State, Msg> {
                 offset: offset.min(content_height.saturating_sub(screen.height)),
             };
             let index = pass.viewport_canvases.len();
-            pass.viewport_canvases.push(ViewportCanvas::new(viewport));
+            pass.viewport_canvases.push(Canvas::new(viewport.content()));
             pass.surface.viewports.push(ViewportRecord {
                 viewport,
                 owner: pass.parent_stack.last().copied(),
@@ -1511,7 +1381,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// one lands after it and `layer_roots` reads outermost-first — which is
     /// what makes `top_layer_root` find the innermost.
     fn layer(&mut self, kind: LayerKind, area: Rect, declare_root: impl FnOnce(&mut Self, usize)) {
-        self.begin_layer(kind, area);
+        self.begin_layer(area);
         let index = self.surface.nodes.len();
         self.surface.layer_roots.push(index);
         declare_root(self, index);
@@ -1521,17 +1391,11 @@ impl<State, Msg> RenderPass<State, Msg> {
 
     /// Open a layer: subsequent declarations carry its tag, and their paint
     /// lands on a fresh canvas composited after the frame.
-    fn begin_layer(&mut self, kind: LayerKind, area: Rect) {
-        self.layers_declared += 1;
-        self.layer_stack.push(self.layers_declared);
-        // Registered by layer number so any node can ask what its layer does,
-        // not just the root.
-        debug_assert_eq!(self.surface.layer_policies.len(), self.layers_declared);
-        self.surface.layer_policies.push(kind.policy());
+    fn begin_layer(&mut self, area: Rect) {
         let area = self.open_projection().map_or(area, |viewport| {
             viewport.project_rect(area, self.frame_area)
         });
-        self.canvases.push(LayerCanvas::new(kind, area));
+        self.canvases.push(Canvas::new(area));
         let canvas = self.canvases.len() - 1;
         self.destination_stack.push(PaintDestination::Layer(canvas));
     }
@@ -1539,13 +1403,9 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Close the innermost layer, queueing its deferred paint behind
     /// everything the layer declared.
     fn end_layer(&mut self) {
-        let layer = self
-            .layer_stack
-            .pop()
-            .expect("end_layer closes a layer begin_layer opened");
         // Queued rather than run here: the layer's own content has only been
         // queued so far, and deferred paint has to land on top of it.
-        self.queue(PaintOp::FlushDeferred { layer });
+        self.queue(PaintOp::FlushDeferred);
         assert!(
             matches!(
                 self.destination_stack.pop(),
@@ -1555,14 +1415,10 @@ impl<State, Msg> RenderPass<State, Msg> {
         );
     }
 
-    /// Run the deferred thunks registered in `layer` into its canvas.
-    fn flush_deferred_for(
-        &mut self,
-        layer: usize,
-        theme: &Theme,
-        state: &State,
-        canvas_index: usize,
-    ) {
+    /// Run the deferred thunks registered in the layer `canvas_index` belongs
+    /// to into that canvas.
+    fn flush_deferred_for(&mut self, canvas_index: usize, theme: &Theme, state: &State) {
+        let layer = Some(canvas_index);
         self.guarded(|pass| {
             let mut thunks = Vec::new();
             let mut index = 0;
@@ -1574,21 +1430,13 @@ impl<State, Msg> RenderPass<State, Msg> {
                 }
             }
             for deferred in thunks {
+                let hover_position =
+                    pass.hover_in(PaintDestination::Layer(canvas_index), deferred.projection);
                 let target =
                     PaintTarget::Canvas(&mut pass.canvases[canvas_index], deferred.projection);
-                let mut painter = Painter { target, theme };
-                (deferred.paint)(&mut painter, state);
+                paint_deferred(target, theme, hover_position, state, deferred.paint);
             }
         });
-    }
-
-    /// Whether anything this pass painted into unwound. A canvas poisons
-    /// itself even when component code catches the panic, so this is the one
-    /// question every commit and composite step asks.
-    fn poisoned(&self) -> bool {
-        self.failed.get()
-            || self.canvases.iter().any(|canvas| canvas.failed)
-            || self.viewport_canvases.iter().any(|canvas| canvas.failed)
     }
 
     /// Run `f` as one declaration region: if it unwinds — a panicking
@@ -1598,13 +1446,13 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// entry point that runs user code or validates a declaration goes
     /// through here.
     pub(crate) fn guarded<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        let mut poison = PoisonOnUnwind {
-            failed: Rc::clone(&self.failed),
-            armed: true,
-        };
-        let result = f(self);
-        poison.armed = false;
-        result
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(result) => result,
+            Err(payload) => {
+                self.failed = true;
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 
     fn begin_node(
@@ -1617,7 +1465,6 @@ impl<State, Msg> RenderPass<State, Msg> {
         let NodeRole {
             is_scope,
             self_focusable,
-            focuses_on_click,
         } = role;
         let parent = self.parent_stack.last().copied();
         let siblings = parent.map_or(self.surface.roots.as_slice(), |index| {
@@ -1641,7 +1488,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             options,
             is_scope,
             self_focusable,
-            focuses_on_click,
             component: None,
             layer,
             layer_kind: None,
@@ -1669,9 +1515,8 @@ impl<State, Msg> RenderPass<State, Msg> {
             // pass, so none of it may depend on what painting produces.
             component.prepare(state);
             let options = component.scope_options();
-            let self_focusable = component.is_focusable(state);
-            let focuses_on_click = component.focuses_on_click(state);
-            let role = NodeRole::component(options.focusable || self_focusable, focuses_on_click);
+            let self_focusable = component.is_focusable();
+            let role = NodeRole::component(options.focusable || self_focusable);
             let area = env.area;
             let interaction_area = component.interaction_area(area);
             assert!(
@@ -1818,15 +1663,8 @@ impl<State, Msg> RenderPass<State, Msg> {
             transients,
             depth,
         } = env;
-        let hover_position = match (self.open_projection(), self.active_target()) {
-            (None, _) => self.hover_position,
-            (Some(viewport), PaintDestination::Viewport(_)) => self
-                .hover_position
-                .and_then(|position| viewport.visible_to_logical(position)),
-            (Some(viewport), PaintDestination::Frame | PaintDestination::Layer(_)) => self
-                .hover_position
-                .and_then(|position| viewport.to_logical(position)),
-        };
+        let target = self.active_target();
+        let hover_position = self.hover_in(target, self.projection_for(target));
         self.guarded(|pass| {
             let mut ctx = DeclareCtx {
                 frame_area,
@@ -1844,7 +1682,7 @@ impl<State, Msg> RenderPass<State, Msg> {
 
     pub(crate) fn defer_paint(
         &mut self,
-        paint: impl FnOnce(&mut Painter<'_, '_>, &State) + 'static,
+        paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static,
     ) {
         self.deferred.push(DeferredPaint {
             layer: self.current_layer(),
@@ -1877,94 +1715,82 @@ impl<State, Msg> RenderPass<State, Msg> {
         theme: &Theme,
         focus: &FocusState,
     ) {
-        // Dead as things stand — `assert_valid` rejects a poisoned pass before
-        // this is reached — and kept as the second half of the guarantee: it
-        // is what would still hold if replay were ever moved ahead of the
-        // checks.
-        if self.poisoned() {
-            return;
-        }
         for queued in std::mem::take(&mut self.paint_queue) {
-            let QueuedPaint {
-                target,
-                projection,
-                op,
-            } = queued;
             let frame = &mut *frame;
-            self.guarded(|pass| {
-                // Read before the component borrow below, which needs the
-                // surface mutably. The root declaration has no node, and so
-                // no flags.
-                let flags = op.node().map_or_else(InteractionFlags::default, |index| {
-                    pass.surface
-                        .interaction_flags(index, focus, &pass.hover_path)
-                });
-                let (area, paint) = match op {
-                    PaintOp::FlushDeferred { layer } => {
-                        let PaintDestination::Layer(index) = target else {
-                            panic!("a layer's flush names that layer's canvas");
-                        };
-                        pass.flush_deferred_for(layer, theme, state, index);
-                        return;
-                    }
-                    PaintOp::PrimeViewport { viewport } => {
-                        pass.prime_viewport(viewport, target, frame);
-                        return;
-                    }
-                    PaintOp::CompositeViewport { viewport } => {
-                        pass.composite_viewport(viewport, target, frame);
-                        return;
-                    }
-                    PaintOp::Node { index, area } => {
-                        // `assert_valid`'s completeness check ran before
-                        // replay, so every node here has its component.
-                        let component = pass.surface.nodes[index]
-                            .component
-                            .as_deref_mut()
-                            .expect("a checked pass installed every node's component");
-                        (area, PaintBody::Component(component))
-                    }
-                    PaintOp::Thunk { area, paint, .. } => (area, PaintBody::Thunk(paint)),
+            self.guarded(|pass| pass.run_op(queued, frame, state, theme, focus));
+        }
+    }
+
+    /// Run one queued op. The ops that seed, composite, or flush do their own
+    /// work; the two that paint a declaration are handed a [`PaintCtx`] over
+    /// the surface their destination names.
+    fn run_op(
+        &mut self,
+        queued: QueuedPaint<State>,
+        frame: &mut Frame,
+        state: &State,
+        theme: &Theme,
+        focus: &FocusState,
+    ) {
+        let QueuedPaint {
+            target,
+            projection,
+            op,
+        } = queued;
+        // Read before the component borrow below, which needs the surface
+        // mutably. The root declaration has no node, and so no flags.
+        let flags = op.node().map_or_else(InteractionFlags::default, |index| {
+            self.surface
+                .interaction_flags(index, focus, &self.hover_path)
+        });
+        let hover_position = self.hover_in(target, projection);
+        let (area, paint) = match op {
+            PaintOp::FlushDeferred => {
+                let PaintDestination::Layer(canvas) = target else {
+                    panic!("a layer's flush names that layer's canvas");
                 };
-                let target = match target {
-                    PaintDestination::Frame => PaintTarget::Frame(frame, projection),
-                    PaintDestination::Layer(index) => {
-                        PaintTarget::Canvas(&mut pass.canvases[index], projection)
-                    }
-                    PaintDestination::Viewport(index) => {
-                        PaintTarget::Viewport(&mut pass.viewport_canvases[index])
-                    }
-                };
-                let hover_position = match (projection, &target) {
-                    (Some(viewport), _) => pass
-                        .hover_position
-                        .and_then(|position| viewport.to_logical(position)),
-                    (None, PaintTarget::Viewport(canvas)) => {
-                        let viewport = canvas.viewport;
-                        pass.hover_position
-                            .and_then(|position| viewport.visible_to_logical(position))
-                    }
-                    (None, _) => pass.hover_position,
-                };
-                let mut ctx = PaintCtx {
-                    target,
-                    theme,
-                    area,
-                    focused: flags.focused,
-                    contains_focus: flags.contains_focus,
-                    hovered: flags.hovered,
-                    contains_hover: flags.contains_hover,
-                    hover_position,
-                    state,
-                };
-                match paint {
-                    PaintBody::Component(component) => component.paint(&mut ctx),
-                    PaintBody::Thunk(paint) => paint(&mut ctx),
-                }
-            });
-            if self.poisoned() {
-                return;
+                return self.flush_deferred_for(canvas, theme, state);
             }
+            PaintOp::PrimeViewport { viewport } => {
+                return self.prime_viewport(viewport, target, frame);
+            }
+            PaintOp::CompositeViewport { viewport } => {
+                return self.composite_viewport(viewport, target, frame);
+            }
+            PaintOp::Node { index, area } => {
+                // `assert_valid`'s completeness check ran before replay, so
+                // every node here has its component.
+                let component = self.surface.nodes[index]
+                    .component
+                    .as_deref_mut()
+                    .expect("a checked pass installed every node's component");
+                (area, PaintBody::Component(component))
+            }
+            PaintOp::Thunk { area, paint, .. } => (area, PaintBody::Thunk(paint)),
+        };
+        let target = match target {
+            PaintDestination::Frame => PaintTarget::Frame(frame, projection),
+            PaintDestination::Layer(index) => {
+                PaintTarget::Canvas(&mut self.canvases[index], projection)
+            }
+            PaintDestination::Viewport(index) => {
+                PaintTarget::Canvas(&mut self.viewport_canvases[index], None)
+            }
+        };
+        let mut ctx = PaintCtx {
+            target,
+            theme,
+            area,
+            focused: flags.focused,
+            contains_focus: flags.contains_focus,
+            hovered: flags.hovered,
+            contains_hover: flags.contains_hover,
+            hover_position,
+            state,
+        };
+        match paint {
+            PaintBody::Component(component) => component.paint(&mut ctx),
+            PaintBody::Thunk(paint) => paint(&mut ctx),
         }
     }
 
@@ -1974,7 +1800,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         target: PaintDestination,
         frame: &mut Frame,
     ) {
-        let viewport = self.viewport_canvases[viewport_index].viewport;
+        let viewport = self.surface.viewports[viewport_index].viewport;
         let destination_area = viewport.visible_content();
         let source_area = Rect::new(
             viewport.screen.x,
@@ -2006,10 +1832,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         target: PaintDestination,
         frame: &mut Frame,
     ) {
-        if self.viewport_canvases[viewport_index].failed {
-            return;
-        }
-        let viewport = self.viewport_canvases[viewport_index].viewport;
+        let viewport = self.surface.viewports[viewport_index].viewport;
         let visible = viewport.visible_content();
         let painted = self.viewport_canvases[viewport_index]
             .painted
@@ -2051,12 +1874,9 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// result, making root-level [`DeclareCtx::defer_paint`] the topmost
     /// decoration slot (toast stacks, drag ghosts).
     fn finish_frame(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
-        for canvas in &self.canvases {
-            if canvas.failed {
-                continue;
-            }
-            if canvas.kind.policy().dims {
-                dim_background(frame.buffer_mut(), canvas.area, theme.background);
+        for (index, canvas) in self.canvases.iter().enumerate() {
+            if self.surface.policy(Some(index)).dims {
+                dim_background(frame.buffer_mut(), canvas.buffer.area, theme.background);
             }
             let frame_area = frame.area();
             let buffer = frame.buffer_mut();
@@ -2073,19 +1893,20 @@ impl<State, Msg> RenderPass<State, Msg> {
                 }
             }
         }
+        let deferred = std::mem::take(&mut self.deferred);
         self.guarded(|pass| {
-            for deferred in pass.deferred.drain(..) {
-                let target = PaintTarget::Frame(frame, deferred.projection);
-                let mut painter = Painter { target, theme };
-                (deferred.paint)(&mut painter, state);
+            for entry in deferred {
+                let hover_position = pass.hover_in(PaintDestination::Frame, entry.projection);
+                let target = PaintTarget::Frame(&mut *frame, entry.projection);
+                paint_deferred(target, theme, hover_position, state, entry.paint);
             }
         });
     }
 
     fn assert_valid(&self) {
-        assert!(!self.poisoned(), "cannot commit a failed declaration pass");
+        assert!(!self.failed, "cannot commit a failed declaration pass");
         assert!(
-            self.parent_stack.is_empty() && self.layer_stack.is_empty(),
+            self.parent_stack.is_empty() && self.destination_stack.is_empty(),
             "cannot commit a declaration pass with unclosed components or layers"
         );
         assert!(
@@ -2156,12 +1977,11 @@ pub struct Ratcn<State, Msg> {
     focus_binding: Option<FocusBinding<State, Msg>>,
     modal_binding: Option<ModalBinding<State>>,
     root_options: ScopeOptions,
-    /// Raw events in, normalized ones out: which buttons are physically held,
-    /// and whether each has moved since its press.
-    mouse_tracker: MouseTracker,
-    /// What is being tracked for each button whose gesture is under way. One
-    /// entry per button, added by its press and removed by its release.
-    gestures: HashMap<MouseButton, ButtonGesture>,
+    /// What is being tracked for each button whose gesture is under way, in
+    /// press order — so the last entry still holding its button is the one
+    /// motion belongs to. One entry per button, added by its press and removed
+    /// by its release.
+    gestures: Vec<Gesture>,
     transients: TransientMap,
     /// Where the pointer physically is, from the last mouse event. `None`
     /// until the first one, and again once the pointer leaves the terminal.
@@ -2173,15 +1993,40 @@ pub struct Ratcn<State, Msg> {
 }
 
 /// Everything the runtime tracks for one mouse button between its press and
-/// its release, as one state rather than as facts scattered across parallel
-/// maps.
+/// its release.
 ///
 /// A button with no entry has no gesture: nothing to route to, nothing to
-/// judge a release against, nothing to swallow. The two states an entry can
-/// be in are exclusive by construction — a gesture that has been called off
-/// keeps no claim and no target, because nothing may act on either again.
+/// judge a release against, nothing to swallow.
 #[derive(Debug)]
-enum ButtonGesture {
+struct Gesture {
+    button: MouseButton,
+    /// The press, while the button is physically down. The release takes it,
+    /// leaving the routing the events it synthesizes still need.
+    press: Option<Press>,
+    routing: Routing,
+}
+
+/// Where a press landed on the grid, and whether the pointer has left that
+/// cell — the half of a gesture that decides what motion and release
+/// normalize into.
+#[derive(Debug, Clone, Copy)]
+struct Press {
+    column: u16,
+    row: u16,
+    /// The pointer has left the pressed cell, so this press has emitted at
+    /// least one [`MouseKind::Drag`]. Whether that makes the release a drag
+    /// end is decided by [`Ratcn::releases_on_press_target`].
+    moved: bool,
+}
+
+/// Where a gesture's events go, as one state rather than as facts scattered
+/// across parallel maps.
+///
+/// The two states are exclusive by construction — a gesture that has been
+/// called off keeps no claim and no target, because nothing may act on either
+/// again.
+#[derive(Debug)]
+enum Routing {
     /// A live gesture.
     Active {
         /// The path that claimed it with
@@ -2199,7 +2044,7 @@ enum ButtonGesture {
     Suppressed,
 }
 
-impl Default for ButtonGesture {
+impl Default for Routing {
     /// A gesture that has just begun: nothing claimed yet, no press recorded
     /// yet.
     fn default() -> Self {
@@ -2210,7 +2055,7 @@ impl Default for ButtonGesture {
     }
 }
 
-impl ButtonGesture {
+impl Routing {
     /// The path that claimed this gesture, if one did.
     fn capture(&self) -> Option<&[ChildId]> {
         match self {
@@ -2266,7 +2111,6 @@ impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
             .field("focus_binding", &self.focus_binding.is_some())
             .field("modal_binding", &self.modal_binding.is_some())
             .field("root_options", &self.root_options)
-            .field("mouse_tracker", &self.mouse_tracker)
             .field("gestures", &self.gestures)
             .field("transients", &self.transients.len())
             .field("pointer", &self.pointer)
@@ -2283,8 +2127,7 @@ impl<State, Msg> Default for Ratcn<State, Msg> {
             focus_binding: None,
             modal_binding: None,
             root_options: ScopeOptions::default(),
-            mouse_tracker: MouseTracker::new(),
-            gestures: HashMap::new(),
+            gestures: Vec::new(),
             transients: HashMap::new(),
             pointer: None,
             hover: Vec::new(),
@@ -2592,29 +2435,79 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// so a redraw path that kept following the pointer would be the only
     /// thing moving hover mid-gesture.
     fn gesture_in_flight(&self) -> bool {
-        self.any_capture() || self.mouse_tracker.has_pressed_button()
+        self.any_capture() || self.gestures.iter().any(|gesture| gesture.press.is_some())
     }
 
     /// Whether any button's gesture has been claimed.
     fn any_capture(&self) -> bool {
         self.gestures
-            .values()
-            .any(|gesture| gesture.capture().is_some())
+            .iter()
+            .any(|gesture| gesture.routing.capture().is_some())
+    }
+
+    /// What is tracked for `button`, while its gesture is under way.
+    fn gesture(&self, button: MouseButton) -> Option<&Gesture> {
+        self.gestures
+            .iter()
+            .find(|gesture| gesture.button == button)
+    }
+
+    fn gesture_mut(&mut self, button: MouseButton) -> Option<&mut Gesture> {
+        self.gestures
+            .iter_mut()
+            .find(|gesture| gesture.button == button)
+    }
+
+    /// The press motion belongs to: the most recent button still held.
+    fn held_press(&mut self) -> Option<(MouseButton, &mut Press)> {
+        self.gestures
+            .iter_mut()
+            .rev()
+            .find_map(|gesture| Some((gesture.button, gesture.press.as_mut()?)))
     }
 
     /// The path that claimed `button`'s gesture, if one did.
     fn capture_path(&self, button: MouseButton) -> Option<&[ChildId]> {
-        self.gestures.get(&button)?.capture()
+        self.gesture(button)?.routing.capture()
     }
 
     /// Whether `button`'s events are being swallowed.
     fn is_suppressed(&self, button: MouseButton) -> bool {
-        matches!(self.gestures.get(&button), Some(ButtonGesture::Suppressed))
+        self.gesture(button)
+            .is_some_and(|gesture| matches!(gesture.routing, Routing::Suppressed))
     }
 
     /// Call off `button`'s gesture, keeping it suppressed until its release.
     fn suppress(&mut self, button: MouseButton) {
-        self.gestures.insert(button, ButtonGesture::Suppressed);
+        match self.gesture_mut(button) {
+            Some(gesture) => gesture.routing = Routing::Suppressed,
+            None => self.gestures.push(Gesture {
+                button,
+                press: None,
+                routing: Routing::Suppressed,
+            }),
+        }
+    }
+
+    /// Record `button`'s press, starting its gesture if it has none. The
+    /// gesture becomes the most recent, which is the one motion belongs to.
+    fn begin_gesture(&mut self, button: MouseButton, column: u16, row: u16) {
+        let routing = self
+            .gestures
+            .iter()
+            .position(|gesture| gesture.button == button)
+            .map_or_else(Routing::default, |index| {
+                self.gestures.remove(index).routing
+            });
+        self.gestures.push(Gesture {
+            button,
+            press: Some(Press {
+                column,
+                row,
+                moved: false,
+            }),
+            routing,
+        });
     }
 
     /// The claim and the press target of `button`'s live gesture, to write
@@ -2632,12 +2525,12 @@ impl<State, Msg> Ratcn<State, Msg> {
         &mut self,
         button: MouseButton,
     ) -> Option<(&mut Option<Vec<ChildId>>, &mut Option<PressTarget>)> {
-        match self.gestures.entry(button).or_default() {
-            ButtonGesture::Active {
+        match &mut self.gesture_mut(button)?.routing {
+            Routing::Active {
                 capture,
                 press_target,
             } => Some((capture, press_target)),
-            ButtonGesture::Suppressed => None,
+            Routing::Suppressed => None,
         }
     }
 
@@ -2657,8 +2550,9 @@ impl<State, Msg> Ratcn<State, Msg> {
         let semantic = (binding.read)(state).ids();
         let declared = surface.modal_roots().map(|index| &surface.nodes[index].id);
         assert!(
-            semantic.iter().eq(declared),
-            "declared modal roots do not match app-owned modal ids: expected {semantic:?}"
+            semantic.clone().eq(declared),
+            "declared modal roots do not match app-owned modal ids: expected {:?}",
+            semantic.collect::<Vec<_>>()
         );
     }
 
@@ -2693,16 +2587,18 @@ impl<State, Msg> Ratcn<State, Msg> {
             let Self {
                 gestures, surface, ..
             } = self;
-            for gesture in gestures.values_mut() {
-                if let Some(path) = gesture.capture()
-                    && !surface.contains_participating_path(path)
+            for gesture in gestures.iter_mut() {
+                if let Some(path) = gesture.routing.capture()
+                    && !surface
+                        .leaf_of(path)
+                        .is_some_and(|index| surface.participates(index))
                 {
-                    *gesture = ButtonGesture::Suppressed;
+                    gesture.routing = Routing::Suppressed;
                 }
             }
         }
         self.transients
-            .retain(|path, _| self.surface.contains_declared_path(path));
+            .retain(|path, _| self.surface.leaf_of(path).is_some());
         // The hover this frame painted, published with the surface it was
         // resolved against — a pass that never got here leaves the previous
         // one in charge, exactly as it leaves the previous surface.
@@ -2770,7 +2666,7 @@ impl<State, Msg> Ratcn<State, Msg> {
 
         let result = match event {
             Event::Mouse(raw) => self.handle_mouse(raw, state),
-            ref event => self.route_key(event, state),
+            ref event => self.route_to_focus(event, state),
         };
         // An open modal is a floor under the whole surface: nothing it covers
         // may report an event as unhandled, or the app would act on input the
@@ -2794,7 +2690,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// [`focus_key`](Ratcn::focus_key) binding and jump to a named path. A key
     /// that is traversal never consults the bindings, so a binding cannot
     /// shadow Tab.
-    fn route_key(&mut self, event: &Event, state: &State) -> EventResult<Msg> {
+    fn route_to_focus(&mut self, event: &Event, state: &State) -> EventResult<Msg> {
         if self.surface.nodes.is_empty() {
             return EventResult::Ignored;
         }
@@ -2836,7 +2732,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// here, so an unhandled Esc still reaches whatever declared them.
     fn key_bubble_chain(&self, focus: &FocusState) -> Vec<usize> {
         let mut matched = self.surface.nodes_along_path(focus.path());
-        let Some(trapping_root) = self.surface.top_layer_root(|policy| policy.traps_keys) else {
+        let Some(trapping_root) = self.surface.top_layer_root(|policy, _| policy.traps_keys) else {
             return matched;
         };
         match matched.iter().position(|&index| index == trapping_root) {
@@ -2923,12 +2819,11 @@ impl<State, Msg> Ratcn<State, Msg> {
 
     fn modal_stack_matches(&self, state: &State) -> bool {
         self.modal_binding.as_ref().is_none_or(|binding| {
-            let semantic = (binding.read)(state).ids();
             let retained = self
                 .surface
                 .modal_roots()
                 .map(|index| &self.surface.nodes[index].id);
-            semantic.iter().eq(retained)
+            (binding.read)(state).ids().eq(retained)
         })
     }
 
@@ -2936,31 +2831,29 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// then delivery of everything that synthesis produced.
     ///
     /// Backends report `Down`, `Up`, and `Moved`; components consume `Click`,
-    /// `Drag`, and `DragEnd`. [`MouseTracker`] bridges the two, so one raw
-    /// event can expand into several normalized ones — a release becomes `Up`
-    /// and then `Click` or `DragEnd`. Each is delivered in turn, but only until
-    /// one emits: the app sees at most one message per raw event, the same
-    /// contract the keyboard path keeps.
+    /// `Drag`, and `DragEnd`. [`normalize`](Self::normalize) bridges the two,
+    /// so one raw event can expand into several normalized ones — a release
+    /// becomes `Up` and then `Click` or `DragEnd`. Each is delivered in turn,
+    /// but only until one emits: the app sees at most one message per raw
+    /// event, the same contract the keyboard path keeps.
     ///
     /// A pointer gesture spans several raw events, and its lifetime is
-    /// bracketed here and nowhere else:
-    /// [`observe_pointer`](Self::observe_pointer) opens it,
-    /// [`record_press_target`](Self::record_press_target) stores what the press
-    /// landed on for its release to be judged against, and
+    /// bracketed here and nowhere else: [`normalize`](Self::normalize) opens
+    /// it, [`record_press_target`](Self::record_press_target) stores what the
+    /// press landed on for its release to be judged against, and
     /// [`end_gesture`](Self::end_gesture) closes it. What they maintain is one
-    /// [`ButtonGesture`] per button, and it exists only between a press and its
+    /// [`Gesture`] per button, and it exists only between a press and its
     /// release.
     fn handle_mouse(&mut self, raw: MouseEvent, state: &State) -> EventResult<Msg> {
         if raw.kind == MouseKind::Exited {
             return self.handle_pointer_exit();
         }
-        let (pressed, released) = self.observe_pointer(raw);
+        self.observe_pointer(raw);
         // Motion the tracker swallowed because the press has not left its cell
         // yet: nothing to deliver, but the app must not read it as unhandled.
-        let held_motion = raw.kind == MouseKind::Moved && self.mouse_tracker.has_pressed_button();
-        let events = self
-            .mouse_tracker
-            .feed(raw, self.releases_on_press_target(raw));
+        let held_motion = raw.kind == MouseKind::Moved
+            && self.gestures.iter().any(|gesture| gesture.press.is_some());
+        let events = self.normalize(raw);
         let mut result = if held_motion && events.is_empty() {
             EventResult::Consumed
         } else {
@@ -2968,12 +2861,6 @@ impl<State, Msg> Ratcn<State, Msg> {
         };
         for mouse in events {
             let next = self.deliver_mouse(mouse, state);
-            // After delivery, never before: a component claims the pointer
-            // while handling its `Down`, and that claim is what the press
-            // target records.
-            if let Some(button) = pressed {
-                self.record_press_target(button, mouse);
-            }
             match next {
                 // A message ends the batch: any normalized event synthesized
                 // after this one is dropped. The pairs that matter do not
@@ -2987,7 +2874,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                 EventResult::Ignored => {}
             }
         }
-        if let Some(button) = released {
+        if let Some(button) = released_button(raw.kind) {
             self.end_gesture(button);
         }
         result
@@ -3018,11 +2905,23 @@ impl<State, Msg> Ratcn<State, Msg> {
         if mouse_button(mouse.kind).is_some_and(|button| self.is_suppressed(button)) {
             return EventResult::Consumed;
         }
-        let routed = self.route_mouse(mouse, state);
+        // The one hit test this event needs. Routing, the press target it may
+        // record, and popup dismissal all ask the same question of the same
+        // cell.
+        let hit = self
+            .surface
+            .hit_index(Position::new(mouse.column, mouse.row));
+        let routed = self.route_mouse(mouse, hit, state);
+        // After routing, never before: a component claims the pointer while
+        // handling its `Down`, and that claim is what the press target
+        // records.
+        if let Some(button) = pressed_button(mouse.kind) {
+            self.record_press_target(button, hit);
+        }
         match (mouse.kind, &routed) {
-            (MouseKind::Down(_), EventResult::Ignored | EventResult::Consumed) => self
-                .popup_dismissal(Position::new(mouse.column, mouse.row))
-                .map_or(routed, EventResult::Emit),
+            (MouseKind::Down(_), EventResult::Ignored | EventResult::Consumed) => {
+                self.popup_dismissal(hit).map_or(routed, EventResult::Emit)
+            }
             _ => routed,
         }
     }
@@ -3031,28 +2930,90 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// [`releases_on_press_target`](Self::releases_on_press_target) to judge
     /// its release against. A capture outranks geometry: a component that
     /// claimed the gesture owns it wherever the pointer then goes.
-    fn record_press_target(&mut self, button: MouseButton, mouse: MouseEvent) {
+    fn record_press_target(&mut self, button: MouseButton, hit: Option<usize>) {
         let target = self
             .capture_path(button)
             .map(<[ChildId]>::to_vec)
-            .or_else(|| {
-                self.surface
-                    .hit_path(Position::new(mouse.column, mouse.row))
-            });
+            .or_else(|| hit.map(|index| self.surface.path_of(index)));
         if let Some((_, press_target)) = self.active_gesture(button) {
             *press_target = Some(PressTarget::at(target));
+        }
+    }
+
+    /// Turn one raw mouse event into the events to dispatch, in order.
+    ///
+    /// Backends report `Down`, `Up`, and `Moved`. This synthesizes the
+    /// [`Click`](MouseKind::Click), [`Drag`](MouseKind::Drag), and
+    /// [`DragEnd`](MouseKind::DragEnd) a backend cannot provide uniformly, and
+    /// it is where a press is recorded and where the pointer's travel since
+    /// that press is tracked.
+    ///
+    /// A release follows up as at most one gesture: landing back on the
+    /// component the press hit makes it a `Click`, a press that moved
+    /// otherwise ends as `DragEnd`, and a press that did not emits nothing. So
+    /// a click never fires on a different target, and a claimed drag never
+    /// also clicks.
+    fn normalize(&mut self, event: MouseEvent) -> Vec<MouseEvent> {
+        match event.kind {
+            MouseKind::Down(button) => {
+                self.begin_gesture(button, event.column, event.row);
+                vec![event]
+            }
+            MouseKind::Up(button) => {
+                let on_target = self.releases_on_press_target(event);
+                let press = self
+                    .gesture_mut(button)
+                    .and_then(|gesture| gesture.press.take());
+                let follow = match press {
+                    // Landing back on the press target wins over having moved:
+                    // movement nobody claimed as a drag is drift within the
+                    // control, and drift must not eat the click. A claimed
+                    // gesture reaches this arm as `false` and ends as
+                    // `DragEnd`.
+                    Some(_) if on_target => Some(MouseKind::Click(button)),
+                    Some(press) if press.moved => Some(MouseKind::DragEnd(button)),
+                    _ => None,
+                };
+                let mut out = vec![event];
+                out.extend(follow.map(|kind| MouseEvent { kind, ..event }));
+                out
+            }
+            MouseKind::Moved => match self.held_press() {
+                Some((button, press)) => {
+                    if !press.moved && press.column == event.column && press.row == event.row {
+                        return Vec::new();
+                    }
+                    press.moved = true;
+                    vec![MouseEvent {
+                        kind: MouseKind::Drag(button),
+                        ..event
+                    }]
+                }
+                None => vec![event],
+            },
+            // Some backends (crossterm) deliver `Drag` natively; it still
+            // marks the press as moved so its release ends as a `DragEnd`.
+            MouseKind::Drag(button) => {
+                if let Some(press) = self
+                    .gesture_mut(button)
+                    .and_then(|gesture| gesture.press.as_mut())
+                {
+                    press.moved = true;
+                }
+                vec![event]
+            }
+            // Scroll (and any already-synthesized kind) pass through.
+            _ => vec![event],
         }
     }
 
     /// Forget everything tracked for `button`: its gesture ended with this
     /// release.
     fn end_gesture(&mut self, button: MouseButton) {
-        self.gestures.remove(&button);
+        self.gestures.retain(|gesture| gesture.button != button);
     }
 
-    /// Does this raw release complete a click? The whole definition lives here,
-    /// because it is the half [`MouseTracker`] cannot answer: it knows where
-    /// the pointer went, not what is under it or who claimed it.
+    /// Does this raw release complete a click?
     ///
     /// A click is a release on the component the press hit. The pointer may
     /// have moved in between — drifting a column while pressing a button is
@@ -3069,31 +3030,25 @@ impl<State, Msg> Ratcn<State, Msg> {
         let MouseKind::Up(button) = raw.kind else {
             return false;
         };
-        let Some(gesture) = self.gestures.get(&button) else {
+        let Some(gesture) = self.gesture(button) else {
             return false;
         };
-        if gesture.capture().is_some() && self.mouse_tracker.press_moved(button) {
+        if gesture.routing.capture().is_some() && gesture.press.is_some_and(|press| press.moved) {
             return false;
         }
         let current = self.surface.hit_path(Position::new(raw.column, raw.row));
-        gesture.releases_on_target(current.as_deref())
+        gesture.routing.releases_on_target(current.as_deref())
     }
 
-    /// Call off every gesture under way: each claimed one, and each button
-    /// still physically held. They stay suppressed until their releases.
+    /// Call off every gesture under way. They stay suppressed until their
+    /// releases.
     fn cancel_pointer_gestures(&mut self) {
-        for button in self.mouse_tracker.pressed_buttons() {
-            self.suppress(button);
-        }
-        for gesture in self.gestures.values_mut() {
-            if gesture.capture().is_some() {
-                *gesture = ButtonGesture::Suppressed;
-            }
+        for gesture in &mut self.gestures {
+            gesture.routing = Routing::Suppressed;
         }
     }
 
     fn reset_pointer_gestures(&mut self) {
-        self.mouse_tracker.clear();
         self.gestures.clear();
     }
 
@@ -3110,35 +3065,24 @@ impl<State, Msg> Ratcn<State, Msg> {
             self.reset_pointer_gestures();
             return;
         }
-        let (pressed, released) = self.observe_pointer(raw);
+        self.observe_pointer(raw);
         self.cancel_pointer_gestures();
         // Nothing routes across this gap, so the synthesized follow-up is
-        // discarded either way; `false` keeps the tracker from consulting a
-        // surface the app has already moved past.
-        let _ = self.mouse_tracker.feed(raw, false);
-        if let Some(button) = pressed {
+        // discarded; the gestures still have to advance exactly as they would
+        // have.
+        let _ = self.normalize(raw);
+        if let Some(button) = pressed_button(raw.kind) {
             self.suppress(button);
         }
-        if let Some(button) = released {
+        if let Some(button) = released_button(raw.kind) {
             self.end_gesture(button);
         }
     }
 
-    /// The pointer bookkeeping every non-exited mouse event performs, shared
-    /// by the routing path and the stale-modal-window consume path so the two
-    /// cannot drift: where the pointer is, and which button this event
-    /// presses or releases.
-    fn observe_pointer(&mut self, raw: MouseEvent) -> (Option<MouseButton>, Option<MouseButton>) {
+    /// Where the pointer now is. Every non-exited mouse event records it,
+    /// on the routing path and on the stale-modal-window consume path alike.
+    fn observe_pointer(&mut self, raw: MouseEvent) {
         self.pointer = Some(Position::new(raw.column, raw.row));
-        let pressed = match raw.kind {
-            MouseKind::Down(button) => Some(button),
-            _ => None,
-        };
-        let released = match raw.kind {
-            MouseKind::Up(button) => Some(button),
-            _ => None,
-        };
-        (pressed, released)
     }
 
     /// Offer `event` to each component in `chain`, deepest first, stopping at
@@ -3171,10 +3115,11 @@ impl<State, Msg> Ratcn<State, Msg> {
             // gesture tracker `EventCtx::drag` keeps.
             let projected = match (event, viewport) {
                 (Event::Mouse(mouse), Some(viewport)) => {
-                    Event::Mouse(viewport.mouse_to_logical(*mouse))
+                    Some(Event::Mouse(viewport.mouse_to_logical(*mouse)))
                 }
-                _ => event.clone(),
+                _ => None,
             };
+            let delivered = projected.as_ref().unwrap_or(event);
             let screen_mouse = match event {
                 Event::Mouse(mouse) => Some(*mouse),
                 _ => None,
@@ -3192,7 +3137,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                     screen_mouse,
                 },
             );
-            let result = component.handle_event(&projected, state, &mut ctx);
+            let result = component.handle_event(delivered, state, &mut ctx);
             if !matches!(result, EventResult::Ignored) {
                 return result;
             }
@@ -3220,8 +3165,13 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// through [`PaintCtx::hover_position`], and a host that redraws on any
     /// result but [`Ignored`](EventResult::Ignored) needs that signal for
     /// motion *within* one component as much as for crossing between two.
-    fn route_mouse(&mut self, mouse: MouseEvent, state: &State) -> EventResult<Msg> {
-        let path = self.pointer_target(mouse);
+    fn route_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        hit: Option<usize>,
+        state: &State,
+    ) -> EventResult<Msg> {
+        let path = self.pointer_target(mouse, hit);
         let moved = mouse.kind == MouseKind::Moved;
         if moved {
             self.set_hover(path.as_deref().unwrap_or_default());
@@ -3244,7 +3194,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             };
         };
 
-        let (chain, layer_confined) = self.surface.mouse_bubble_chain(&path);
+        let chain = self.surface.mouse_bubble_chain(&path);
         let routed = self.dispatch_pointer(&chain, mouse, state);
         if !matches!(routed, EventResult::Ignored) {
             return routed;
@@ -3257,8 +3207,12 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         // An event the hit layer's content ignored is consumed at the layer
         // boundary: it must never read as unhandled to lower layers or to
-        // whatever declared the layer.
-        if layer_confined {
+        // whatever declared the layer. Such a chain starts at that layer's
+        // root.
+        if chain
+            .first()
+            .is_some_and(|&index| self.surface.is_layer_root(index))
+        {
             return EventResult::Consumed;
         }
         EventResult::Ignored
@@ -3270,7 +3224,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// Only the events that continue a gesture consult the capture map. A
     /// `Down` starts one, so it always hit-tests; a `Moved` belongs to no
     /// gesture at all.
-    fn pointer_target(&self, mouse: MouseEvent) -> Option<Vec<ChildId>> {
+    fn pointer_target(&self, mouse: MouseEvent, hit: Option<usize>) -> Option<Vec<ChildId>> {
         let captured = match mouse.kind {
             MouseKind::Drag(button)
             | MouseKind::Up(button)
@@ -3278,10 +3232,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             | MouseKind::DragEnd(button) => self.capture_path(button).map(<[ChildId]>::to_vec),
             _ => None,
         };
-        captured.or_else(|| {
-            self.surface
-                .hit_path(Position::new(mouse.column, mouse.row))
-        })
+        captured.or_else(|| hit.map(|index| self.surface.path_of(index)))
     }
 
     /// Offer the event to the hit component and its ancestors, and record a
@@ -3327,30 +3278,20 @@ impl<State, Msg> Ratcn<State, Msg> {
         mouse: MouseEvent,
         state: &State,
     ) -> Option<EventResult<Msg>> {
-        if !matches!(
-            mouse.kind,
-            MouseKind::Down(MouseButton::Left) | MouseKind::Click(MouseButton::Left)
-        ) {
+        if mouse.kind != MouseKind::Down(MouseButton::Left) {
             return None;
         }
-        let target = chain.iter().rev().copied().find(|&index| {
-            let focuses = match mouse.kind {
-                MouseKind::Down(_) => !self.surface.nodes[index].focuses_on_click,
-                MouseKind::Click(_) => self.surface.nodes[index].focuses_on_click,
-                _ => false,
-            };
-            focuses && self.surface.focusable(index)
-        })?;
+        let target = chain
+            .iter()
+            .rev()
+            .copied()
+            .find(|&index| self.surface.focusable(index))?;
 
-        let stored = self.stored_focus(state);
-        let current = self.surface.resolve_focus(&stored);
         // Focus lands on a leaf, so a focusable container hands off to its
         // first focusable descendant.
-        let mut path = self.surface.path_of(target);
-        if let Some(child) = self.surface.edge_child(Some(target), Step::Forward) {
-            self.surface.extend_to_edge(child, Step::Forward, &mut path);
-        }
-        let focus = FocusState::intent(path);
+        let focus = self.surface.descend_focus(target, Step::Forward)?;
+        let stored = self.stored_focus(state);
+        let current = self.surface.resolve_focus(&stored);
         Some(self.focus_transition_result(focus, &current, state))
     }
 
@@ -3358,24 +3299,15 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// outside of, if any. "Outside" is containment, not depth: the press hit
     /// nothing, or hit something that is not inside the popup's subtree.
     /// Popups an open modal covers are inert and never dismiss.
-    fn popup_dismissal(&self, point: Position) -> Option<Msg> {
-        let target = self.surface.hit_index(point);
+    fn popup_dismissal(&self, target: Option<usize>) -> Option<Msg> {
         // Innermost first, and keep looking: the layer the press landed
         // inside is not dismissed, but one it landed outside of still is.
-        let top = self
-            .surface
-            .layer_roots
-            .iter()
-            .rev()
-            .copied()
-            .find(|&root| {
-                self.surface
-                    .layer_kind_policy(root)
-                    .dismiss_on_outside_press
-                    && self.surface.interactive(root)
-                    && self.surface.participates(root)
-                    && target.is_none_or(|hit| !self.surface.inside(hit, root))
-            })?;
+        let top = self.surface.top_layer_root(|policy, root| {
+            policy.dismiss_on_outside_press
+                && self.surface.interactive(root)
+                && self.surface.participates(root)
+                && target.is_none_or(|hit| !self.surface.inside(hit, root))
+        })?;
         self.surface.nodes[top].on_dismiss.as_ref().map(|f| f())
     }
 
@@ -3419,8 +3351,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// destination to bring it into view. A destination that is already fully
     /// on screen, or that no viewport clips, reaches nobody.
     fn reveal_focus(&mut self, focus: &FocusState, state: &State) {
-        let matched = self.surface.nodes_along_path(focus.path());
-        let Some(&target) = matched.last() else {
+        let Some(&target) = self.surface.nodes_along_path(focus.path()).last() else {
             return;
         };
         if self.surface.viewport_visibility(target) == ViewportVisibility::Full {
@@ -3457,18 +3388,45 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         self.focus_result(next, state)
     }
+}
 
-    #[cfg(test)]
+/// What the tests in this module read back out of a committed surface.
+#[cfg(test)]
+impl<State, Msg> Ratcn<State, Msg> {
     fn hover_path(&self) -> &[ChildId] {
         &self.hover
     }
 
-    #[cfg(test)]
     fn declared_paths(&self) -> Vec<Vec<ChildId>> {
         (0..self.surface.nodes.len())
             .map(|index| self.surface.path_of(index))
             .collect()
     }
+}
+
+/// Give one deferred closure its context. Deferred paint has no identity, so
+/// every interaction flag is false and the area is the whole surface it
+/// writes to.
+fn paint_deferred<State>(
+    mut target: PaintTarget<'_, '_>,
+    theme: &Theme,
+    hover_position: Option<Position>,
+    state: &State,
+    paint: PaintThunk<State>,
+) {
+    let area = target.whole_area();
+    let mut ctx = PaintCtx {
+        target,
+        theme,
+        area,
+        focused: false,
+        contains_focus: false,
+        hovered: false,
+        contains_hover: false,
+        hover_position,
+        state,
+    };
+    paint(&mut ctx);
 }
 
 fn copy_buffer(source: &Buffer, source_area: Rect, destination: &mut Buffer, target_area: Rect) {
@@ -3505,6 +3463,22 @@ fn traversal_direction(key: &KeyEvent) -> Option<Step> {
     }
 }
 
+/// The button this event presses, if it is a press.
+const fn pressed_button(kind: MouseKind) -> Option<MouseButton> {
+    match kind {
+        MouseKind::Down(button) => Some(button),
+        _ => None,
+    }
+}
+
+/// The button this event releases, if it is a release.
+const fn released_button(kind: MouseKind) -> Option<MouseButton> {
+    match kind {
+        MouseKind::Up(button) => Some(button),
+        _ => None,
+    }
+}
+
 fn mouse_button(kind: MouseKind) -> Option<MouseButton> {
     match kind {
         MouseKind::Down(button)
@@ -3522,6 +3496,7 @@ mod tests {
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
         panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -3562,7 +3537,7 @@ mod tests {
             assert_eq!(*ctx.state(), 7);
         }
 
-        fn is_focusable(&self, _state: &u8) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -3613,7 +3588,7 @@ mod tests {
     impl Component<(), ()> for PanickingFocusable {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
-        fn is_focusable(&self, _state: &()) -> bool {
+        fn is_focusable(&self) -> bool {
             panic!("focusability failed");
         }
     }
@@ -3682,7 +3657,7 @@ mod tests {
             EventResult::Emit(ModalTestMsg::Routed(self.0))
         }
 
-        fn is_focusable(&self, _state: &ModalTestState) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -3710,7 +3685,7 @@ mod tests {
             EventResult::Emit(ModalTestMsg::Routed("dialog"))
         }
 
-        fn is_focusable(&self, _state: &ModalTestState) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -3825,29 +3800,15 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self, _state: &FocusTestState) -> bool {
+        fn is_focusable(&self) -> bool {
             self.enabled
-        }
-    }
-
-    struct ClickFocusLeaf;
-
-    impl Component<FocusTestState, FocusTestMsg> for ClickFocusLeaf {
-        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
-
-        fn is_focusable(&self, _state: &FocusTestState) -> bool {
-            true
-        }
-
-        fn focuses_on_click(&self, _state: &FocusTestState) -> bool {
-            true
         }
     }
 
     type PathLog = Arc<Mutex<Vec<Vec<ChildId>>>>;
 
     /// Record the identity path the declaration pass currently has open.
-    fn record_declared_path(ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>, log: &PathLog) {
+    fn record_declared_path(ctx: &DeclareCtx<'_, FocusTestState, FocusTestMsg>, log: &PathLog) {
         if let Some(path) = ctx.pass.current_path() {
             log.lock().expect("path log").push(path.to_vec());
         }
@@ -3863,7 +3824,7 @@ mod tests {
             record_declared_path(ctx, &self.0);
         }
 
-        fn is_focusable(&self, _state: &FocusTestState) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -3924,7 +3885,7 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self, _state: &FocusTestState) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -4654,7 +4615,7 @@ mod tests {
                 ratcn.render(frame, &(), &theme, |ctx| {
                     ctx.component(ChildId::Static("next"), Leaf, area);
                     let deferred_painted = Arc::clone(&deferred_painted);
-                    ctx.defer_paint(move |_, ()| {
+                    ctx.defer_paint(move |_| {
                         deferred_painted.store(true, Ordering::SeqCst);
                     });
                 });
@@ -4678,7 +4639,7 @@ mod tests {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
                         ctx.component(ChildId::Static("next"), Leaf, area);
-                        ctx.defer_paint(|_, ()| panic!("deferred paint failed"));
+                        ctx.defer_paint(|_| panic!("deferred paint failed"));
                     });
                 })
                 .expect("draw");
@@ -5687,7 +5648,7 @@ mod tests {
     impl Component<HoverFocusState, HoverFocusMsg> for HoverFocusLeaf {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, HoverFocusState, HoverFocusMsg>) {}
 
-        fn is_focusable(&self, _state: &HoverFocusState) -> bool {
+        fn is_focusable(&self) -> bool {
             self.enabled
         }
     }
@@ -6363,13 +6324,12 @@ mod tests {
         );
         ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
         assert!(ratcn.capture_path(MouseButton::Left).is_some());
-        assert_eq!(ratcn.mouse_tracker.pressed_buttons(), [MouseButton::Left]);
+        assert!(ratcn.gestures.iter().any(|gesture| gesture.press.is_some()));
 
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Exited, 1, 1), &state),
             EventResult::Consumed
         );
-        assert!(ratcn.mouse_tracker.pressed_buttons().is_empty());
         assert!(ratcn.gestures.is_empty());
 
         // Re-entry is plain motion: it moves hover (which the exit emptied)
@@ -6440,7 +6400,7 @@ mod tests {
                             },
                             area,
                         );
-                        ctx.defer_paint(|_, _| panic!("deferred paint failed"));
+                        ctx.defer_paint(|_| panic!("deferred paint failed"));
                     });
                 })
                 .expect("draw");
@@ -6934,6 +6894,109 @@ mod tests {
         );
     }
 
+    /// Motion that has not left the pressed cell is not yet a drag, so
+    /// nothing is synthesized from it — but the runtime still answers for it,
+    /// because the host has to redraw whether or not the pointer crossed a
+    /// cell boundary.
+    #[test]
+    fn motion_inside_the_pressed_cell_synthesizes_nothing() {
+        let state = PointerState;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        render_neighbours(&mut ratcn, &mut terminal, &events, false);
+
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        assert_eq!(
+            ratcn.handle_event(mouse(MouseKind::Moved, 1, 1), &state),
+            EventResult::Consumed
+        );
+
+        assert_eq!(
+            *events.lock().expect("pointer event log"),
+            [("left", MouseKind::Down(MouseButton::Left))]
+        );
+    }
+
+    /// A release somewhere else ends a gesture that never moved as a plain
+    /// `Up`: there was no drag to end, and it landed on nothing it could
+    /// click.
+    #[test]
+    fn a_still_press_released_elsewhere_is_only_an_up() {
+        let state = PointerState;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        render_neighbours(&mut ratcn, &mut terminal, &events, false);
+
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 7, 1), &state);
+
+        assert_eq!(
+            *events.lock().expect("pointer event log"),
+            [
+                ("left", MouseKind::Down(MouseButton::Left)),
+                ("right", MouseKind::Up(MouseButton::Left)),
+            ]
+        );
+    }
+
+    /// crossterm reports `Drag` itself rather than motion under a held button.
+    /// It marks the press as moved just as synthesized motion does, so the
+    /// release still ends as a drag.
+    #[test]
+    fn a_backend_reported_drag_still_ends_as_a_drag() {
+        let state = PointerState;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        render_neighbours(&mut ratcn, &mut terminal, &events, false);
+
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Drag(MouseButton::Left), 7, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 7, 1), &state);
+
+        assert_eq!(
+            *events.lock().expect("pointer event log"),
+            [
+                ("left", MouseKind::Down(MouseButton::Left)),
+                ("right", MouseKind::Drag(MouseButton::Left)),
+                ("right", MouseKind::Up(MouseButton::Left)),
+                ("right", MouseKind::DragEnd(MouseButton::Left)),
+            ]
+        );
+    }
+
+    /// Motion belongs to the button pressed most recently, and the release of
+    /// that button hands it back to one still held — so a second button
+    /// pressed mid-drag does not strand the first.
+    #[test]
+    fn motion_belongs_to_the_latest_press_and_returns_to_the_one_still_held() {
+        let state = PointerState;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        render_neighbours(&mut ratcn, &mut terminal, &events, false);
+
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Right), 7, 1), &state);
+        events.lock().expect("pointer event log").clear();
+
+        ratcn.handle_event(mouse(MouseKind::Moved, 8, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Right), 8, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Moved, 2, 1), &state);
+
+        assert_eq!(
+            *events.lock().expect("pointer event log"),
+            [
+                ("right", MouseKind::Drag(MouseButton::Right)),
+                ("right", MouseKind::Up(MouseButton::Right)),
+                ("right", MouseKind::Click(MouseButton::Right)),
+                ("left", MouseKind::Drag(MouseButton::Left)),
+            ]
+        );
+    }
+
     #[test]
     fn area_scope_hit_prefers_descendant_then_falls_back_to_scope() {
         let state = HoverFocusState::default();
@@ -7054,7 +7117,7 @@ mod tests {
             });
         }
 
-        fn is_focusable(&self, _state: &FocusTestState) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -7706,44 +7769,6 @@ mod tests {
         assert_eq!(
             ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 12, 0), &state),
             EventResult::Emit(FocusTestMsg::Activated(vec![ChildId::Static("emitted")]))
-        );
-    }
-
-    #[test]
-    fn click_focused_component_ignores_primary_down_and_focuses_on_click() {
-        let state = FocusTestState {
-            focus: FocusState::intent([ChildId::Static("first")]),
-        };
-        let mut ratcn =
-            Ratcn::new().focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus);
-        let mut terminal = Terminal::new(TestBackend::new(8, 2)).expect("terminal");
-        let theme = Theme::default_dark();
-        terminal
-            .draw(|frame| {
-                ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(
-                        ChildId::Static("first"),
-                        FocusLeaf::enabled(),
-                        Rect::new(0, 0, 3, 2),
-                    );
-                    ctx.component(
-                        ChildId::Static("click"),
-                        ClickFocusLeaf,
-                        Rect::new(4, 0, 3, 2),
-                    );
-                });
-            })
-            .expect("draw");
-
-        assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 5, 0), &state),
-            EventResult::Ignored
-        );
-        assert_eq!(
-            ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 5, 0), &state),
-            EventResult::Emit(FocusTestMsg::Focus(FocusState::intent([ChildId::Static(
-                "click"
-            )])))
         );
     }
 
@@ -8444,7 +8469,7 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self, _state: &FocusTestState) -> bool {
+        fn is_focusable(&self) -> bool {
             self.focusable
         }
     }
@@ -8524,7 +8549,7 @@ mod tests {
                         area,
                     );
                     let base = Arc::clone(&log);
-                    ctx.defer_paint(move |_, _| {
+                    ctx.defer_paint(move |_| {
                         base.lock().expect("paint log").push("base overlay");
                     });
                     ctx.modal(
@@ -8537,7 +8562,7 @@ mod tests {
                         area,
                     );
                     let lower = Arc::clone(&log);
-                    ctx.defer_paint(move |_, _| {
+                    ctx.defer_paint(move |_| {
                         lower.lock().expect("paint log").push("lower overlay");
                     });
                     ctx.modal(
@@ -8550,7 +8575,7 @@ mod tests {
                         area,
                     );
                     let top = Arc::clone(&log);
-                    ctx.defer_paint(move |_, _| top.lock().expect("paint log").push("top overlay"));
+                    ctx.defer_paint(move |_| top.lock().expect("paint log").push("top overlay"));
                 });
             })
             .expect("draw");
@@ -8590,15 +8615,14 @@ mod tests {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     ctx.popup(
                         ChildId::Static("panel"),
-                        PopupOptions::default(),
                         Rect::new(0, 0, 2, 1),
+                        PopupOptions::default(),
                         |ctx| {
                             ctx.paint(|ctx| {
                                 ctx.widget(ratatui::text::Line::from("PP"), Rect::new(0, 0, 2, 1));
                             });
-                            ctx.defer_paint(|painter, _| {
-                                painter
-                                    .widget(ratatui::text::Line::from("O"), Rect::new(0, 0, 1, 1));
+                            ctx.defer_paint(|ctx| {
+                                ctx.widget(ratatui::text::Line::from("O"), Rect::new(0, 0, 1, 1));
                             });
                         },
                     );
@@ -8915,8 +8939,8 @@ mod tests {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     ctx.popup(
                         ChildId::Static("panel"),
-                        PopupOptions::default(),
                         Rect::new(0, 0, 2, 1),
+                        PopupOptions::default(),
                         |ctx| {
                             ctx.paint(|ctx| {
                                 ctx.with_buffer(|buf| {
@@ -9466,8 +9490,8 @@ mod tests {
                     // paint, so presses inside it reach nothing interactive.
                     ctx.popup(
                         ChildId::Static("panel"),
-                        options,
                         Rect::new(0, 0, 5, 2),
+                        options,
                         |_| {},
                     );
                 });
@@ -9521,8 +9545,8 @@ mod tests {
                     // it is a sibling of the modal, not inside it.
                     ctx.popup(
                         ChildId::Static("panel"),
-                        PopupOptions::default(),
                         Rect::new(0, 0, 5, 1),
+                        PopupOptions::default(),
                         |ctx| {
                             ctx.component(
                                 ChildId::Static("pi"),
@@ -9554,7 +9578,7 @@ mod tests {
         impl Component<PointerState, PointerMsg> for FocusableLeaf {
             fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
-            fn is_focusable(&self, _state: &PointerState) -> bool {
+            fn is_focusable(&self) -> bool {
                 true
             }
         }
@@ -9574,8 +9598,8 @@ mod tests {
                     // Covers the button completely.
                     ctx.hint(
                         ChildId::Static("tip"),
-                        ScopeOptions::default(),
                         Rect::new(0, 0, 6, 1),
+                        ScopeOptions::default(),
                         |ctx| {
                             ctx.component(
                                 ChildId::Static("text"),
@@ -9618,16 +9642,16 @@ mod tests {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     ctx.popup(
                         ChildId::Static("first"),
+                        Rect::new(0, 0, 5, 1),
                         PopupOptions::default()
                             .on_dismiss(|| PointerMsg::Routed("first", MouseKind::Moved, 0)),
-                        Rect::new(0, 0, 5, 1),
                         |_| {},
                     );
                     ctx.popup(
                         ChildId::Static("second"),
+                        Rect::new(6, 2, 5, 1),
                         PopupOptions::default()
                             .on_dismiss(|| PointerMsg::Routed("second", MouseKind::Moved, 0)),
-                        Rect::new(6, 2, 5, 1),
                         |_| {},
                     );
                 });
@@ -9654,16 +9678,16 @@ mod tests {
                 ratcn.render(frame, &state, &theme, |ctx| {
                     ctx.popup(
                         ChildId::Static("outer"),
+                        Rect::new(0, 0, 5, 2),
                         PopupOptions::default()
                             .on_dismiss(|| PointerMsg::Routed("outer", MouseKind::Moved, 0)),
-                        Rect::new(0, 0, 5, 2),
                         |ctx| {
                             ctx.popup(
                                 ChildId::Static("inner"),
+                                Rect::new(0, 0, 3, 1),
                                 PopupOptions::default().on_dismiss(|| {
                                     PointerMsg::Routed("inner", MouseKind::Moved, 0)
                                 }),
-                                Rect::new(0, 0, 3, 1),
                                 |_| {},
                             );
                         },
@@ -9695,8 +9719,8 @@ mod tests {
                     );
                     ctx.popup(
                         ChildId::Static("panel"),
-                        PopupOptions::default().on_dismiss(|| PointerMsg::Dismissed),
                         Rect::new(0, 0, 5, 2),
+                        PopupOptions::default().on_dismiss(|| PointerMsg::Dismissed),
                         |_| {},
                     );
                 });
@@ -9734,8 +9758,8 @@ mod tests {
             let area = ctx.area();
             ctx.popup(
                 ChildId::Static("panel"),
-                PopupOptions::default(),
                 area,
+                PopupOptions::default(),
                 |ctx| {
                     let area = ctx.area();
                     ctx.component(ChildId::Static("item"), FocusLeaf::enabled(), area);
@@ -9819,8 +9843,8 @@ mod tests {
                             );
                             ctx.popup(
                                 ChildId::Static("panel"),
-                                PopupOptions::default(),
                                 Rect::new(0, 0, 5, 2),
+                                PopupOptions::default(),
                                 |ctx| {
                                     ctx.component(
                                         ChildId::Static("option"),
@@ -9869,8 +9893,8 @@ mod tests {
                     // The popup paints first in declaration order…
                     ctx.popup(
                         ChildId::Static("panel"),
-                        PopupOptions::default(),
                         Rect::new(0, 0, 2, 1),
+                        PopupOptions::default(),
                         |ctx| {
                             ctx.paint(|ctx| {
                                 ctx.widget(ratatui::text::Line::from("PP"), Rect::new(0, 0, 2, 1));
@@ -10002,7 +10026,7 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self, _state: &ModalTestState) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -10051,8 +10075,8 @@ mod tests {
                         if popup_open {
                             ctx.popup(
                                 ChildId::Static("panel"),
-                                PopupOptions::default().on_dismiss(|| PointerMsg::Dismissed),
                                 Rect::new(0, 0, 5, 2),
+                                PopupOptions::default().on_dismiss(|| PointerMsg::Dismissed),
                                 |_| {},
                             );
                         }
@@ -10384,7 +10408,7 @@ mod tests {
                 .draw(|frame| {
                     let area = frame.area();
                     ratcn.render(frame, &(), &theme, |ctx| {
-                        ctx.defer_paint(|_, ()| panic!("base overlay failed"));
+                        ctx.defer_paint(|_| panic!("base overlay failed"));
                         let caught = catch_unwind(AssertUnwindSafe(|| {
                             ctx.modal(ChildId::Static("modal"), Leaf, area);
                         }));
@@ -10436,7 +10460,7 @@ mod tests {
                             },
                             area,
                         );
-                        ctx.defer_paint(|_, _| panic!("lower modal overlay failed"));
+                        ctx.defer_paint(|_| panic!("lower modal overlay failed"));
                         let caught = catch_unwind(AssertUnwindSafe(|| {
                             ctx.modal(ChildId::Static("top"), RouteLeaf("top"), area);
                         }));
@@ -10576,8 +10600,8 @@ mod tests {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
                     ctx.component(ChildId::Static("base"), RouteLeaf("base"), area);
-                    ctx.defer_paint(|painter, _| {
-                        painter.with_buffer(|buf| {
+                    ctx.defer_paint(|ctx| {
+                        ctx.with_buffer(|buf| {
                             buf[(0, 0)].set_symbol("overlay");
                         });
                     });
@@ -10613,7 +10637,7 @@ mod tests {
                                 ctx.modal(ChildId::Static(id), Leaf, area);
                                 if position + 1 == ids.len() - 1 {
                                     let painted = Arc::clone(&pending_overlay);
-                                    ctx.defer_paint(move |_, ()| {
+                                    ctx.defer_paint(move |_| {
                                         painted.store(true, Ordering::SeqCst);
                                     });
                                 }
@@ -10645,7 +10669,7 @@ mod tests {
                     ratcn.render(frame, &(), &theme, |ctx| {
                         ctx.component(ChildId::Static("same"), Leaf, area);
                         let deferred = Arc::clone(&painted);
-                        ctx.defer_paint(move |_, ()| deferred.store(true, Ordering::SeqCst));
+                        ctx.defer_paint(move |_| deferred.store(true, Ordering::SeqCst));
                         ctx.modal(ChildId::Static("same"), Leaf, area);
                     });
                 })
@@ -11506,7 +11530,7 @@ mod viewport_tests {
             }
         }
 
-        fn is_focusable(&self, _state: &State) -> bool {
+        fn is_focusable(&self) -> bool {
             true
         }
     }
@@ -11528,10 +11552,12 @@ mod viewport_tests {
         }
     }
 
-    /// A paint panic a component catches still poisons the pass, and the
-    /// viewport's own paint never reaches the frame.
+    /// A paint panic a component catches is the component's own business: the
+    /// pass finishes and commits. What the panicking paint wrote into the
+    /// viewport canvas still never reaches the frame, because the write is
+    /// recorded as painted only once it returns.
     #[test]
-    fn a_caught_viewport_paint_panic_keeps_the_previous_frame_and_surface() {
+    fn a_caught_viewport_paint_panic_composites_nothing_and_commits() {
         for failure in [
             CaughtViewportFailure::Widget,
             CaughtViewportFailure::StatefulWidget,
@@ -11541,7 +11567,6 @@ mod viewport_tests {
             driver.render(|ctx| {
                 ctx.component("stable", Leaf, Rect::new(0, 0, 6, 1));
             });
-            let previous_frame = (0..3).map(|row| driver.row(row)).collect::<Vec<_>>();
 
             driver
                 .terminal
@@ -11549,96 +11574,89 @@ mod viewport_tests {
                     // The backend clears between draws, so the frame this pass
                     // must leave alone is painted back first.
                     frame.render_widget(Paragraph::new("stable"), Rect::new(0, 0, 6, 1));
-                    let failed = catch_unwind(AssertUnwindSafe(|| {
-                        driver
-                            .ratcn
-                            .render(frame, &State, &Theme::default_dark(), move |ctx| {
-                                ctx.viewport(Rect::new(0, 0, 2, 1), 2, 0, move |ctx| {
-                                    ctx.paint(move |ctx| {
-                                        let caught = catch_unwind(AssertUnwindSafe(|| {
-                                            let area = Rect::new(0, 0, 2, 1);
-                                            match failure {
-                                                CaughtViewportFailure::Widget => {
-                                                    ctx.widget(PanicWidget, area);
-                                                }
-                                                CaughtViewportFailure::StatefulWidget => {
-                                                    ctx.stateful_widget(PanicWidget, area, &mut ());
-                                                }
-                                                CaughtViewportFailure::WithBuffer => {
-                                                    ctx.with_buffer(|buffer| {
-                                                        buffer[(0, 0)].set_symbol("X");
-                                                        panic!("component paint failed");
-                                                    });
-                                                }
+                    driver
+                        .ratcn
+                        .render(frame, &State, &Theme::default_dark(), move |ctx| {
+                            ctx.viewport(Rect::new(0, 0, 2, 1), 2, 0, move |ctx| {
+                                ctx.paint(move |ctx| {
+                                    let caught = catch_unwind(AssertUnwindSafe(|| {
+                                        let area = Rect::new(0, 0, 2, 1);
+                                        match failure {
+                                            CaughtViewportFailure::Widget => {
+                                                ctx.widget(PanicWidget, area);
                                             }
-                                        }));
-                                        assert!(caught.is_err());
-                                    });
+                                            CaughtViewportFailure::StatefulWidget => {
+                                                ctx.stateful_widget(PanicWidget, area, &mut ());
+                                            }
+                                            CaughtViewportFailure::WithBuffer => {
+                                                ctx.with_buffer(|buffer| {
+                                                    buffer[(0, 0)].set_symbol("X");
+                                                    panic!("component paint failed");
+                                                });
+                                            }
+                                        }
+                                    }));
+                                    assert!(caught.is_err());
                                 });
                             });
-                    }));
-                    assert!(failed.is_err(), "{failure:?} must poison the render pass");
+                        });
                 })
-                .expect("failed pass draw finishes");
+                .expect("draw");
 
             assert_eq!(
-                (0..3).map(|row| driver.row(row)).collect::<Vec<_>>(),
-                previous_frame,
-                "{failure:?} let a poisoned viewport canvas reach the frame"
+                driver.row(0),
+                "stable    ",
+                "{failure:?} let an unrecorded viewport write reach the frame"
             );
             assert_eq!(
                 driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0)),
-                EventResult::Emit(Msg::Pressed),
-                "{failure:?} replaced the previous retained surface"
+                EventResult::Ignored,
+                "{failure:?} kept the previous retained surface"
             );
         }
     }
 
-    /// A layer canvas poisons on the same terms a viewport canvas does.
+    /// A layer canvas behaves the same as a viewport canvas does.
     #[test]
-    fn a_caught_layer_paint_panic_keeps_the_previous_frame_and_surface() {
+    fn a_caught_layer_paint_panic_composites_nothing_and_commits() {
         let mut driver = Driver::new(10, 3);
         driver.render(|ctx| {
             ctx.component("stable", Leaf, Rect::new(0, 0, 6, 1));
         });
-        let previous_frame = (0..3).map(|row| driver.row(row)).collect::<Vec<_>>();
 
         driver
             .terminal
             .draw(|frame| {
                 frame.render_widget(Paragraph::new("stable"), Rect::new(0, 0, 6, 1));
-                let failed = catch_unwind(AssertUnwindSafe(|| {
-                    driver
-                        .ratcn
-                        .render(frame, &State, &Theme::default_dark(), |ctx| {
-                            ctx.popup(
-                                "popup",
-                                PopupOptions::default(),
-                                Rect::new(0, 0, 4, 1),
-                                |ctx| {
-                                    ctx.paint(|ctx| {
-                                        let caught = catch_unwind(AssertUnwindSafe(|| {
-                                            ctx.widget(PanicWidget, Rect::new(0, 0, 4, 1));
-                                        }));
-                                        assert!(caught.is_err());
-                                    });
-                                },
-                            );
-                        });
-                }));
-                assert!(failed.is_err(), "a caught layer panic must poison the pass");
+                driver
+                    .ratcn
+                    .render(frame, &State, &Theme::default_dark(), |ctx| {
+                        ctx.popup(
+                            "popup",
+                            Rect::new(0, 0, 4, 1),
+                            PopupOptions::default(),
+                            |ctx| {
+                                ctx.paint(|ctx| {
+                                    let caught = catch_unwind(AssertUnwindSafe(|| {
+                                        ctx.widget(PanicWidget, Rect::new(0, 0, 4, 1));
+                                    }));
+                                    assert!(caught.is_err());
+                                });
+                            },
+                        );
+                    });
             })
-            .expect("failed pass draw finishes");
+            .expect("draw");
 
         assert_eq!(
-            (0..3).map(|row| driver.row(row)).collect::<Vec<_>>(),
-            previous_frame,
-            "a poisoned layer canvas reached the frame"
+            driver.row(0),
+            "stable    ",
+            "an unrecorded layer write reached the frame"
         );
         assert_eq!(
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0)),
-            EventResult::Emit(Msg::Pressed),
-            "a poisoned layer canvas replaced the retained surface"
+            EventResult::Consumed,
+            "the popup layer kept the previous retained surface"
         );
     }
 
@@ -11734,8 +11752,8 @@ mod viewport_tests {
         let mut driver = Driver::new(2, 6);
         driver.render(|ctx| {
             ctx.viewport(Rect::new(0, 0, 2, 3), u16::MAX, u16::MAX, |ctx| {
-                ctx.defer_paint(|painter, _| {
-                    painter.with_buffer(|buffer| {
+                ctx.defer_paint(|ctx| {
+                    ctx.with_buffer(|buffer| {
                         buffer.set_string(0, u16::MAX - 3, "D", Style::default());
                     });
                 });

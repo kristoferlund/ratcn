@@ -31,7 +31,7 @@ impl Component<AppState, Msg> for MyComponent {
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<Msg> { ... }
 
-    fn is_focusable(&self, state: &AppState) -> bool { ... }
+    fn is_focusable(&self) -> bool { ... }
 
     fn interaction_area(&self, area: Rect) -> Rect { ... }
 }
@@ -52,8 +52,9 @@ depend on those flags.
 
 Every method except `declare` has a default. `paint` defaults to drawing
 nothing, which is right for a composite that is only a container.
-`is_focusable` defaults to `false`;
-override it for anything that should take part in Tab traversal.
+`is_focusable` defaults to `false`; override it for anything that should take
+part in Tab traversal. It answers from the props the component was declared
+with, so resolve anything state-dependent in `prepare` first.
 `interaction_area` defaults to returning the supplied paint area unchanged.
 Override it when interactive pixels occupy only part of the allocation. The
 runtime still paints with the supplied area, but retains the returned area for

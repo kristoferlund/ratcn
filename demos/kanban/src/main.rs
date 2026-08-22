@@ -249,9 +249,9 @@ impl Component<AppState, Msg> for KanbanCard {
         };
         let dragged_card_area = offset_rect(self.board_layout.area, ctx.area(), active_drag.offset);
         let dragged_card_id = self.card_id.clone();
-        ctx.defer_paint(move |painter, _state| {
-            let theme = painter.theme;
-            painter.with_buffer(|buf| {
+        ctx.defer_paint(move |ctx| {
+            let theme = ctx.theme;
+            ctx.with_buffer(|buf| {
                 paint_card(buf, dragged_card_area, &dragged_card_id, theme);
             });
         });

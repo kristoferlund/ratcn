@@ -28,7 +28,7 @@ use super::ChildId;
 ///
 /// Events that arrive before the first successful render are ignored, so an
 /// unresolved empty path never receives input.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FocusState {
     pub(crate) path: Vec<ChildId>,
 }
@@ -51,13 +51,10 @@ impl FocusState {
         }
     }
 
-    /// True if `path` is exactly the focus path, root declaration's child
-    /// first, leaf last. Identity is the full path — a bare ID is ambiguous
-    /// when different subtrees reuse it.
-    #[must_use]
-    pub fn is_path(&self, path: impl IntoIterator<Item = impl Into<ChildId>>) -> bool {
-        let mut ids = self.path.iter();
-        path.into_iter().all(|id| ids.next() == Some(&id.into())) && ids.next().is_none()
+    /// Focus on the path a surface resolved: a leaf the runtime walked to,
+    /// already checked against the tree it came from.
+    pub(crate) const fn at(path: Vec<ChildId>) -> Self {
+        Self { path }
     }
 
     /// True if `path` is a prefix of the focus path — the focused leaf is at or
@@ -84,18 +81,6 @@ impl FocusState {
 mod tests {
     use super::FocusState;
 
-    // A bare leaf ID is ambiguous when subtrees reuse it ("left/save" vs.
-    // "right/save"); only the full path identifies a component.
-    #[test]
-    fn is_path_matches_the_full_path_only() {
-        let focus = FocusState::intent(["left", "save"]);
-        assert!(focus.is_path(["left", "save"]));
-        assert!(!focus.is_path(["right", "save"]));
-        assert!(!focus.is_path(["save"]));
-        assert!(!focus.is_path(["left"]));
-        assert!(!focus.is_path(["left", "save", "extra"]));
-    }
-
     #[test]
     fn contains_path_matches_prefixes_of_the_path() {
         let focus = FocusState::intent(["left", "save"]);
@@ -111,9 +96,7 @@ mod tests {
     #[test]
     fn path_queries_on_a_single_segment_path() {
         let focus = FocusState::intent(["save"]);
-        assert!(focus.is_path(["save"]));
         assert!(focus.contains_path(["save"]));
-        assert!(!focus.is_path(["left", "save"]));
         assert!(!focus.contains_path(["left", "save"]));
     }
 
@@ -123,13 +106,10 @@ mod tests {
     fn path_queries_on_and_with_the_empty_path() {
         let empty: [&str; 0] = [];
         let unresolved = FocusState::default();
-        assert!(unresolved.is_path(empty));
         assert!(unresolved.contains_path(empty));
-        assert!(!unresolved.is_path(["save"]));
         assert!(!unresolved.contains_path(["save"]));
 
         let focus = FocusState::intent(["left", "save"]);
-        assert!(!focus.is_path(empty));
         assert!(focus.contains_path(empty));
     }
 
@@ -138,8 +118,8 @@ mod tests {
     #[test]
     fn path_queries_compare_static_and_dynamic_ids_by_content() {
         let focus = FocusState::intent([String::from("left"), String::from("save")]);
-        assert!(focus.is_path(["left", "save"]));
-        assert!(!focus.is_path(["right", "save"]));
+        assert!(focus.contains_path(["left", "save"]));
+        assert!(!focus.contains_path(["right", "save"]));
     }
 }
 

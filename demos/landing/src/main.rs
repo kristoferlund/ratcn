@@ -169,7 +169,7 @@ impl demo_shared::Demo for App {
             self.update(AppMsg::ScreensaverDismissed);
             return true;
         }
-        let modal_active = !self.state.modals_state.ids().is_empty() || self.ratcn.modal_is_open();
+        let modal_active = self.state.modals_state.top().is_some() || self.ratcn.modal_is_open();
         if !modal_active && self.app_hotkeys(&event) {
             return true;
         }
@@ -225,8 +225,9 @@ impl demo_shared::Demo for App {
             if state.modals_state.is_open(screensaver::ID) {
                 screensaver::declare(ctx, frame_area, now);
             }
-            ctx.defer_paint(move |painter, state| {
-                painter.widget(
+            ctx.defer_paint(move |ctx| {
+                let state = ctx.state();
+                ctx.widget(
                     ToasterWidget::new(&state.toasts, now).themed(&state.theme()),
                     frame_area,
                 );

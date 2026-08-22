@@ -46,9 +46,9 @@ impl State {
 /// canvas, preserving the app beneath it.
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>, area: Rect, now: Duration) {
     ctx.modal_scope(ID, area, ScopeOptions::default().focusable(), |_| {});
-    ctx.defer_paint(move |painter, state| {
-        let elapsed = now.saturating_sub(state.screensaver.started);
-        painter.with_buffer(|buf| snow(buf, area, elapsed));
+    ctx.defer_paint(move |ctx| {
+        let elapsed = now.saturating_sub(ctx.state().screensaver.started);
+        ctx.with_buffer(|buf| snow(buf, area, elapsed));
     });
 }
 

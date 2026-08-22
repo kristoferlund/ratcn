@@ -840,7 +840,7 @@ impl<T, S, M> Select<T, S, M> {
 /// A Select is one row tall whether it is open or closed — the panel floats in a
 /// popup layer — so declaration, paint, and hit-testing all read the same top
 /// row of whatever area the layout gave, and the rows below belong to whatever
-/// else is declared there. Not [`fixed_height`](crate::runtime::fixed_height):
+/// else is declared there. Not [`fixed_height`](crate::geometry::fixed_height):
 /// this crops to at most a row rather than requiring one, so a zero-height
 /// allocation stays a zero-height trigger instead of becoming an empty rect at
 /// the origin.
@@ -1042,8 +1042,8 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         let on_open_change = Rc::clone(on_open_change);
         ctx.popup(
             "panel",
-            PopupOptions::default().on_dismiss(move || on_open_change(false)),
             panel_area,
+            PopupOptions::default().on_dismiss(move || on_open_change(false)),
             move |ctx| ctx.component("options", panel, panel_area),
         );
     }
@@ -1086,7 +1086,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         }
     }
 
-    fn is_focusable(&self, _state: &S) -> bool {
+    fn is_focusable(&self) -> bool {
         self.keyboard_enabled() && !self.disabled && self.has_enabled_item()
     }
 
@@ -2203,7 +2203,7 @@ mod tests {
             .selection(|state: &State| state.selected, Msg::Selected);
         component.prepare(&state);
 
-        assert!(!component.is_focusable(&state));
+        assert!(!component.is_focusable());
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Down)),
@@ -2230,7 +2230,7 @@ mod tests {
             .item_focus(|state: &State| state.cursor, Msg::Focused);
         component.prepare(&state);
 
-        assert!(!component.is_focusable(&state));
+        assert!(!component.is_focusable());
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Down)),
@@ -2320,7 +2320,7 @@ mod tests {
         let state = State::default();
         let mut disabled = select(items()).disabled(true);
         disabled.prepare(&state);
-        assert!(!disabled.is_focusable(&state));
+        assert!(!disabled.is_focusable());
         assert_eq!(
             disabled.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Enter)),
