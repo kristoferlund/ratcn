@@ -53,9 +53,8 @@ impl ModalState {
     /// # Errors
     ///
     /// Returns [`ModalOpenError`] if `id` is already open *below* another
-    /// modal. Allowing that would put the same id in the stack twice with two
-    /// different saved focus snapshots, and closing it would have no single
-    /// correct answer.
+    /// modal: one id holds one place in the stack, with one saved focus
+    /// snapshot.
     pub fn open(
         &mut self,
         id: impl Into<ChildId>,
@@ -79,8 +78,8 @@ impl ModalState {
     /// Pop the top modal and write its saved focus snapshot back into `focus`.
     ///
     /// The restored path is the exact one that was current when that modal
-    /// opened, including a path whose component is no longer declared — focus
-    /// parks there rather than being retargeted.
+    /// opened, including a path whose component is not declared — focus parks
+    /// there.
     ///
     /// Returns the closed modal id, or `None` when the stack is already empty,
     /// in which case `focus` is left alone.

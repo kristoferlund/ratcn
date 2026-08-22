@@ -22,9 +22,8 @@ use super::ChildId;
 ///
 /// Layout is responsive, so that candidate can turn out to have no focusable
 /// leaf once its parent has painted. The surface then keeps the parent path it
-/// actually painted instead of silently jumping to some other control, and
-/// event routing reuses that same path — render and routing must never disagree
-/// about where focus is.
+/// painted, and event routing reuses that same path, so render and routing
+/// agree on where focus is.
 ///
 /// Events that arrive before the first successful render are ignored, so an
 /// unresolved empty path never receives input.

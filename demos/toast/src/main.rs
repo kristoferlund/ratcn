@@ -56,7 +56,7 @@ impl AppState {
             let _ = self.toasts.replace("save", Toast::success("Saved"), now);
         } else {
             self.toasts
-                .push(Toast::loading("Saving").persistent().id("save"), now);
+                .push(Toast::loading("Saving").persistent().with_id("save"), now);
         }
         self.save_in_progress = !self.save_in_progress;
     }
@@ -95,7 +95,9 @@ impl App {
             Msg::MakeToast => {
                 let (kind, title, description) = self.state.next_flavor();
                 self.state.toasts.push(
-                    Toast::new(title).kind(kind).description(description),
+                    Toast::new(title)
+                        .with_kind(kind)
+                        .with_description(description),
                     demo_shared::monotonic_time(),
                 );
             }
@@ -216,17 +218,11 @@ mod tests {
 
         state.toggle_save(Duration::ZERO);
         assert_eq!(state.toasts.len(), 1);
-        assert_eq!(
-            state.toasts.entries()[0].toast().toast_kind(),
-            ToastKind::Loading
-        );
+        assert_eq!(state.toasts.entries()[0].toast().kind(), ToastKind::Loading);
 
         state.toggle_save(Duration::from_secs(1));
         assert_eq!(state.toasts.len(), 1);
-        assert_eq!(
-            state.toasts.entries()[0].toast().toast_kind(),
-            ToastKind::Success
-        );
+        assert_eq!(state.toasts.entries()[0].toast().kind(), ToastKind::Success);
         assert_eq!(
             state.toasts.time_until_next_expiry(Duration::from_secs(1)),
             Some(Duration::from_secs(4))

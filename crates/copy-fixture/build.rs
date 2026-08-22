@@ -44,7 +44,7 @@ fn main() {
     println!("cargo::rerun-if-changed={}", components_dir.display());
     println!("cargo::rerun-if-changed={}", stubs_dir.display());
 
-    // `mod.rs` is the module's own documentation, not a component anyone copies.
+    // `mod.rs` declares the modules, and is not a component anyone copies.
     let mut components = module_names(&components_dir);
     components.remove("mod");
     let stubs = module_names(&stubs_dir);

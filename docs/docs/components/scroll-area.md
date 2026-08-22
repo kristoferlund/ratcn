@@ -41,17 +41,18 @@ let scroll = ScrollArea::new(state.content_height).content(|ctx| {
 ctx.component("content", scroll, Rect::new(0, 0, 40, 12));
 ```
 
-The area owns its offset. Bind it with `.offset(...)` when the app needs the
-value — to persist it, or to scroll from elsewhere:
+The area owns its offset. Bind it with `.scroll(...)` when the app needs the
+value — to persist it, or to scroll from elsewhere. The message carries the
+new first visible content row:
 
 ```rust
 let scroll = ScrollArea::new(state.content_height)
-    .offset(|state: &AppState| state.scroll_offset, Msg::ScrollAreaChanged);
+    .scroll(|state: &AppState| state.scroll_offset, Msg::ScrollAreaChanged);
 ```
 
 ```rust
-match change {
-    ScrollAreaChange::ScrollTo(offset) => state.scroll_offset = offset,
+match msg {
+    Msg::ScrollAreaChanged(offset) => state.scroll_offset = offset,
 }
 ```
 
@@ -138,6 +139,5 @@ window.
 
 ## Full API
 
-See [`ScrollArea`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollArea.html),
-[`ScrollAreaChange`](https://docs.rs/ratcn/latest/ratcn/enum.ScrollAreaChange.html),
+See [`ScrollArea`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollArea.html)
 and [`ScrollAreaStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollAreaStyle.html).

@@ -30,15 +30,6 @@ pub struct ScrollAreaStyle {
 }
 
 impl ScrollAreaStyle {
-    /// A neutral style using plain ANSI colors.
-    #[must_use]
-    pub const fn fallback() -> Self {
-        Self {
-            thumb: Color::White,
-            track: Color::DarkGray,
-        }
-    }
-
     /// Derive the thumb and track from `theme`.
     #[must_use]
     pub const fn from_theme(theme: &Theme) -> Self {
@@ -49,20 +40,13 @@ impl ScrollAreaStyle {
     }
 }
 
-/// A scroll position [`ScrollArea`] asks a bound app to store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScrollAreaChange {
-    /// The requested first visible content row.
-    ScrollTo(u16),
-}
-
 /// Where the wheel, a key, or a reveal left the view.
 ///
 /// Event handling writes it and the next declaration reads it, which is what
 /// lets an unbound area scroll at all and what carries a reveal into the frame
 /// that follows a focus change.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-enum ScrollPark {
+enum ScrollHold {
     /// Nothing is holding the view: the bound offset decides where it sits.
     #[default]
     Released,
@@ -75,7 +59,7 @@ enum ScrollPark {
 }
 
 type ReadOffsetFn<S> = Box<dyn Fn(&S) -> u16>;
-type OnChangeFn<M> = Box<dyn Fn(ScrollAreaChange) -> M>;
+type OnChangeFn<M> = Box<dyn Fn(u16) -> M>;
 type ContentFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
 type StyleFn = Box<dyn Fn(&Theme) -> ScrollAreaStyle>;
 
@@ -86,7 +70,7 @@ type StyleFn = Box<dyn Fn(&Theme) -> ScrollAreaStyle>;
 /// `content_height` logical rows, however many of them are visible. The
 /// scrollbar is an indicator of where the view sits.
 ///
-/// The offset is the area's own until [`offset`](Self::offset) binds it. Wheel,
+/// The offset is the area's own until [`scroll`](Self::scroll) binds it. Wheel,
 /// Page Up, Page Down, Home, and End reach descendants first; what none of them
 /// handles scrolls the area. An event that leaves the offset where it is — every
 /// one of these keys at an edge, and a horizontal wheel — bubbles on to the app,
@@ -165,10 +149,10 @@ impl<S, M> ScrollArea<S, M> {
     /// A reveal moves the view on its own, without a message; the next offset
     /// the area emits starts from where the reveal left it.
     #[must_use]
-    pub fn offset(
+    pub fn scroll(
         mut self,
         read: impl Fn(&S) -> u16 + 'static,
-        on_change: impl Fn(ScrollAreaChange) -> M + 'static,
+        on_change: impl Fn(u16) -> M + 'static,
     ) -> Self {
         self.read_offset = Some(Box::new(read));
         self.on_change = Some(Box::new(on_change));
@@ -216,9 +200,9 @@ impl<S, M> ScrollArea<S, M> {
     }
 
     /// The offset in force: a standing hold, or the bound value.
-    fn resolve(&self, area: Rect, bound: Option<u16>, park: ScrollPark) -> u16 {
-        let offset = match park {
-            ScrollPark::Held { offset, base } if base == bound => offset,
+    fn resolve(&self, area: Rect, bound: Option<u16>, hold: ScrollHold) -> u16 {
+        let offset = match hold {
+            ScrollHold::Held { offset, base } if base == bound => offset,
             _ => bound.unwrap_or(0),
         };
         offset.min(self.max_offset(area))
@@ -231,23 +215,23 @@ impl<S, M> ScrollArea<S, M> {
     /// where a bound offset is read; and it is permanent, so an app that
     /// returns to the offset a hold was taken at does not revive it.
     fn settle(&self, ctx: &mut DeclareCtx<'_, S, M>, area: Rect, bound: Option<u16>) -> u16 {
-        let mut unheld = ScrollPark::Released;
-        let park = ctx.transient_mut::<ScrollPark>().unwrap_or(&mut unheld);
-        if matches!(*park, ScrollPark::Held { base, .. } if base != bound) {
-            *park = ScrollPark::Released;
+        let mut unheld = ScrollHold::Released;
+        let hold = ctx.transient_mut::<ScrollHold>().unwrap_or(&mut unheld);
+        if matches!(*hold, ScrollHold::Held { base, .. } if base != bound) {
+            *hold = ScrollHold::Released;
         }
-        self.resolve(area, bound, *park)
+        self.resolve(area, bound, *hold)
     }
 
     /// The offset in force at event time.
     fn current(&self, state: &S, ctx: &mut EventCtx<'_>) -> u16 {
-        let park = *ctx.transient::<ScrollPark>();
-        self.resolve(ctx.area(), self.bound_offset(state), park)
+        let hold = *ctx.transient::<ScrollHold>();
+        self.resolve(ctx.area(), self.bound_offset(state), hold)
     }
 
     /// Hold the view at `offset` for the coming declaration, and report the
     /// offset taken. `None` when the view is already there.
-    fn park(&self, offset: u16, state: &S, ctx: &mut EventCtx<'_>) -> Option<u16> {
+    fn hold(&self, offset: u16, state: &S, ctx: &mut EventCtx<'_>) -> Option<u16> {
         let area = ctx.area();
         let bound = self.bound_offset(state);
         let current = self.current(state, ctx);
@@ -255,7 +239,7 @@ impl<S, M> ScrollArea<S, M> {
         if offset == current {
             return None;
         }
-        *ctx.transient::<ScrollPark>() = ScrollPark::Held {
+        *ctx.transient::<ScrollHold>() = ScrollHold::Held {
             offset,
             base: bound,
         };
@@ -268,11 +252,11 @@ impl<S, M> ScrollArea<S, M> {
     /// app hotkey on Home, End, or a page key working while focus rests in an
     /// area with nothing to scroll.
     fn scroll_to(&self, offset: u16, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
-        let Some(offset) = self.park(offset, state, ctx) else {
+        let Some(offset) = self.hold(offset, state, ctx) else {
             return EventResult::Ignored;
         };
         match &self.on_change {
-            Some(on_change) => EventResult::Emit(on_change(ScrollAreaChange::ScrollTo(offset))),
+            Some(on_change) => EventResult::Emit(on_change(offset)),
             None => EventResult::Consumed,
         }
     }
@@ -364,7 +348,7 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
     fn reveal_in_viewport(&mut self, target: Rect, state: &S, ctx: &mut EventCtx<'_>) {
         let area = ctx.area();
         let current = self.current(state, ctx);
-        self.park(self.reveal_offset(target, area, current), state, ctx);
+        self.hold(self.reveal_offset(target, area, current), state, ctx);
     }
 
     fn scope_options(&self) -> ScopeOptions {
@@ -410,7 +394,7 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq)]
     enum Msg {
-        Area(ScrollAreaChange),
+        Area(u16),
         Focus(FocusState),
         Pressed(&'static str),
         ChildHandled,
@@ -458,7 +442,7 @@ mod tests {
         content: impl FnOnce(&mut DeclareCtx<'_, State, Msg>) + 'static,
     ) -> ScrollArea<State, Msg> {
         ScrollArea::new(content_height)
-            .offset(|state: &State| state.offset, Msg::Area)
+            .scroll(|state: &State| state.offset, Msg::Area)
             .content(content)
     }
 
@@ -948,7 +932,7 @@ mod tests {
                 mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 1),
                 &state
             ),
-            EventResult::Emit(Msg::Area(ScrollAreaChange::ScrollTo(3)))
+            EventResult::Emit(Msg::Area(3))
         );
         state.offset = 3;
         assert_eq!(
@@ -956,12 +940,12 @@ mod tests {
                 mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 1),
                 &state
             ),
-            EventResult::Emit(Msg::Area(ScrollAreaChange::ScrollTo(6)))
+            EventResult::Emit(Msg::Area(6))
         );
         state.offset = 6;
         assert_eq!(
             driver.event(key(KeyCode::PageDown), &state),
-            EventResult::Emit(Msg::Area(ScrollAreaChange::ScrollTo(9)))
+            EventResult::Emit(Msg::Area(9))
         );
     }
 
@@ -1032,7 +1016,7 @@ mod tests {
         );
         assert_eq!(
             driver.event(key(KeyCode::Home), &state),
-            EventResult::Emit(Msg::Area(ScrollAreaChange::ScrollTo(0)))
+            EventResult::Emit(Msg::Area(0))
         );
         state.offset = 0;
         assert_eq!(
@@ -1835,7 +1819,7 @@ mod tests {
         render(&mut driver, &state);
         assert!((0..8).any(|row| driver.row(row).contains("TIP")));
 
-        let EventResult::Emit(Msg::Area(ScrollAreaChange::ScrollTo(offset))) = driver.event(
+        let EventResult::Emit(Msg::Area(offset)) = driver.event(
             mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 3),
             &state,
         ) else {

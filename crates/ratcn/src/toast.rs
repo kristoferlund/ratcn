@@ -10,11 +10,11 @@
 //! in the copyable `components::toast` module; this state travels with the
 //! library so `ratcn::toast::ToasterState` stays one type across copies.
 //!
-//! Accessor naming: builder methods own the natural nouns
-//! ([`Toast::description`], [`Toast::kind`], [`Toast::id`]), so getters that
-//! would collide take a `_text`/`toast_`-qualified name
-//! ([`Toast::description_text`], [`Toast::toast_kind`], [`Toast::toast_id`]);
-//! bool getters use `is_`/`has_` ([`Toast::is_bordered`]).
+//! Accessor naming: builders take a `with_` prefix
+//! ([`Toast::with_description`], [`Toast::with_kind`], [`Toast::with_id`]), the
+//! plain nouns are the getters ([`Toast::description`], [`Toast::kind`],
+//! [`Toast::id`]), and bool getters use `is_`/`has_`
+//! ([`Toast::is_bordered`]).
 
 use std::borrow::Cow;
 use std::time::Duration;
@@ -73,43 +73,43 @@ impl<'a> Toast<'a> {
     /// Shorthand for [`ToastKind::Success`].
     #[must_use]
     pub fn success(title: impl Into<Cow<'a, str>>) -> Self {
-        Self::new(title).kind(ToastKind::Success)
+        Self::new(title).with_kind(ToastKind::Success)
     }
 
     /// Shorthand for [`ToastKind::Error`].
     #[must_use]
     pub fn error(title: impl Into<Cow<'a, str>>) -> Self {
-        Self::new(title).kind(ToastKind::Error)
+        Self::new(title).with_kind(ToastKind::Error)
     }
 
     /// Shorthand for [`ToastKind::Warning`].
     #[must_use]
     pub fn warning(title: impl Into<Cow<'a, str>>) -> Self {
-        Self::new(title).kind(ToastKind::Warning)
+        Self::new(title).with_kind(ToastKind::Warning)
     }
 
     /// Shorthand for [`ToastKind::Info`].
     #[must_use]
     pub fn info(title: impl Into<Cow<'a, str>>) -> Self {
-        Self::new(title).kind(ToastKind::Info)
+        Self::new(title).with_kind(ToastKind::Info)
     }
 
     /// Shorthand for [`ToastKind::Loading`].
     #[must_use]
     pub fn loading(title: impl Into<Cow<'a, str>>) -> Self {
-        Self::new(title).kind(ToastKind::Loading)
+        Self::new(title).with_kind(ToastKind::Loading)
     }
 
     /// A second line of detail under the title. Wraps at the stack width.
     #[must_use]
-    pub fn description(mut self, description: impl Into<Cow<'a, str>>) -> Self {
+    pub fn with_description(mut self, description: impl Into<Cow<'a, str>>) -> Self {
         self.description = Some(description.into());
         self
     }
 
     /// Set the kind directly. See [`ToastKind`].
     #[must_use]
-    pub const fn kind(mut self, kind: ToastKind) -> Self {
+    pub const fn with_kind(mut self, kind: ToastKind) -> Self {
         self.kind = kind;
         self
     }
@@ -127,8 +127,7 @@ impl<'a> Toast<'a> {
     }
 
     /// Never expire. In [`ToasterState`], the toast stays until the app removes
-    /// it — by [`clear`](ToasterState::clear), or individually through an
-    /// [`id`](Self::id) with [`ToasterState::dismiss`] or
+    /// it through an [`id`](Self::with_id) with [`ToasterState::dismiss`] or
     /// [`ToasterState::replace`].
     ///
     /// Right for errors the user must acknowledge, and for `Loading` toasts
@@ -150,13 +149,13 @@ impl<'a> Toast<'a> {
     /// An app-chosen identity for this toast, so
     /// [`ToasterState::dismiss`] and [`ToasterState::replace`] can address it
     /// later — a "saving…" toast replaced by "saved", say. Toasts without an id
-    /// (the default) can only leave the stack by expiring, via
-    /// [`ToasterState::pop_newest`], or via [`ToasterState::clear`].
+    /// (the default) leave the stack by expiring or via
+    /// [`ToasterState::pop_newest`].
     ///
     /// Ids are not deduplicated: pushing two toasts with the same id shows
     /// both, and id-keyed operations then affect the oldest match.
     #[must_use]
-    pub fn id(mut self, id: impl Into<Cow<'a, str>>) -> Self {
+    pub fn with_id(mut self, id: impl Into<Cow<'a, str>>) -> Self {
         self.id = Some(id.into());
         self
     }
@@ -181,13 +180,13 @@ impl<'a> Toast<'a> {
 
     /// The toast's optional description text (see [`title`](Self::title)).
     #[must_use]
-    pub fn description_text(&self) -> Option<&str> {
+    pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
 
     /// The toast's [`ToastKind`] accent (see [`title`](Self::title)).
     #[must_use]
-    pub const fn toast_kind(&self) -> ToastKind {
+    pub const fn kind(&self) -> ToastKind {
         self.kind
     }
 
@@ -197,10 +196,10 @@ impl<'a> Toast<'a> {
         self.border
     }
 
-    /// The identity given to [`id`](Self::id), or `None` for an anonymous
-    /// toast.
+    /// The identity given to [`with_id`](Self::with_id), or `None` for an
+    /// anonymous toast.
     #[must_use]
-    pub fn toast_id(&self) -> Option<&str> {
+    pub fn id(&self) -> Option<&str> {
         self.id.as_deref()
     }
 }
@@ -253,10 +252,10 @@ impl<'a> ToastEntry<'a> {
 
 /// The stack of toasts currently showing, owned by the app.
 ///
-/// This holds the toasts; [`ToasterWidget`](crate::ToasterWidget) draws them.
-/// Beyond pruning expired entries and [`clear`](Self::clear)ing the stack,
-/// [`pop_newest`](Self::pop_newest) removes the most recent toast, while a toast
-/// given an id with [`Toast::id`] can be individually
+/// This holds the toasts; [`ToasterWidget`](crate::ToasterWidget) paints them.
+/// Beyond [`prune_expired`](Self::prune_expired),
+/// [`pop_newest`](Self::pop_newest) removes the most recent toast, and a toast
+/// given an id with [`Toast::with_id`] is individually
 /// [`dismiss`](Self::dismiss)ed or [`replace`](Self::replace)d. Apps that need a
 /// different lifecycle entirely can own a custom [`ToastEntry`] collection and paint it with
 /// [`ToasterWidget::from_entries`](crate::ToasterWidget::from_entries).
@@ -375,7 +374,7 @@ impl<'a> ToasterState<'a> {
     fn position_of(&self, id: &str) -> Option<usize> {
         self.toasts
             .iter()
-            .position(|entry| entry.toast.toast_id() == Some(id))
+            .position(|entry| entry.toast.id() == Some(id))
     }
 
     /// Remove and return the newest toast, regardless of whether it has an id.
@@ -385,11 +384,6 @@ impl<'a> ToasterState<'a> {
     #[must_use]
     pub fn pop_newest(&mut self) -> Option<Toast<'a>> {
         self.toasts.pop().map(|entry| entry.toast)
-    }
-
-    /// Remove every toast, including persistent ones. The dismiss-all action.
-    pub fn clear(&mut self) {
-        self.toasts.clear();
     }
 
     /// Whether the stack is empty — worth checking before reserving screen space
@@ -478,11 +472,11 @@ mod tests {
     fn dismiss_removes_the_oldest_match_by_id() {
         let mut toasts = ToasterState::new();
         toasts.push(
-            Toast::loading("saving A").persistent().id("save"),
+            Toast::loading("saving A").persistent().with_id("save"),
             Duration::ZERO,
         );
         toasts.push(
-            Toast::loading("saving B").persistent().id("save"),
+            Toast::loading("saving B").persistent().with_id("save"),
             Duration::ZERO,
         );
         toasts.push(Toast::new("other"), Duration::ZERO);
@@ -499,7 +493,7 @@ mod tests {
     #[test]
     fn dismiss_with_an_unknown_id_returns_false_and_changes_nothing() {
         let mut toasts = ToasterState::new();
-        toasts.push(Toast::new("saved").id("save"), Duration::ZERO);
+        toasts.push(Toast::new("saved").with_id("save"), Duration::ZERO);
 
         assert!(!toasts.dismiss("missing"));
         assert_eq!(toasts.len(), 1);
@@ -509,14 +503,14 @@ mod tests {
     fn replace_swaps_in_place_and_restarts_the_duration() {
         let mut toasts = ToasterState::new();
         toasts.push(
-            Toast::loading("saving").persistent().id("save"),
+            Toast::loading("saving").persistent().with_id("save"),
             Duration::ZERO,
         );
         toasts.push(Toast::new("other").persistent(), Duration::from_secs(1));
 
         assert!(toasts.replace(
             "save",
-            Toast::success("saved").id("save"),
+            Toast::success("saved").with_id("save"),
             Duration::from_secs(10),
         ));
 
@@ -539,7 +533,7 @@ mod tests {
     #[test]
     fn replace_with_an_unknown_id_returns_false_and_changes_nothing() {
         let mut toasts = ToasterState::new();
-        toasts.push(Toast::new("saved").id("save"), Duration::ZERO);
+        toasts.push(Toast::new("saved").with_id("save"), Duration::ZERO);
 
         assert!(!toasts.replace("missing", Toast::new("nope"), Duration::ZERO));
         assert_eq!(toasts.entries()[0].toast().title(), "saved");
@@ -557,7 +551,7 @@ mod tests {
     fn pop_newest_removes_identified_or_anonymous_toasts() {
         let mut toasts = ToasterState::new();
         toasts.push(Toast::new("anonymous"), Duration::ZERO);
-        toasts.push(Toast::new("identified").id("latest"), Duration::ZERO);
+        toasts.push(Toast::new("identified").with_id("latest"), Duration::ZERO);
 
         assert_eq!(
             toasts.pop_newest().as_ref().map(Toast::title),

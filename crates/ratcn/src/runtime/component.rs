@@ -296,11 +296,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// the identity scope stays the composite's, so anything the body declares
     /// is an ordinary sibling of the composite's other children and shares
     /// their id namespace. [`Dialog`](crate::Dialog) places its content and
-    /// footer bodies this way. Declaring nothing itself, it costs no identity.
-    ///
-    /// Not to be confused with [`EventCtx::with_area`], which is a builder
-    /// setter: this one opens a sub-area for a callback and declares nothing of
-    /// its own.
+    /// footer bodies this way. The call declares nothing of its own and takes
+    /// no identity. [`EventCtx::with_area`] is a builder setter and a
+    /// different thing.
     pub fn in_area(&mut self, area: Rect, declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>)) {
         let mut ctx = DeclareCtx {
             frame_area: self.frame_area,
@@ -542,8 +540,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     }
 
     /// Declare a scope as a modal layer on top of everything declared so far —
-    /// a hand-rolled modal, built from plain declarations instead of a
-    /// component.
+    /// a modal built from plain declarations.
     ///
     /// The layer mechanics are exactly [`modal`](Self::modal)'s: the area
     /// behind is dimmed, the scope becomes the next modal root, and lower
@@ -785,10 +782,10 @@ fn with_projected_buffer<R>(
 ///
 /// Painting goes through [`widget`](Self::widget),
 /// [`stateful_widget`](Self::stateful_widget), and
-/// [`with_buffer`](Self::with_buffer). The context deliberately never lends
-/// out the ratatui `Frame`: keeping it private means a paint call can read
-/// `ctx.theme`, [`ctx.state()`](Self::state), and the interaction flags while
-/// building its widget argument, which a borrowed frame would prevent.
+/// [`with_buffer`](Self::with_buffer). The context keeps the ratatui `Frame`
+/// to itself, so a paint call can read `ctx.theme`,
+/// [`ctx.state()`](Self::state), and the interaction flags while building its
+/// widget argument.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "two independent (leaf, within) flag pairs — focus and hover; the bools are the natural shape"
@@ -1151,9 +1148,9 @@ impl<'a> EventCtx<'a> {
     /// So do [`DragPhase`](super::DragPhase) positions; see
     /// [`drag`](Self::drag).
     ///
-    /// Components that need event-time geometry (a dialog hit-testing its own
-    /// border for a drag, say) read it from here instead of caching the area
-    /// themselves while declaring. Zero outside a [`Ratcn`](super::Ratcn) event
+    /// Components that need event-time geometry — a dialog hit-testing its own
+    /// border for a drag, say — read it from here, so nothing has to cache the
+    /// area while declaring. Zero outside a [`Ratcn`](super::Ratcn) event
     /// dispatch, such as a unit test built from `EventCtx::default()`.
     #[must_use]
     pub const fn area(&self) -> Rect {
@@ -1182,11 +1179,10 @@ impl<'a> EventCtx<'a> {
     /// the narrow exception, for a value only the layout can settle.
     ///
     /// In a context built without a dispatch — `EventCtx::default()` in a
-    /// component unit test — the value lives and dies with that context
-    /// instead of the runtime's store, so a component that uses a transient
-    /// can still be tested directly. Nothing persists from one such context
-    /// to the next, so behavior that spans events has to be tested through
-    /// [`Ratcn`](super::Ratcn).
+    /// component unit test — the value lives and dies with that context, so a
+    /// component that uses a transient can be tested directly. Nothing
+    /// persists from one such context to the next, so behavior that spans
+    /// events is tested through [`Ratcn`](super::Ratcn).
     ///
     /// # Panics
     ///
@@ -1259,7 +1255,7 @@ impl<'a> EventCtx<'a> {
 /// - **A control's items**, in index order — list rows, tabs, select options.
 ///   The index arithmetic in [`linear_nav`](crate::linear_nav) takes this
 ///   argument: [`step_enabled`](crate::linear_nav::step_enabled) and
-///   [`page_enabled`](crate::linear_nav::page_enabled).
+///   [`nav_key_target`](crate::linear_nav::nav_key_target).
 ///
 /// Named `Step` rather than `Direction` because ratatui's prelude already
 /// exports a `Direction` (the horizontal/vertical layout axis), and the two
@@ -1311,9 +1307,9 @@ pub trait Component<State, Msg> {
     /// malformed declaration — [`List`](crate::List), [`Select`](crate::Select),
     /// and [`Tabs`](crate::Tabs) assert their item values are unique — so the
     /// panic names the declaring component rather than surfacing later as a
-    /// routing oddity. A check whose answer changes only when the props do, and
-    /// whose cost grows with them, belongs behind `cfg!(debug_assertions)`:
-    /// every frame declares a fresh instance, so every frame runs this hook.
+    /// routing oddity. Put a check whose answer changes only with the props
+    /// behind `cfg!(debug_assertions)`: every frame declares a fresh instance,
+    /// so every frame runs this hook.
     ///
     /// Leaf components take their props as plain values at declaration and can
     /// ignore it.

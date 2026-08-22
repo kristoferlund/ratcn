@@ -60,8 +60,8 @@ impl DragOptions {
     ///
     /// Pass the offset your app has stored for this thing. Later
     /// [`DragPhase::Moved`] offsets are this value plus how far the pointer has
-    /// travelled since the press, which is what makes a second drag continue
-    /// from where the first one left off instead of jumping back to zero.
+    /// travelled since the press, so a second drag continues from where the
+    /// first one left off.
     #[must_use]
     pub const fn new(offset: CellOffset) -> Self {
         Self {

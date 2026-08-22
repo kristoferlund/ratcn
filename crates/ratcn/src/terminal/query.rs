@@ -33,18 +33,16 @@ pub(super) const BACKSTOP: Duration = Duration::from_secs(1);
 
 /// What the terminal reported about its own colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct TerminalColors {
+pub(super) struct TerminalColors {
     /// The terminal's default background, from OSC 11.
-    pub background: Color,
+    pub(super) background: Color,
     /// The terminal's default foreground, from OSC 10.
-    pub foreground: Color,
+    pub(super) foreground: Color,
 }
 
 impl TerminalColors {
     /// The theme these colors solve to.
-    #[must_use]
-    pub fn theme(&self) -> crate::Theme {
+    pub(super) fn theme(self) -> crate::Theme {
         crate::Theme::adaptive(self.background, self.foreground, None)
     }
 }
@@ -66,7 +64,7 @@ impl TerminalColors {
 ///
 /// Returns an I/O error if the query cannot be written, or if reading the
 /// terminal fails. A terminal that stays silent yields [`None`].
-pub fn query<T: Terminal>(terminal: &mut T) -> io::Result<Option<TerminalColors>> {
+pub(super) fn query<T: Terminal>(terminal: &mut T) -> io::Result<Option<TerminalColors>> {
     exchange(
         terminal,
         asked(env::var("TERM").ok().as_deref(), io::stdout().is_terminal()),

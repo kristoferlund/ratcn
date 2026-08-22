@@ -4,11 +4,10 @@
 //! of a base color — a well separating from the background on focus, a fill
 //! deepening, a control dimming when disabled — components derive it with these
 //! helpers rather than the theme storing every variant. All operate on channels
-//! resolved by [`resolve_rgb`]: `Color::Rgb` directly, the 16 named colors via
-//! a fixed VGA approximation (so state changes stay visible on named-color
-//! themes, at the cost of the derived color leaving the terminal palette), and
-//! `Indexed`/`Reset` pass through unchanged (those carry no channels to
-//! resolve).
+//! resolved by [`resolve_rgb`]: `Color::Rgb` directly, and the 16 named colors
+//! via a fixed VGA approximation, so a color derived from a named base is an
+//! `Rgb` near it. `Indexed` and `Reset` carry no channels to resolve and pass
+//! through unchanged.
 
 use std::sync::LazyLock;
 
@@ -204,18 +203,6 @@ pub const fn darken(color: Color, amount: u16) -> Color {
     dim(color, Color::Black, amount)
 }
 
-/// Lighten a color toward white by `amount` percent — [`dim`] against
-/// [`Color::White`], the mirror of [`darken`], for a dark fill that should
-/// brighten (rather than deepen) as it gains prominence on focus. Amounts above
-/// 100 are treated as 100.
-///
-/// Channels come from [`resolve_rgb`]; `Indexed` and [`Color::Reset`] pass
-/// through unchanged.
-#[must_use]
-pub const fn lighten(color: Color, amount: u16) -> Color {
-    dim(color, Color::White, amount)
-}
-
 /// Blend `color` toward `toward` by `amount` percent, keeping a fraction of the
 /// original hue so a dimmed control isn't flattened to a neutral grey (a
 /// disabled destructive button stays red-ish). Amounts above 100 are treated
@@ -254,7 +241,10 @@ mod tests {
         let toward = Color::Rgb(100, 120, 140);
 
         assert_eq!(darken(color, 101), Color::Rgb(0, 0, 0));
-        assert_eq!(lighten(color, u16::MAX), Color::Rgb(255, 255, 255));
+        assert_eq!(
+            dim(color, Color::White, u16::MAX),
+            Color::Rgb(255, 255, 255)
+        );
         assert_eq!(dim(color, toward, 101), toward);
     }
 
@@ -274,18 +264,18 @@ mod tests {
         );
     }
 
-    /// `darken` and `lighten` are `dim` against black and white, so they have to
-    /// round the way a blend toward those endpoints rounds. The boundaries are
-    /// where a rounding difference would show.
+    /// `darken` is `dim` against black, so it has to round the way a blend
+    /// toward an endpoint rounds. The boundaries are where a rounding
+    /// difference would show.
     #[test]
-    fn darkening_and_lightening_round_as_a_blend_toward_the_endpoints() {
+    fn darkening_rounds_as_a_blend_toward_the_endpoints() {
         let gray = Color::Rgb(128, 128, 128);
 
         assert_eq!(darken(gray, 0), gray, "nothing moves at all");
-        assert_eq!(lighten(gray, 0), gray);
+        assert_eq!(dim(gray, Color::White, 0), gray);
         assert_eq!(darken(gray, 100), Color::Rgb(0, 0, 0), "all the way down");
         assert_eq!(
-            lighten(gray, 100),
+            dim(gray, Color::White, 100),
             Color::Rgb(255, 255, 255),
             "all the way up"
         );
@@ -293,7 +283,7 @@ mod tests {
         assert_eq!(darken(Color::Rgb(1, 1, 1), 50), Color::Rgb(1, 1, 1));
         assert_eq!(darken(Color::Rgb(3, 3, 3), 50), Color::Rgb(2, 2, 2));
         assert_eq!(
-            lighten(Color::Rgb(254, 254, 254), 50),
+            dim(Color::Rgb(254, 254, 254), Color::White, 50),
             Color::Rgb(255, 255, 255)
         );
         assert_eq!(
@@ -324,7 +314,10 @@ mod tests {
     #[test]
     fn unresolvable_colors_pass_through() {
         assert_eq!(darken(Color::Reset, 10), Color::Reset);
-        assert_eq!(lighten(Color::Indexed(42), 10), Color::Indexed(42));
+        assert_eq!(
+            dim(Color::Indexed(42), Color::White, 10),
+            Color::Indexed(42)
+        );
         assert_eq!(
             dim(Color::Rgb(1, 2, 3), Color::Reset, 50),
             Color::Rgb(1, 2, 3)

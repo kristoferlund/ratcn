@@ -84,7 +84,7 @@ Select has no text-editing behavior.
 
 The panel shows at most eight options by default and scrolls to keep the cursor
 visible, except while the wheel is holding the view elsewhere.
-`.max_visible_options(...)` changes that limit. Its top border starts
+`.max_visible_items(...)` changes that limit. Its top border starts
 one row above the trigger, so the first option covers the trigger row. The panel
 stays fixed while the cursor moves, shifting only when needed to remain inside
 the frame.
@@ -100,7 +100,7 @@ ListItem::new(Fruit::Durian, "Durian").disabled(!state.durian_available)
 
 ## Custom rows
 
-`.render_item(...)` paints each option yourself — columns, secondary text,
+`.paint_item(...)` paints each option yourself — columns, secondary text,
 per-option icons — from the same `ListItemState` row description `List` uses.
 The row's state colors are painted underneath what you return, so unstyled text
 picks them up, and any color you set explicitly on a `Text`, `Line`, or `Span`
@@ -110,7 +110,7 @@ is the same height and clicks land on the right one:
 
 ```rust
 Select::new(items)
-    .render_item(|state: &AppState, row| Text::from(vec![
+    .paint_item(|state: &AppState, row| Text::from(vec![
         Line::from(row.label.to_string()),
         Line::from(format!("  {}", state.subtitle_for(row.value))),
     ]))
@@ -156,10 +156,10 @@ frame.render_widget(
     SelectWidget::new(selected_label)
         .placeholder("Pick a fruit...")
         .open(&options)
-        .focused_option(Some(cursor_index))
-        .selected_option(selected_index)
-        .disabled_options(&[false, false, true, false])
-        .scroll_offset(scroll_offset)
+        .focused_item(Some(cursor_index))
+        .selected_item(selected_index)
+        .disabled_items(&[false, false, true, false])
+        .first_item(first_item)
         .focused(select_has_focus)
         .hovered(pointer_is_over_select)
         .disabled(select_is_disabled)
@@ -168,14 +168,14 @@ frame.render_widget(
 );
 ```
 
-Call `.height(...)` and `.visible_options(...)` on the built widget when the
+Call `.height(...)` and `.visible_items(...)` on the built widget when the
 surrounding layout needs to reserve exactly the rows it will paint — they read
 openness, disabled state, option count, and row height from the instance.
-`.visible_option_rows(...)` accepts screen rows you build for the options
-actually painted — the ones from `scroll_offset` on, in paint order — while
+`.visible_item_rows(...)` accepts screen rows you build for the options
+actually painted — the ones from `first_item` on, in paint order — while
 `.open(...)` still takes every option, because the panel's height is measured
 from their count. Pair it with `.row_height(...)` for multi-line rows. Together
-they are the paint-only counterpart of the component's `.render_item(...)`.
+they are the paint-only counterpart of the component's `.paint_item(...)`.
 Replace `.themed(...)` with `.style(...)` to supply exact widget colors.
 
 ## Full API

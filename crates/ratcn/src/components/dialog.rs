@@ -46,17 +46,6 @@ pub struct DialogStyle {
 }
 
 impl DialogStyle {
-    /// A neutral style using plain ANSI colors, for use without a [`Theme`].
-    #[must_use]
-    pub const fn fallback() -> Self {
-        Self {
-            border: Color::Gray,
-            title_foreground: Color::White,
-            background: Color::Reset,
-            description_foreground: Color::DarkGray,
-        }
-    }
-
     /// Derive every dialog color from `theme`.
     ///
     /// This is what [`Dialog`] calls when no custom style is configured. Call
@@ -272,17 +261,16 @@ impl<S, M> fmt::Debug for DialogFooter<S, M> {
 ///
 /// # Declaring one
 ///
-/// A `Dialog` is an ordinary [`Component`], but declare it with
-/// [`DeclareCtx::modal`] rather than `component` — that is what puts it on
-/// its own layer, above everything declared before it, and gives it the whole
-/// layer's keyboard fallback. Tab cycles inside it instead of escaping, and a
-/// key nothing inside handles is absorbed by the layer rather than reaching the
-/// app beneath.
+/// A `Dialog` is an ordinary [`Component`]. Declare it with
+/// [`DeclareCtx::modal`]: that puts it on its own layer, above everything
+/// declared before it, and gives it the whole layer's keyboard fallback. Tab
+/// cycles inside it, and a key nothing inside handles is absorbed by the
+/// layer.
 ///
 /// Wire [`on_dismiss`](Dialog::on_dismiss) and the dialog itself becomes a
 /// focus target of last resort, so the dismiss key still lands somewhere when
-/// nothing inside is focused. Without it the dialog is never focused itself —
-/// there would be nothing for it to do with the key.
+/// nothing inside is focused. A dialog with no `on_dismiss` is not itself a
+/// focus target.
 ///
 /// Opening and closing is the app's. Keep the open dialogs in a
 /// [`ModalState`](crate::runtime::ModalState) and bind it with
@@ -415,7 +403,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
         self
     }
 
-    /// Draw the main content area yourself, instead of using
+    /// Fill the main content area yourself. It supersedes
     /// [`description`](Dialog::description).
     ///
     /// The callback gets an ordinary [`DeclareCtx`] whose
@@ -485,7 +473,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
         self
     }
 
-    /// Lay out a `height`-row footer yourself, instead of the standard
+    /// Lay out a `height`-row footer yourself. It supersedes the standard
     /// [`action`](Dialog::action) row.
     ///
     /// Reach for this when the row needs something the standard layout does not

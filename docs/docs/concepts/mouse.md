@@ -23,7 +23,7 @@ A terminal reports mouse events once the host asks it to. With Ratcn's
 
 ```rust
 let _input_modes = ratcn::crossterm::InputModes::new()
-    .mouse_capture()
+    .mouse()
     .enable()?;
 ```
 

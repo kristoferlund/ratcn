@@ -52,7 +52,7 @@ fn button(disabled: bool) -> Button<AppMsg> {
     Button::new(LABEL)
         .variant(ButtonVariant::Outline)
         .size(Large)
-        .on_press(|| AppMsg::Toast(Toast::new(TOAST_TEXT).kind(ToastKind::Info)))
+        .on_press(|| AppMsg::Toast(Toast::new(TOAST_TEXT).with_kind(ToastKind::Info)))
         .disabled(disabled)
 }
 

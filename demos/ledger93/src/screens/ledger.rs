@@ -56,7 +56,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
             |s: &AppState| s.ledger.list_scroll,
             |offset| AppMsg::Ledger(Msg::ListScrolled(offset)),
         )
-        .render_item(|s: &AppState, row| render_row(row.index, &s.shared.prefs));
+        .paint_item(|s: &AppState, row| render_row(row.index, &s.shared.prefs));
 
     let inner = crate::screens::declare_panel(ctx, area, None);
 

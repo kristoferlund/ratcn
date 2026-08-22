@@ -38,8 +38,9 @@
 //! [`BarChartWidget`] is paint-only too, but it is also not a component in the
 //! sense used above: it is a themed adapter over ratatui's own `BarChart`,
 //! adding theme colors, grouping, and a value-display switch to a chart ratatui
-//! draws. [`Dialog`] is the opposite exception: it is an interactive composite
-//! with no separate paint widget.
+//! draws. [`Dialog`] and [`ScrollArea`] are interactive composites that stop at
+//! the component half: their frame and their viewport are geometry the
+//! component paints itself.
 //!
 //! The paint widgets drop straight into a plain ratatui app. They take a theme
 //! and some bools, and `frame.render_widget(...)` is the whole integration —
@@ -66,6 +67,15 @@
 //! [`Theme`]) are at the crate root. Runtime types — the
 //! engine, focus, events, and the traits for writing your own components — are
 //! under [`runtime`].
+//!
+//! Beside them sit the copy-support modules: [`button_shape`], [`geometry`],
+//! [`linear_nav`], [`list_core`], [`selection_indicator`], and [`text_width`].
+//! They hold the pieces more than one component needs — the button idiom's cap
+//! and fill rows, area arithmetic, item-index movement, value-keyed items and
+//! their row viewport, the radio and checkbox markers, display-width
+//! measurement — so a component module depends on the crate root and these,
+//! and on no sibling component. That is what lets you copy one component
+//! module into your own project and have it compile against `ratcn` alone.
 //!
 //! # Examples
 //! ```no_run
@@ -140,12 +150,12 @@ pub mod toast;
 #[doc(inline)]
 pub use components::{
     barchart::{BarChartGroup, BarChartStyle, BarChartWidget},
-    button::{Button, ButtonRenderMode, ButtonSize, ButtonStyle, ButtonVariant, ButtonWidget},
+    button::{Button, ButtonFill, ButtonSize, ButtonStyle, ButtonVariant, ButtonWidget},
     dialog::{Dialog, DialogStyle},
     list::{List, ListStyle, ListWidget},
-    scroll_area::{ScrollArea, ScrollAreaChange, ScrollAreaStyle},
+    scroll_area::{ScrollArea, ScrollAreaStyle},
     select::{Select, SelectStyle, SelectWidget},
-    tabs::{Tab, TabLayout, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget, tab_layout},
+    tabs::{Tab, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget},
     toast::{ToastPosition, ToasterStyle, ToasterWidget},
     tooltip::{Tooltip, TooltipSide, TooltipStyle, TooltipWidget},
 };

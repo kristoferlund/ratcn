@@ -84,6 +84,22 @@ usually a sign the design should move it to the app instead. See
 declaration-time questions. Matching the surrounding code matters more than
 personal preference.
 
+**Component modules share one layout.** Imports, constants, variant enums, the
+style struct (`from_theme()`, a `fallback()` where the component paints without
+a theme, and the `resolve_*` methods that pick colors from the component's own
+interaction state), the paint widget `XWidget`, closure type aliases, the
+interactive component `X<S, M>`, its `Component` impl, private helpers, tests.
+Modules vary where their own reading order wins, so match the shape rather than
+the exact sequence.
+
+**Component `handle_event` shares one silhouette**, with the same latitude.
+`List`, `Select`, and `Tabs` open with an early guard returning `Ignored` when
+the component cannot act — disabled, or no items — then match on the event kind,
+mouse arm first and key arm second, falling through to `Ignored`. `Button`
+matches both kinds into one `bool`, `Dialog` answers its dismiss key before the
+border hit-test and then dispatches on the drag phase, and `ScrollArea` has
+nothing to guard on. Only `Event::Mouse` and `Event::Key` are handled anywhere.
+
 **A demo registers itself.** Any directory under `demos/` is a workspace member,
 and one with a `Trunk.toml` is built for the docs site. Serve a single demo with
 `npm run demo:dev -- <name>` — the name is required, and a wrong one lists the

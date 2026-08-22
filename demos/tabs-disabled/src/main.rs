@@ -122,7 +122,7 @@ impl demo_shared::Demo for App {
                 Tab::new(Screen::Analytics, "Analytics").disabled(true),
                 Tab::new(Screen::Reports, "Reports"),
             ])
-            .tab_focus(|s: &AppState| Some(s.focused), Msg::ScreenFocusChanged)
+            .item_focus(|s: &AppState| Some(s.focused), Msg::ScreenFocusChanged)
             .selection(|s: &AppState| Some(s.selected), Msg::ScreenSelected);
 
             let demo = area.centered(

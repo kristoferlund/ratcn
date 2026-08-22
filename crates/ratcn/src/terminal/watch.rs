@@ -30,8 +30,8 @@ const REQUERY: &str = "\x1b]10;?\x07\x1b]11;?\x07";
 /// How long notifications are collected before the colors are asked for.
 ///
 /// Terminals send these in bursts — one per palette slot on some, one per
-/// transition step on others — and each one would otherwise cost a round trip
-/// and a repaint.
+/// transition step on others — and the wait collapses a burst into one query
+/// and one repaint.
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
 /// The re-asks a trigger schedules after its own, measured from the trigger.
@@ -219,9 +219,8 @@ impl Watch {
     /// Advance the watch, writing the re-query to `out` when one comes due.
     ///
     /// Returns the terminal's new colors on the pass that completes them. A
-    /// terminal that stops answering costs one bounded wait and is then dropped
-    /// quietly: the colors already on screen are the last ones it stood behind,
-    /// which is a better answer than none.
+    /// terminal that stops answering is waited on for a bounded time and then
+    /// dropped quietly, leaving the colors already on screen in place.
     ///
     /// # Errors
     ///

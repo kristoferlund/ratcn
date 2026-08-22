@@ -119,9 +119,9 @@ Button::new("Archive")
     })
 ```
 
-`ButtonStyle::mode` selects `ButtonRenderMode::Filled` or
-`ButtonRenderMode::Bordered`. `ButtonStyle::fallback()` is the no-theme starting
-point: plain ANSI colors that render on any terminal.
+`ButtonStyle::mode` selects `ButtonFill::Filled` or `ButtonFill::Bordered`.
+`ButtonStyle::fallback()` is the no-theme starting point: plain ANSI colors
+that render on any terminal.
 
 ## Paint-only widget
 
@@ -151,7 +151,7 @@ Every method, with parameter and edge-case detail:
 [`ButtonWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ButtonWidget.html),
 [`ButtonVariant`](https://docs.rs/ratcn/latest/ratcn/enum.ButtonVariant.html),
 [`ButtonSize`](https://docs.rs/ratcn/latest/ratcn/enum.ButtonSize.html),
-[`ButtonRenderMode`](https://docs.rs/ratcn/latest/ratcn/enum.ButtonRenderMode.html),
+[`ButtonFill`](https://docs.rs/ratcn/latest/ratcn/enum.ButtonFill.html),
 [`ButtonStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ButtonStyle.html).
 
 Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).

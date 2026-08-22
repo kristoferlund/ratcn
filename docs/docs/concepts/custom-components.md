@@ -229,5 +229,7 @@ what you can use too.
 - Everything that paints: `paint`, styled from its interaction flags.
 - Interactive geometry within the paint area: express it with `interaction_area`.
 - Gesture mechanics that outlive the instance: `ctx.transient`.
-- `is_focusable` reflects the same condition that makes events ignored.
+- `is_focusable` answers from the props alone, and reflects the same
+  condition that makes events ignored. Settle anything state-dependent in
+  `prepare`.
 - One `Emit` per event; `Ignored` only when a parent should get a chance.

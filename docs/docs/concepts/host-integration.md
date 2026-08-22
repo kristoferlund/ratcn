@@ -146,8 +146,8 @@ cargo add ratatui --no-default-features --features layout-cache,std,crossterm
 
 ```rust
 let _input_modes = ratcn::crossterm::InputModes::new()
-    .mouse_capture()
-    .bracketed_paste()
+    .mouse()
+    .paste()
     .enable()?;
 ```
 

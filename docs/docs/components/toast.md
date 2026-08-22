@@ -38,7 +38,7 @@ a plain Ratatui app with no `Ratcn` runtime.
 ## Kinds
 
 The kind sets the accent color and icon. Each has a shorthand constructor, or
-pass one to `.kind(...)`.
+pass one to `.with_kind(...)`.
 
 | Kind | Shorthand | Use for |
 | --- | --- | --- |
@@ -51,11 +51,11 @@ pass one to `.kind(...)`.
 
 ```rust
 Toast::error("Upload failed")
-    .description("Check your connection and try again.")
+    .with_description("Check your connection and try again.")
     .persistent()
 ```
 
-`.description(...)` adds a second line under the title, and `.border(false)`
+`.with_description(...)` adds a second line under the title, and `.border(false)`
 drops the border on one toast.
 
 ## Your app owns the clock
@@ -99,10 +99,13 @@ persistent "working…" toast when the work finishes:
 
 ```rust
 // When the upload starts:
-state.toasts.push(Toast::loading("Uploading…").persistent().id("upload"), now);
+state.toasts.push(
+    Toast::loading("Uploading…").persistent().with_id("upload"),
+    now,
+);
 
 // When it finishes — swap in place, restarting the 4-second lifetime from now:
-state.toasts.replace("upload", Toast::success("Uploaded").id("upload"), now);
+state.toasts.replace("upload", Toast::success("Uploaded").with_id("upload"), now);
 
 // Or just remove it:
 state.toasts.dismiss("upload");
@@ -188,9 +191,9 @@ frame.render_widget(
 ```
 
 For writing your own renderer against `entries()`, `Toast` and `ToastEntry`
-expose read accessors: `title`, `description_text`, `toast_kind`, `toast_id`,
-`is_bordered`, `is_expired_after`, `created_at`, `age`, and `is_expired`.
-`ToasterWidget::visible()` iterates what would be painted.
+expose read accessors: `title`, `description`, `kind`, `id`, `is_bordered`,
+`is_expired_after`, `created_at`, `age`, and `is_expired`. The builders that
+set those values are `with_description`, `with_kind`, and `with_id`.
 
 ## Full API
 

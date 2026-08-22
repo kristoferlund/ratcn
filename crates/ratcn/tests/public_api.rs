@@ -2,7 +2,7 @@
 
 #[cfg(any(feature = "crossterm", feature = "ratzilla"))]
 use ratcn::runtime::Event;
-use ratcn::{Button, ScrollArea, ScrollAreaChange, Theme, Toast, ToasterState};
+use ratcn::{Button, ScrollArea, Theme, Toast, ToasterState};
 
 #[test]
 fn documented_root_imports_are_available_to_external_crates() {
@@ -11,7 +11,7 @@ fn documented_root_imports_are_available_to_external_crates() {
     let _ = Toast::new("Saved");
     let _ = ToasterState::default();
     let _ = ScrollArea::<(), ()>::new(10)
-        .offset(|()| 0, |_: ScrollAreaChange| ())
+        .scroll(|()| 0, |_: u16| ())
         .hover_focus();
 }
 
@@ -27,7 +27,7 @@ where
 fn crossterm_feature_exposes_host_helpers_and_event_conversion() {
     use ratcn::crossterm::{InputModeGuard, InputModes};
 
-    let _ = InputModes::new().mouse_capture().bracketed_paste();
+    let _ = InputModes::new().mouse().paste();
     let _: Option<InputModeGuard> = None;
     assert_backend_event::<ratatui::crossterm::event::Event>();
 }

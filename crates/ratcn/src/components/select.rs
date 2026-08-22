@@ -2,15 +2,16 @@
 //!
 //! This module uses three related nouns consistently:
 //!
-//! - An **item** is the value-keyed [`ListItem`] shared with [`List`](crate::List).
-//!   Item values provide stable identity across filtering and reordering.
-//! - An **option** is one semantic Select entry that the user can choose.
+//! - An **item** is the value-keyed [`ListItem`] shared with [`List`](crate::List),
+//!   and what every index-addressed builder names. Item values provide stable
+//!   identity across filtering and reordering.
+//! - An **option** is one item as the user meets it: a choice in the panel.
 //! - A **row** is terminal geometry: the one or more screen rows used to paint
 //!   an option.
 //!
-//! For example, [`SelectWidget::visible_option_rows`] accepts pre-rendered
-//! screen rows for the options on screen, while [`Select::render_item`]
-//! receives the shared item state used by List.
+//! For example, [`SelectWidget::visible_item_rows`] accepts the screen rows for
+//! the items on screen, while [`Select::paint_item`] receives the shared item
+//! state used by List.
 
 use std::{fmt, rc::Rc};
 
@@ -28,7 +29,7 @@ use crate::color::{
 };
 use crate::linear_nav::{self, NavOutcome, ScrollStep};
 use crate::list_core::{
-    self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelPark,
+    self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelHold,
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
@@ -36,6 +37,12 @@ use crate::runtime::{
 };
 use crate::selection_indicator;
 use crate::theme::resolve_style;
+
+/// The trigger height in terminal rows.
+const TRIGGER_HEIGHT: u16 = 1;
+
+/// How many options a Select shows before the panel scrolls.
+const DEFAULT_MAX_VISIBLE_ITEMS: u16 = 8;
 
 const INDICATOR_CLOSED: &str = "∨";
 const INDICATOR_OPEN: &str = "∧";
@@ -224,12 +231,12 @@ pub struct SelectWidget<'a> {
     placeholder: &'a str,
     open: bool,
     options: &'a [&'a str],
-    option_rows: Option<&'a [Text<'static>]>,
+    item_rows: Option<&'a [Text<'static>]>,
     row_height: u16,
-    focused_option: Option<usize>,
-    selected_option: Option<usize>,
-    disabled_options: &'a [bool],
-    scroll_offset: usize,
+    focused_item: Option<usize>,
+    selected_item: Option<usize>,
+    disabled_items: &'a [bool],
+    first_item: usize,
     focused: bool,
     hovered: bool,
     disabled: bool,
@@ -237,9 +244,6 @@ pub struct SelectWidget<'a> {
 }
 
 impl<'a> SelectWidget<'a> {
-    /// The trigger height in terminal rows.
-    pub const TRIGGER_HEIGHT: u16 = 1;
-
     /// Construct a closed select showing `value`, or an empty placeholder.
     #[must_use]
     pub const fn new(value: Option<&'a str>) -> Self {
@@ -248,12 +252,12 @@ impl<'a> SelectWidget<'a> {
             placeholder: "",
             open: false,
             options: &[],
-            option_rows: None,
+            item_rows: None,
             row_height: 1,
-            focused_option: None,
-            selected_option: None,
-            disabled_options: &[],
-            scroll_offset: 0,
+            focused_item: None,
+            selected_item: None,
+            disabled_items: &[],
+            first_item: 0,
             focused: false,
             hovered: false,
             disabled: false,
@@ -292,7 +296,7 @@ impl<'a> SelectWidget<'a> {
 
     /// Pre-rendered screen rows to paint instead of the default
     /// marker-and-label line — one per *painted* option, in paint order,
-    /// starting at [`scroll_offset`](Self::scroll_offset).
+    /// starting at [`first_item`](Self::first_item).
     ///
     /// [`open`](Self::open) still takes every option, because the panel's
     /// height is measured from their count; these are only the rows that
@@ -305,8 +309,8 @@ impl<'a> SelectWidget<'a> {
     /// beneath the supplied text, so unstyled text inherits them while
     /// explicit colors remain intact.
     #[must_use]
-    pub const fn visible_option_rows(mut self, option_rows: &'a [Text<'static>]) -> Self {
-        self.option_rows = Some(option_rows);
+    pub const fn visible_item_rows(mut self, item_rows: &'a [Text<'static>]) -> Self {
+        self.item_rows = Some(item_rows);
         self
     }
 
@@ -323,29 +327,29 @@ impl<'a> SelectWidget<'a> {
 
     /// Set the cursor option by index.
     #[must_use]
-    pub const fn focused_option(mut self, focused: Option<usize>) -> Self {
-        self.focused_option = focused;
+    pub const fn focused_item(mut self, focused: Option<usize>) -> Self {
+        self.focused_item = focused;
         self
     }
 
     /// Set the chosen option by index.
     #[must_use]
-    pub const fn selected_option(mut self, selected: Option<usize>) -> Self {
-        self.selected_option = selected;
+    pub const fn selected_item(mut self, selected: Option<usize>) -> Self {
+        self.selected_item = selected;
         self
     }
 
     /// Set the disabled mask, positionally matched to the options.
     #[must_use]
-    pub const fn disabled_options(mut self, disabled: &'a [bool]) -> Self {
-        self.disabled_options = disabled;
+    pub const fn disabled_items(mut self, disabled: &'a [bool]) -> Self {
+        self.disabled_items = disabled;
         self
     }
 
-    /// Set the index of the first visible option.
+    /// Set the index of the first visible item.
     #[must_use]
-    pub const fn scroll_offset(mut self, offset: usize) -> Self {
-        self.scroll_offset = offset;
+    pub const fn first_item(mut self, first: usize) -> Self {
+        self.first_item = first;
         self
     }
 
@@ -380,13 +384,13 @@ impl<'a> SelectWidget<'a> {
     /// measure the same value that will paint.
     #[must_use]
     pub const fn height(&self, max_visible: u16, area_height: u16) -> u16 {
-        let visible = self.visible_options(max_visible, area_height);
+        let visible = self.visible_items(max_visible, area_height);
         if area_height == 0 {
             0
         } else if visible == 0 {
-            Self::TRIGGER_HEIGHT
+            TRIGGER_HEIGHT
         } else {
-            Self::TRIGGER_HEIGHT + visible * self.row_height + 2
+            TRIGGER_HEIGHT + visible * self.row_height + 2
         }
     }
 
@@ -398,7 +402,7 @@ impl<'a> SelectWidget<'a> {
         clippy::cast_possible_truncation,
         reason = "the option count is clamped before conversion"
     )]
-    pub const fn visible_options(&self, max_visible: u16, area_height: u16) -> u16 {
+    pub const fn visible_items(&self, max_visible: u16, area_height: u16) -> u16 {
         if !self.open || self.disabled {
             return 0;
         }
@@ -411,7 +415,7 @@ impl<'a> SelectWidget<'a> {
             count,
             min_u16(
                 max_visible,
-                area_height.saturating_sub(Self::TRIGGER_HEIGHT + 2) / self.row_height,
+                area_height.saturating_sub(TRIGGER_HEIGHT + 2) / self.row_height,
             ),
         )
     }
@@ -426,9 +430,9 @@ impl Widget for SelectWidget<'_> {
         if area.is_empty() {
             return;
         }
-        render_trigger(self, area, buf);
+        paint_trigger(self, area, buf);
         // The standalone widget reserves one trigger row and two border rows.
-        let visible = self.visible_options(u16::MAX, area.height);
+        let visible = self.visible_items(u16::MAX, area.height);
         if self.open && !self.disabled && visible > 0 {
             let panel = Rect::new(
                 area.x,
@@ -436,12 +440,12 @@ impl Widget for SelectWidget<'_> {
                 area.width,
                 visible * self.row_height + 2,
             );
-            render_panel(self, panel, buf);
+            paint_panel(self, panel, buf);
         }
     }
 }
 
-fn render_trigger(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
+fn paint_trigger(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
     let area = Rect { height: 1, ..area }.intersection(buf.area);
     let background = widget
         .style
@@ -480,7 +484,7 @@ fn render_trigger(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn render_panel(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
+fn paint_panel(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -493,12 +497,12 @@ fn render_panel(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
     let inner = block.inner(area);
     block.render(area, buf);
     let row_height = widget.row_height.max(1);
-    for (row, index) in (widget.scroll_offset..widget.options.len())
+    for (row, index) in (widget.first_item..widget.options.len())
         .take(usize::from(inner.height / row_height))
         .enumerate()
     {
-        let disabled = widget.disabled_options.get(index).copied().unwrap_or(false);
-        let selected = widget.selected_option == Some(index);
+        let disabled = widget.disabled_items.get(index).copied().unwrap_or(false);
+        let selected = widget.selected_item == Some(index);
         let row_area = Rect::new(
             inner.x,
             inner.y + u16::try_from(row).expect("visible rows fit in u16") * row_height,
@@ -509,9 +513,9 @@ fn render_panel(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
             row_area,
             widget
                 .style
-                .resolve_row(widget.focused_option == Some(index), selected, disabled),
+                .resolve_row(widget.focused_item == Some(index), selected, disabled),
         );
-        if let Some(rows) = widget.option_rows {
+        if let Some(rows) = widget.item_rows {
             if let Some(text) = rows.get(row) {
                 text.render(row_area, buf);
             }
@@ -536,7 +540,7 @@ struct SelectPanelWidget<'a>(SelectWidget<'a>);
 
 impl Widget for SelectPanelWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        render_panel(self.0, area, buf);
+        paint_panel(self.0, area, buf);
     }
 }
 
@@ -545,7 +549,7 @@ type ReadOpenFn<S> = Rc<dyn Fn(&S) -> bool>;
 type OnOpenChangeFn<M> = Rc<dyn Fn(bool) -> M>;
 type OpenBinding<S, M> = (ReadOpenFn<S>, OnOpenChangeFn<M>);
 type OnChangeFn<T, M> = Rc<dyn Fn(T) -> M>;
-type RenderItemFn<S, T> = Rc<dyn for<'a> Fn(&S, ListItemState<'a, T>) -> Text<'static>>;
+type PaintItemFn<S, T> = Rc<dyn for<'a> Fn(&S, ListItemState<'a, T>) -> Text<'static>>;
 type StyleFn = Rc<dyn Fn(&Theme) -> SelectStyle>;
 
 fn bound_index<T: PartialEq, S>(
@@ -562,7 +566,7 @@ fn resolved_cursor_index<T: PartialEq, S>(
     focused: Option<&ReadFn<S, T>>,
     selected: Option<&ReadFn<S, T>>,
 ) -> Option<usize> {
-    // A bound value is never second-guessed: a cursor parked on a disabled
+    // A bound value is never second-guessed: a cursor resting on a disabled
     // option stays there and is painted there, exactly as in `List`, and the
     // commit path refuses it. Only an absent value falls back.
     bound_index(items, state, focused)
@@ -613,7 +617,7 @@ fn emit_item<T: Clone, M>(
 /// wheel scrolls the panel and leaves item focus where it is, so the cursor
 /// may scroll out of sight until the cursor or the options move — the same
 /// wheel behavior as [`List`](crate::List), held under the rule
-/// [`WheelPark`](crate::list_core::WheelPark) states.
+/// [`WheelHold`](crate::list_core::WheelHold) states.
 /// Other modified keys are ignored so app shortcuts can handle
 /// them after they bubble through the popup. Paste events bubble for the same
 /// reason; Select has no text-editing behavior.
@@ -631,7 +635,7 @@ pub struct Select<T, S, M> {
     on_select: Option<OnChangeFn<T, M>>,
     max_visible: u16,
     disabled: bool,
-    render_item: Option<RenderItemFn<S, T>>,
+    paint_item: Option<PaintItemFn<S, T>>,
     row_height: u16,
     style: Option<StyleFn>,
     resolved_open: bool,
@@ -651,9 +655,6 @@ impl<T: fmt::Debug, S, M> fmt::Debug for Select<T, S, M> {
 }
 
 impl<T, S, M> Select<T, S, M> {
-    /// Default maximum number of visible options.
-    pub const DEFAULT_MAX_VISIBLE_OPTIONS: u16 = 8;
-
     /// Construct a Select from value-keyed options.
     ///
     /// Accepts anything convertible to [`ListItem`], including plain strings.
@@ -668,9 +669,9 @@ impl<T, S, M> Select<T, S, M> {
             on_focus_change: None,
             selected: None,
             on_select: None,
-            max_visible: Self::DEFAULT_MAX_VISIBLE_OPTIONS,
+            max_visible: DEFAULT_MAX_VISIBLE_ITEMS,
             disabled: false,
-            render_item: None,
+            paint_item: None,
             row_height: 1,
             style: None,
             resolved_open: false,
@@ -750,10 +751,9 @@ impl<T, S, M> Select<T, S, M> {
 
     /// Set the maximum visible option count. Additional options scroll.
     ///
-    /// Defaults to [`DEFAULT_MAX_VISIBLE_OPTIONS`](Self::DEFAULT_MAX_VISIBLE_OPTIONS).
-    /// Zero is treated as one.
+    /// Defaults to eight. Zero is treated as one.
     #[must_use]
-    pub const fn max_visible_options(mut self, max_visible: u16) -> Self {
+    pub const fn max_visible_items(mut self, max_visible: u16) -> Self {
         self.max_visible = if max_visible == 0 { 1 } else { max_visible };
         self
     }
@@ -763,7 +763,7 @@ impl<T, S, M> Select<T, S, M> {
     ///
     /// The closure gets app state and a [`ListItemState`] describing the
     /// option, and returns what to paint — the same contract as
-    /// [`List::render_item`](crate::List::render_item). Use it for columns,
+    /// [`List::paint_item`](crate::List::paint_item). Use it for columns,
     /// secondary text, per-option icons — anything the default cannot express.
     /// The resolved [`SelectStyle`] is painted beneath the returned text, so
     /// unstyled text inherits option-state colors while explicit `Text`, `Line`,
@@ -774,17 +774,17 @@ impl<T, S, M> Select<T, S, M> {
     /// needs [`row_height`](Self::row_height) set to match, since every option
     /// must be the same height for clicks to land on the right one.
     #[must_use]
-    pub fn render_item<R: Into<Text<'static>>>(
+    pub fn paint_item<R: Into<Text<'static>>>(
         mut self,
         f: impl for<'a> Fn(&S, ListItemState<'a, T>) -> R + 'static,
     ) -> Self {
-        self.render_item = Some(Rc::new(move |state, row| f(state, row).into()));
+        self.paint_item = Some(Rc::new(move |state, row| f(state, row).into()));
         self
     }
 
     /// How many terminal rows each option occupies. Defaults to 1.
     ///
-    /// Raise it when [`render_item`](Self::render_item) returns more than one
+    /// Raise it when [`paint_item`](Self::paint_item) returns more than one
     /// line. Every option gets the same height, which is what keeps clicking,
     /// paging, and scrolling exact: a returned [`Text`] is padded with blank
     /// lines or truncated to fit, so the option the user clicks is always the
@@ -796,21 +796,6 @@ impl<T, S, M> Select<T, S, M> {
     pub const fn row_height(mut self, rows: u16) -> Self {
         self.row_height = if rows == 0 { 1 } else { rows };
         self
-    }
-
-    /// The rows this Select needs: always one, open or closed.
-    ///
-    /// The trigger is a single row and the panel is a popup layer floating
-    /// above the rest of the frame, so a layout reserves one row and never
-    /// has to leave space for the options. Width is the caller's: the trigger
-    /// fills whatever area it is given, and the panel matches it.
-    ///
-    /// [`SelectWidget::height`] is the other half's answer, and differs on
-    /// purpose: a paint-only Select draws its panel *inside* the area it is
-    /// given, so there the options do count.
-    #[must_use]
-    pub const fn height(&self) -> u16 {
-        SelectWidget::TRIGGER_HEIGHT
     }
 
     /// Replace the theme-derived style.
@@ -846,7 +831,7 @@ impl<T, S, M> Select<T, S, M> {
 /// the origin.
 const fn trigger_area(area: Rect) -> Rect {
     Rect {
-        height: min_u16(area.height, SelectWidget::TRIGGER_HEIGHT),
+        height: min_u16(area.height, TRIGGER_HEIGHT),
         ..area
     }
 }
@@ -980,7 +965,7 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
             return EventResult::Ignored;
         }
         if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
-            // A cursor parked on a disabled option commits nothing, as in
+            // A cursor resting on a disabled option commits nothing, as in
             // `List`, and the key bubbles rather than vanishing.
             return match cursor {
                 Some(index) if !self.disabled_at(index) => self.select(index),
@@ -1033,7 +1018,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             on_focus_change: self.on_focus_change.clone(),
             selected: self.selected.clone(),
             on_select: self.on_select.clone(),
-            render_item: self.render_item.clone(),
+            paint_item: self.paint_item.clone(),
             style,
             panel_area,
             inner,
@@ -1102,7 +1087,7 @@ struct SelectPanel<T, S, M> {
     on_focus_change: Option<OnChangeFn<T, M>>,
     selected: Option<ReadFn<S, T>>,
     on_select: Option<OnChangeFn<T, M>>,
-    render_item: Option<RenderItemFn<S, T>>,
+    paint_item: Option<PaintItemFn<S, T>>,
     style: SelectStyle,
     panel_area: Rect,
     /// `panel_area` inside its border: the rows the options themselves occupy.
@@ -1132,10 +1117,10 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let state = ctx.state();
         let cursor = self.cursor(state);
-        // The panel owns its scrolling, so the park supplies the offset: the
+        // The panel owns its scrolling, so the hold supplies the offset: the
         // view stays where the wheel left it — cursor visible or not — until
-        // the cursor or the options move, and the park dies with the popup.
-        WheelPark::settle_transient(
+        // the cursor or the options move, and the hold dies with the popup.
+        WheelHold::settle_transient(
             ctx,
             &self.items,
             cursor,
@@ -1155,12 +1140,12 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         // Only the options on screen are built, however many the select has.
         // The panel is laid out to a whole number of rows, so there is no
         // clipped trailing option to account for. Indices stay global, as a
-        // custom `render_item` and the panel's hit-testing both read them.
+        // custom `paint_item` and the panel's hit-testing both read them.
         let first_option = self.viewport.painted_offset().min(self.items.len());
         let last_option = first_option
             .saturating_add(self.viewport.visible_items(self.inner))
             .min(self.items.len());
-        let rows: Option<Vec<Text<'static>>> = self.render_item.as_ref().map(|render_item| {
+        let rows: Option<Vec<Text<'static>>> = self.paint_item.as_ref().map(|paint_item| {
             list_core::windowed_rows(
                 &self.items,
                 first_option..last_option,
@@ -1174,20 +1159,20 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                         selected: selected == Some(index),
                         disabled: item.is_disabled(),
                     };
-                    render_item(state, row)
+                    paint_item(state, row)
                 },
             )
         });
         let mut widget = SelectWidget::new(None)
             .open(&labels)
             .row_height(rows_per_item)
-            .focused_option(cursor)
-            .selected_option(selected)
-            .disabled_options(&disabled)
-            .scroll_offset(self.viewport.painted_offset())
+            .focused_item(cursor)
+            .selected_item(selected)
+            .disabled_items(&disabled)
+            .first_item(self.viewport.painted_offset())
             .style(self.style);
         if let Some(rows) = &rows {
-            widget = widget.visible_option_rows(rows);
+            widget = widget.visible_item_rows(rows);
         }
         ctx.widget(SelectPanelWidget(widget), self.panel_area);
     }
@@ -1217,13 +1202,13 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                     step,
                     SCROLL_STEP,
                 );
-                // Park the view in the transient store against the options as
+                // Hold the view in the transient store against the options as
                 // they stand: render honors it until the cursor or the options
                 // move, and it survives redraws because it lives on the panel's
                 // identity, not on this per-frame instance. The cursor itself
                 // never moves on wheel.
-                ctx.transient::<WheelPark<T>>()
-                    .park(offset, &self.items, cursor);
+                ctx.transient::<WheelHold<T>>()
+                    .hold(offset, &self.items, cursor);
                 // Keep this retained instance's hit-testing aligned with the
                 // offset the next paint will use.
                 self.viewport.record_painted_offset(offset);
@@ -1288,7 +1273,7 @@ fn panel_layout(
     let max_y = bounds.bottom().saturating_sub(height);
     let y = desired_y.clamp(bounds.y, max_y);
     // The scroll offset is not decided here: the panel resolves it each frame
-    // from the wheel-parked transient and the cursor, then records it.
+    // from the wheel-held transient and the cursor, then records it.
     Some((
         Rect::new(trigger.x, y, trigger.width, height),
         RowViewport::new(row_height),
@@ -1374,8 +1359,8 @@ mod tests {
         let area = Rect::new(0, 0, 12, 5);
         let mut buffer = Buffer::empty(area);
 
-        assert_eq!(widget.visible_options(8, area.height), 0);
-        assert_eq!(widget.height(8, area.height), SelectWidget::TRIGGER_HEIGHT);
+        assert_eq!(widget.visible_items(8, area.height), 0);
+        assert_eq!(widget.height(8, area.height), TRIGGER_HEIGHT);
         widget.render(area, &mut buffer);
 
         assert_eq!(
@@ -1688,8 +1673,8 @@ mod tests {
             "hover moves the one cursor, as in List"
         );
 
-        // Park the view away from the cursor, then close and reopen: the
-        // parked offset dies with the panel's identity and the view anchors
+        // Hold the view away from the cursor, then close and reopen: the
+        // held offset dies with the panel's identity and the view anchors
         // to the cursor again.
         assert_eq!(
             driver.event(
@@ -1731,7 +1716,7 @@ mod tests {
                     ctx.component(
                         "fruit",
                         select(items())
-                            .render_item(|_: &State, row| {
+                            .paint_item(|_: &State, row| {
                                 if row.selected {
                                     Text::from(Span::styled(
                                         row.label.to_string(),
@@ -1783,7 +1768,7 @@ mod tests {
                     ratcn.render(frame, &state, &theme, |ctx| {
                         ctx.component(
                             "fruit",
-                            select(items()).render_item(
+                            select(items()).paint_item(
                                 move |_: &State, row: ListItemState<'_, Fruit>| {
                                     recorded.borrow_mut().push(row.index);
                                     Text::from(row.label.to_string())
@@ -1828,9 +1813,9 @@ mod tests {
     }
 
     /// Returning the cursor to where the wheel left it must not revive the
-    /// parked view — the same rule `List` follows.
+    /// held view — the same rule `List` follows.
     #[test]
-    fn a_released_wheel_park_never_revives() {
+    fn a_released_wheel_hold_never_revives() {
         let mut driver = Driver::new(20, 4);
         let mut state = State {
             open: true,
@@ -1862,16 +1847,16 @@ mod tests {
         driver.render(&state, area, &items());
         assert!(
             driver.row(1).contains("Mango"),
-            "returning to the wheel anchor must not re-park the view: {}",
+            "returning to the wheel anchor must not re-take the hold: {}",
             driver.row(1)
         );
     }
 
-    /// The panel's park is anchored to the option the cursor sits on, not to
+    /// The panel's hold is anchored to the option the cursor sits on, not to
     /// its row — `List`'s rule. Swapping that option for another at the same
     /// index puts a different option under the cursor, so the hold ends.
     #[test]
-    fn replacing_the_anchored_option_releases_the_wheel_park() {
+    fn replacing_the_anchored_option_releases_the_wheel_hold() {
         let mut driver = Driver::new(20, 4);
         let mut state = State {
             open: true,
@@ -1887,7 +1872,7 @@ mod tests {
         driver.render(&state, area, &items());
         assert!(
             driver.row(1).contains("Lychee"),
-            "the wheel parked the view away from the cursor: {}",
+            "the wheel held the view away from the cursor: {}",
             driver.row(1)
         );
 
@@ -1898,7 +1883,7 @@ mod tests {
 
         assert!(
             driver.row(1).contains("Guava"),
-            "a park anchored by row would still be holding Lychee on screen: {}",
+            "a hold anchored by row would still be showing Lychee on screen: {}",
             driver.row(1)
         );
     }
@@ -2244,7 +2229,7 @@ mod tests {
 
     fn tall_select(items: Vec<ListItem<Fruit>>) -> Select<Fruit, State, Msg> {
         select(items)
-            .render_item(|_state: &State, row| {
+            .paint_item(|_state: &State, row| {
                 Text::from(vec![
                     Line::from(row.label.to_string()),
                     Line::from(format!("  focused={}", row.focused)),
