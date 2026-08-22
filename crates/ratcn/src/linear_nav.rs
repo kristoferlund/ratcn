@@ -1,7 +1,7 @@
 //! The index arithmetic behind moving through an ordered list of things.
 //!
 //! Every control with items in a row or column — [`List`](crate::List),
-//! [`Tabs`](crate::Tabs), and any Select or Menu added later — needs the same
+//! [`Select`](crate::Select), and [`Tabs`](crate::Tabs) — needs the same
 //! handful of answers. Where does Down go from here? What if the next three
 //! items are disabled? Where does Page Down land near the end? Getting those
 //! subtly wrong in each control separately is how a UI ends up feeling
@@ -68,7 +68,7 @@ pub fn has_enabled(len: usize, disabled: impl Fn(usize) -> bool) -> bool {
 /// either end, this clamps to the furthest enabled item in that direction.
 /// An out-of-range `from` is clamped before movement.
 #[must_use]
-pub fn page_enabled(
+fn page_enabled(
     len: usize,
     from: usize,
     direction: Step,
@@ -246,7 +246,7 @@ pub fn nav_key_target(
 /// The scroll offset that keeps `cursor` visible in a `viewport_height`-row
 /// viewport, starting from a `requested` offset.
 ///
-/// The requested offset is first clamped by [`clamp_scroll_offset`]. A cursor above
+/// The requested offset is first clamped to the last full page. A cursor above
 /// the viewport pulls the offset up to itself; a cursor below pulls the offset
 /// just far enough that the cursor becomes the last visible row; a cursor
 /// already visible (or `None`) leaves the clamped offset alone. This is the
@@ -277,19 +277,14 @@ pub fn cursor_visible_offset(
 
 /// Clamp a scroll `offset` to `0..=len.saturating_sub(viewport_height)`, so
 /// the last page of `len` rows never scrolls past the bottom of a
-/// `viewport_height`-row viewport. Shared by [`wheel_offset`] and by a
-/// component seeding its scroll offset from app state before render.
-///
-/// The offset counts *items*, not cells. The similarly shaped
-/// [`runtime::clamp_offset`](crate::runtime::clamp_offset) is unrelated: it
-/// keeps a dragged box inside an area, in terminal cells.
+/// `viewport_height`-row viewport.
 #[must_use]
-pub fn clamp_scroll_offset(len: usize, viewport_height: usize, offset: usize) -> usize {
+fn clamp_scroll_offset(len: usize, viewport_height: usize, offset: usize) -> usize {
     offset.min(len.saturating_sub(viewport_height))
 }
 
 /// The scroll offset after moving one wheel notch by `step` rows from
-/// `current`, clamped by [`clamp_scroll_offset`].
+/// `current`, clamped to the last full page.
 #[must_use]
 pub fn wheel_offset(
     len: usize,

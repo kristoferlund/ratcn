@@ -45,7 +45,7 @@ pub enum TabsActivation {
     #[default]
     Manual,
     /// Left/Right switch tabs directly, with no separate cursor. The
-    /// [`tab_focus`](Tabs::tab_focus) binding is unused in this mode.
+    /// [`item_focus`](Tabs::item_focus) binding is unused in this mode.
     Automatic,
 }
 
@@ -247,20 +247,20 @@ struct ResolvedTabStyle {
 /// through this widget internally.
 ///
 /// Inputs are parallel to the labels by index — which tab is selected
-/// ([`selected_tab`](Self::selected_tab)), which tab the cursor is on
-/// ([`focused_tab`](Self::focused_tab)), and which tabs are disabled
-/// ([`disabled_tabs`](Self::disabled_tabs)) — the same shape as
+/// ([`selected_item`](Self::selected_item)), which tab the cursor is on
+/// ([`focused_item`](Self::focused_item)), and which tabs are disabled
+/// ([`disabled_items`](Self::disabled_items)) — the same shape as
 /// [`ListWidget`](crate::ListWidget). When the tabs are wider than the row, the
 /// widget shows the group around the selected/focused tab and adds `‹`/`›`
 /// markers on sides that have hidden tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TabsWidget<'a> {
     labels: &'a [&'a str],
-    selected_tab: Option<usize>,
-    focused_tab: Option<usize>,
-    disabled_tabs: &'a [bool],
+    selected_item: Option<usize>,
+    focused_item: Option<usize>,
+    disabled_items: &'a [bool],
     focused: bool,
-    hovered_tab: Option<usize>,
+    hovered_item: Option<usize>,
     disabled: bool,
     size: TabsSize,
     style: TabsStyle,
@@ -274,11 +274,11 @@ impl<'a> TabsWidget<'a> {
     pub const fn new(labels: &'a [&'a str]) -> Self {
         Self {
             labels,
-            selected_tab: None,
-            focused_tab: None,
-            disabled_tabs: &[],
+            selected_item: None,
+            focused_item: None,
+            disabled_items: &[],
             focused: false,
-            hovered_tab: None,
+            hovered_item: None,
             disabled: false,
             size: TabsSize::Small,
             style: TabsStyle::fallback(),
@@ -286,20 +286,11 @@ impl<'a> TabsWidget<'a> {
         }
     }
 
-    /// Paint this tab geometry instead of measuring the labels again.
-    ///
-    /// Left unset, the widget lays the row out itself from the labels, the size,
-    /// and whichever tab must stay visible — all a standalone caller needs. Pass
-    /// one when something outside the widget has already computed the same
-    /// layout and has to agree with the paint cell for cell: [`Tabs`] hands over
-    /// the layout it hit-tests clicks against, so the tab a click lands on is
-    /// the tab drawn there by construction rather than because both sides ran
-    /// the same arithmetic.
-    ///
-    /// Build one with [`tab_layout`]. A layout measured against a different area
-    /// paints where that area was, since the rects are absolute.
+    /// Paint this tab geometry, which [`Tabs`] also hit-tests clicks against,
+    /// so the tab a click lands on is the tab painted there. Given no layout
+    /// the widget measures the row itself.
     #[must_use]
-    pub const fn layout(mut self, layout: &'a TabLayout) -> Self {
+    const fn layout(mut self, layout: &'a TabLayout) -> Self {
         self.layout = Some(layout);
         self
     }
@@ -320,24 +311,24 @@ impl<'a> TabsWidget<'a> {
 
     /// The index of the selected (active) tab, filled as the default button.
     #[must_use]
-    pub const fn selected_tab(mut self, selected_tab: Option<usize>) -> Self {
-        self.selected_tab = selected_tab;
+    pub const fn selected_item(mut self, selected_item: Option<usize>) -> Self {
+        self.selected_item = selected_item;
         self
     }
 
     /// The index of the cursor tab. It paints with the focus shift only while
     /// the row itself has focus ([`focused`](Self::focused)).
     #[must_use]
-    pub const fn focused_tab(mut self, focused_tab: Option<usize>) -> Self {
-        self.focused_tab = focused_tab;
+    pub const fn focused_item(mut self, focused_item: Option<usize>) -> Self {
+        self.focused_item = focused_item;
         self
     }
 
     /// A disabled mask parallel to the labels; a missing entry reads as
-    /// enabled. Matches [`ListWidget::disabled_rows`](crate::ListWidget::disabled_rows).
+    /// enabled. Matches [`ListWidget::disabled_items`](crate::ListWidget::disabled_items).
     #[must_use]
-    pub const fn disabled_tabs(mut self, disabled_tabs: &'a [bool]) -> Self {
-        self.disabled_tabs = disabled_tabs;
+    pub const fn disabled_items(mut self, disabled_items: &'a [bool]) -> Self {
+        self.disabled_items = disabled_items;
         self
     }
 
@@ -360,10 +351,13 @@ impl<'a> TabsWidget<'a> {
     }
 
     /// The tab under the pointer, by index. Hover wins over focus for this tab
-    /// only; it does not alter the semantic cursor or selection.
+    /// only; it does not alter the semantic cursor or selection. A tab row
+    /// paints hover per item, where [`ListWidget`](crate::ListWidget) and
+    /// [`SelectWidget`](crate::SelectWidget) paint one hovered backdrop for the
+    /// whole control through their `hovered(bool)`.
     #[must_use]
-    pub const fn hovered_tab(mut self, hovered_tab: Option<usize>) -> Self {
-        self.hovered_tab = hovered_tab;
+    pub const fn hovered_item(mut self, hovered_item: Option<usize>) -> Self {
+        self.hovered_item = hovered_item;
         self
     }
 
@@ -406,7 +400,7 @@ impl Widget for TabsWidget<'_> {
         let Some(layout) = self.layout else {
             // Keep the focused tab visible when it exists; otherwise keep the
             // selected tab visible.
-            let must_show = self.focused_tab.or(self.selected_tab).unwrap_or(0);
+            let must_show = self.focused_item.or(self.selected_item).unwrap_or(0);
             self.paint_layout(&tab_layout(area, self.labels, self.size, must_show), buf);
             return;
         };
@@ -417,17 +411,18 @@ impl Widget for TabsWidget<'_> {
 impl TabsWidget<'_> {
     fn paint_layout(self, layout: &TabLayout, buf: &mut Buffer) {
         for &(index, rect) in &layout.tabs {
-            let disabled = self.disabled || self.disabled_tabs.get(index).copied().unwrap_or(false);
-            let cursor = self.focused_tab == Some(index);
+            let disabled =
+                self.disabled || self.disabled_items.get(index).copied().unwrap_or(false);
+            let cursor = self.focused_item == Some(index);
             let resolved = self.style.resolve(
-                self.selected_tab == Some(index),
+                self.selected_item == Some(index),
                 cursor && self.focused,
-                self.hovered_tab == Some(index),
+                self.hovered_item == Some(index),
                 disabled,
             );
             if self.size == TabsSize::Large {
-                render_tab_cap(rect, resolved.fill, TOP_CAP, buf);
-                render_tab_cap(
+                paint_tab_cap(rect, resolved.fill, TOP_CAP, buf);
+                paint_tab_cap(
                     Rect::new(rect.x, rect.y + 2, rect.width, 1),
                     resolved.fill,
                     BOTTOM_CAP,
@@ -459,7 +454,7 @@ impl TabsWidget<'_> {
     }
 }
 
-fn render_tab_cap(rect: Rect, fill: Color, symbol: &str, buf: &mut Buffer) {
+fn paint_tab_cap(rect: Rect, fill: Color, symbol: &str, buf: &mut Buffer) {
     Line::from(cap_row(fill, symbol, rect.width as usize))
         .style(Style::default().fg(fill))
         .render(rect, buf);
@@ -510,17 +505,17 @@ type StyleFn = Box<dyn Fn(&Theme) -> TabsStyle>;
 ///
 /// # Cursor and selection
 ///
-/// - [`tab_focus`](Self::tab_focus) is the cursor: which tab Left/Right and
+/// - [`item_focus`](Self::item_focus) is the cursor: which tab Left/Right and
 ///   Home/End are pointing at.
 /// - [`selection`](Self::selection) is the active tab, the one whose content is
 ///   showing.
 ///
 /// With the default [`TabsActivation::Manual`], the cursor moves freely and
 /// Enter or Space commits it. With [`TabsActivation::Automatic`] there is no
-/// separate cursor at all — arrows switch tabs directly, and the `tab_focus`
+/// separate cursor at all — arrows switch tabs directly, and the `item_focus`
 /// binding goes unused.
 ///
-/// Manual activation is keyboard-focusable only when both `tab_focus` and
+/// Manual activation is keyboard-focusable only when both `item_focus` and
 /// `selection` are bound. Automatic activation is keyboard-focusable only when
 /// `selection` is bound. An incompletely bound row can still paint and handle
 /// wired pointer actions, but it is not a focus stop and ignores keys.
@@ -536,19 +531,19 @@ type StyleFn = Box<dyn Fn(&Theme) -> TabsStyle>;
 ///
 /// # #[derive(Clone, Copy, PartialEq)]
 /// # enum Screen { Overview, Settings }
-/// # struct AppState { focused_tab: Screen, screen: Screen }
+/// # struct AppState { focused_item: Screen, screen: Screen }
 /// # enum Msg { TabFocused(Screen), ScreenChanged(Screen) }
 /// let _tabs = Tabs::new([
 ///     Tab::new(Screen::Overview, "Overview"),
 ///     Tab::new(Screen::Settings, "Settings"),
 /// ])
-/// .tab_focus(|s: &AppState| Some(s.focused_tab), Msg::TabFocused)
+/// .item_focus(|s: &AppState| Some(s.focused_item), Msg::TabFocused)
 /// .selection(|s: &AppState| Some(s.screen), Msg::ScreenChanged);
 /// ```
 pub struct Tabs<T, S, M> {
     items: Vec<Tab<T>>,
     /// Current semantic state bindings; events re-read these between frames.
-    focused_tab: Option<ReadFn<S, T>>,
+    focused_item: Option<ReadFn<S, T>>,
     on_focus_change: Option<OnChangeFn<T, M>>,
     selected: Option<ReadFn<S, T>>,
     on_select: Option<OnChangeFn<T, M>>,
@@ -569,7 +564,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Tabs")
             .field("items", &self.items)
-            .field("focused_tab", &self.focused_tab.is_some())
+            .field("focused_item", &self.focused_item.is_some())
             .field("on_focus_change", &self.on_focus_change.is_some())
             .field("selected", &self.selected.is_some())
             .field("on_select", &self.on_select.is_some())
@@ -590,7 +585,7 @@ impl<T, S, M> Tabs<T, S, M> {
     pub fn new(tabs: impl IntoIterator<Item = impl Into<Tab<T>>>) -> Self {
         Self {
             items: tabs.into_iter().map(Into::into).collect(),
-            focused_tab: None,
+            focused_item: None,
             on_focus_change: None,
             selected: None,
             on_select: None,
@@ -624,12 +619,12 @@ impl<T, S, M> Tabs<T, S, M> {
     /// Ignored under [`TabsActivation::Automatic`], which has no separate
     /// cursor.
     #[must_use]
-    pub fn tab_focus(
+    pub fn item_focus(
         mut self,
         read: impl Fn(&S) -> Option<T> + 'static,
         on_change: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.focused_tab = Some(Box::new(read));
+        self.focused_item = Some(Box::new(read));
         self.on_focus_change = Some(Box::new(on_change));
         self
     }
@@ -779,7 +774,7 @@ where
         match self.activation {
             TabsActivation::Automatic => self.selected_index(state),
             TabsActivation::Manual => self
-                .focused_tab
+                .focused_item
                 .as_ref()
                 .and_then(|read| self.index_of(&read(state)?)),
         }
@@ -788,7 +783,7 @@ where
     fn keyboard_enabled(&self) -> bool {
         self.selected.is_some()
             && match self.activation {
-                TabsActivation::Manual => self.focused_tab.is_some(),
+                TabsActivation::Manual => self.focused_item.is_some(),
                 TabsActivation::Automatic => true,
             }
     }
@@ -907,7 +902,7 @@ where
         let cursor = self.cursor_index(state);
         let labels: Vec<&str> = self.items.iter().map(Tab::label).collect();
         let disabled: Vec<bool> = (0..self.items.len()).map(|i| self.disabled_at(i)).collect();
-        let hovered_tab = ctx.hover_position().and_then(|position| {
+        let hovered_item = ctx.hover_position().and_then(|position| {
             self.hits
                 .tabs
                 .iter()
@@ -916,11 +911,11 @@ where
         });
         let style = resolve_style(self.style.as_deref(), ctx.theme, TabsStyle::from_theme);
         let widget = TabsWidget::new(&labels)
-            .selected_tab(selected)
-            .focused_tab(cursor)
-            .disabled_tabs(&disabled)
+            .selected_item(selected)
+            .focused_item(cursor)
+            .disabled_items(&disabled)
             .focused(ctx.focused)
-            .hovered_tab(hovered_tab)
+            .hovered_item(hovered_item)
             .disabled(self.disabled)
             .size(self.size)
             .style(style)
@@ -1019,20 +1014,18 @@ fn tab_width(label: &str) -> u16 {
 }
 
 /// Where the tabs of one row sit on screen: the outcome of measuring the labels
-/// against an area, and the single source of tab geometry.
-///
-/// [`tab_layout`] produces one. [`TabsWidget::layout`] paints from one, and
-/// [`Tabs`] hit-tests clicks against the same one it painted, so a click and the
-/// tab under it cannot disagree.
+/// against an area, and the single source of tab geometry. `tab_layout`
+/// produces one, the widget paints from it, and `Tabs` hit-tests clicks against
+/// the same one it painted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TabLayout {
+struct TabLayout {
     /// Each visible tab as `(label index, rect)`. The index is the tab's original
     /// position. Hidden tabs mean this index may differ from the tab's screen slot.
-    pub tabs: Vec<(usize, Rect)>,
+    tabs: Vec<(usize, Rect)>,
     /// The `‹` marker's cell, present only when tabs are hidden to the left.
-    pub left: Option<Rect>,
+    left: Option<Rect>,
     /// The `›` marker's cell, present only when tabs are hidden to the right.
-    pub right: Option<Rect>,
+    right: Option<Rect>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1188,13 +1181,8 @@ fn place_tab_window(
 /// with hidden tabs. An out-of-range `must_show` is clamped to the last tab.
 ///
 /// An empty row, a zero-width area, or one shorter than `size` lays out nothing.
-///
-/// A standalone [`TabsWidget`] caller need not call this — the widget measures
-/// its own row when given no layout. Call it when something else must agree with
-/// the paint cell for cell, and hand the result to
-/// [`TabsWidget::layout`](TabsWidget::layout).
 #[must_use]
-pub fn tab_layout(area: Rect, labels: &[&str], size: TabsSize, must_show: usize) -> TabLayout {
+fn tab_layout(area: Rect, labels: &[&str], size: TabsSize, must_show: usize) -> TabLayout {
     let height = size.height();
     if labels.is_empty() || area.width == 0 || area.height < height {
         return TabLayout::default();
@@ -1261,8 +1249,8 @@ mod tests {
         .activation(TabsActivation::Automatic)
     }
 
-    fn automatic_with_tab_focus() -> Tabs<Screen, State, Msg> {
-        automatic().tab_focus(
+    fn automatic_with_item_focus() -> Tabs<Screen, State, Msg> {
+        automatic().item_focus(
             |state: &State| Some(state.focused.unwrap_or(state.selected)),
             Msg::Focused,
         )
@@ -1275,7 +1263,7 @@ mod tests {
             Tab::new(Screen::B, "B").disabled(true),
             Tab::new(Screen::C, "C"),
         ])
-        .tab_focus(
+        .item_focus(
             |s: &State| Some(s.focused.unwrap_or(s.selected)),
             Msg::Focused,
         )
@@ -1323,7 +1311,7 @@ mod tests {
                             Tab::new(Screen::B, "B").disabled(state.disable_b),
                             Tab::new(Screen::C, "C"),
                         ])
-                        .tab_focus(
+                        .item_focus(
                             |state: &State| Some(state.focused.unwrap_or(state.selected)),
                             Msg::Focused,
                         )
@@ -1347,8 +1335,8 @@ mod tests {
     }
 
     #[test]
-    fn automatic_keyboard_ignores_a_stale_manual_tab_focus() {
-        let mut tabs = automatic_with_tab_focus();
+    fn automatic_keyboard_ignores_a_stale_manual_item_focus() {
+        let mut tabs = automatic_with_item_focus();
         let state = State {
             focused: Some(Screen::C),
             selected: Screen::A,
@@ -1388,7 +1376,7 @@ mod tests {
     #[test]
     fn manual_without_selection_binding_is_not_focusable_and_ignores_keys() {
         let mut tabs = Tabs::new([Tab::new(Screen::A, "A"), Tab::new(Screen::B, "B")])
-            .tab_focus(|_: &State| Some(Screen::A), Msg::Focused);
+            .item_focus(|_: &State| Some(Screen::A), Msg::Focused);
         let state = State::default();
 
         assert!(!tabs.is_focusable());
@@ -1434,7 +1422,7 @@ mod tests {
                 Tab::new(Screen::A, "A"),
                 Tab::new(Screen::D, "D"),
             ])
-            .tab_focus(
+            .item_focus(
                 |state: &State| Some(state.focused.unwrap_or(state.selected)),
                 Msg::Focused,
             )
@@ -1520,8 +1508,8 @@ mod tests {
     }
 
     #[test]
-    fn automatic_hover_ignores_a_manual_tab_focus_binding() {
-        let mut tabs = automatic_with_tab_focus();
+    fn automatic_hover_ignores_a_manual_item_focus_binding() {
+        let mut tabs = automatic_with_item_focus();
         tabs.hits = tab_layout(
             Rect::new(0, 0, 30, TabsSize::Small.height()),
             &["A", "B", "C"],
@@ -1719,7 +1707,7 @@ mod tests {
             Tab::new(Screen::E, "E"),
             Tab::new(Screen::F, "F"),
         ])
-        .tab_focus(
+        .item_focus(
             |state: &State| Some(state.focused.unwrap_or(state.selected)),
             Msg::Focused,
         )
@@ -2045,7 +2033,7 @@ mod tests {
             Tab::new(Screen::B, "B").disabled(true),
             Tab::new(Screen::C, "C"),
         ])
-        .tab_focus(
+        .item_focus(
             |state: &State| Some(state.focused.unwrap_or(state.selected)),
             Msg::Focused,
         )
@@ -2286,7 +2274,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_render_uses_selection_instead_of_stale_manual_tab_focus() {
+    fn automatic_render_uses_selection_instead_of_stale_manual_item_focus() {
         let theme = Theme::default_dark();
         let style = TabsStyle::from_theme(&theme);
         let state = State {
@@ -2303,7 +2291,7 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 ratcn.render(frame, &state, &theme, |ctx| {
-                    ctx.component(ChildId::Static("tabs"), automatic_with_tab_focus(), area);
+                    ctx.component(ChildId::Static("tabs"), automatic_with_item_focus(), area);
                 });
             })
             .expect("draw");
@@ -2329,7 +2317,7 @@ mod tests {
         // Selected A, no focused tab. A 0..5, B 6..11 (1-cell gap).
         Widget::render(
             TabsWidget::new(&["A", "B"])
-                .selected_tab(Some(0))
+                .selected_item(Some(0))
                 .style(style),
             area,
             &mut buffer,
@@ -2354,8 +2342,8 @@ mod tests {
 
         Widget::render(
             TabsWidget::new(&["A", "B"])
-                .selected_tab(Some(0))
-                .disabled_tabs(&[true, true])
+                .selected_item(Some(0))
+                .disabled_items(&[true, true])
                 .style(style),
             area,
             &mut buffer,
@@ -2379,8 +2367,8 @@ mod tests {
         // focused secondary button.
         Widget::render(
             TabsWidget::new(&["A", "B"])
-                .selected_tab(Some(0))
-                .focused_tab(Some(1))
+                .selected_item(Some(0))
+                .focused_item(Some(1))
                 .focused(true)
                 .style(style),
             area,
@@ -2422,13 +2410,13 @@ mod tests {
             "arriving on the row"
         );
         draw(&mut ratcn, &mut terminal);
-        let hovered_tab = terminal
+        let hovered_item = terminal
             .backend()
             .buffer()
             .cell((14, 0))
             .expect("hovered label cell")
             .bg;
-        assert_eq!(hovered_tab, style.hovered_background);
+        assert_eq!(hovered_item, style.hovered_background);
 
         // The empty end of the row is inside the tabs component but on no tab,
         // so nothing handles the motion. Hover does not move either — the
@@ -2555,7 +2543,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
 
         Widget::render(
-            TabsWidget::new(&["A", "B"]).selected_tab(Some(0)),
+            TabsWidget::new(&["A", "B"]).selected_item(Some(0)),
             area,
             &mut buffer,
         );
@@ -2573,7 +2561,7 @@ mod tests {
 
         Widget::render(
             TabsWidget::new(&["A"])
-                .selected_tab(Some(0))
+                .selected_item(Some(0))
                 .size(TabsSize::Large),
             area,
             &mut buffer,
@@ -2610,7 +2598,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
 
         Widget::render(
-            TabsWidget::new(&["A", "B"]).selected_tab(Some(0)),
+            TabsWidget::new(&["A", "B"]).selected_item(Some(0)),
             area,
             &mut buffer,
         );
@@ -2628,7 +2616,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
 
         Widget::render(
-            TabsWidget::new(&labels).selected_tab(Some(4)),
+            TabsWidget::new(&labels).selected_item(Some(4)),
             area,
             &mut buffer,
         );
@@ -2654,7 +2642,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
 
         Widget::render(
-            TabsWidget::new(&labels).selected_tab(Some(3)),
+            TabsWidget::new(&labels).selected_item(Some(3)),
             area,
             &mut buffer,
         );
@@ -2673,7 +2661,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
 
         Widget::render(
-            TabsWidget::new(&["VeryWide"]).selected_tab(Some(0)),
+            TabsWidget::new(&["VeryWide"]).selected_item(Some(0)),
             area,
             &mut buffer,
         );
@@ -2693,7 +2681,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
 
         Widget::render(
-            TabsWidget::new(&labels).selected_tab(Some(1)),
+            TabsWidget::new(&labels).selected_item(Some(1)),
             area,
             &mut buffer,
         );
@@ -2752,7 +2740,7 @@ mod tests {
 
         Widget::render(
             TabsWidget::new(&["日本"])
-                .selected_tab(Some(0))
+                .selected_item(Some(0))
                 .style(style),
             area,
             &mut buffer,
@@ -2781,7 +2769,7 @@ mod tests {
 
         Widget::render(
             TabsWidget::new(&["日本語"])
-                .selected_tab(Some(0))
+                .selected_item(Some(0))
                 .style(style),
             area,
             &mut buffer,
@@ -2796,12 +2784,12 @@ mod tests {
         // Zero-sized areas are a no-op, not a panic.
         let before = buffer.clone();
         Widget::render(
-            TabsWidget::new(&["日本語"]).selected_tab(Some(0)),
+            TabsWidget::new(&["日本語"]).selected_item(Some(0)),
             Rect::new(2, 0, 0, 1),
             &mut buffer,
         );
         Widget::render(
-            TabsWidget::new(&["日本語"]).selected_tab(Some(0)),
+            TabsWidget::new(&["日本語"]).selected_item(Some(0)),
             Rect::new(2, 0, 5, 0),
             &mut buffer,
         );
@@ -2934,7 +2922,7 @@ mod tests {
         // selected-disabled identity, the rest grey out.
         Widget::render(
             TabsWidget::new(&["A", "B"])
-                .selected_tab(Some(0))
+                .selected_item(Some(0))
                 .disabled(true)
                 .style(style),
             area,

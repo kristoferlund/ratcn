@@ -2563,8 +2563,8 @@ impl<State, Msg> Ratcn<State, Msg> {
         );
     }
 
-    /// Publish `next` as the retained interaction surface, and carry the
-    /// cross-frame pointer and transient bookkeeping onto it.
+    /// Publish `next` as the retained surface, and carry the cross-frame
+    /// pointer and transient bookkeeping onto it.
     ///
     /// Everything here outlives a single frame and so has to be reconciled
     /// when the ground moves: a captured gesture's component may no longer be

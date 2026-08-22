@@ -82,7 +82,7 @@ use termina::{
 use crate::Theme;
 use watch::Watch;
 
-pub use query::{TerminalColors, query};
+use query::{TerminalColors, query};
 /// The terminal library this module is built on, re-exported so an integrator
 /// names the types inside [`SessionEvent::Input`] through ratcn, at the version
 /// ratcn builds against.
@@ -290,8 +290,8 @@ impl Drop for Session {
 
 /// The terminal modes a session switches on, in the order it switches them on.
 ///
-/// Termina deliberately manages none of these: they are protocol, and the
-/// application decides. Restoring walks the list back off in reverse, so the
+/// Termina manages none of these: they are protocol, and the application
+/// decides. Restoring walks the list back off in reverse, so the
 /// theme subscription goes on last and comes off first — a terminal being put
 /// back reports no change into a session that is closing.
 fn modes(options: SessionOptions, subscribe: bool) -> Vec<DecPrivateModeCode> {

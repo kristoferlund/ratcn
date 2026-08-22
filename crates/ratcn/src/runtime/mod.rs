@@ -1,5 +1,5 @@
-//! The interaction runtime: focus, hover, mouse routing, and typed messages for
-//! components that would otherwise be paint-only widgets.
+//! The interaction runtime: focus, hover, mouse routing, and the typed
+//! messages a component sends back to your app.
 //!
 //! Ratatui widgets only draw. Anything interactive needs something that knows
 //! which component is focused, what the pointer is over, and where an event

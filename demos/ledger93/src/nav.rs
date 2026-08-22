@@ -45,7 +45,7 @@ pub fn tabs() -> Tabs<Screen, AppState, Msg> {
         Tab::new(Screen::Report, "Report"),
         Tab::new(Screen::Settings, "Settings"),
     ])
-    .tab_focus(
+    .item_focus(
         |s: &AppState| Some(s.nav.focused),
         |screen| Msg::Nav(NavMsg::Focused(screen)),
     )
@@ -60,7 +60,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pointer_selection_message_aligns_selection_and_tab_focus() {
+    fn pointer_selection_message_aligns_selection_and_item_focus() {
         let mut nav = Nav::default();
 
         nav.update(NavMsg::Selected(Screen::Settings));

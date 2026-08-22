@@ -179,7 +179,7 @@ impl<'a> TooltipWidget<'a> {
     /// line count plus the two border rows.
     ///
     /// `width` is the outer width, border columns included, so pass the same
-    /// value you will paint with. A width with no room for text still costs
+    /// value you will paint with. A width with no room for text still occupies
     /// the two border rows.
     #[must_use]
     pub fn height(&self, width: u16) -> u16 {
@@ -369,10 +369,10 @@ impl<S, M> Tooltip<S, M> {
     /// The focus query is a root-anchored prefix, so the id to pass is the
     /// Tooltip's own — its trigger's children sit beneath it.
     ///
-    /// Note what the focus half costs: a click focuses what it hits, so on its
-    /// own that reader leaves the bubble showing after a press, until focus
-    /// moves elsewhere. If that is not what you want, pair focus with your own
-    /// record of which device the user is on — the app sees every event, so
+    /// A click focuses what it hits, so a reader that watches focus keeps the
+    /// bubble up after a press, until focus moves elsewhere. To keep the bubble
+    /// to the keyboard, pair focus with your own record of which device the
+    /// user is on — the app sees every event, so
     /// `state.keyboard = !matches!(event, Event::Mouse(_))` before routing is
     /// enough. That is the distinction the web draws between `:focus` and
     /// `:focus-visible`, and `demos/tooltip` shows it end to end.

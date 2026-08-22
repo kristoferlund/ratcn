@@ -88,7 +88,7 @@ removes it. Enter or Space toggles the cursor item. Pick one mode —
 
 ## Custom rows
 
-`render_item` replaces the default marker-and-label line with anything you can
+`paint_item` replaces the default marker-and-label line with anything you can
 paint. For rows taller than one line, return a `Text` and set `.row_height(...)`
 to match.
 
@@ -108,7 +108,7 @@ to match.
 List::new(people)
     .multi_selection(|s: &AppState, name| s.invited.contains(name), Msg::Toggled)
     .row_height(2)
-    .render_item(move |state: &AppState, row| {
+    .paint_item(move |state: &AppState, row| {
         let marker = if row.selected { "[x]" } else { "[ ]" };
         Text::from(vec![
             Line::from(format!("{marker}  {}", row.label)),
@@ -122,7 +122,7 @@ List::new(people)
 
 Every item is the same height, which keeps clicking and paging exact. The
 default markers are `■`/`□` and `●`/`○`; this demo paints ASCII `[x]`/`[ ]`
-instead. The row's state colors are painted underneath what `render_item`
+instead. The row's state colors are painted underneath what `paint_item`
 returns, so unstyled text picks up the focused, selected, or disabled colors,
 and any color you set explicitly on a `Text`, `Line`, or `Span` is kept.
 
@@ -221,9 +221,9 @@ let rows = vec![Text::from("Inbox"), Text::from("Archive")];
 frame.render_widget(
     ListWidget::new(&rows[scroll_offset.min(rows.len())..])
         .first_item(scroll_offset)
-        .focused_row(Some(0))
-        .selected_rows(&[1])
-        .disabled_rows(&[false, true])
+        .focused_item(Some(0))
+        .selected_items(&[1])
+        .disabled_items(&[false, true])
         .focused(list_has_focus)
         .hovered(pointer_is_over_list)
         .focus_symbol("> ")
@@ -233,8 +233,8 @@ frame.render_widget(
 ```
 
 Scrolling is yours: hand over the rows that are on screen and say where they
-start with `first_item`. Every other index — `focused_row`, `selected_rows`,
-`disabled_rows` — counts from the start of the list, so scrolling changes only
+start with `first_item`. Every other index — `focused_item`, `selected_items`,
+`disabled_items` — counts from the start of the list, so scrolling changes only
 that number and the rows. The widget holds no scroll position and never adjusts
 one, so your app stays the only scroll policy. Offscreen rows are free: you
 build `Text`s for the rows you hand over, and the widget allocates nothing per
@@ -246,15 +246,15 @@ those heights uniform is yours to do here, because the arithmetic that maps a
 screen row back to an item counts items rather than lines; the `List` component
 does it for you.
 
-The two row inputs use different encodings: `selected_rows` is a list of
-selected indices, since selection is sparse, while `disabled_rows` is one flag
+The two row inputs use different encodings: `selected_items` is a list of
+selected indices, since selection is sparse, while `disabled_items` is one flag
 per item. Both are read at the item's own index, and only for the rows
 the widget paints — so a windowed caller can name just the selected rows inside
-its window, but `disabled_rows` is a positional mask and has to be padded up to
+its window, but `disabled_items` is a positional mask and has to be padded up to
 the window: entry *n* describes item *n*, and entries past the end of the slice
 read as enabled.
 
-`.disabled(true)` dims the whole widget, as `.disabled_rows(...)` does for
+`.disabled(true)` dims the whole widget, as `.disabled_items(...)` does for
 single rows. Replace `.themed(...)` with `.style(...)` to supply exact widget
 colors instead of deriving them from a theme.
 

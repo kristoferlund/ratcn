@@ -2,9 +2,10 @@
 //! value-keyed items: item identity, a uniform-row viewport, and what a pointer
 //! gesture over one of those rows asks for.
 //!
-//! [`List`](crate::List) is one presentation of such a set; a Select dropdown
-//! or a menu is another. What they present differs, but what they *are* — an
-//! ordered collection of value-keyed items, some disabled — is the same. That
+//! [`List`](crate::List) presents such a set as a column of rows, and
+//! [`Select`](crate::Select) presents one as a dropdown panel. What they
+//! present differs, but what they *are* — an ordered collection of value-keyed
+//! items, some disabled — is the same. That
 //! substance lives here once, next to the index arithmetic in
 //! [`crate::linear_nav`], so two of them can never drift apart on how items are
 //! identified, how clicks map to rows, or when a list scrolls.
@@ -13,7 +14,7 @@
 //! component keyed by item value, whatever its own item type and however it is
 //! laid out — [`Tabs`](crate::Tabs) uses it for a row of tabs, and so is
 //! [`ListItem`] itself, which a tab is. Everything else here —
-//! [`RowViewport`], [`WheelPark`], [`windowed_rows`], [`row_intent`] — assumes
+//! [`RowViewport`], [`WheelHold`], [`windowed_rows`], [`row_intent`] — assumes
 //! items stacked in a scrolling column of uniform-height rows.
 //!
 //! Nothing here paints or emits. [`row_intent`] decides what a pointer gesture
@@ -42,7 +43,7 @@ pub const SCROLL_STEP: usize = 3;
 /// one bit of memory between frames, which no component instance can hold: a
 /// fresh one is built every frame. This lives in the runtime's
 /// identity-scoped transient store instead, written by event handlers and read
-/// by paint, and it disappears with the component's identity (a select's park
+/// by paint, and it disappears with the component's identity (a select's hold
 /// dies when its popup closes).
 ///
 /// The hold stands only while the list has not moved under it: the item the
@@ -51,24 +52,24 @@ pub const SCROLL_STEP: usize = 3;
 /// survive one item being swapped for another at the same position and leave the
 /// new one off-screen — these components key focus and selection by value, so
 /// the value is what identifies the anchor. Anchoring by value alone would
-/// survive reordering, filtering, insertion, and removal, leaving a parked
+/// survive reordering, filtering, insertion, and removal, leaving a held
 /// offset that says nothing about which items now sit there. Requiring all of it
 /// is what makes the held offset worth honoring: while the hold stands, the row
 /// it names still holds the same items it named.
 ///
 /// The rules, in the order they matter:
 ///
-/// - [`park`](Self::park) records a wheel scroll: the view moves to `offset`
+/// - [`hold`](Self::hold) records a wheel scroll: the view moves to `offset`
 ///   and holds there while the list stays as it was.
 /// - [`settle`](Self::settle) runs once per frame, where the component
 ///   declares. It releases the hold for good once anything has moved, and
 ///   answers with the offset that declaration paints from. Releasing is
 ///   permanent: without it, moving the cursor away and back would revive a
-///   stale park and throw the cursor off-screen again.
+///   stale hold and throw the cursor off-screen again.
 ///
 /// The declaration settles it rather than event handling because only the
 /// declaration sees every cursor change: a select's options are scrolled by
-/// the panel but moved by the keys its trigger handles. The park is stored
+/// the panel but moved by the keys its trigger handles. The hold is stored
 /// through [`DeclareCtx::transient_mut`](crate::runtime::DeclareCtx::transient_mut),
 /// so it survives between frames and the wheel's own event handler writes it
 /// from the other side.
@@ -76,16 +77,16 @@ pub const SCROLL_STEP: usize = 3;
 /// This is render-derived presentation state. The cursor, the selection, and
 /// any app-bound scroll offset stay app-owned.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WheelPark<T> {
+pub struct WheelHold<T> {
     offset: usize,
-    /// What the list looked like where it mattered when the wheel parked.
+    /// What the list looked like where it mattered when the wheel took the hold.
     /// `None` while nothing holds the view.
     held: Option<Anchor<T>>,
 }
 
 /// The list as the wheel left it: the item under the cursor, the row it sat on,
-/// and how many items there were. Captured together in [`WheelPark::park`] so no
-/// caller can assemble a half-anchor.
+/// and how many items there were. Captured together in [`WheelHold::hold`] so
+/// no caller can assemble a half-anchor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Anchor<T> {
     value: T,
@@ -93,9 +94,9 @@ struct Anchor<T> {
     len: usize,
 }
 
-/// An unparked view at the top of the list: nothing holds it, so the cursor is
+/// An unheld view at the top of the list: nothing holds it, so the cursor is
 /// kept visible.
-impl<T> Default for WheelPark<T> {
+impl<T> Default for WheelHold<T> {
     fn default() -> Self {
         Self {
             offset: 0,
@@ -104,13 +105,13 @@ impl<T> Default for WheelPark<T> {
     }
 }
 
-impl<T: Clone + PartialEq> WheelPark<T> {
+impl<T: Clone + PartialEq> WheelHold<T> {
     /// Record a wheel scroll to `offset`, holding the view there while `items`
     /// still reads as it does now where `cursor` sits.
     ///
     /// A `cursor` of `None` anchors nothing: with no cursor there is none to
     /// push off-screen, and the view simply starts from `offset`.
-    pub fn park(&mut self, offset: usize, items: &[ListItem<T>], cursor: Option<usize>) {
+    pub fn hold(&mut self, offset: usize, items: &[ListItem<T>], cursor: Option<usize>) {
         self.offset = offset;
         self.held = cursor
             .and_then(|index| Some((items.get(index)?, index)))
@@ -134,8 +135,8 @@ impl<T: Clone + PartialEq> WheelPark<T> {
     /// anchored row, that row still carries the anchored item, and `items` is
     /// still the length it was. Replacing that item, reordering, filtering,
     /// inserting, removing, or moving the cursor elsewhere all release the hold
-    /// and scroll the cursor back into view: a parked offset is worth honoring
-    /// only while it still names the rows it was parked on.
+    /// and scroll the cursor back into view: a held offset is worth honoring
+    /// only while it still names the rows it was held on.
     pub fn settle(
         &mut self,
         items: &[ListItem<T>],
@@ -162,14 +163,14 @@ impl<T: Clone + PartialEq> WheelPark<T> {
     }
 }
 
-impl<T: Clone + PartialEq + 'static> WheelPark<T> {
-    /// [`settle`](Self::settle) the park stored at the current declaration's
-    /// identity, or an unparked view when nothing is stored there.
+impl<T: Clone + PartialEq + 'static> WheelHold<T> {
+    /// [`settle`](Self::settle) the hold stored at the current declaration's
+    /// identity, or an unheld view when nothing is stored there.
     ///
-    /// A park is written by a wheel event and read back by the next declaration,
+    /// A hold is written by a wheel event and read back by the next declaration,
     /// so a declaration that has never been wheeled finds nothing — and must
     /// still resolve the offset it paints from. Settling through here is what
-    /// makes the absent park mean "unparked" rather than "no offset", in the one
+    /// makes the absent hold mean "unheld" rather than "no offset", in the one
     /// place both list-shaped components reach for it.
     pub fn settle_transient<S, M>(
         ctx: &mut DeclareCtx<'_, S, M>,
@@ -179,9 +180,9 @@ impl<T: Clone + PartialEq + 'static> WheelPark<T> {
         viewport: &mut RowViewport,
         area: Rect,
     ) {
-        let mut unparked = Self::default();
+        let mut unheld = Self::default();
         ctx.transient_mut::<Self>()
-            .unwrap_or(&mut unparked)
+            .unwrap_or(&mut unheld)
             .settle(items, cursor, requested, viewport, area);
     }
 }
@@ -235,8 +236,8 @@ impl<T> ListItem<T> {
     /// Dim this row and prevent user-driven focus and selection.
     ///
     /// Keyboard movement skips over it and clicks on it do nothing. Controlled
-    /// state may still identify the row, so components can preserve a previously
-    /// selected value while it is disabled.
+    /// state may still name the row, so a component keeps a selected value
+    /// while it is disabled.
     #[must_use]
     pub const fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
@@ -274,11 +275,11 @@ impl From<String> for ListItem<String> {
     }
 }
 
-/// Everything a custom row-rendering closure — [`List::render_item`] or
-/// [`Select::render_item`] — knows about the row it is drawing.
+/// Everything a custom row-rendering closure — [`List::paint_item`] or
+/// [`Select::paint_item`] — knows about the row it is drawing.
 ///
-/// [`List::render_item`]: crate::List::render_item
-/// [`Select::render_item`]: crate::Select::render_item
+/// [`List::paint_item`]: crate::List::paint_item
+/// [`Select::paint_item`]: crate::Select::paint_item
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListItemState<'a, T> {
     /// Position in the list as declared, counting from 0.
@@ -302,7 +303,7 @@ pub struct ListItemState<'a, T> {
 /// extra lines from long ones.
 ///
 /// Uniform item height is what lets hit-testing divide a screen row by it, so a
-/// `render_item` closure returning the wrong number of lines must not be able
+/// `paint_item` closure returning the wrong number of lines must not be able
 /// to desynchronise clicks from items.
 #[must_use]
 pub fn fit_to_height(mut text: Text<'static>, height: u16) -> Text<'static> {
@@ -431,9 +432,8 @@ pub fn disabled_at<T>(items: &[ListItem<T>], index: usize) -> bool {
 /// Call it from a component's declaration-time validation (`prepare`) with an
 /// iterator over the identifying values — e.g. `items.iter().map(ListItem::value)`
 /// for [`ListItem`]s, or the equivalent for any other value-keyed item type.
-/// Duplicate values would make focus, selection, and pointer actions
-/// ambiguous — two rows would answer to the same identity — so declaration
-/// fails loudly rather than one of them winning silently. `component` names
+/// Duplicate values make focus, selection, and pointer actions ambiguous — two
+/// rows answer to the same identity — so declaration panics. `component` names
 /// the caller in the panic message.
 ///
 /// Item values are only [`PartialEq`], so there is nothing to sort or hash by
@@ -588,26 +588,26 @@ mod tests {
     }
 
     #[test]
-    fn a_park_persists_only_while_its_item_stays_put() {
+    fn a_hold_persists_only_while_its_item_stays_put() {
         let numbered = |values: [u8; 6]| values.map(|value| ListItem::new(value, "row"));
-        // Two items fit, so a park at 4 leaves a cursor near the top off-screen.
+        // Two items fit, so a hold at 4 leaves a cursor near the top off-screen.
         let area = Rect::new(0, 0, 10, 2);
         let mut viewport = RowViewport::new(1);
         let unchanged = numbered([1, 2, 3, 4, 5, 6]);
-        let mut park = WheelPark::default();
+        let mut hold = WheelHold::default();
 
-        park.park(4, &unchanged, Some(0));
-        park.settle(&unchanged, Some(0), None, &mut viewport, area);
+        hold.hold(4, &unchanged, Some(0));
+        hold.settle(&unchanged, Some(0), None, &mut viewport, area);
         assert_eq!(
             viewport.painted_offset(),
             4,
             "nothing moved, so the wheel keeps the view where it left it"
         );
 
-        // The anchored item is still in the list, at another row: the parked
-        // offset no longer names the rows it was parked on.
-        park.park(4, &unchanged, Some(0));
-        park.settle(
+        // The anchored item is still in the list, at another row: the held
+        // offset no longer names the rows it was held on.
+        hold.hold(4, &unchanged, Some(0));
+        hold.settle(
             &numbered([2, 3, 1, 4, 5, 6]),
             Some(2),
             None,
@@ -621,8 +621,8 @@ mod tests {
         );
 
         // Another item at the anchored row.
-        park.park(4, &unchanged, Some(0));
-        park.settle(
+        hold.hold(4, &unchanged, Some(0));
+        hold.settle(
             &numbered([7, 2, 3, 4, 5, 6]),
             Some(0),
             None,
@@ -636,24 +636,24 @@ mod tests {
         );
     }
 
-    /// A park holds a row number, which only means something in a list of the
-    /// same length. Filtering one out from under it must not leave the view
-    /// clamped to a tail that no longer holds those items.
+    /// A hold names a row number, which only means something in a list of the
+    /// same length. Filtering an item out from under it releases the hold and
+    /// brings the cursor back into view.
     #[test]
-    fn filtering_the_list_under_a_park_brings_the_cursor_back() {
+    fn filtering_the_list_under_a_hold_brings_the_cursor_back() {
         let area = Rect::new(0, 0, 10, 2);
         let mut viewport = RowViewport::new(1);
         let long: Vec<ListItem<u8>> = (0..60).map(|value| ListItem::new(value, "row")).collect();
-        let mut park = WheelPark::default();
+        let mut hold = WheelHold::default();
 
-        park.park(45, &long, Some(0));
-        park.settle(&long, Some(0), None, &mut viewport, area);
+        hold.hold(45, &long, Some(0));
+        hold.settle(&long, Some(0), None, &mut viewport, area);
         assert_eq!(viewport.painted_offset(), 45, "the wheel holds the view");
 
         // The filter keeps the cursor's own item exactly where it was and drops
         // half the tail, so only the length gives the change away.
         let filtered: Vec<ListItem<u8>> = long.iter().take(30).cloned().collect();
-        park.settle(&filtered, Some(0), None, &mut viewport, area);
+        hold.settle(&filtered, Some(0), None, &mut viewport, area);
         assert_eq!(
             viewport.painted_offset(),
             0,

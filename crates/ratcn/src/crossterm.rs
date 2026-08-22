@@ -13,8 +13,8 @@
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let _modes = InputModes::new()
-//!     .mouse_capture()
-//!     .bracketed_paste()
+//!     .mouse()
+//!     .paste()
 //!     .enable()?;
 //! // Run the event loop; `_modes` must stay alive for the whole of it.
 //! # Ok(())
@@ -157,41 +157,34 @@ fn mode_registry() -> &'static ModeRegistry {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[must_use]
 pub struct InputModes {
-    mouse_capture: bool,
-    bracketed_paste: bool,
+    mouse: bool,
+    paste: bool,
 }
 
 impl InputModes {
     /// Start with no optional terminal input modes enabled.
     pub const fn new() -> Self {
         Self {
-            mouse_capture: false,
-            bracketed_paste: false,
+            mouse: false,
+            paste: false,
         }
     }
 
     /// Report mouse movement, clicks, and scrolling as events.
     ///
-    /// Required for any of ratcn's mouse handling — hover, clicking a button,
-    /// dragging a dialog. Without it the terminal handles the mouse itself and
-    /// no mouse events reach the app.
-    ///
-    /// The trade-off: while it is on, the terminal's own text selection usually
-    /// stops working, and users fall back to holding Shift to select.
-    pub const fn mouse_capture(mut self) -> Self {
-        self.mouse_capture = true;
+    /// Every part of ratcn's mouse handling needs it — hover, clicking a
+    /// button, dragging a dialog. While it is on, the terminal's own text
+    /// selection usually stops working, and users hold Shift to select.
+    pub const fn mouse(mut self) -> Self {
+        self.mouse = true;
         self
     }
 
-    /// Report a paste as one event rather than as fake typing.
-    ///
-    /// Without it the terminal delivers pasted text as a burst of individual key
-    /// presses, so a pasted newline looks exactly like the user hitting Enter —
-    /// which submits the form. With it, the paste arrives as a single
-    /// [`Event::Paste`](crate::runtime::Event::Paste) that components insert
-    /// verbatim.
-    pub const fn bracketed_paste(mut self) -> Self {
-        self.bracketed_paste = true;
+    /// Deliver a paste as one [`Event::Paste`](crate::runtime::Event::Paste)
+    /// that components insert verbatim, so a pasted newline stays distinct
+    /// from the user hitting Enter.
+    pub const fn paste(mut self) -> Self {
+        self.paste = true;
         self
     }
 
@@ -204,13 +197,13 @@ impl InputModes {
     /// leaves the terminal as it found it.
     pub fn enable(self) -> io::Result<InputModeGuard> {
         let mut guard = InputModeGuard::default();
-        if self.mouse_capture {
+        if self.mouse {
             mode_registry().acquire(Mode::MouseCapture, || {
                 execute!(io::stdout(), EnableMouseCapture)
             })?;
             guard.mouse_capture = true;
         }
-        if self.bracketed_paste {
+        if self.paste {
             mode_registry().acquire(Mode::BracketedPaste, || {
                 execute!(io::stdout(), EnableBracketedPaste)
             })?;
@@ -256,10 +249,10 @@ mod tests {
     #[test]
     fn mode_builders_select_only_the_requested_modes() {
         assert_eq!(InputModes::new(), InputModes::default());
-        assert!(InputModes::new().mouse_capture().mouse_capture);
-        assert!(InputModes::new().bracketed_paste().bracketed_paste);
-        let both = InputModes::new().mouse_capture().bracketed_paste();
-        assert!(both.mouse_capture && both.bracketed_paste);
+        assert!(InputModes::new().mouse().mouse);
+        assert!(InputModes::new().paste().paste);
+        let both = InputModes::new().mouse().paste();
+        assert!(both.mouse && both.paste);
     }
 
     #[test]

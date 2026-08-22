@@ -67,7 +67,7 @@ fn button(
     Button::new(label)
         .variant(variant)
         .size(Large)
-        .on_press(move || AppMsg::Toast(Toast::new(format!("{label} pressed")).kind(kind)))
+        .on_press(move || AppMsg::Toast(Toast::new(format!("{label} pressed")).with_kind(kind)))
         .disabled(disabled)
 }
 

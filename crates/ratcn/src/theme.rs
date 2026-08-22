@@ -570,8 +570,8 @@ impl Theme {
     /// preset does not break callers: index it, iterate it, or take its
     /// `len()`, but do not depend on the count.
     ///
-    /// [`adaptive`](Self::adaptive) is deliberately absent: it is solved per
-    /// terminal rather than authored, so there is no one theme to list.
+    /// The list holds the authored themes. [`adaptive`](Self::adaptive) solves
+    /// one per terminal, so it has no entry here.
     #[must_use]
     pub const fn presets() -> &'static [Self] {
         &PRESETS
@@ -1724,10 +1724,9 @@ mod tests {
     /// for focus and hover, which is where a label's contrast is spent, and
     /// which are taken from the real style constructors rather than recomputed.
     ///
-    /// One kind of pair is deliberately absent: disabled pairs, covered by
-    /// `preset_disabled_wells_read_as_disabled` instead. WCAG 1.4.3 exempts
-    /// inactive components, and a disabled control that met the text floor
-    /// would not look disabled.
+    /// Disabled pairs are checked by `preset_disabled_wells_read_as_disabled`.
+    /// WCAG 1.4.3 exempts inactive components, and a disabled control that met
+    /// the text floor would not look disabled.
     fn text_pairs(theme: &Theme) -> Vec<(String, Color, Color)> {
         let mut pairs = surface_text_pairs(theme);
         pairs.append(&mut well_text_pairs(theme));
@@ -2026,9 +2025,7 @@ mod tests {
     }
 
     /// A select is a list wearing a trigger: the two derive the same well from
-    /// the same theme, and a component that hardcoded a direction its sibling
-    /// asks for would show up here as a panel that no longer tracks the list it
-    /// mirrors.
+    /// the same theme, so the panel tracks the list it mirrors.
     fn check_select_tracks_the_list(theme: &Theme) {
         let list = ListStyle::from_theme(theme);
         let select = SelectStyle::from_theme(theme);
@@ -2113,10 +2110,9 @@ mod tests {
         );
     }
 
-    /// Text is the thing a palette is allowed to get wrong quietly: a fill that
-    /// is one tone off still looks deliberate, while text one tone off is just
-    /// hard to read. So every pair a component paints is measured, not only the
-    /// ones on the background.
+    /// A fill one tone off still reads as a fill; text one tone off is hard to
+    /// read. Every pair a component paints is measured, including the ones off
+    /// the background.
     fn check_text(theme: &Theme) {
         for (pair, foreground, background) in text_pairs(theme) {
             let floor = contrast_floor(theme, &pair);
@@ -2184,11 +2180,10 @@ mod tests {
         );
     }
 
-    /// `destructive` is the one role in this preset that keeps a hue, because
-    /// the hue *is* the role — a red button is red on every palette. The cost
-    /// is that its derived fills resolve through the VGA table before they
-    /// darken, so focus lands on a fixed `#f00000` and hover on `#e00000`
-    /// whatever red the terminal draws at rest.
+    /// `destructive` keeps a hue in this preset: the hue *is* the role, and a
+    /// red button is red on every palette. Its derived fills resolve through
+    /// the VGA table before they darken, so focus lands on a fixed `#f00000`
+    /// and hover on `#e00000` whatever red the terminal paints at rest.
     ///
     /// What can still be checked is which side of that red the label sits on.
     /// Black holds 4.17:1 at its worst against the approximation and white

@@ -1,6 +1,6 @@
 //! Multi-selection with two-line custom rows.
 //!
-//! `render_item` returns a `Text` rather than a `Line`, and `row_height(2)`
+//! `paint_item` returns a `Text` rather than a `Line`, and `row_height(2)`
 //! tells the list that every item is two rows tall. That pairing is what keeps
 //! clicking exact — without it, a click on a job title would toggle the person
 //! below.
@@ -126,7 +126,7 @@ impl demo_shared::Demo for App {
                 .scroll(|s: &AppState| s.scroll, Msg::PersonScrollChanged)
                 // Two lines per item, so the list must be told the height.
                 .row_height(ROW_HEIGHT)
-                .render_item(move |state: &AppState, row| {
+                .paint_item(move |state: &AppState, row| {
                     // ASCII checkbox: renders identically everywhere.
                     let marker = if row.selected { "[x]" } else { "[ ]" };
                     Text::from(vec![

@@ -270,13 +270,11 @@ impl<'a, 'toast: 'a> ToasterWidget<'a, 'toast> {
         self
     }
 
-    /// The toasts this widget would draw, newest first: unexpired as of `now`,
-    /// capped at [`max_visible_toasts`](Self::max_visible_toasts).
-    ///
-    /// Does not account for available space — a toast listed here may still be
-    /// dropped at paint time if the area cannot hold it whole.
-    #[must_use = "reports which toasts would draw without drawing them"]
-    pub fn visible(&self) -> impl Iterator<Item = &'a Toast<'toast>> + '_ {
+    /// The toasts this widget paints, newest first: unexpired as of `now`,
+    /// capped at [`max_visible_toasts`](Self::max_visible_toasts). A toast
+    /// listed here is still dropped at paint time when the area cannot hold it
+    /// whole.
+    fn visible(&self) -> impl Iterator<Item = &'a Toast<'toast>> + '_ {
         self.toasts
             .iter()
             .filter(move |toast| !toast.is_expired(self.now))
@@ -304,7 +302,7 @@ impl<'a, 'toast: 'a> Widget for ToasterWidget<'a, 'toast> {
         let mut fitting: Vec<PaintedToast<'_, '_>> = Vec::new();
         let mut height = 0u16;
         for toast in self.visible() {
-            let Some(painted) = PaintedToast::prepare(toast, &self.style, width) else {
+            let Some(painted) = PaintedToast::wrap(toast, &self.style, width) else {
                 continue;
             };
             let gap = if fitting.is_empty() { 0 } else { self.gap };
@@ -350,7 +348,7 @@ impl<'a, 'toast: 'a> Widget for ToasterWidget<'a, 'toast> {
                 current
             };
             let toast_area = Rect::new(column.x, toast_y, column.width, toast_height);
-            painted.render(&self.style, toast_area, buf);
+            painted.paint(&self.style, toast_area, buf);
         }
     }
 }
@@ -369,9 +367,9 @@ impl<'a, 'toast> PaintedToast<'a, 'toast> {
     /// Wrap `toast` at stack width `width`, or `None` when that width cannot
     /// render it at all. The height is the [`toast_lines`] count plus, when
     /// bordered, the two border rows. The horizontal chrome (one border and one
-    /// padding column per side) mirrors the block [`Self::render`] builds, so
+    /// padding column per side) mirrors the block [`Self::paint`] builds, so
     /// the content width wrapped at is the width painted at.
-    fn prepare(toast: &'a Toast<'toast>, style: &ToasterStyle, width: u16) -> Option<Self> {
+    fn wrap(toast: &'a Toast<'toast>, style: &ToasterStyle, width: u16) -> Option<Self> {
         if width < minimum_toast_width(toast) {
             return None;
         }
@@ -388,10 +386,10 @@ impl<'a, 'toast> PaintedToast<'a, 'toast> {
     }
 
     /// Paint the wrapped toast into `area`, whose height is [`Self::height`].
-    fn render(self, style: &ToasterStyle, area: Rect, buf: &mut Buffer) {
+    fn paint(self, style: &ToasterStyle, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let (accent, _) = style.resolve(self.toast.toast_kind());
+        let (accent, _) = style.resolve(self.toast.kind());
         let content_area = if self.toast.is_bordered() {
             // A plain ratatui border, themed inline. Components draw their own
             // border rather than depending on the `Border` component.
@@ -425,8 +423,8 @@ fn toast_lines<'a>(
     style: &ToasterStyle,
     content_width: u16,
 ) -> Vec<Line<'a>> {
-    let (accent, title_style) = style.resolve(toast.toast_kind());
-    let icon = toast_icon(toast.toast_kind());
+    let (accent, title_style) = style.resolve(toast.kind());
+    let icon = toast_icon(toast.kind());
     let prefix_width = usize::from(TITLE_PREFIX_WIDTH);
 
     let mut lines = Vec::new();
@@ -446,7 +444,7 @@ fn toast_lines<'a>(
             Span::styled(segment, title_style),
         ]));
     }
-    if let Some(description) = toast.description_text() {
+    if let Some(description) = toast.description() {
         for segment in wrap_to_width(description, content_width.into()) {
             lines.push(Line::from(segment).style(Style::default().fg(style.muted_foreground)));
         }
@@ -491,19 +489,19 @@ mod tests {
     const LONG_DESCRIPTION: &str = "a rather long description that wraps onto several rows";
 
     /// The rows one toast occupies at stack width `width`, zero when the width
-    /// cannot render it — what the stack asks of [`PaintedToast::prepare`].
+    /// cannot paint it — what the stack asks of [`PaintedToast::wrap`].
     fn toast_height(toast: &Toast<'_>, style: &ToasterStyle, width: u16) -> u16 {
-        PaintedToast::prepare(toast, style, width).map_or(0, |painted| painted.height)
+        PaintedToast::wrap(toast, style, width).map_or(0, |painted| painted.height)
     }
 
     /// Paint one toast into `area`, wrapped at that area's width, so a test
     /// paints through the path the stack paints through.
-    fn render_toast(toast: &Toast<'_>, style: &ToasterStyle, area: Rect, buf: &mut Buffer) {
+    fn paint_toast(toast: &Toast<'_>, style: &ToasterStyle, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
         }
-        if let Some(painted) = PaintedToast::prepare(toast, style, area.width) {
-            painted.render(style, area, buf);
+        if let Some(painted) = PaintedToast::wrap(toast, style, area.width) {
+            painted.paint(style, area, buf);
         }
     }
 
@@ -603,7 +601,7 @@ mod tests {
     #[test]
     fn toast_height_follows_wrapped_content() {
         let style = ToasterStyle::fallback();
-        let toast = Toast::new("saved").description("a description long enough to wrap");
+        let toast = Toast::new("saved").with_description("a description long enough to wrap");
 
         // At the default width the description fits on one row: one title
         // row, one description row, two border rows.
@@ -617,12 +615,12 @@ mod tests {
     #[test]
     fn measurement_matches_paint() {
         let style = ToasterStyle::fallback();
-        let toast = Toast::new("saved").description("a description long enough to wrap");
+        let toast = Toast::new("saved").with_description("a description long enough to wrap");
         let width = 20;
         let height = toast_height(&toast, &style, width);
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        render_toast(&toast, &style, area, &mut buf);
+        paint_toast(&toast, &style, area, &mut buf);
 
         // The bottom border lands on the measured last row, with the last
         // wrapped content row directly above it: measurement and paint agree
@@ -753,7 +751,7 @@ mod tests {
     fn wrapped_toast_stacks_whole_below_without_overlap() {
         let mut toasts = ToasterState::new();
         toasts.push(
-            Toast::new("first").description(LONG_DESCRIPTION),
+            Toast::new("first").with_description(LONG_DESCRIPTION),
             Duration::ZERO,
         );
         toasts.push(Toast::new("second"), Duration::ZERO);
@@ -783,7 +781,7 @@ mod tests {
         let mut toasts = ToasterState::new();
         toasts.push(Toast::new("earlier"), Duration::ZERO);
         toasts.push(
-            Toast::new("latest").description(LONG_DESCRIPTION),
+            Toast::new("latest").with_description(LONG_DESCRIPTION),
             Duration::ZERO,
         );
         let area = Rect::new(0, 0, 40, 20);
@@ -839,7 +837,7 @@ mod tests {
         let mut toasts = ToasterState::new();
         toasts.push(
             Toast::new("saved")
-                .description(LONG_DESCRIPTION)
+                .with_description(LONG_DESCRIPTION)
                 .border(false),
             Duration::ZERO,
         );
@@ -871,7 +869,7 @@ mod tests {
     fn cjk_content_wraps_by_display_cells() {
         let mut toasts = ToasterState::new();
         toasts.push(
-            Toast::new("状態").description("日本語のテキスト"),
+            Toast::new("状態").with_description("日本語のテキスト"),
             Duration::ZERO,
         );
         let area = Rect::new(0, 0, 14, 8);
@@ -919,7 +917,7 @@ mod tests {
     fn wide_area_paints_at_the_stack_width_not_the_area_width() {
         let mut toasts = ToasterState::new();
         toasts.push(
-            Toast::new("saved").description(LONG_DESCRIPTION),
+            Toast::new("saved").with_description(LONG_DESCRIPTION),
             Duration::ZERO,
         );
         let area = Rect::new(0, 0, 80, 10);

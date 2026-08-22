@@ -13,10 +13,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `ratcn::geometry`, the crate-root module holding the rect helpers components
   share: `fixed_height`, `is_border`, and `wrapped_height`.
 - `FocusState` implements `Eq`.
-- `ScrollArea`, with `ScrollAreaChange` and `ScrollAreaStyle`: a vertical
-  viewport for arbitrary interactive descendants. Paint and pointer input are
-  clipped to the visible rows while descendants keep their full logical
-  allocations, and focus landing on a clipped descendant scrolls it into view.
+- `ScrollArea`, with `ScrollAreaStyle`: a vertical viewport for arbitrary
+  interactive descendants. Paint and pointer input are clipped to the visible
+  rows while descendants keep their full logical allocations, and focus landing
+  on a clipped descendant scrolls it into view. `scroll(read, on_change)` binds
+  the first visible content row to app state, handing `on_change` each new
+  offset as a `u16`.
 - `DeclareCtx::viewport`, the runtime mechanism behind `ScrollArea`, and
   `Component::reveal_in_viewport`, which the runtime calls on the component
   that declared a viewport when focus lands on a descendant it clips.
@@ -32,9 +34,6 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `termina` feature, converting [termina](https://docs.rs/termina) events into
   `runtime::Event` the way `crossterm` does. Both features can be on at once,
   and neither is on by default.
-- `terminal::query(&mut terminal)` (feature `termina`) asks the terminal for its
-  own background and foreground and hands back `TerminalColors`, whose `theme()`
-  solves them. Call it in raw mode before the event loop reads anything.
 - The `termina` feature re-exports the crate as `ratcn::terminal::termina`,
   where the types inside `SessionEvent::Input` live.
 - `Theme::adaptive(background, foreground, palette16)` derives a full theme
@@ -83,8 +82,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `list_core::windowed_rows`, which maps a window of items to the rows a widget
   paints, handing the row closure each item's index in the *whole* list and
   forcing every row to the declared height.
-- `list_core::WheelPark::settle_transient`, settling the park stored at the
-  current declaration's identity — or an unparked view when a wheel has never
+- `list_core::WheelHold::settle_transient`, settling the hold stored at the
+  current declaration's identity — or an unheld view when a wheel has never
   stored one.
 - `selection_indicator::marker_line`, the default row of a selection control:
   the marker, colored, then the label, uncolored. `List` and `Select` drew the
@@ -94,16 +93,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cannot hold them. `Button` and `Tabs` derive their interaction area from it.
 - `linear_nav::has_enabled`, the focusability question every item control asks:
   is there any index a cursor could land on?
-- `TabLayout`, `tab_layout`, and `TabsWidget::layout`. A tab row's geometry is a
-  value now, so `Tabs` can hand the layout it hit-tests clicks against to the
-  paint that draws them. A standalone `TabsWidget` given no layout still
-  measures its own row, so nothing about that use changes. `TabLayout`'s three
-  fields — `tabs`, `left`, `right` — are public and it is not
-  `#[non_exhaustive]`, so it can be built and matched literally; adding a field
-  would therefore be a breaking change.
 
 ### Removed
 
+- **Breaking:** public items nothing reaches: `color::lighten`,
+  `DialogStyle::fallback`, `ToasterState::clear`, `ToasterWidget::visible`,
+  `Select::height`, `Select::DEFAULT_MAX_VISIBLE_OPTIONS`,
+  `SelectWidget::TRIGGER_HEIGHT`, `linear_nav::clamp_scroll_offset`, and
+  `linear_nav::page_enabled`.
 - **Breaking:** `runtime::Painter`. `DeclareCtx::defer_paint` takes
   `FnOnce(&mut PaintCtx<'_, '_, State>)`, which carries the theme and the app
   state and reports every interaction flag as false.
@@ -167,6 +164,24 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** the paint-only widgets address items by one noun.
+  `ListWidget`'s `focused_row`/`selected_rows`/`disabled_rows`, `SelectWidget`'s
+  `focused_option`/`selected_option`/`disabled_options`, and `TabsWidget`'s
+  `selected_tab`/`focused_tab`/`disabled_tabs`/`hovered_tab` are `focused_item`,
+  `selected_item(s)`, `disabled_items`, and `hovered_item`.
+- **Breaking:** `SelectWidget::scroll_offset` is `first_item` and
+  `SelectWidget::visible_options` is `visible_items`, the names `ListWidget`
+  uses.
+- **Breaking:** `Tabs::tab_focus` is `Tabs::item_focus`, the name `List` and
+  `Select` use, and `Select::max_visible_options` is `max_visible_items`.
+- **Breaking:** `List::render_item` and `Select::render_item` are `paint_item`,
+  and `ButtonRenderMode` is `ButtonFill`. Both name cell writing.
+- **Breaking:** `Toast` builders are `with_description`, `with_kind`, and
+  `with_id`; the readers for those values are `description`, `kind`, and `id`.
+- **Breaking:** `crossterm::InputModes::mouse_capture` and `bracketed_paste` are
+  `mouse` and `paste`, the names `terminal::SessionOptions` uses.
+- **Breaking:** `list_core::WheelPark` is `WheelHold` and its `park` method is
+  `hold`, so "park" names focus parking alone.
 - **Breaking:** `Component::is_focusable(&self)` drops its state parameter. A
   component answers from the props it was declared with, and settles anything
   state-dependent in `prepare`.
@@ -243,28 +258,28 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   test that was named for the absent feature is renamed for what it checks.
 - **Breaking:** `ListWidget` takes the rows on screen rather than the whole
   list. `ListWidget::scroll_offset` is replaced by `ListWidget::first_item`,
-  the index `items[0]` has in the whole list; `focused_row`, `selected_rows`,
-  and `disabled_rows` still count from the start of the list, so scrolling
+  the index `items[0]` has in the whole list; `focused_item`, `selected_items`,
+  and `disabled_items` still count from the start of the list, so scrolling
   changes only that number and the rows. `new(&items).scroll_offset(n)` becomes
   `new(&items[n.min(items.len())..]).first_item(n)` — the clamp matters, because
   the old call painted an empty list for an offset past the end where slicing
   panics. The widget holds no scroll position, and a long list costs a long
   list's worth of `Text` only if the caller builds one.
-- **Breaking:** `SelectWidget::option_rows` is `SelectWidget::visible_option_rows`
-  and takes one row per *painted* option, in paint order, starting at
-  `scroll_offset`. `open` still takes every option, because the panel's height
-  is measured from their count.
+- **Breaking:** `SelectWidget::option_rows` is `visible_item_rows` and takes one
+  row per *painted* option, in paint order, starting at `first_item`. `open`
+  still takes every option, because the panel's height is measured from their
+  count.
 - **Breaking:** `List`'s `Component` implementation requires `T: 'static`.
   `DeclareCtx::component` already required it of any `List` declared
   through the runtime, so a declared list is unaffected; a `List` driven
   directly through the `Component` trait — `prepare`/`handle_event` against an
   `EventCtx::default()`, which is how the transient docs suggest testing one —
-  now needs an owned item type too. The park below keeps an item value in the
+  now needs an owned item type too. The hold below keeps an item value in the
   transient store, and while a transient is keyed by its identity *path*, the
   type stored at that path is asserted on read, so the value's type is part of
   what reader and writer must agree on.
-- **Breaking:** `list_core::WheelPark` is generic over the item value, and the
-  wheel's hold now persists only while the list has not moved under it: the
+- **Breaking:** `WheelHold` is generic over the item value, and the wheel's
+  hold persists only while the list has not moved under it: the
   anchored item is still at its anchored row, in a list of the same length,
   with the cursor still on it. Replacing that item, reordering, filtering,
   inserting, removing, or moving the cursor releases the hold and scrolls the
@@ -274,11 +289,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `settle`, `record`, `cursor_to_show`, and `offset` collapse into one
     `settle(items, cursor, requested, viewport, area)` that releases the hold,
     computes the offset, and records it in the `RowViewport`.
-  - `park(offset, items, cursor)` replaces `park(offset, cursor)` and captures
+  - `hold(offset, items, cursor)` replaces `park(offset, cursor)` and captures
     the whole anchor itself, so no caller can assemble half of one. It is no
     longer `const`, and its impl block requires `T: Clone` to keep the value.
-  - `WheelPark` is no longer `Copy`, and `Debug`, `Clone`, `PartialEq`, and `Eq`
-    now hold only when the item type does. `Default` is unconditional.
+  - The type is no longer `Copy`, and `Debug`, `Clone`, `PartialEq`, and `Eq`
+    hold only when the item type does. `Default` is unconditional.
 - **Breaking:** `List`, `Select`, and `Tabs` check their item values for
   duplicates only under `cfg!(debug_assertions)`. The scan is quadratic —
   values are only `PartialEq`, so there is nothing to sort or hash by — and
@@ -326,7 +341,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   table into pure blue regardless of the terminal's palette; a neutral one
   adapts.
 - `List` and a `Select` panel build only the rows they paint. A thousand-item
-  list showing fifteen rows builds fifteen, `render_item` still receives each
+  list showing fifteen rows builds fifteen, `paint_item` still receives each
   row's index in the whole list, and a multi-selection predicate is asked once
   per painted row rather than once per item. Declaring and painting a
   thousand-item list into a fifteen-row frame drops from 457 µs to 40 µs in a

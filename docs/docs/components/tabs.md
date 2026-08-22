@@ -27,7 +27,7 @@ let tabs = Tabs::new([
     Tab::new(Screen::Analytics, "Analytics"),
     Tab::new(Screen::Reports, "Reports"),
 ])
-.tab_focus(|s: &AppState| Some(s.focused), Msg::ScreenFocusChanged)
+.item_focus(|s: &AppState| Some(s.focused), Msg::ScreenFocusChanged)
 .selection(|s: &AppState| Some(s.selected), Msg::ScreenSelected);
 
 ctx.component("tabs", tabs, tabs_area);
@@ -173,24 +173,24 @@ render on any terminal.
 `TabsWidget` paints a row without focus or events. It is an ordinary Ratatui
 widget, so it works in a plain Ratatui app with no `Ratcn` runtime. Everything
 is addressed by index rather than by value — which tab is selected, which the cursor is on
-(`.focused_tab(...)`), which are disabled, and whether the row itself has focus:
+(`.focused_item(...)`), which are disabled, and whether the row itself has focus:
 
 ```rust
 use ratcn::TabsWidget;
 
 frame.render_widget(
     TabsWidget::new(&["Overview", "Analytics", "Reports"])
-        .selected_tab(Some(selected_index))
-        .focused_tab(Some(cursor_index))
-        .disabled_tabs(&[false, true, false])
+        .selected_item(Some(selected_index))
+        .focused_item(Some(cursor_index))
+        .disabled_items(&[false, true, false])
         .focused(row_has_focus)
-        .hovered_tab(hovered_index)
+        .hovered_item(hovered_index)
         .themed(&theme),
     area,
 );
 ```
 
-`.disabled(true)` dims the whole row, as `.disabled_tabs(...)` does for single
+`.disabled(true)` dims the whole row, as `.disabled_items(...)` does for single
 tabs. `.size(...)` picks the row height, the same `TabsSize` the component
 takes. Call `.height()` and `.width()` on the built widget when the surrounding
 layout needs to reserve space for it — `width()` sums every label plus its

@@ -68,9 +68,8 @@ impl From<KeyCode> for KeyEvent {
 
 /// Which key a [`KeyEvent`] refers to.
 ///
-/// Deliberately small: it covers the keys terminal UIs actually bind, not
-/// everything a backend can report. A backend key with no variant here does not
-/// convert into an [`Event`] and is ignored.
+/// It covers the keys terminal UIs bind. A backend key with no variant here
+/// does not convert into an [`Event`] and is ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum KeyCode {
