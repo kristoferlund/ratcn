@@ -169,11 +169,11 @@ impl Viewport {
     }
 
     /// `area` with this viewport's scroll undone: the screen rectangle those
-    /// logical rows sit at, held against the top edge where the offset would
-    /// carry them above it.
+    /// logical rows sit at, held against the viewport's top edge where the
+    /// offset would carry them above it.
     fn unscrolled(self, area: Rect) -> Rect {
         Rect {
-            y: area.y.saturating_sub(self.offset),
+            y: area.y.saturating_sub(self.offset).max(self.screen.y),
             ..area
         }
     }
@@ -345,11 +345,11 @@ struct LayerPolicy {
     allows_focus: bool,
     /// A press outside this layer emits its dismiss hook.
     dismiss_on_outside_press: bool,
-    /// The layer belongs to the screen. It undoes the scroll of the viewport
-    /// it was declared in, once, over its own area, and declares from there in
-    /// screen coordinates — free to open a viewport of its own. The anchored
-    /// kinds keep that viewport's coordinates and are projected out of it
-    /// once.
+    /// This layer's coordinates are the screen's. It undoes the scroll of the
+    /// viewport it was declared in, once, over its own area, and declares from
+    /// there in screen coordinates — free to open a viewport of its own. The
+    /// anchored kinds keep that viewport's coordinates and are projected out
+    /// of it once.
     screen_level: bool,
 }
 

@@ -20,8 +20,9 @@ it never uses.
 ## The trait
 
 ```rust
-// The order the runtime reaches them in, which is the order the trait
-// declares them in.
+// A frame reaches the first five in this order. `handle_event` runs on the
+// retained instance between frames, and `reveal_in_viewport` opens the frame
+// that answers a focus move.
 impl Component<AppState, Msg> for MyComponent {
     fn prepare(&mut self, state: &AppState) { ... }
 
@@ -53,36 +54,37 @@ Declaring and painting are two methods because they happen in two walks.
 `declare` lays the component out and declares its descendants, and paints
 nothing. `paint` writes cells, after the whole tree is declared and focus has
 resolved — which is why the interaction flags (`ctx.focused()`,
-`ctx.contains_focus()`, `ctx.hovered()`, `ctx.contains_hover()`) live on `PaintCtx`
-and not on `DeclareCtx`: while `declare` runs, focus has nothing complete to
-resolve against yet. Hover is the exception, because it predates the frame
-rather than following from it: `DeclareCtx::pointer_within()` reports whether
-the pointer is inside this declaration, for the rare component whose
+`ctx.contains_focus()`, `ctx.hovered()`, `ctx.contains_hover()`) live on
+`PaintCtx` and not on `DeclareCtx`: while `declare` runs, focus has nothing
+complete to resolve against yet. Hover is the exception, because it predates
+the frame rather than following from it: `DeclareCtx::pointer_within()` reports
+whether the pointer is inside this declaration, for the rare component whose
 *structure* depends on it. Both methods run once per frame, so anything
 `handle_event` reads back must be recorded in `declare`, and must therefore not
 depend on those flags.
 
 Every method except `declare` has a default. `paint` defaults to painting
 nothing, which is right for a composite that is only a container.
-`scope_options` carries the focus claim: `ScopeOptions::default().focusable(b)`
-is how anything that should take part in Tab traversal says so, and it defaults
-to `false`. It answers from the props the component was declared with, so
-resolve anything state-dependent in `prepare` first. The same options shape a
-composite's scope (below). `interaction_area` defaults to returning the
-supplied paint area unchanged. Override it when interactive pixels occupy only
-part of the allocation. The runtime still paints with the supplied area, but
-retains the returned area for focus, hit-testing, pointer capture, and event
-routing. A non-empty result must be fully contained in the supplied paint area;
-otherwise rendering panics and the previous retained surface remains active.
-Returning an area with zero width or height keeps the component's identity and
-paint but excludes it and its descendants from interaction for that surface.
-`prepare` runs once per declaration, before any of those answers are read, so
-all of them may be computed from what it pins: `Select` resolves its open flag
-there, and `List`, `Select`, and `Tabs` use it to fail loud when two items carry
-the same value.
+`scope_options` carries the focus claim:
+`ScopeOptions::default().focusable(true)` is how anything that should take part
+in Tab traversal says so, and it defaults to `false`. It answers from the props
+the component was declared with, so resolve anything state-dependent in
+`prepare` first. The same options shape a composite's scope (below).
+`interaction_area` defaults to returning the supplied paint area unchanged.
+Override it when interactive pixels occupy only part of the allocation. The
+runtime still paints with the supplied area, but retains the returned area for
+focus, hit-testing, pointer capture, and event routing. A non-empty result must
+be fully contained in the supplied paint area; otherwise rendering panics and
+the previous retained surface remains active. Returning an area with zero width
+or height keeps the component's identity and paint but excludes it and its
+descendants from interaction for that surface. `prepare` runs once per
+declaration, before any of those answers are read, so all of them may be
+computed from what it pins: `Select` resolves its open flag there, and `List`,
+`Select`, and `Tabs` use it to fail loud when two items carry the same value.
 `reveal_in_viewport` is called on the component that declared a viewport when
-focus lands on a descendant the viewport clips, so it can scroll that
-descendant into view.
+focus lands on a descendant the viewport clips, so it can scroll that descendant
+into view; [Layers and modals](./layers-and-modals) covers when the call
+arrives, including the focus changes it answers on the frame after.
 `MeasuredComponent` adds a `measure` method so containers such as the Dialog
 action row can size a component before declaring it.
 

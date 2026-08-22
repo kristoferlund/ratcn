@@ -134,12 +134,12 @@ with its anchor.
 A modal escapes the viewport entirely. Its area is in the coordinates of the
 declaration that gave it, as every layer's is, and the modal opens at the place
 on screen those coordinates name; a row the viewport has scrolled past the top
-names the top edge, so a dialog opened from content that has scrolled away is
-still on screen and still the layer holding focus. From there the modal is
-screen-level: its frame area and everything it declares are in screen
-coordinates, which is what makes a scroll area inside a dialog inside a scroll
-area ordinary nesting. A popup or a hint keeps the viewport it was declared in,
-so a viewport inside one of those is nested and says so.
+names the viewport's top edge, so a dialog opened from content that has
+scrolled away is still on screen and still the layer holding focus. From there
+the modal is screen-level: its frame area and everything it declares are in
+screen coordinates, which is what makes a scroll area inside a dialog inside a
+scroll area ordinary nesting. A popup or a hint keeps the viewport it was
+declared in, so a viewport declared inside one of those panics.
 
 When focus reaches a descendant the viewport is clipping, the runtime calls
 `Component::reveal_in_viewport` on the component that opened the viewport, with
