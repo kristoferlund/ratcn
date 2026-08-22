@@ -275,7 +275,13 @@ fn drag_helper_stays_captured_across_rebuild_and_ends_outside() {
         }))
     );
     assert!(driver.ratcn.transients.is_empty());
-    assert!(driver.ratcn.capture_path(MouseButton::Left).is_none());
+    assert!(
+        driver
+            .ratcn
+            .gestures
+            .capture_path(MouseButton::Left)
+            .is_none()
+    );
     assert_eq!(
         driver.event(mouse(MouseKind::Drag(MouseButton::Left), 19, 3), &state),
         EventResult::Ignored
@@ -299,8 +305,14 @@ fn drag_helper_path_removal_cleans_transient_and_suppresses_capture() {
 
     render_lifecycle_drag(&mut driver, &state, None, Rect::ZERO);
     assert!(driver.ratcn.transients.is_empty());
-    assert!(driver.ratcn.capture_path(MouseButton::Left).is_none());
-    assert!(driver.ratcn.is_suppressed(MouseButton::Left));
+    assert!(
+        driver
+            .ratcn
+            .gestures
+            .capture_path(MouseButton::Left)
+            .is_none()
+    );
+    assert!(driver.ratcn.gestures.is_suppressed(MouseButton::Left));
     assert_eq!(
         driver.event(mouse(MouseKind::Moved, 19, 3), &state),
         EventResult::Consumed
@@ -309,7 +321,7 @@ fn drag_helper_path_removal_cleans_transient_and_suppresses_capture() {
         driver.event(mouse(MouseKind::Up(MouseButton::Left), 19, 3), &state),
         EventResult::Consumed
     );
-    assert!(!driver.ratcn.is_suppressed(MouseButton::Left));
+    assert!(!driver.ratcn.gestures.is_suppressed(MouseButton::Left));
 }
 
 /// One button's gesture says nothing about another's. A left press that
@@ -349,11 +361,15 @@ fn one_buttons_gesture_never_routes_or_suppresses_another() {
     render(&mut driver, true);
     driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
     assert_eq!(
-        driver.ratcn.capture_path(MouseButton::Left),
+        driver.ratcn.gestures.capture_path(MouseButton::Left),
         Some([ChildId::Static("grabber")].as_slice())
     );
     assert!(
-        driver.ratcn.capture_path(MouseButton::Right).is_none(),
+        driver
+            .ratcn
+            .gestures
+            .capture_path(MouseButton::Right)
+            .is_none(),
         "the right button claimed nothing"
     );
 
@@ -370,8 +386,8 @@ fn one_buttons_gesture_never_routes_or_suppresses_another() {
     // The left gesture's component disappears: that button is called off,
     // and only that button.
     render(&mut driver, false);
-    assert!(driver.ratcn.is_suppressed(MouseButton::Left));
-    assert!(!driver.ratcn.is_suppressed(MouseButton::Right));
+    assert!(driver.ratcn.gestures.is_suppressed(MouseButton::Left));
+    assert!(!driver.ratcn.gestures.is_suppressed(MouseButton::Right));
 
     events.borrow_mut().clear();
     driver.event(mouse(MouseKind::Down(MouseButton::Right), 8, 0), &state);
@@ -389,7 +405,7 @@ fn one_buttons_gesture_never_routes_or_suppresses_another() {
     );
     assert!(events.borrow().is_empty());
     assert!(
-        !driver.ratcn.is_suppressed(MouseButton::Left),
+        !driver.ratcn.gestures.is_suppressed(MouseButton::Left),
         "and that release ends the gesture"
     );
 }
@@ -465,14 +481,14 @@ fn pointer_exit_cancels_capture_and_stale_press_before_reentry() {
         &[("drag", "drag", Rect::new(0, 0, 4, 2))],
     );
     driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
-    assert!(driver.ratcn.capture_path(MouseButton::Left).is_some());
     assert!(
         driver
             .ratcn
             .gestures
-            .iter()
-            .any(|gesture| gesture.press.is_some())
+            .capture_path(MouseButton::Left)
+            .is_some()
     );
+    assert!(driver.ratcn.gestures.holding());
 
     assert_eq!(
         driver.event(mouse(MouseKind::Exited, 1, 1), &state),
@@ -641,8 +657,14 @@ fn capture_and_transient_cleanup_finish_before_previous_component_drop() {
 
     assert!(transient_dropped.load(Ordering::SeqCst));
     assert!(component_dropped.load(Ordering::SeqCst));
-    assert!(driver.ratcn.capture_path(MouseButton::Left).is_none());
-    assert!(driver.ratcn.is_suppressed(MouseButton::Left));
+    assert!(
+        driver
+            .ratcn
+            .gestures
+            .capture_path(MouseButton::Left)
+            .is_none()
+    );
+    assert!(driver.ratcn.gestures.is_suppressed(MouseButton::Left));
 }
 
 #[test]
@@ -1219,7 +1241,7 @@ fn primary_down_result_controls_focus_fallback_after_capture_and_routing() {
         )])))
     );
     assert_eq!(
-        driver.ratcn.capture_path(MouseButton::Left),
+        driver.ratcn.gestures.capture_path(MouseButton::Left),
         Some([ChildId::Static("ignored")].as_slice())
     );
     driver.event(mouse(MouseKind::Exited, 4, 0), &state);
