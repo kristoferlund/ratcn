@@ -807,7 +807,7 @@ mod tests {
         let mut driver = driver(8, 3);
         driver.ratcn = std::mem::take(&mut driver.ratcn)
             .focus_key(KeyChord::from('l').alt(), ["scroll", "last"]);
-        let state = State {
+        let mut state = State {
             focus: FocusState::intent(["scroll", "last"]),
             ..State::default()
         };
@@ -823,6 +823,18 @@ mod tests {
             });
         };
         render(&mut driver, &state);
+        render(&mut driver, &state);
+        assert_eq!(
+            &driver.row(2)[..4],
+            "last",
+            "the stored focus reached its row"
+        );
+
+        // The app scrolls its own offset away from the focused row, which
+        // releases the reveal's hold. Focus has not moved.
+        state.offset = 1;
+        render(&mut driver, &state);
+        assert_ne!(&driver.row(2)[..4], "last");
 
         assert_eq!(
             driver.event(
@@ -839,13 +851,17 @@ mod tests {
             "focus did not change, so there is no focus message to send"
         );
         render(&mut driver, &state);
-        assert_eq!(&driver.row(2)[..4], "last");
+        assert_eq!(
+            &driver.row(2)[..4],
+            "last",
+            "asking for a control by name is a request to see it"
+        );
     }
 
     #[test]
     fn wrapped_traversal_reveals_its_same_offscreen_target() {
         let mut driver = driver(8, 3);
-        let state = State {
+        let mut state = State {
             focus: FocusState::intent(["scroll", "wrap", "only"]),
             ..State::default()
         };
@@ -872,6 +888,12 @@ mod tests {
             });
         };
         render(&mut driver, &state);
+        render(&mut driver, &state);
+        assert_eq!(&driver.row(2)[..4], "only");
+
+        state.offset = 1;
+        render(&mut driver, &state);
+        assert_ne!(&driver.row(2)[..4], "only");
 
         assert_eq!(
             driver.event(key(KeyCode::Tab), &state),
@@ -879,7 +901,11 @@ mod tests {
             "the wrap landed back where it started, so focus did not change"
         );
         render(&mut driver, &state);
-        assert_eq!(&driver.row(2)[..4], "only");
+        assert_eq!(
+            &driver.row(2)[..4],
+            "only",
+            "the wrap still asked to see it"
+        );
     }
 
     #[test]

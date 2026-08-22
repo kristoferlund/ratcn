@@ -426,6 +426,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `DeclareCtx::viewport` declared inside a modal that is itself inside a
   viewport declares and paints.
 - A duplicate modal id nested inside another modal panics.
+- Focus the app moves itself — a path its update function stores, a
+  `Ratcn::focus_path` result — scrolls the viewport clipping it into view.
 
 ## [0.0.1]
 

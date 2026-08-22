@@ -342,11 +342,11 @@ mod tests {
 
     #[test]
     fn captured_drag_reports_click_without_drag_and_cleans_up() {
-        let path = [ChildId::Static("drag")];
+        let path = vec![ChildId::Static("drag")];
         let mut transients = HashMap::new();
         let mut capture = None;
         let mut ctx = EventCtx::at(
-            &path,
+            path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
@@ -363,11 +363,11 @@ mod tests {
             ),
             DragPhase::Down
         );
-        assert_eq!(capture, Some(path.to_vec()));
+        assert_eq!(capture, Some(path.clone()));
 
         let mut no_capture = None;
         let mut ctx = EventCtx::at(
-            &path,
+            path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
@@ -391,11 +391,11 @@ mod tests {
 
     #[test]
     fn captured_drag_tracks_offset_and_position_across_context_replacement() {
-        let path = [ChildId::Static("drag")];
+        let path = vec![ChildId::Static("drag")];
         let mut transients = HashMap::new();
         let mut capture = None;
         EventCtx::at(
-            &path,
+            path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
@@ -411,7 +411,7 @@ mod tests {
 
         let mut no_capture = None;
         let phase = EventCtx::at(
-            &path,
+            path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
@@ -435,11 +435,11 @@ mod tests {
 
     #[test]
     fn captured_drag_ignores_unrelated_buttons_without_transient_or_capture() {
-        let path = [ChildId::Static("drag")];
+        let path = vec![ChildId::Static("drag")];
         let mut transients = HashMap::new();
         let mut capture = None;
         let mut ctx = EventCtx::at(
-            &path,
+            path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
@@ -466,11 +466,11 @@ mod tests {
     /// clicked elsewhere.
     #[test]
     fn a_running_drag_ignores_another_buttons_movement_and_release() {
-        let path = [ChildId::Static("drag")];
+        let path = vec![ChildId::Static("drag")];
         let mut transients = HashMap::new();
         let mut capture = None;
         EventCtx::at(
-            &path,
+            path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
@@ -486,7 +486,7 @@ mod tests {
 
         let mut no_capture = None;
         let mut ctx = EventCtx::at(
-            &path,
+            path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {

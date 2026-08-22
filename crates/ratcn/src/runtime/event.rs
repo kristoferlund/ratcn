@@ -1,8 +1,10 @@
-//! Normalized input events.
+//! The event vocabulary: what arrives, and what a component answers with.
 //!
-//! The interaction runtime defines its own event vocabulary so components match
-//! one set of types across backends. Conversions from crossterm, termina, and
+//! The interaction runtime defines its own event types so components match one
+//! set of them across backends. Conversions from crossterm, termina, and
 //! ratzilla are feature-gated (`crossterm`, `termina`, `ratzilla`).
+//! [`EventResult`] is the answering half, carried back up the same chain the
+//! event travelled down.
 
 /// An input event, in the runtime's own vocabulary rather than a backend's.
 ///
@@ -38,6 +40,31 @@ impl From<KeyCode> for Event {
     fn from(code: KeyCode) -> Self {
         Self::Key(KeyEvent::new(code))
     }
+}
+
+/// What a component did with an event, and what should happen next.
+///
+/// Events travel from a component up through its ancestors. This value decides
+/// whether that continues: `Ignored` passes the event to the parent, while both
+/// `Consumed` and `Emit` stop it there.
+///
+/// The same enum comes back out of
+/// [`Ratcn::handle_event`](super::Ratcn::handle_event), so the app sees the
+/// final outcome after bubbling has finished.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventResult<Msg> {
+    /// Not handled here. The parent gets a chance at it, and if nothing in the
+    /// chain handles it the app sees `Ignored` and can treat it as a global
+    /// hotkey.
+    Ignored,
+    /// Handled, with nothing for the app to do — a keypress that only moved an
+    /// internal cursor, for example.
+    Consumed,
+    /// Handled, and the app should apply this message. Implies consumed.
+    ///
+    /// Components never write app state themselves; this message is how a
+    /// change reaches the app's update function.
+    Emit(Msg),
 }
 
 /// A key press, with whichever modifiers were held at the time.

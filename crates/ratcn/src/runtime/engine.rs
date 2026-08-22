@@ -29,6 +29,7 @@ use super::{
     ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyCode, KeyEvent,
     ModalState, MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
     component::{InteractionFlags, PaintTarget, PointerInputs, TransientMap},
+    focus,
 };
 
 // The largest rectangle a viewport declares as its content, and the largest a
@@ -325,20 +326,14 @@ pub(crate) enum LayerKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "a policy table: each flag is one independent layer behavior"
+    reason = "a policy table: one column per behavior, one row per layer kind"
 )]
 struct LayerPolicy {
-    /// Dim what is beneath before this layer composites.
-    dims: bool,
-    /// Interaction belongs to this layer alone: events landing outside it are
-    /// consumed rather than routed. Distinct from pointer capture, which is a
-    /// component's claim on one gesture.
-    exclusive: bool,
-    /// Focus resolves into this layer, and Tab is trapped at its root.
-    holds_focus: bool,
-    /// Keys stop at this layer's root instead of bubbling to whatever
-    /// declared it.
-    traps_keys: bool,
+    /// This layer takes the screen over: what lies beneath it dims, events
+    /// landing outside it are consumed, focus resolves into it, Tab is
+    /// trapped at its root, and keys stop there too. One decision with five
+    /// consequences, so they travel together.
+    takes_over: bool,
     /// The pointer can hit this layer at all. A layer that cannot is inert
     /// decoration: presses fall through to whatever is beneath it.
     hit_testable: bool,
@@ -361,10 +356,7 @@ impl LayerPolicy {
     /// except that it can be clicked.
     const fn base() -> Self {
         Self {
-            dims: false,
-            exclusive: false,
-            holds_focus: false,
-            traps_keys: false,
+            takes_over: false,
             hit_testable: true,
             allows_focus: true,
             dismiss_on_outside_press: false,
@@ -377,14 +369,11 @@ impl LayerKind {
     /// The whole difference between the layer kinds, in one table.
     const fn policy(self) -> LayerPolicy {
         match self {
-            // Takes over: dims, claims interaction, holds focus, swallows
-            // keys, and belongs to the screen rather than to whatever viewport
-            // declared it.
+            // Takes the screen over: dims, claims interaction, holds focus,
+            // swallows keys, and belongs to the screen rather than to whatever
+            // viewport declared it.
             Self::Modal => LayerPolicy {
-                dims: true,
-                exclusive: true,
-                holds_focus: true,
-                traps_keys: true,
+                takes_over: true,
                 screen_level: true,
                 ..LayerPolicy::base()
             },
@@ -593,9 +582,10 @@ impl<State, Msg> Surface<State, Msg> {
         self.participates(index) && self.has_hit_geometry(index)
     }
 
-    /// Whether the pointer can land on `index`: present, inside the exclusive
-    /// layer, on a layer the pointer reaches, and not scrolled out of its
-    /// viewport. The one eligibility test behind hit-testing and hover.
+    /// Whether the pointer can land on `index`: present, inside whatever layer
+    /// has taken the screen over, on a layer the pointer reaches, and not
+    /// scrolled out of its viewport. The one eligibility test behind
+    /// hit-testing and hover.
     fn hittable(&self, index: usize) -> bool {
         self.present(index)
             && self.interactive(index)
@@ -609,17 +599,18 @@ impl<State, Msg> Surface<State, Msg> {
         })
     }
 
-    /// Whether this node is inside the exclusive layer, and so can still be
-    /// interacted with. With no exclusive layer open, everything can.
+    /// Whether this node is inside the layer that has taken the screen over,
+    /// and so can still be interacted with. With no such layer open,
+    /// everything can.
     ///
     /// Membership is containment in the tree, not layer number: a layer
-    /// declared after the exclusive one takes a higher layer number but is not
-    /// thereby inside it. Layer numbers order paint; this orders interaction,
-    /// and only the ancestor chain can answer it. Checked on
+    /// declared after the one that took over takes a higher layer number
+    /// without being inside it. Layer numbers order paint; this orders
+    /// interaction, and only the ancestor chain can answer it. Checked on
     /// interaction targets (hit, focus leaves), not on ancestors: a nested
     /// layer root's ancestors provide identity and structure, not interaction.
     fn interactive(&self, index: usize) -> bool {
-        self.exclusive_root()
+        self.takeover_root()
             .is_none_or(|root| self.inside(index, root))
     }
 
@@ -651,15 +642,10 @@ impl<State, Msg> Surface<State, Msg> {
             .find(|&root| wants(self.root_policy(root), root))
     }
 
-    /// The layer that has taken interaction over, if one is open: everything
-    /// outside it is inert.
-    fn exclusive_root(&self) -> Option<usize> {
-        self.top_layer_root(|policy, _| policy.exclusive)
-    }
-
-    /// The layer that owns focus, if one is open.
-    fn focus_root(&self) -> Option<usize> {
-        self.top_layer_root(|policy, _| policy.holds_focus)
+    /// The layer that has taken the screen over, if one is open: everything
+    /// outside it is inert, unfocusable, and unreachable by a key.
+    fn takeover_root(&self) -> Option<usize> {
+        self.top_layer_root(|policy, _| policy.takes_over)
     }
 
     /// Every modal root, outermost first — what `Ratcn::modals` validates the
@@ -689,11 +675,11 @@ impl<State, Msg> Surface<State, Msg> {
         false
     }
 
-    /// The roots focus traversal works across: the topmost focus-holding layer
-    /// root alone while one is open (Tab is trapped inside it), all roots
-    /// otherwise.
+    /// The roots focus traversal works across: the root of the layer that has
+    /// taken the screen over while one is open (Tab is trapped inside it), all
+    /// roots otherwise.
     fn traversal_roots(&self) -> Vec<usize> {
-        self.focus_root()
+        self.takeover_root()
             .map_or_else(|| self.roots.clone(), |root| vec![root])
     }
 
@@ -729,8 +715,9 @@ impl<State, Msg> Surface<State, Msg> {
     }
 
     /// Whether `path` names something the pointer could be on: declared,
-    /// participating, with hit geometry, and not shut out by an exclusive
-    /// layer. The question [`Ratcn::resolve_hover`] asks of a frozen path.
+    /// participating, with hit geometry, and not shut out by a layer that has
+    /// taken the screen over. The question [`Ratcn::resolve_hover`] asks of a
+    /// frozen path.
     fn contains_hit_path(&self, path: &[ChildId]) -> bool {
         self.leaf_of(path).is_some_and(|index| self.hittable(index))
     }
@@ -783,8 +770,8 @@ impl<State, Msg> Surface<State, Msg> {
     /// The effective answer, not the claim: [`ScopeOptions::focusable`] is
     /// only what the declaration asked for, and it is the last of five
     /// conditions checked here. The node must also still be part of the tree,
-    /// have hit geometry, sit inside the exclusive layer if one is open, and
-    /// belong to a layer that allows focus at all.
+    /// have hit geometry, sit inside the layer that has taken the screen over
+    /// if one is open, and belong to a layer that allows focus at all.
     ///
     /// See [`Self::focusable`] for the same question about a node *or any of
     /// its descendants*.
@@ -839,6 +826,9 @@ impl<State, Msg> Surface<State, Msg> {
         }
     }
 
+    /// The focus path produced by descending into the first focusable child
+    /// of `parent` — the traversal roots when there is no parent. The other
+    /// primitive: an edge, with no request behind it.
     fn edge_focus(&self, parent: Option<usize>, direction: Step) -> Option<FocusState> {
         let index = self.edge_child(parent, direction)?;
         self.descend_focus(index, direction)
@@ -847,12 +837,16 @@ impl<State, Msg> Surface<State, Msg> {
     /// The focus path produced by descending from `index` to its first
     /// focusable leaf, seeded with the node's own ancestor prefix — correct
     /// whether the node is a tree root or a nested layer root.
+    ///
+    /// The primitive every focus policy ends at: the path it answers with is
+    /// a leaf this surface declares, walked to here on the surface's own
+    /// terms.
     fn descend_focus(&self, index: usize, direction: Step) -> Option<FocusState> {
         let mut path = self.nodes[index]
             .parent
             .map_or_else(Vec::new, |parent| self.path_of(parent));
         self.extend_to_edge(index, direction, &mut path)
-            .then(|| FocusState::at(path))
+            .then(|| FocusState::intent(path))
     }
 
     /// Resolve an app-held focus path against this surface's actual structure
@@ -871,11 +865,11 @@ impl<State, Msg> Surface<State, Msg> {
     ///   leaf.
     /// - A path this surface did not declare, or that is no longer focusable,
     ///   stays as it is — parked, never silently retargeted.
-    /// - With a focus-holding layer open, a declared path outside it resolves
+    /// - With a layer holding the screen, a declared path outside it resolves
     ///   into that layer; an absent path stays parked even then, so render and
     ///   routing agree on it.
     fn resolve_focus(&self, stored: &FocusState) -> FocusState {
-        if let Some(root) = self.focus_root()
+        if let Some(root) = self.takeover_root()
             && !self.path_is_prefix_of(root, stored.path())
         {
             // The layer steals focus from an empty path and from paths it
@@ -902,44 +896,65 @@ impl<State, Msg> Surface<State, Msg> {
             .unwrap_or_else(|| stored.clone())
     }
 
-    fn explicit_focus(&self, path: &[ChildId]) -> Option<FocusState> {
+    /// The focus one named path asks for: the leaf reached by descending from
+    /// the node it names. `None` when this surface does not declare that node
+    /// whole, or when nothing inside it can hold focus.
+    ///
+    /// The policy behind every explicit request — a
+    /// [`focus_key`](Ratcn::focus_key) binding, [`Ratcn::focus_path`], a
+    /// hover-focus boundary — where [`Self::resolve_focus`] answers for the
+    /// path the app is holding.
+    fn focus_at_path(&self, path: &[ChildId]) -> Option<FocusState> {
         let matched = self.nodes_along_path(path);
         if matched.len() != path.len() {
             return None;
         }
-        let &target = matched.last()?;
-        if !matched.iter().all(|&index| self.focusable(index)) {
-            return None;
-        }
-        self.descend_focus(target, Step::Forward)
+        // A descent that succeeds ends on a leaf that participates, and
+        // participation runs the whole parent chain, so every node along
+        // `path` is focusable whenever this answers with one at all.
+        self.descend_focus(*matched.last()?, Step::Forward)
     }
 
-    fn hover_focus(
+    /// The focus a pointer resting on `path` asks for, and `None` when it
+    /// rests inside no [`hover_focus`](ScopeOptions::hover_focus) scope that
+    /// wants it.
+    ///
+    /// The outermost such scope along the path wins, and one that already
+    /// holds the focus is passed over: a pointer crossing from one pane into
+    /// another hands focus to the pane it entered. A scope with no focusable
+    /// leaf is passed over too, since [`Self::focus_at_path`] answers `None`
+    /// for it. Motion is the most frequent event there is, so `stored` is
+    /// resolved once a scope asking for focus turns up, and not before.
+    fn focus_for_hover(
         &self,
         path: &[ChildId],
-        focus: &FocusState,
+        stored: &FocusState,
         root_options: &ScopeOptions,
     ) -> Option<FocusState> {
         let matched = self.nodes_along_path(path);
         if matched.len() != path.len() {
             return None;
         }
+        let mut resolved = None;
 
-        // `matched` resolved `path` whole, so the node at position `n` is the
-        // node named by `path[..=n]` — the child's own identity path, already
-        // materialized by the caller.
-        let boundaries = std::iter::once(root_options)
-            .chain(matched.iter().map(|&parent| &self.nodes[parent].options));
-        boundaries
-            .zip(matched.iter().copied())
+        // Each node's parent decides whether hover moves focus onto it: the
+        // root options for the outermost, the node above it for the rest. The
+        // innermost node's own options speak for children off this path, so
+        // the pairing stops one short of them. `matched` resolved `path`
+        // whole, so position `n` is the node named by `path[..=n]`.
+        std::iter::once(root_options)
+            .chain(matched.iter().map(|&parent| &self.nodes[parent].options))
+            .take(path.len())
             .enumerate()
-            .find_map(|(position, (options, child))| {
+            .find_map(|(position, options)| {
+                if !options.hover_focus {
+                    return None;
+                }
                 let child_path = &path[..=position];
-                (options.hover_focus
-                    && !focus.path().starts_with(child_path)
-                    && self.focusable(child))
-                .then(|| self.explicit_focus(child_path))
-                .flatten()
+                let focus = resolved.get_or_insert_with(|| self.resolve_focus(stored));
+                (!focus.path().starts_with(child_path))
+                    .then(|| self.focus_at_path(child_path))
+                    .flatten()
             })
     }
 
@@ -979,11 +994,12 @@ impl<State, Msg> Surface<State, Msg> {
         direction: Step,
         root_options: &ScopeOptions,
     ) -> FocusAdvance {
-        // A path parked outside the focus-holding layer belongs to nothing
-        // traversal may use: the scope holding it is covered, so consulting
-        // its `tab_wrap` would let a wrapping pane swallow Tab forever with
-        // the layer unreachable. Start from that layer's own edge instead.
-        if let Some(root) = self.focus_root()
+        // A path parked outside the layer holding the screen belongs to
+        // nothing traversal may use: the scope holding it is covered, so
+        // consulting its `tab_wrap` would let a wrapping pane swallow Tab
+        // forever with the layer unreachable. Start from that layer's own
+        // edge instead.
+        if let Some(root) = self.takeover_root()
             && !self.path_is_prefix_of(root, focus.path())
         {
             return self
@@ -1042,9 +1058,9 @@ impl<State, Msg> Surface<State, Msg> {
                 return FocusAdvance::Move(focus);
             }
 
-            // A focus-holding layer root traps Tab regardless of where it sits
-            // in the tree; otherwise the enclosing scope decides.
-            let tab_wrap = if self.focus_root() == Some(current) {
+            // The root of a layer holding the screen traps Tab regardless of
+            // where it sits in the tree; otherwise the enclosing scope decides.
+            let tab_wrap = if self.takeover_root() == Some(current) {
                 TabWrap::Wrap
             } else {
                 parent.map_or(root_options.tab_wrap, |index| {
@@ -1846,7 +1862,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     fn finish_frame(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
         let mut deferred = std::mem::take(&mut self.deferred);
         for index in 0..self.canvases.len() {
-            if self.surface.policy(Some(index)).dims {
+            if self.surface.policy(Some(index)).takes_over {
                 dim_background(
                     frame.buffer_mut(),
                     self.canvases[index].buffer.area,
@@ -2009,6 +2025,15 @@ pub struct Ratcn<State, Msg> {
     /// space. Derived from `pointer` and the retained surface, and rewritten
     /// wherever either changes — pointer motion, and every commit.
     hover: Vec<ChildId>,
+    /// The focus the retained surface resolved and painted. Comparing a fresh
+    /// resolution against it is how a focus change is noticed, whoever made
+    /// it. Between the reveal at the top of a frame and the commit at its end
+    /// it holds what that reveal answered for.
+    resolved_focus: FocusState,
+    /// Whether a reveal is still waiting to be answered: a focus change no
+    /// surface has been able to place yet, or one an event asked for
+    /// outright. The frame that answers it clears it.
+    reveal_pending: bool,
 }
 
 /// Everything the runtime tracks for one mouse button between its press and
@@ -2132,6 +2157,8 @@ impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
             .field("transients", &self.transients.len())
             .field("pointer", &self.pointer)
             .field("hover", &self.hover)
+            .field("resolved_focus", &self.resolved_focus)
+            .field("reveal_pending", &self.reveal_pending)
             .finish()
     }
 }
@@ -2148,6 +2175,8 @@ impl<State, Msg> Default for Ratcn<State, Msg> {
             transients: HashMap::new(),
             pointer: None,
             hover: Vec::new(),
+            resolved_focus: FocusState::default(),
+            reveal_pending: false,
         }
     }
 }
@@ -2313,10 +2342,10 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// already covered: at render the just-declared roots are validated
     /// against the bound [`ModalState`], and during the one-frame mismatch
     /// gap events are consumed before routing.
-    fn stored_focus(&self, state: &State) -> FocusState {
+    fn stored_focus<'s>(&self, state: &'s State) -> &'s FocusState {
         self.focus_binding
             .as_ref()
-            .map_or_else(FocusState::default, |binding| (binding.read)(state).clone())
+            .map_or(&focus::UNRESOLVED, |binding| (binding.read)(state))
     }
 
     /// Declare and paint one frame, then keep it as the surface events route
@@ -2387,6 +2416,12 @@ impl<State, Msg> Ratcn<State, Msg> {
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let focus_snapshot = self.stored_focus(state);
+        // Reveal first: the surface that painted the previous focus is still
+        // the one in hand, and it is the tree that can say where the focus now
+        // sits and what clips it. What it answers is a transient the
+        // declaration below reads. A change this surface cannot place — a path
+        // it never declared — stays pending for the frame that can.
+        self.reveal_moved_focus(focus_snapshot, state);
 
         // Declare. Nothing is drawn and no *focus* flag is read: the walk
         // builds the tree and queues the paint it owes. Hover is the one
@@ -2410,7 +2445,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         // same tree — the pointer has not moved, but what is under it may
         // have — so paint reports this frame's hover rather than the one the
         // declaration was built from.
-        let resolved_focus = pass.surface.resolve_focus(&focus_snapshot);
+        let resolved_focus = pass.surface.resolve_focus(focus_snapshot);
         let resolved_hover = self.resolve_hover(&pass.surface);
         pass.replay_paint(
             frame,
@@ -2422,7 +2457,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             },
         );
         pass.finish_frame(frame, state, theme);
-        self.commit_surface(pass.surface, resolved_hover);
+        self.commit_surface(pass.surface, resolved_hover, resolved_focus);
     }
 
     /// What the pointer is on, answered against `surface`.
@@ -2589,7 +2624,12 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// closing is the disruptive case and gets its own treatment — every
     /// tracked gesture is abandoned rather than re-checked, because the layer
     /// that appeared or vanished changes what the pointer was ever over.
-    fn commit_surface(&mut self, next: Surface<State, Msg>, hover: Vec<ChildId>) {
+    fn commit_surface(
+        &mut self,
+        next: Surface<State, Msg>,
+        hover: Vec<ChildId>,
+        focus: FocusState,
+    ) {
         let active_modal_changed = self
             .surface
             .modal_roots()
@@ -2621,10 +2661,16 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         self.transients
             .retain(|path, _| self.surface.leaf_of(path).is_some());
-        // The hover this frame painted, published with the surface it was
-        // resolved against — a pass that never got here leaves the previous
-        // one in charge, exactly as it leaves the previous surface.
+        // The hover and focus this frame painted, published with the surface
+        // they were resolved against — a pass that never got here leaves the
+        // previous ones in charge, exactly as it leaves the previous surface.
         self.hover = hover;
+        // Focus that resolves differently against this surface than against
+        // the one the frame opened with never reached that frame's reveal:
+        // this tree is the first that can answer for it, so the next frame
+        // owes the reveal.
+        self.reveal_pending |= focus != self.resolved_focus;
+        self.resolved_focus = focus;
         // Explicit: dropping the previous surface drops the component
         // instances it retained, and that must happen after everything above
         // has finished reading the new one.
@@ -2716,8 +2762,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         if self.surface.nodes.is_empty() {
             return EventResult::Ignored;
         }
-        let stored_focus = self.stored_focus(state);
-        let focus = self.surface.resolve_focus(&stored_focus);
+        let focus = self.surface.resolve_focus(self.stored_focus(state));
         let chain = self.key_bubble_chain(&focus);
 
         let routed = self.dispatch_chain(&chain, event, state, &mut None, None);
@@ -2734,30 +2779,30 @@ impl<State, Msg> Ratcn<State, Msg> {
                     .surface
                     .next_focus(&focus, direction, &self.root_options)
                 {
-                    FocusAdvance::Move(next) => self.focus_transition_result(next, &focus, state),
+                    FocusAdvance::Move(next) => self.focus_transition_result(next, &focus),
                     FocusAdvance::Consumed => EventResult::Consumed,
                     FocusAdvance::Ignored => EventResult::Ignored,
                 }
             }
             None => self
-                .focus_key_jump(key, &chain, &focus, state)
+                .focus_key_jump(key, &chain, &focus)
                 .unwrap_or(EventResult::Ignored),
         }
     }
 
     /// The chain a key bubbles through: the focused leaf up to the root, cut
-    /// at the topmost key-trapping layer.
+    /// at the root of the layer that has taken the screen over.
     ///
     /// Keys never cross such a layer outward. Bubbling stops at its root,
     /// which doubles as the layer-wide fallback for keys nothing inside
-    /// handled. Layers that do not trap keys — popups, hints — are absent
-    /// here, so an unhandled Esc still reaches whatever declared them.
+    /// handled. A popup or a hint leaves keys alone, so an unhandled Esc
+    /// under one still reaches whatever declared it.
     fn key_bubble_chain(&self, focus: &FocusState) -> Vec<usize> {
         let mut matched = self.surface.nodes_along_path(focus.path());
-        let Some(trapping_root) = self.surface.top_layer_root(|policy, _| policy.traps_keys) else {
+        let Some(takeover) = self.surface.takeover_root() else {
             return matched;
         };
-        match matched.iter().position(|&index| index == trapping_root) {
+        match matched.iter().position(|&index| index == takeover) {
             Some(position) => {
                 matched.drain(..position);
                 matched
@@ -2767,7 +2812,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             // from this surface. The chain becomes that root alone — keeping
             // the outside chain would offer the key to the covered component
             // first, since the chain is walked deepest-first.
-            None => vec![trapping_root],
+            None => vec![takeover],
         }
     }
 
@@ -2784,7 +2829,6 @@ impl<State, Msg> Ratcn<State, Msg> {
         key: &KeyEvent,
         chain: &[usize],
         focus: &FocusState,
-        state: &State,
     ) -> Option<EventResult<Msg>> {
         for scope in chain.iter().rev().copied().map(Some).chain([None]) {
             let options = scope.map_or(&self.root_options, |index| {
@@ -2796,10 +2840,10 @@ impl<State, Msg> Ratcn<State, Msg> {
                 }
                 let mut path = scope.map_or_else(Vec::new, |index| self.surface.path_of(index));
                 path.extend(binding.path.iter().cloned());
-                let Some(next) = self.surface.explicit_focus(&path) else {
+                let Some(next) = self.surface.focus_at_path(&path) else {
                     continue;
                 };
-                return Some(self.focus_transition_result(next, focus, state));
+                return Some(self.focus_transition_result(next, focus));
             }
         }
         None
@@ -2824,7 +2868,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     #[must_use]
     pub fn focus_path(&self, path: &[ChildId]) -> Option<FocusState> {
         self.has_rendered
-            .then(|| self.surface.explicit_focus(path))
+            .then(|| self.surface.focus_at_path(path))
             .flatten()
     }
 
@@ -3149,7 +3193,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                 continue;
             };
             let mut ctx = EventCtx::at(
-                &path,
+                path,
                 area,
                 &mut self.transients,
                 PointerInputs {
@@ -3311,9 +3355,8 @@ impl<State, Msg> Ratcn<State, Msg> {
         // Focus lands on a leaf, so a focusable container hands off to its
         // first focusable descendant.
         let focus = self.surface.descend_focus(target, Step::Forward)?;
-        let stored = self.stored_focus(state);
-        let current = self.surface.resolve_focus(&stored);
-        Some(self.focus_transition_result(focus, &current, state))
+        let current = self.surface.resolve_focus(self.stored_focus(state));
+        Some(self.focus_transition_result(focus, &current))
     }
 
     /// The dismiss message of the topmost popup the press at `point` landed
@@ -3338,9 +3381,10 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// the one message a motion can carry is this one.
     fn stage_hover_focus(&mut self, path: &[ChildId], state: &State) -> Option<EventResult<Msg>> {
         let stored = self.stored_focus(state);
-        let focus = self.surface.resolve_focus(&stored);
-        let next = self.surface.hover_focus(path, &focus, &self.root_options)?;
-        Some(self.focus_result(next, state))
+        let next = self
+            .surface
+            .focus_for_hover(path, stored, &self.root_options)?;
+        Some(self.focus_result(next))
     }
 
     /// Point hover at `path`. The event-time writer; a commit writes it from
@@ -3353,14 +3397,9 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
     }
 
-    /// The app's focus message for `focus`, after any viewport clipping the
-    /// target has been asked to reveal it.
-    ///
-    /// The reveal is a separate channel: it can add to what a focus change
-    /// does, and it never stands in for the message
-    /// [`Ratcn::focus`](Self::focus) bound.
-    fn focus_result(&mut self, focus: FocusState, state: &State) -> EventResult<Msg> {
-        self.reveal_focus(&focus, state);
+    /// The app's focus message for `focus`. Consumed when nothing is bound to
+    /// carry it, since the change has nowhere to be stored.
+    fn focus_result(&self, focus: FocusState) -> EventResult<Msg> {
         self.focus_binding
             .as_ref()
             .map_or(EventResult::Consumed, |binding| {
@@ -3368,46 +3407,78 @@ impl<State, Msg> Ratcn<State, Msg> {
             })
     }
 
+    /// Reveal focus that has moved since the last frame, or that an event
+    /// asked to see again, while the surface it moved across is still the one
+    /// in hand.
+    ///
+    /// Every reveal in the runtime happens here, whatever moved focus: a Tab
+    /// the runtime resolved, a press, a [`focus_path`](Self::focus_path) the
+    /// app looked up, or a [`FocusState`] its update function stored. What
+    /// they share is that the app holds the new path by the time this frame
+    /// starts. The component's answer is a transient, which the declaration
+    /// that follows reads back and lays out from.
+    ///
+    /// The first frame whose surface can place the focused target reveals it.
+    /// A surface that does not declare the focused leaf has no geometry to
+    /// answer with, so the reveal stays pending and each frame asks its own
+    /// surface again.
+    fn reveal_moved_focus(&mut self, stored: &FocusState, state: &State) {
+        let focus = self.surface.resolve_focus(stored);
+        if std::mem::take(&mut self.reveal_pending) || focus != self.resolved_focus {
+            self.reveal_pending = !self.reveal_focus(&focus, state);
+        }
+        self.resolved_focus = focus;
+    }
+
     /// Ask the component that declared the viewport clipping `focus`'s target
     /// to bring it into view. A target that is already fully on screen, or
     /// that no viewport clips, reaches nobody.
-    fn reveal_focus(&mut self, focus: &FocusState, state: &State) {
-        let Some(&target) = self.surface.nodes_along_path(focus.path()).last() else {
-            return;
+    ///
+    /// `false` when this surface does not declare the focused leaf: it has no
+    /// geometry to answer with, and whatever prefix of the path it does
+    /// declare belongs to a different node. Focus sits on a whole path or
+    /// nowhere, and so does the reveal.
+    fn reveal_focus(&mut self, focus: &FocusState, state: &State) -> bool {
+        let Some(target) = self.surface.leaf_of(focus.path()) else {
+            return false;
         };
         if self.surface.viewport_visibility(target) == ViewportVisibility::Full {
-            return;
+            return true;
         }
         let Some(owner) = self
             .surface
             .clipping_viewport(target)
             .and_then(|record| record.owner)
         else {
-            return;
+            return true;
         };
         let reveal = self.surface.nodes[target].area;
         let path = self.surface.path_of(owner);
         let area = self.surface.nodes[owner].area;
         let Some(component) = self.surface.nodes[owner].component.as_mut() else {
-            return;
+            return true;
         };
-        let mut ctx = EventCtx::at(&path, area, &mut self.transients, PointerInputs::default());
+        let mut ctx = EventCtx::at(path, area, &mut self.transients, PointerInputs::default());
         component.reveal_in_viewport(reveal, state, &mut ctx);
+        true
     }
 
-    /// The result of a focus step that resolved to `next`. A step that lands
-    /// where focus already is reveals its target.
+    /// The result of a focus step that resolved to `next`.
+    ///
+    /// A step that lands where focus already is consumes the event and owes a
+    /// reveal. Focus does not move, so there is no message to send and no
+    /// change for the next frame to notice — yet asking for a control by name
+    /// is a request to see it, and the frame that follows answers it.
     fn focus_transition_result(
         &mut self,
         next: FocusState,
         current: &FocusState,
-        state: &State,
     ) -> EventResult<Msg> {
         if next == *current {
-            self.reveal_focus(&next, state);
+            self.reveal_pending = true;
             return EventResult::Consumed;
         }
-        self.focus_result(next, state)
+        self.focus_result(next)
     }
 }
 
