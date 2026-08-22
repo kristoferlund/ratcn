@@ -140,8 +140,9 @@ The `MouseKind`s a component is offered are `Down`, `Up`, `Click`, `Drag`,
   source apply its own drop-target hit test. See [Dragging](./dragging) for the
   full pattern; `EventCtx::drag` owns capture, path-transient gesture state,
   button matching, and release cleanup.
+
 `Exited` never reaches a component. A backend reports it when the pointer
-leaves the interactive grid, and the runtime answers for it by cancelling every
+leaves the interactive grid, and the runtime answers for it by clearing every
 tracked gesture and emptying hover until another pointer event arrives — so a
 release outside the terminal grid cannot leave a stale drag or hover active
 when the pointer returns.

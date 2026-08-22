@@ -138,7 +138,7 @@ pub enum DragPhase {
 /// [`EventCtx::drag`] keeps `Option<ActiveDrag>` at the component's identity
 /// path: the transient store inserts a default before the press fills it in, a
 /// gesture is never observed in that empty state, and the release removes the
-/// transient rather than emptying it.
+/// transient.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ActiveDrag {
     /// Only this button's movement and release continue the gesture.

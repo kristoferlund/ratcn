@@ -10,6 +10,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ratcn::geometry`, the crate-root module holding the rect helpers components
+  share: `fixed_height`, `is_border`, and `wrapped_height`.
+- `FocusState` implements `Eq`.
 - `ScrollArea`, with `ScrollAreaChange` and `ScrollAreaStyle`: a vertical
   viewport for arbitrary interactive descendants. Paint and pointer input are
   clipped to the visible rows while descendants keep their full logical
@@ -86,7 +89,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `selection_indicator::marker_line`, the default row of a selection control:
   the marker, colored, then the label, uncolored. `List` and `Select` drew the
   identical line separately.
-- `runtime::geometry::fixed_height` (also `runtime::fixed_height`): an area
+- `geometry::fixed_height`: an area
   cropped to exactly the rows a fixed-height shape occupies, or empty when it
   cannot hold them. `Button` and `Tabs` derive their interaction area from it.
 - `linear_nav::has_enabled`, the focusability question every item control asks:
@@ -104,9 +107,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** `runtime::Painter`. `DeclareCtx::defer_paint` takes
   `FnOnce(&mut PaintCtx<'_, '_, State>)`, which carries the theme and the app
   state and reports every interaction flag as false.
-- **Breaking:** `DeclareCtx::hover_position` and `FocusState::is_path`.
-  `DeclareCtx::pointer_within_area` and `FocusState::contains_path` answer the
-  same questions.
+- **Breaking:** `DeclareCtx::hover_position`. A declaration reads hover through
+  `pointer_within` and `pointer_within_area`, which answer with identity and
+  geometry; the raw pointer position is a paint-time value, on
+  `PaintCtx::hover_position`.
+- **Breaking:** `FocusState::is_path`. Compare `FocusState::path()` against the
+  path you have; `contains_path` tests prefixes and answers a different
+  question.
+- **Breaking:** `Component::focuses_on_click`, the doc-hidden hook a component
+  could implement to take focus on the click. Every component focuses on the
+  press.
 - **Breaking:** `runtime::drag` and `runtime::geometry` as public modules.
   `CellOffset`, `DragOptions`, `DragPhase`, `clamp_offset`, and `offset_rect`
   keep their `ratcn::runtime` paths; `fixed_height`, `is_border`, and
@@ -162,12 +172,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   state-dependent in `prepare`.
 - **Breaking:** `DeclareCtx::hint` and `DeclareCtx::popup` take
   `(id, area, options, declare)`, the order `scope` and `modal_scope` use.
-- **Breaking:** `ModalState::open` clears the focus path rather than pointing
-  it at the modal root. The modal resolves focus to its own first focusable
-  leaf either way, and `close` restores the saved path as before.
+- **Breaking:** `ModalState::ids` returns
+  `impl ExactSizeIterator<Item = &ChildId> + Clone`, not `&[ChildId]`.
+- **Breaking:** `ModalState::open` clears the focus path; the modal resolves
+  focus to its own first focusable leaf. `close` writes the saved path back and
+  returns `None` on an empty stack, leaving `focus` alone.
 - **Breaking:** a paint panic a component catches leaves the declaration pass
-  to finish and commit. A layer or viewport canvas composites only what was
-  recorded as painted, so cells written before the panic stay off the frame.
+  to finish and commit. A layer or viewport canvas composites only the rects
+  paint recorded, so a widget that panicked part-way through its own area
+  contributes nothing.
 - **Breaking:** `MouseEvent` coordinates and `DragPhase` positions are in the
   coordinate space the receiving component was declared with, matching
   `EventCtx::area`. Outside a viewport that is the screen.

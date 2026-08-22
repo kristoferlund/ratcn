@@ -23,11 +23,11 @@ that does the job:
 
 Use `defer_paint` for passive overlays that must land on top of the current
 layer — a floating dragged card, say. The closure receives a `PaintCtx` over the
-frame, carrying the theme and the app state; it has no identity and no hit
+surface it belongs to — the enclosing layer's canvas, or the frame at base
+level — carrying the theme and the app state. It has no identity and no hit
 target, so its interaction flags are all false, it cannot receive events, and it
-is not a way to defer an interactive component. A
-`paint` closure in the right declaration position is simpler when ordering
-already works out.
+is not a way to defer an interactive component. A `paint` closure in the right
+declaration position is simpler when ordering already works out.
 
 ## The three layer kinds
 
