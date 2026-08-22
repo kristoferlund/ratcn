@@ -323,9 +323,8 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
 pub(crate) struct Surface<State, Msg> {
     nodes: Vec<Node<State, Msg>>,
     roots: Vec<usize>,
-    /// Every layer root, indexed by the canvas number nodes carry. A layer
-    /// declared inside another lands after it, so the last entry is always the
-    /// innermost.
+    /// Every layer root, in declaration order and indexed by the canvas
+    /// number nodes carry. Scanning backwards reaches the topmost layer first.
     layer_roots: Vec<usize>,
     /// Every viewport declared this pass, in declaration order.
     viewports: Vec<ViewportRecord>,
@@ -358,9 +357,11 @@ impl<State, Msg> Surface<State, Msg> {
     ///
     /// Building it allocates, so it belongs to the consumers that need a path
     /// as a value — panic messages, the paths handed to components, the
-    /// runtime's own hover path and app-held focus. Structural questions have
-    /// non-allocating answers instead: [`Self::inside`] for containment,
-    /// [`Self::path_is_prefix_of`] for testing a node against a stored path.
+    /// runtime's own hover path and app-held focus.
+    ///
+    /// Structural questions have non-allocating answers: [`Self::inside`] for
+    /// containment, [`Self::path_is_prefix_of`] for testing a node against a
+    /// stored path.
     fn path_of(&self, index: usize) -> Vec<ChildId> {
         let mut path = Vec::with_capacity(self.depth(index));
         let mut current = Some(index);
@@ -497,25 +498,32 @@ impl<State, Msg> Surface<State, Msg> {
             .is_none_or(|root| self.inside(index, root))
     }
 
-    /// What the layer `layer` names does to interaction. The kind its root
-    /// carries is the one fact, read here; `None` is the base layer everything
-    /// outside any layer is declared into.
-    fn policy(&self, layer: Option<usize>) -> LayerPolicy {
-        layer
-            .and_then(|index| self.layer_roots.get(index))
-            .and_then(|&root| self.nodes[root].layer_kind)
+    /// What the layer rooted at `root` does to interaction. The kind that
+    /// root carries is the one fact, read here.
+    fn root_policy(&self, root: usize) -> LayerPolicy {
+        self.nodes[root]
+            .layer_kind
             .map_or_else(LayerPolicy::base, LayerKind::policy)
     }
 
-    /// The innermost open layer root whose policy and index satisfy `wants`.
+    /// What the layer `layer` names does to interaction. `None` is the base
+    /// layer everything outside any layer is declared into.
+    fn policy(&self, layer: Option<usize>) -> LayerPolicy {
+        layer
+            .and_then(|index| self.layer_roots.get(index).copied())
+            .map_or_else(LayerPolicy::base, |root| self.root_policy(root))
+    }
+
+    /// The topmost open layer root whose policy and index satisfy `wants`.
     ///
     /// `layer_roots` is in declaration order and nesting appends, so scanning
-    /// backwards finds the innermost first — the one on top.
+    /// backwards reaches the topmost first.
     fn top_layer_root(&self, wants: impl Fn(LayerPolicy, usize) -> bool) -> Option<usize> {
-        (0..self.layer_roots.len())
+        self.layer_roots
+            .iter()
             .rev()
-            .map(|layer| self.layer_roots[layer])
-            .find(|&root| wants(self.policy(self.nodes[root].layer), root))
+            .copied()
+            .find(|&root| wants(self.root_policy(root), root))
     }
 
     /// The layer that has taken interaction over, if one is open: everything
@@ -950,12 +958,18 @@ struct DeferredPaint<State> {
 /// component is queued where it opens, so its own paint precedes its
 /// descendants'.
 struct QueuedPaint<State> {
-    /// The surface fixed where the op was queued.
-    /// Fixed where the op was queued, so an op belongs to the layer that was
-    /// open at its declaration whatever is open at replay.
-    target: PaintDestination,
-    projection: Option<Viewport>,
+    slot: PaintSlot,
     op: PaintOp<State>,
+}
+
+/// The surface an op paints onto, and the projection it paints through.
+///
+/// Both are fixed where the op was queued, so an op belongs to the layer that
+/// was open at its declaration whatever is open at replay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PaintSlot {
+    destination: PaintDestination,
+    projection: Option<Viewport>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -965,11 +979,29 @@ enum PaintDestination {
     Viewport(usize),
 }
 
-/// Every op names the node whose position it paints at, because that node is
-/// what its interaction flags are read from once focus has resolved. Only the
-/// area is captured: it is a declaration fact, settled where the op was
-/// queued, while the flags are not facts yet.
+/// What the queue owes at one point in declaration order.
 enum PaintOp<State> {
+    /// Paint one declaration, styled from the flags the finished tree
+    /// resolves for it.
+    Paint(DeclaredPaint<State>),
+    /// Run the deferred thunks registered in the layer `canvas` belongs to,
+    /// at the point that layer's declaration closed — which is what keeps
+    /// [`DeclareCtx::defer_paint`] above its layer's content.
+    FlushDeferred { canvas: usize },
+    /// Seed the visible logical cells with paint already present beneath the
+    /// viewport at this exact point in declaration order.
+    PrimeViewport { viewport: usize },
+    /// Copy a completed logical viewport canvas into its screen allocation.
+    CompositeViewport { viewport: usize },
+}
+
+/// One declaration's own paint.
+///
+/// Both forms name the node whose position they paint at, because that node is
+/// what their interaction flags are read from once focus has resolved. Only
+/// the area is captured: it is a declaration fact, settled where the op was
+/// queued, while the flags are not facts yet.
+enum DeclaredPaint<State> {
     /// Call [`Component::paint`] on the component installed at this node.
     Node { index: usize, area: Rect },
     /// Run a closure queued through [`DeclareCtx::paint`]. `node` is the
@@ -980,28 +1012,15 @@ enum PaintOp<State> {
         area: Rect,
         paint: PaintThunk<State>,
     },
-    /// Run the deferred thunks registered in the layer this op is queued for,
-    /// at the point that layer's declaration closed — which is what keeps
-    /// [`DeclareCtx::defer_paint`] above its layer's content.
-    FlushDeferred,
-    /// Seed the visible logical cells with paint already present beneath the
-    /// viewport at this exact point in declaration order.
-    PrimeViewport { viewport: usize },
-    /// Copy a completed logical viewport canvas into its screen allocation.
-    CompositeViewport { viewport: usize },
 }
 
-impl<State> PaintOp<State> {
-    /// The declaration this op paints at, and so the one its interaction
-    /// flags come from. `None` for the root and for deferred paint, neither
-    /// of which has an identity.
+impl<State> DeclaredPaint<State> {
+    /// The declaration this paint belongs to, and so the one its interaction
+    /// flags come from. `None` at the root, which has no identity.
     const fn node(&self) -> Option<usize> {
         match self {
             Self::Node { index, .. } => Some(*index),
             Self::Thunk { node, .. } => *node,
-            Self::FlushDeferred | Self::PrimeViewport { .. } | Self::CompositeViewport { .. } => {
-                None
-            }
         }
     }
 }
@@ -1021,8 +1040,8 @@ enum PaintBody<'a, State, Msg> {
 /// later. A viewport's content is declared at its full logical height and
 /// only afterwards translated and clipped to the rectangle on screen. Both
 /// paint here and composite once the pass is over: `painted` records the
-/// areas widgets declared, only those rects blit — so a modal declared over
-/// the full screen composites just the box it painted — and each rect
+/// rects paint wrote through, only those rects blit — so a modal declared
+/// over the full screen composites just the box it painted — and each rect
 /// composites opaquely, unwritten cells included.
 pub(crate) struct Canvas {
     pub(crate) buffer: Buffer,
@@ -1117,10 +1136,10 @@ impl<'a, State> DeclarationEnv<'a, State> {
 /// drifting out of step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NodeRole {
-    /// A scope rather than a component. It keeps its place in the tree with no
-    /// geometry of its own, so a zero-area scope still parents descendants
-    /// that have geometry, where a zero-area component takes its subtree out
-    /// of interaction with it.
+    /// A scope: a node the tree keeps for its identity, with no geometry of
+    /// its own. A zero-area scope still parents descendants that have
+    /// geometry, where a zero-area component takes its whole subtree out of
+    /// interaction.
     is_scope: bool,
     /// This node can hold focus itself, rather than only parenting things that
     /// can.
@@ -1260,34 +1279,37 @@ impl<State, Msg> RenderPass<State, Msg> {
             .unwrap_or(PaintDestination::Frame)
     }
 
-    /// Queue an op for the destination currently being declared into.
+    /// Queue an op for the slot currently being declared into.
     fn queue(&mut self, op: PaintOp<State>) {
-        let target = self.active_target();
         self.paint_queue.push(QueuedPaint {
-            target,
-            projection: self.projection_for(target),
+            slot: self.active_slot(),
             op,
         });
     }
 
-    /// The projection paint into `target` carries. A layer inside a viewport
-    /// escaped the clip but still paints where the offset puts it, so it
-    /// carries one; the viewport's own canvas is already in logical
-    /// coordinates and does not.
-    fn projection_for(&self, target: PaintDestination) -> Option<Viewport> {
-        match target {
+    /// The slot the destination currently being declared into paints in. A
+    /// layer inside a viewport escaped the clip but still paints where the
+    /// offset puts it, so it carries a projection; the viewport's own canvas
+    /// is already in logical coordinates and carries none.
+    fn active_slot(&self) -> PaintSlot {
+        let destination = self.active_target();
+        let projection = match destination {
             PaintDestination::Layer(_) => self.open_projection(),
             PaintDestination::Frame | PaintDestination::Viewport(_) => None,
+        };
+        PaintSlot {
+            destination,
+            projection,
         }
     }
 
     /// Where the pointer is in the coordinates paint or declaration into
-    /// `target` uses. Inside the viewport itself the pointer counts only
-    /// where the viewport is on screen; content that escaped the clip carries
-    /// the projection and translates unconditionally.
-    fn hover_in(&self, target: PaintDestination, projection: Option<Viewport>) -> Option<Position> {
+    /// `slot` uses. Inside the viewport itself the pointer counts only where
+    /// the viewport is on screen; content that escaped the clip carries the
+    /// projection and translates unconditionally.
+    fn hover_in(&self, slot: PaintSlot) -> Option<Position> {
         let position = self.hover_position?;
-        match (projection, target) {
+        match (slot.projection, slot.destination) {
             (Some(viewport), _) => viewport.to_logical(position),
             (None, PaintDestination::Viewport(index)) => self.surface.viewports[index]
                 .viewport
@@ -1311,18 +1333,18 @@ impl<State, Msg> RenderPass<State, Msg> {
         paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static,
     ) {
         let node = self.parent_stack.last().copied();
-        self.queue(PaintOp::Thunk {
+        self.queue(PaintOp::Paint(DeclaredPaint::Thunk {
             node,
             area,
             paint: Box::new(paint),
-        });
+        }));
     }
 
     /// Queue the just-opened node's own paint. `area` is its paint
     /// allocation, which [`Component::interaction_area`] may have narrowed
     /// for the node itself but never for what it draws.
     fn queue_node(&mut self, index: usize, area: Rect) {
-        self.queue(PaintOp::Node { index, area });
+        self.queue(PaintOp::Paint(DeclaredPaint::Node { index, area }));
     }
 
     /// Open a viewport, declare its content through `declare`, and close it.
@@ -1403,16 +1425,13 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Close the innermost layer, queueing its deferred paint behind
     /// everything the layer declared.
     fn end_layer(&mut self) {
+        let PaintDestination::Layer(canvas) = self.active_target() else {
+            panic!("a declared layer closes its own paint destination");
+        };
         // Queued rather than run here: the layer's own content has only been
         // queued so far, and deferred paint has to land on top of it.
-        self.queue(PaintOp::FlushDeferred);
-        assert!(
-            matches!(
-                self.destination_stack.pop(),
-                Some(PaintDestination::Layer(_))
-            ),
-            "a declared layer closes its own paint destination"
-        );
+        self.queue(PaintOp::FlushDeferred { canvas });
+        self.destination_stack.pop();
     }
 
     /// Run the deferred thunks registered in the layer `canvas_index` belongs
@@ -1430,8 +1449,10 @@ impl<State, Msg> RenderPass<State, Msg> {
                 }
             }
             for deferred in thunks {
-                let hover_position =
-                    pass.hover_in(PaintDestination::Layer(canvas_index), deferred.projection);
+                let hover_position = pass.hover_in(PaintSlot {
+                    destination: PaintDestination::Layer(canvas_index),
+                    projection: deferred.projection,
+                });
                 let target =
                     PaintTarget::Canvas(&mut pass.canvases[canvas_index], deferred.projection);
                 paint_deferred(target, theme, hover_position, state, deferred.paint);
@@ -1663,8 +1684,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             transients,
             depth,
         } = env;
-        let target = self.active_target();
-        let hover_position = self.hover_in(target, self.projection_for(target));
+        let hover_position = self.hover_in(self.active_slot());
         self.guarded(|pass| {
             let mut ctx = DeclareCtx {
                 frame_area,
@@ -1715,49 +1735,41 @@ impl<State, Msg> RenderPass<State, Msg> {
         theme: &Theme,
         focus: &FocusState,
     ) {
-        for queued in std::mem::take(&mut self.paint_queue) {
+        for QueuedPaint { slot, op } in std::mem::take(&mut self.paint_queue) {
             let frame = &mut *frame;
-            self.guarded(|pass| pass.run_op(queued, frame, state, theme, focus));
+            self.guarded(|pass| match op {
+                PaintOp::FlushDeferred { canvas } => pass.flush_deferred_for(canvas, theme, state),
+                PaintOp::PrimeViewport { viewport } => {
+                    pass.prime_viewport(viewport, slot.destination, frame);
+                }
+                PaintOp::CompositeViewport { viewport } => {
+                    pass.composite_viewport(viewport, slot.destination, frame);
+                }
+                PaintOp::Paint(op) => pass.paint_op(op, slot, frame, state, theme, focus),
+            });
         }
     }
 
-    /// Run one queued op. The ops that seed, composite, or flush do their own
-    /// work; the two that paint a declaration are handed a [`PaintCtx`] over
-    /// the surface their destination names.
-    fn run_op(
+    /// Paint one declaration onto the surface its destination names, with the
+    /// flags the finished tree resolved for it.
+    fn paint_op(
         &mut self,
-        queued: QueuedPaint<State>,
+        op: DeclaredPaint<State>,
+        slot: PaintSlot,
         frame: &mut Frame,
         state: &State,
         theme: &Theme,
         focus: &FocusState,
     ) {
-        let QueuedPaint {
-            target,
-            projection,
-            op,
-        } = queued;
         // Read before the component borrow below, which needs the surface
         // mutably. The root declaration has no node, and so no flags.
         let flags = op.node().map_or_else(InteractionFlags::default, |index| {
             self.surface
                 .interaction_flags(index, focus, &self.hover_path)
         });
-        let hover_position = self.hover_in(target, projection);
+        let hover_position = self.hover_in(slot);
         let (area, paint) = match op {
-            PaintOp::FlushDeferred => {
-                let PaintDestination::Layer(canvas) = target else {
-                    panic!("a layer's flush names that layer's canvas");
-                };
-                return self.flush_deferred_for(canvas, theme, state);
-            }
-            PaintOp::PrimeViewport { viewport } => {
-                return self.prime_viewport(viewport, target, frame);
-            }
-            PaintOp::CompositeViewport { viewport } => {
-                return self.composite_viewport(viewport, target, frame);
-            }
-            PaintOp::Node { index, area } => {
+            DeclaredPaint::Node { index, area } => {
                 // `assert_valid`'s completeness check ran before replay, so
                 // every node here has its component.
                 let component = self.surface.nodes[index]
@@ -1766,15 +1778,18 @@ impl<State, Msg> RenderPass<State, Msg> {
                     .expect("a checked pass installed every node's component");
                 (area, PaintBody::Component(component))
             }
-            PaintOp::Thunk { area, paint, .. } => (area, PaintBody::Thunk(paint)),
+            DeclaredPaint::Thunk { area, paint, .. } => (area, PaintBody::Thunk(paint)),
         };
-        let target = match target {
-            PaintDestination::Frame => PaintTarget::Frame(frame, projection),
+        // Every surface takes the projection its op was queued with. A
+        // viewport canvas is already in logical coordinates and is queued
+        // with none.
+        let target = match slot.destination {
+            PaintDestination::Frame => PaintTarget::Frame(frame, slot.projection),
             PaintDestination::Layer(index) => {
-                PaintTarget::Canvas(&mut self.canvases[index], projection)
+                PaintTarget::Canvas(&mut self.canvases[index], slot.projection)
             }
             PaintDestination::Viewport(index) => {
-                PaintTarget::Canvas(&mut self.viewport_canvases[index], None)
+                PaintTarget::Canvas(&mut self.viewport_canvases[index], slot.projection)
             }
         };
         let mut ctx = PaintCtx {
@@ -1879,24 +1894,18 @@ impl<State, Msg> RenderPass<State, Msg> {
                 dim_background(frame.buffer_mut(), canvas.buffer.area, theme.background);
             }
             let frame_area = frame.area();
-            let buffer = frame.buffer_mut();
             for &rect in &canvas.painted {
                 let rect = rect.intersection(frame_area);
-                for y in rect.y..rect.bottom() {
-                    for x in rect.x..rect.right() {
-                        if let (Some(target), Some(source)) =
-                            (buffer.cell_mut((x, y)), canvas.buffer.cell((x, y)))
-                        {
-                            *target = source.clone();
-                        }
-                    }
-                }
+                copy_buffer(&canvas.buffer, rect, frame.buffer_mut(), rect);
             }
         }
         let deferred = std::mem::take(&mut self.deferred);
         self.guarded(|pass| {
             for entry in deferred {
-                let hover_position = pass.hover_in(PaintDestination::Frame, entry.projection);
+                let hover_position = pass.hover_in(PaintSlot {
+                    destination: PaintDestination::Frame,
+                    projection: entry.projection,
+                });
                 let target = PaintTarget::Frame(&mut *frame, entry.projection);
                 paint_deferred(target, theme, hover_position, state, entry.paint);
             }
@@ -2019,12 +2028,10 @@ struct Press {
     moved: bool,
 }
 
-/// Where a gesture's events go, as one state rather than as facts scattered
-/// across parallel maps.
+/// Where a gesture's events go.
 ///
-/// The two states are exclusive by construction — a gesture that has been
-/// called off keeps no claim and no target, because nothing may act on either
-/// again.
+/// The two states are exclusive: a gesture that has been called off keeps no
+/// claim and no target, because nothing may act on either again.
 #[derive(Debug)]
 enum Routing {
     /// A live gesture.
@@ -6911,10 +6918,15 @@ mod tests {
             ratcn.handle_event(mouse(MouseKind::Moved, 1, 1), &state),
             EventResult::Consumed
         );
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state);
 
         assert_eq!(
             *events.lock().expect("pointer event log"),
-            [("left", MouseKind::Down(MouseButton::Left))]
+            [
+                ("left", MouseKind::Down(MouseButton::Left)),
+                ("left", MouseKind::Up(MouseButton::Left)),
+                ("left", MouseKind::Click(MouseButton::Left)),
+            ]
         );
     }
 
@@ -6941,9 +6953,9 @@ mod tests {
         );
     }
 
-    /// crossterm reports `Drag` itself rather than motion under a held button.
-    /// It marks the press as moved just as synthesized motion does, so the
-    /// release still ends as a drag.
+    /// crossterm reports `Drag` itself, where other backends report motion
+    /// under a held button. It marks the press as moved just as synthesized
+    /// motion does, so the release still ends as a drag.
     #[test]
     fn a_backend_reported_drag_still_ends_as_a_drag() {
         let state = PointerState;
@@ -6993,6 +7005,34 @@ mod tests {
                 ("right", MouseKind::Up(MouseButton::Right)),
                 ("right", MouseKind::Click(MouseButton::Right)),
                 ("left", MouseKind::Drag(MouseButton::Left)),
+            ]
+        );
+    }
+
+    /// The other release order: the button pressed *first* goes up while a
+    /// later one is still held. Its own gesture ends, and motion stays with
+    /// the button still down.
+    #[test]
+    fn releasing_the_earlier_press_leaves_motion_with_the_later_one() {
+        let state = PointerState;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut ratcn = Ratcn::new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).expect("terminal");
+        render_neighbours(&mut ratcn, &mut terminal, &events, false);
+
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Down(MouseButton::Right), 7, 1), &state);
+        events.lock().expect("pointer event log").clear();
+
+        ratcn.handle_event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state);
+        ratcn.handle_event(mouse(MouseKind::Moved, 8, 1), &state);
+
+        assert_eq!(
+            *events.lock().expect("pointer event log"),
+            [
+                ("left", MouseKind::Up(MouseButton::Left)),
+                ("left", MouseKind::Click(MouseButton::Left)),
+                ("right", MouseKind::Drag(MouseButton::Right)),
             ]
         );
     }
@@ -11611,7 +11651,7 @@ mod viewport_tests {
             assert_eq!(
                 driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0)),
                 EventResult::Ignored,
-                "{failure:?} kept the previous retained surface"
+                "{failure:?} did not commit the pass that caught the panic"
             );
         }
     }
@@ -11656,7 +11696,7 @@ mod viewport_tests {
         assert_eq!(
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0)),
             EventResult::Consumed,
-            "the popup layer kept the previous retained surface"
+            "the popup layer did not commit the pass that caught the panic"
         );
     }
 
