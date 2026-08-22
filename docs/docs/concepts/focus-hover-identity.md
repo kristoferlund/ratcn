@@ -79,9 +79,9 @@ discovers them — every frame is declared in full before focus resolves against
 it, so whether focus can descend into a scope is observed, never promised. One
 option changes a scope's own role:
 
-- `focusable()` makes the scope itself the Tab stop — for a pane with nothing
-  focusable inside, such as a read-only chart. Focus still prefers a focusable
-  descendant when one exists.
+- `focusable(true)` makes the scope itself the Tab stop — for a pane with
+  nothing focusable inside, such as a read-only chart. Focus still prefers a
+  focusable descendant when one exists.
 
 The declare-then-paint mechanics behind this live in
 [Rendering and event routing](./rendering-and-events).

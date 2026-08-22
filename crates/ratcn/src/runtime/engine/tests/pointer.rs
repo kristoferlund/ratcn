@@ -40,8 +40,8 @@ impl Component<FocusTestState, FocusTestMsg> for DownFocusLeaf {
         }
     }
 
-    fn is_focusable(&self) -> bool {
-        true
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
     }
 }
 
@@ -1094,8 +1094,8 @@ fn releasing_the_earlier_press_leaves_motion_with_the_later_one() {
 
 #[test]
 fn area_scope_hit_prefers_descendant_then_falls_back_to_scope() {
-    let state = HoverFocusState::default();
-    let mut driver = Driver::<HoverFocusState, HoverFocusMsg>::new(8, 2);
+    let state = FocusTestState::default();
+    let mut driver = Driver::<FocusTestState, FocusTestMsg>::new(8, 2);
     driver.render(&state, |ctx| {
         ctx.scope(
             ChildId::Static("scope"),
@@ -1104,7 +1104,7 @@ fn area_scope_hit_prefers_descendant_then_falls_back_to_scope() {
             |ctx| {
                 ctx.component(
                     ChildId::Static("child"),
-                    HoverFocusLeaf::enabled(),
+                    FocusLeaf::enabled(),
                     Rect::new(0, 0, 3, 2),
                 );
             },

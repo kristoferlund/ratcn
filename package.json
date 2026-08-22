@@ -3,9 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "docs:dev": "npm run docs:check && npm run demo:build && vitepress dev docs",
-    "docs:build": "npm run docs:check && npm run demo:build && vitepress build docs",
-    "docs:check": "node scripts/check-doc-regions.mjs",
+    "docs:dev": "npm run demo:build && vitepress dev docs",
+    "docs:build": "npm run demo:build && vitepress build docs",
     "demo:build": "scripts/build-demos.sh",
     "demo:dev": "scripts/demo-dev.sh"
   },

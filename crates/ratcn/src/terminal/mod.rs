@@ -467,110 +467,12 @@ fn restore_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::
 #[cfg(test)]
 mod tests {
     use super::{
-        DecPrivateModeCode as M, Duration, Instant, SessionEvent, SessionOptions, Source,
-        TerminalColors, Watch, io, modes, opening, pump, pump_and_remember, remember,
-        restore_modes, stored_or,
+        DecPrivateModeCode as M, Duration, Instant, SessionEvent, SessionOptions, TerminalColors,
+        Watch, modes, opening, pump, pump_and_remember, remember, restore_modes, stored_or,
     };
     use crate::Theme;
+    use crate::terminal::fake::FakeTerminal;
     use ratatui::style::Color;
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
-    use termina::Parser;
-
-    /// An event source the test writes the script for: each step is either an
-    /// event to hand over or a wait to really sit out. A spent script is a
-    /// terminal with nothing more to say, and [`POLLS`] is what keeps a loop
-    /// that would never leave it from running forever.
-    struct Scripted {
-        steps: RefCell<VecDeque<Option<termina::Event>>>,
-        /// The timeout each poll was given, in order.
-        polls: RefCell<Vec<Option<Duration>>>,
-    }
-
-    /// How many times one `pump` call may ask the source before the loop it is
-    /// in counts as a spin.
-    ///
-    /// Every script here is a handful of steps, and every pass through the loop
-    /// spends one: a pump still asking after this many has stopped making
-    /// progress through anything.
-    const POLLS: usize = 64;
-
-    impl Scripted {
-        /// `script` parses to the events; `waits` marks, by index, the points
-        /// where the source should instead sit out the wait it was given.
-        fn new(script: &str, waits: &[usize]) -> Self {
-            let mut parser = Parser::default();
-            parser.parse(script.as_bytes(), false);
-            let mut events = VecDeque::new();
-            while let Some(event) = parser.pop() {
-                events.push_back(event);
-            }
-            let mut steps: VecDeque<Option<termina::Event>> = VecDeque::new();
-            for (index, event) in events.into_iter().enumerate() {
-                if waits.contains(&index) {
-                    steps.push_back(None);
-                }
-                steps.push_back(Some(event));
-            }
-            if waits.contains(&steps.len()) {
-                steps.push_back(None);
-            }
-            Self {
-                steps: RefCell::new(steps),
-                polls: RefCell::new(Vec::new()),
-            }
-        }
-
-        fn waiting() -> Self {
-            Self {
-                steps: RefCell::new(VecDeque::from([None])),
-                polls: RefCell::new(Vec::new()),
-            }
-        }
-
-        fn poll_at(&self, index: usize) -> Option<Duration> {
-            self.polls.borrow().get(index).copied().flatten()
-        }
-    }
-
-    impl Source for Scripted {
-        fn poll(&self, timeout: Option<Duration>) -> io::Result<bool> {
-            self.polls.borrow_mut().push(timeout);
-            let asked = self.polls.borrow().len();
-            if asked > POLLS {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    format!("the source was asked {asked} times: the loop is spinning"),
-                ));
-            }
-            match self.steps.borrow().front() {
-                Some(Some(_)) => return Ok(true),
-                Some(None) => {}
-                // A spent script is a terminal with nothing more to say: it
-                // sits out whatever wait it was given, and answers an unbounded
-                // one the way a silent terminal does, by staying silent.
-                None => {
-                    if let Some(timeout) = timeout {
-                        std::thread::sleep(timeout);
-                    }
-                    return Ok(false);
-                }
-            }
-            self.steps.borrow_mut().pop_front();
-            if let Some(timeout) = timeout {
-                std::thread::sleep(timeout);
-            }
-            Ok(false)
-        }
-
-        fn read(&self) -> io::Result<termina::Event> {
-            self.steps
-                .borrow_mut()
-                .pop_front()
-                .flatten()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "nothing pending"))
-        }
-    }
 
     const NOTIFIED: &str = "\x1b[?997;2n";
 
@@ -601,7 +503,7 @@ mod tests {
     #[test]
     fn typing_reaches_the_app_whether_or_not_the_terminal_is_watched() {
         for watched in [false, true] {
-            let source = Scripted::new("q", &[]);
+            let source = FakeTerminal::scripted("q", &[]);
             let mut watch = Watch::new(None, Instant::now());
             let mut out = Vec::new();
 
@@ -624,7 +526,7 @@ mod tests {
     #[test]
     fn focus_reaches_the_app_whether_or_not_the_terminal_is_watched() {
         for watched in [false, true] {
-            let source = Scripted::new("\x1b[I", &[]);
+            let source = FakeTerminal::scripted("\x1b[I", &[]);
             let mut watch = Watch::new(None, Instant::now());
             let mut out = Vec::new();
 
@@ -653,7 +555,7 @@ mod tests {
     fn a_session_that_follows_nothing_writes_nothing_when_focus_returns() {
         // A session with no re-query to trigger has nothing for focus to do,
         // and the wait in the middle carries it long past any collapse window.
-        let source = Scripted::new("\x1b[Iq", &[1]);
+        let source = FakeTerminal::scripted("\x1b[Iq", &[1]);
         let mut out = Vec::new();
 
         let focus =
@@ -681,7 +583,7 @@ mod tests {
         // Unsolicited or left over, an escape report is not something the app
         // can read. The contract is the same with a watch and without one.
         for watched in [false, true] {
-            let source = Scripted::new("\x1b[?62;1;6cq", &[]);
+            let source = FakeTerminal::scripted("\x1b[?62;1;6cq", &[]);
             let mut watch = Watch::new(None, Instant::now());
             let mut out = Vec::new();
 
@@ -704,7 +606,7 @@ mod tests {
     #[test]
     fn a_wait_that_runs_out_reports_nothing_and_asks_for_the_time_it_was_given() {
         let wait = Duration::from_millis(30);
-        let source = Scripted::waiting();
+        let source = FakeTerminal::scripted("", &[0]);
         let mut out = Vec::new();
 
         let event =
@@ -721,7 +623,7 @@ mod tests {
         // hundred milliseconds, and the poll has to come back in time for it.
         // A keystroke after the window closes, so the pump has something to
         // return once the re-query has gone out.
-        let source = Scripted::new(&format!("{NOTIFIED}q"), &[1]);
+        let source = FakeTerminal::scripted(&format!("{NOTIFIED}q"), &[1]);
         let mut watch = Watch::new(None, Instant::now());
         let mut out = Vec::new();
 
@@ -743,7 +645,7 @@ mod tests {
 
     #[test]
     fn the_colours_a_re_query_brings_back_are_the_theme_that_comes_out() {
-        let source = Scripted::new(&format!("{NOTIFIED}{LIGHT}"), &[1]);
+        let source = FakeTerminal::scripted(&format!("{NOTIFIED}{LIGHT}"), &[1]);
         let mut watch = Watch::new(None, Instant::now());
         let mut out = Vec::new();
 
@@ -779,7 +681,7 @@ mod tests {
     fn focus_returning_re_queries_and_reports_a_real_change() {
         // The reproducer, at the seam: a terminal that reports no change of its
         // own, recoloured while the app was in the background.
-        let source = Scripted::new(&format!("\x1b[I{LIGHT}"), &[1]);
+        let source = FakeTerminal::scripted(&format!("\x1b[I{LIGHT}"), &[1]);
         let mut watch = Watch::new(None, Instant::now());
         let mut out = Vec::new();
 
@@ -813,7 +715,7 @@ mod tests {
             foreground: Color::Rgb(192, 202, 245),
         };
         let unchanged = "\x1b]10;rgb:c0c0/caca/f5f5\x07\x1b]11;rgb:1a1a/1b1b/2626\x07";
-        let source = Scripted::new(&format!("\x1b[I{unchanged}q"), &[1]);
+        let source = FakeTerminal::scripted(&format!("\x1b[I{unchanged}q"), &[1]);
         let mut watch = Watch::new(Some(known), Instant::now());
         let mut out = Vec::new();
 
@@ -835,7 +737,7 @@ mod tests {
     fn input_after_a_long_quiet_re_queries_and_reports_a_real_change() {
         // The other reproducer: a compositor that gives the window no focus
         // event at all, so the user coming back to it is the whole signal.
-        let source = Scripted::new(&format!("q{LIGHT}"), &[1]);
+        let source = FakeTerminal::scripted(&format!("q{LIGHT}"), &[1]);
         let mut watch = quiet_watch();
         let mut out = Vec::new();
 
@@ -865,7 +767,7 @@ mod tests {
     fn input_inside_a_session_already_in_use_asks_the_terminal_nothing() {
         // Typing is what a session is for. Only the first keystroke after a
         // spell of nothing at all says the user was somewhere else.
-        let source = Scripted::new("q", &[1]);
+        let source = FakeTerminal::scripted("q", &[1]);
         let mut watch = Watch::new(None, Instant::now());
         let mut out = Vec::new();
 
@@ -883,7 +785,7 @@ mod tests {
     fn a_session_that_follows_nothing_writes_nothing_when_input_resumes() {
         // A session with no re-query to trigger has no quiet to answer to
         // either, however long it was left alone.
-        let source = Scripted::new("q", &[1]);
+        let source = FakeTerminal::scripted("q", &[1]);
         let mut out = Vec::new();
 
         let typing =
@@ -921,7 +823,7 @@ mod tests {
     fn the_change_reported_is_the_change_remembered() {
         // A caller that reads the theme after the event must see the theme the
         // event carried.
-        let source = Scripted::new(&format!("{NOTIFIED}{LIGHT}"), &[1]);
+        let source = FakeTerminal::scripted(&format!("{NOTIFIED}{LIGHT}"), &[1]);
         let mut watch = Watch::new(None, Instant::now());
         let mut out = Vec::new();
         let mut stored = None;

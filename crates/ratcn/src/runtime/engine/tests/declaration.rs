@@ -13,8 +13,8 @@ impl Component<u8, ()> for ContextProbe {
         assert_eq!(*ctx.state(), 7);
     }
 
-    fn is_focusable(&self) -> bool {
-        true
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
     }
 }
 
@@ -49,24 +49,14 @@ impl Component<(), ()> for PanickingScopeOptions {
     }
 }
 
-struct PanickingResolve;
+struct PanickingPrepare;
 
-impl Component<(), ()> for PanickingResolve {
+impl Component<(), ()> for PanickingPrepare {
     fn prepare(&mut self, _state: &()) {
-        panic!("declaration prop resolution failed");
+        panic!("prepare failed");
     }
 
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
-}
-
-struct PanickingFocusable;
-
-impl Component<(), ()> for PanickingFocusable {
-    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
-
-    fn is_focusable(&self) -> bool {
-        panic!("focusability failed");
-    }
 }
 
 struct PanickingInteractionArea;
@@ -121,8 +111,8 @@ impl Component<FocusTestState, FocusTestMsg> for PathProbe {
         record_declared_path(ctx, &self.0);
     }
 
-    fn is_focusable(&self) -> bool {
-        true
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
     }
 }
 
@@ -417,42 +407,105 @@ fn declared_paths_match_the_declaration_for_a_depth_four_tree_with_layers_and_dy
 }
 
 #[test]
-fn declaration_panic_does_not_replace_the_previous_surface() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
+fn a_failed_declaration_pass_leaves_the_previous_surface_in_place() {
+    /// One way a pass can fail, and the declaration that provokes it.
+    type Case = (&'static str, fn(&mut DeclareCtx<'_, (), ()>, Rect));
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
+    // Half of these catch the panic inside the declaration, so the unwind never
+    // reaches the runtime: the pass has to remember that it failed rather than
+    // learn it from an escaping payload.
+    let cases: &[Case] = &[
+        ("the declaration closure", |ctx, area| {
             ctx.component(ChildId::Static("staged"), Leaf, area);
             panic!("declaration failed");
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
-}
-
-#[test]
-fn component_panic_does_not_replace_the_previous_surface() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
+        }),
+        ("Component::declare", |ctx, area| {
             ctx.component(ChildId::Static("panicking"), PanickingLeaf, area);
-        });
-    }));
+        }),
+        ("Component::declare, caught by the parent", |ctx, area| {
+            ctx.component(ChildId::Static("catching"), CatchingComposite, area);
+        }),
+        ("a duplicate child id, caught", |ctx, area| {
+            ctx.component(ChildId::Static("duplicate"), Leaf, area);
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                ctx.component(ChildId::Static("duplicate"), Leaf, area);
+            }));
+            assert!(caught.is_err());
+        }),
+        // `scope` validates sibling ids exactly as `component` does; an app
+        // that catches the duplicate's panic and carries on is still denied
+        // the commit, or it would route against a half-declared tree.
+        ("a duplicate scope id, caught", |ctx, area| {
+            ctx.scope(
+                ChildId::Static("duplicate"),
+                area,
+                ScopeOptions::default(),
+                |_| {},
+            );
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                ctx.scope(
+                    ChildId::Static("duplicate"),
+                    area,
+                    ScopeOptions::default(),
+                    |_| {},
+                );
+            }));
+            assert!(caught.is_err());
+        }),
+        ("Component::prepare, caught", |ctx, area| {
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                ctx.component(ChildId::Static("panicking-prepare"), PanickingPrepare, area);
+            }));
+            assert!(caught.is_err());
+        }),
+        ("Component::scope_options, caught", |ctx, area| {
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                ctx.component(
+                    ChildId::Static("panicking-options"),
+                    PanickingScopeOptions,
+                    area,
+                );
+            }));
+            assert!(caught.is_err());
+        }),
+        ("Component::interaction_area, caught", |ctx, area| {
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                ctx.component(
+                    ChildId::Static("panicking-area"),
+                    PanickingInteractionArea,
+                    area,
+                );
+            }));
+            assert!(caught.is_err());
+        }),
+        (
+            "an interaction area escaping the paint area",
+            |ctx, _area| {
+                ctx.component(
+                    ChildId::Static("escaping-area"),
+                    EscapingInteractionArea,
+                    Rect::new(2, 1, 4, 1),
+                );
+            },
+        ),
+    ];
 
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
+    for (name, declare) in cases {
+        let mut driver = Driver::<(), ()>::new(10, 3);
+        render_leaf(&mut driver, &ChildId::Static("stable"));
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let area = driver.area();
+            driver.render(&(), |ctx| declare(ctx, area));
+        }));
+
+        assert!(result.is_err(), "{name}: the pass reported success");
+        assert_eq!(
+            driver.ratcn.declared_paths(),
+            vec![vec![ChildId::Static("stable")]],
+            "{name}: the failed pass replaced the retained surface"
+        );
+    }
 }
 
 #[test]
@@ -482,207 +535,6 @@ fn the_closure_declares_once_and_queued_paint_runs_once_on_the_frame() {
     assert_eq!(*seen.borrow(), [" "]);
     let buffer = driver.buffer();
     assert_eq!(buffer.cell((0, 0)).expect("painted cell").symbol(), "X");
-}
-
-#[test]
-fn caught_component_panic_marks_the_whole_pass_as_failed() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
-            ctx.component(ChildId::Static("catching"), CatchingComposite, area);
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
-}
-
-#[test]
-fn caught_duplicate_id_panic_marks_the_whole_pass_as_failed() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
-            ctx.component(ChildId::Static("duplicate"), Leaf, area);
-            let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.component(ChildId::Static("duplicate"), Leaf, area);
-            }));
-            assert!(caught.is_err());
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
-}
-
-/// The same for the scope form: `scope` validates sibling ids exactly as
-/// `component` does, so an app that catches the duplicate's panic and carries
-/// on must still be denied the commit — a half-declared tree would route
-/// against geometry the app believes it replaced.
-#[test]
-fn caught_duplicate_scope_id_panic_marks_the_whole_pass_as_failed() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
-            ctx.scope(
-                ChildId::Static("duplicate"),
-                area,
-                ScopeOptions::default(),
-                |_| {},
-            );
-            let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.scope(
-                    ChildId::Static("duplicate"),
-                    area,
-                    ScopeOptions::default(),
-                    |_| {},
-                );
-            }));
-            assert!(caught.is_err());
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
-}
-
-#[test]
-fn caught_scope_option_panic_marks_the_whole_pass_as_failed() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
-            let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.component(
-                    ChildId::Static("panicking-options"),
-                    PanickingScopeOptions,
-                    area,
-                );
-            }));
-            assert!(caught.is_err());
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
-}
-
-#[test]
-fn caught_resolve_panic_marks_the_whole_pass_as_failed() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
-            let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.component(ChildId::Static("panicking-resolve"), PanickingResolve, area);
-            }));
-            assert!(caught.is_err());
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
-}
-
-#[test]
-fn caught_focusability_panic_marks_the_whole_pass_as_failed() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
-            let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.component(
-                    ChildId::Static("panicking-focusable"),
-                    PanickingFocusable,
-                    area,
-                );
-            }));
-            assert!(caught.is_err());
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
-}
-
-#[test]
-fn caught_interaction_area_panic_marks_the_whole_pass_as_failed() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let area = driver.area();
-        driver.render(&(), |ctx| {
-            let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.component(
-                    ChildId::Static("panicking-area"),
-                    PanickingInteractionArea,
-                    area,
-                );
-            }));
-            assert!(caught.is_err());
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
-}
-
-#[test]
-fn escaping_interaction_area_panics_without_replacing_the_surface() {
-    let mut driver = Driver::<(), ()>::new(10, 3);
-    render_leaf(&mut driver, &ChildId::Static("stable"));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        driver.render(&(), |ctx| {
-            ctx.component(
-                ChildId::Static("escaping-area"),
-                EscapingInteractionArea,
-                Rect::new(2, 1, 4, 1),
-            );
-        });
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(
-        driver.ratcn.declared_paths(),
-        vec![vec![ChildId::Static("stable")]]
-    );
 }
 
 #[test]
@@ -729,8 +581,6 @@ fn deferred_paint_panic_does_not_replace_the_previous_surface() {
 
 /// Declared closed, prepared open: every pre-render answer reports what
 /// `prepare` computed, never the value the builder was constructed with.
-/// `is_focusable` stays at its default so the focus claim is attributable
-/// to `scope_options` alone — the runtime ORs the two together.
 struct PreparedClaims {
     open: bool,
 }
@@ -743,12 +593,7 @@ impl Component<bool, ()> for PreparedClaims {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, bool, ()>) {}
 
     fn scope_options(&self) -> ScopeOptions {
-        let options = ScopeOptions::default();
-        if self.open {
-            options.focusable()
-        } else {
-            options
-        }
+        ScopeOptions::default().focusable(self.open)
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {

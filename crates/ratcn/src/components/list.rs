@@ -18,7 +18,7 @@ use crate::list_core::{
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseKind, PaintCtx,
-    ScrollDirection,
+    ScopeOptions, ScrollDirection,
 };
 use crate::selection_indicator;
 use crate::text_width::display_width;
@@ -1002,10 +1002,12 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         }
     }
 
-    fn is_focusable(&self) -> bool {
-        self.focused_item.is_some()
-            && !self.disabled
-            && linear_nav::has_enabled(self.items.len(), |i| self.disabled_at(i))
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(
+            self.focused_item.is_some()
+                && !self.disabled
+                && linear_nav::has_enabled(self.items.len(), |i| self.disabled_at(i)),
+        )
     }
 }
 

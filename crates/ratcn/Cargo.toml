@@ -33,8 +33,7 @@ criterion = "0.5.1"
 name = "frame"
 harness = false
 
-# ratzilla is wasm-only, so `all-features` cannot build here; these two are what
-# a terminal consumer sees.
+# The feature set docs.rs builds: what a terminal consumer sees.
 [package.metadata.docs.rs]
 features = ["crossterm", "termina"]
 

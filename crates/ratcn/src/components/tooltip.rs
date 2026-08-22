@@ -11,8 +11,6 @@
 //!   takes no input at all (see [`DeclareCtx::hint`]), which is what keeps a
 //!   tooltip from swallowing the click on the control it describes.
 
-use std::rc::Rc;
-
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -226,10 +224,10 @@ impl Widget for TooltipWidget<'_> {
     }
 }
 
-type ReadOpenFn<S> = Rc<dyn Fn(&S, bool) -> bool>;
-type OnOpenChangeFn<M> = Rc<dyn Fn(bool) -> M>;
+type ReadOpenFn<S> = Box<dyn Fn(&S, bool) -> bool>;
+type OnOpenChangeFn<M> = Box<dyn Fn(bool) -> M>;
 type OpenBinding<S, M> = (ReadOpenFn<S>, Option<OnOpenChangeFn<M>>);
-type StyleFn = Rc<dyn Fn(&Theme) -> TooltipStyle>;
+type StyleFn = Box<dyn Fn(&Theme) -> TooltipStyle>;
 /// The trigger closure, boxed for storage until the declaration runs it.
 type TriggerFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
 
@@ -382,7 +380,7 @@ impl<S, M> Tooltip<S, M> {
     /// nothing, so its pointer and Esc handling do not apply.
     #[must_use]
     pub fn open_when(mut self, read: impl Fn(&S, bool) -> bool + 'static) -> Self {
-        self.open = Some((Rc::new(read), None));
+        self.open = Some((Box::new(read), None));
         self
     }
 
@@ -410,7 +408,7 @@ impl<S, M> Tooltip<S, M> {
         read: impl Fn(&S, bool) -> bool + 'static,
         on_open_change: impl Fn(bool) -> M + 'static,
     ) -> Self {
-        self.open = Some((Rc::new(read), Some(Rc::new(on_open_change))));
+        self.open = Some((Box::new(read), Some(Box::new(on_open_change))));
         self
     }
 
@@ -460,7 +458,7 @@ impl<S, M> Tooltip<S, M> {
     /// runtime theme changes.
     #[must_use]
     pub fn style(mut self, style: impl Fn(&Theme) -> TooltipStyle + 'static) -> Self {
-        self.style = Some(Rc::new(style));
+        self.style = Some(Box::new(style));
         self
     }
 

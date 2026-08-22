@@ -4,20 +4,21 @@
 //! each one has to compile as an ordinary external crate against `ratcn`'s
 //! public API — no `pub(crate)` reach into the engine, no `super::` reach at a
 //! sibling component. This script performs that copy (drop the test module,
-//! rewrite `crate::` to `ratcn::`) into `OUT_DIR`, where one binary target per
-//! component compiles it alone. Nothing generated is committed, and there is no
-//! sync step to run or forget.
+//! rewrite `crate::` to `ratcn::`) into `OUT_DIR`, where one example target
+//! per component compiles it alone. Nothing generated is committed, and there
+//! is no sync step to run or forget.
 //!
 //! Line numbers survive the copy: the transform rewrites and truncates, never
 //! inserts, so a compile error at `<component>.rs:412` in `OUT_DIR` is line 412
 //! of `crates/ratcn/src/components/<component>.rs`.
 //!
-//! The inventory is `src/bin/`: one stub per component, each including the module
-//! generated for the binary it is compiled as. This script fails if a component
-//! has no stub, if a stub has no component, or if a stub is not [`STUB`] byte for
-//! byte — a stub that had been emptied to `fn main() {}` would pass the inventory
-//! while its component went unchecked. So the set cannot drift from
-//! `crates/ratcn/src/components/`, and nor can what a target actually compiles.
+//! The inventory is `examples/`: one stub per component, each including the
+//! module generated for the target it is compiled as. This script fails if a
+//! component has no stub, if a stub has no component, or if a stub is not
+//! [`STUB`] byte for byte — a stub that had been emptied to `fn main() {}`
+//! would pass the inventory while its component went unchecked. So the set
+//! cannot drift from `crates/ratcn/src/components/`, and nor can what a target
+//! actually compiles.
 
 use std::{
     collections::BTreeSet,
@@ -25,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Every stub in `src/bin`, byte for byte. `CARGO_BIN_NAME` is what makes one
+/// Every stub in `examples`, byte for byte. `CARGO_BIN_NAME` is what makes one
 /// text serve all of them: cargo sets it to the target being compiled, which is
 /// the component whose copy that target includes.
 const STUB: &str = r#"// One component module, copied at build time and compiled alone. See build.rs.
@@ -39,7 +40,7 @@ fn main() {
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     let components_dir = manifest_dir.join("../ratcn/src/components");
-    let stubs_dir = manifest_dir.join("src/bin");
+    let stubs_dir = manifest_dir.join("examples");
 
     println!("cargo::rerun-if-changed={}", components_dir.display());
     println!("cargo::rerun-if-changed={}", stubs_dir.display());
@@ -54,14 +55,14 @@ fn main() {
         unchecked.is_empty(),
         "no compile target for the component module(s): {unchecked}.\n\
          Every module in crates/ratcn/src/components is copied into a consumer's project, so each \
-         one is compiled here in isolation. Add crates/copy-fixture/src/bin/<component>.rs with \
+         one is compiled here in isolation. Add crates/copy-fixture/examples/<component>.rs with \
          the same two lines as its neighbours."
     );
     let orphaned = joined(stubs.difference(&components));
     assert!(
         orphaned.is_empty(),
         "compile target(s) with no component module in crates/ratcn/src/components: {orphaned}.\n\
-         Delete the matching crates/copy-fixture/src/bin/<component>.rs."
+         Delete the matching crates/copy-fixture/examples/<component>.rs."
     );
 
     for component in &components {

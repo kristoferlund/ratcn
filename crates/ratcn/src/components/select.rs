@@ -33,7 +33,7 @@ use crate::list_core::{
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
-    MouseEvent, MouseKind, PaintCtx, PopupOptions, ScrollDirection,
+    MouseEvent, MouseKind, PaintCtx, PopupOptions, ScopeOptions, ScrollDirection,
 };
 use crate::selection_indicator;
 use crate::theme::resolve_style;
@@ -1071,8 +1071,9 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         }
     }
 
-    fn is_focusable(&self) -> bool {
-        self.keyboard_enabled() && !self.disabled && self.has_enabled_item()
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default()
+            .focusable(self.keyboard_enabled() && !self.disabled && self.has_enabled_item())
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
@@ -1290,7 +1291,7 @@ mod tests {
     use ratatui::text::{Line, Span};
 
     use super::*;
-    use crate::runtime::{FocusState, Modifiers, Ratcn, ScopeOptions};
+    use crate::runtime::{FocusState, Modifiers, Ratcn};
     use crate::test_support::{Driver, mouse};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2102,7 +2103,7 @@ mod tests {
             .selection(|state: &State| state.selected, Msg::Selected);
         component.prepare(&state);
 
-        assert!(!component.is_focusable());
+        assert!(!component.scope_options().focusable);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Down)),
@@ -2129,7 +2130,7 @@ mod tests {
             .item_focus(|state: &State| state.cursor, Msg::Focused);
         component.prepare(&state);
 
-        assert!(!component.is_focusable());
+        assert!(!component.scope_options().focusable);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Down)),
@@ -2207,7 +2208,7 @@ mod tests {
         let state = State::default();
         let mut disabled = select(items()).disabled(true);
         disabled.prepare(&state);
-        assert!(!disabled.is_focusable());
+        assert!(!disabled.scope_options().focusable);
         assert_eq!(
             disabled.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Enter)),

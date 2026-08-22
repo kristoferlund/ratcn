@@ -56,12 +56,13 @@ jobs:
       # The copy-out promise: every component module must compile against
       # ratcn's public API alone. copy-fixture's build script makes the copy a
       # consumer makes — `crate::` rewritten to `ratcn::`, tests dropped — and
-      # compiles each component as its own binary target, so a reach at a
+      # compiles each component as its own example target, so a reach at a
       # sibling component fails as surely as a reach at a private item. Nothing
       # is committed and there is no sync step; a component with no target in
-      # that crate fails the build script.
+      # that crate fails the build script. `--examples` is what compiles those
+      # targets: the crate's only source is its examples directory.
       - name: Copyable components compile in isolation
-        run: cargo check -p copy-fixture --locked
+        run: cargo check -p copy-fixture --examples --locked
 
       # --all-targets matters: without it clippy lints only the lib target and
       # skips every test module, which is over half this crate's source.

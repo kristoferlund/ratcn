@@ -68,14 +68,16 @@
 //! engine, focus, events, and the traits for writing your own components — are
 //! under [`runtime`].
 //!
-//! Beside them sit the copy-support modules: [`button_shape`], [`geometry`],
-//! [`linear_nav`], [`list_core`], [`selection_indicator`], and [`text_width`].
-//! They hold the pieces more than one component needs — the button idiom's cap
-//! and fill rows, area arithmetic, item-index movement, value-keyed items and
-//! their row viewport, the radio and checkbox markers, display-width
-//! measurement — so a component module depends on the crate root and these,
-//! and on no sibling component. That is what lets you copy one component
-//! module into your own project and have it compile against `ratcn` alone.
+//! Beside them sit the copy-support modules: [`button_shape`], [`color`],
+//! [`geometry`], [`linear_nav`], [`list_core`], [`selection_indicator`], and
+//! [`text_width`]. They hold the pieces more than one component needs — the
+//! button idiom's cap and fill rows, the color arithmetic every focus, hover,
+//! and disabled state derives through, area arithmetic, item-index movement,
+//! value-keyed items and their row viewport, the radio and checkbox markers,
+//! display-width measurement — so a component module depends on the crate root
+//! and these, and on no sibling component. That is what lets you copy one
+//! component module into your own project and have it compile against `ratcn`
+//! alone.
 //!
 //! # Examples
 //! ```no_run

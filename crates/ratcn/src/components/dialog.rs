@@ -721,12 +721,9 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
     fn scope_options(&self) -> ScopeOptions {
         // A dialog itself is only a useful fallback focus target when it can
         // handle its dismiss key. Descendants remain independently focusable.
-        let options = ScopeOptions::default().tab_wrap(self.tab_wrap);
-        if self.on_dismiss.is_some() {
-            options.focusable()
-        } else {
-            options
-        }
+        ScopeOptions::default()
+            .tab_wrap(self.tab_wrap)
+            .focusable(self.on_dismiss.is_some())
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
@@ -859,8 +856,8 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self) -> bool {
-            !self.disabled
+        fn scope_options(&self) -> ScopeOptions {
+            ScopeOptions::default().focusable(!self.disabled)
         }
     }
 
@@ -1375,7 +1372,7 @@ mod tests {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
         fn scope_options(&self) -> ScopeOptions {
-            ScopeOptions::default().focusable()
+            ScopeOptions::default().focusable(true)
         }
 
         fn handle_event(

@@ -72,6 +72,18 @@ pub enum EventResult<Msg> {
 /// context is still building, so while it exists there is nothing to report.
 /// Hover is the exception, because it predates the pass rather than following
 /// from it: [`pointer_within`](Self::pointer_within) is readable here.
+///
+/// # Argument order
+///
+/// Every declaration ends with its payload, and one that carries an identity
+/// opens with the [`ChildId`]. `area` takes the side of the payload that keeps
+/// the call readable: it precedes a closure payload — [`in_area`](Self::in_area),
+/// [`scope`](Self::scope), [`modal_scope`](Self::modal_scope),
+/// [`popup`](Self::popup), [`hint`](Self::hint), [`viewport`](Self::viewport) —
+/// and follows a value payload — [`component`](Self::component),
+/// [`modal`](Self::modal), [`paint_widget`](Self::paint_widget), which is the
+/// order `render_widget(widget, area)` reads in. Whatever else a declaration
+/// needs sits between the two, as `viewport`'s content height and offset do.
 pub struct DeclareCtx<'a, State, Msg> {
     pub(crate) frame_area: Rect,
     pub(crate) area: Rect,
@@ -1022,16 +1034,23 @@ impl ScopeOptions {
         self
     }
 
-    /// Let this scope hold focus itself, not only pass it to descendants.
+    /// Whether this scope holds focus itself, and so takes part in Tab
+    /// traversal. Defaults to `false`.
     ///
-    /// Needed when a container is a Tab stop in its own right — a scrollable
-    /// pane with nothing focusable inside it, for instance. Focus still prefers
-    /// a focusable descendant when there is one, so this only makes the scope a
-    /// target when there isn't. A zero-area declaration never participates in
-    /// traversal regardless.
+    /// An interactive leaf answers from the props it was declared with, so a
+    /// disabled button says `false`; anything that has to be derived from app
+    /// state is settled in [`Component::prepare`] first. A container asks for
+    /// it when it is a Tab stop in its own right — a scrollable pane with
+    /// nothing focusable inside it, for instance. Focus still prefers a
+    /// focusable descendant when there is one, so this only makes the scope a
+    /// target when there isn't.
+    ///
+    /// The runtime also requires a non-empty
+    /// [`Component::interaction_area`]; a zero-area declaration never
+    /// participates in traversal regardless.
     #[must_use]
-    pub const fn focusable(mut self) -> Self {
-        self.focusable = true;
+    pub const fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
         self
     }
 
@@ -1375,8 +1394,7 @@ pub enum Step {
 ///
 /// 1. [`prepare`](Self::prepare) — pin what the steps below read out of app
 ///    state.
-/// 2. [`scope_options`](Self::scope_options) and
-///    [`is_focusable`](Self::is_focusable) — read *before* any painting,
+/// 2. [`scope_options`](Self::scope_options) — read *before* any painting,
 ///    because focus for the whole frame is decided in one pass.
 /// 3. [`interaction_area`](Self::interaction_area) — derive the geometry used
 ///    for focus, hit-testing, and events from the final paint area.
@@ -1390,11 +1408,10 @@ pub enum Step {
 pub trait Component<State, Msg> {
     /// Prepare this component from the state it is being declared with.
     ///
-    /// The runtime runs this once per declaration, before it reads any of
-    /// [`scope_options`](Component::scope_options),
-    /// [`is_focusable`](Component::is_focusable), or
+    /// The runtime runs this once per declaration, before it reads either of
+    /// [`scope_options`](Component::scope_options) or
     /// [`interaction_area`](Component::interaction_area) — so a component may
-    /// answer all three from state computed here.
+    /// answer both from state computed here.
     ///
     /// That is what the hook is for: pinning declaration-time state once,
     /// rather than deriving it again in every answer.
@@ -1410,32 +1427,6 @@ pub trait Component<State, Msg> {
     /// Leaf components take their props as plain values at declaration and can
     /// ignore it.
     fn prepare(&mut self, _state: &State) {}
-
-    /// Declare the component: lay out its area, declare its descendants, and
-    /// record whatever [`handle_event`](Self::handle_event) will need to read
-    /// back.
-    ///
-    /// This paints nothing. What belongs here is everything the answer to
-    /// "what exists, and where" is made of: layout arithmetic, child
-    /// declarations, and the retained geometry event routing hit-tests
-    /// against. None of it can depend on the interaction flags, which do not
-    /// exist yet — focus resolves against the tree this is still building.
-    ///
-    /// Anything that draws belongs in [`paint`](Self::paint).
-    fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>);
-
-    /// Paint the component. `ctx` carries the paint surface, area, app state,
-    /// theme, and interaction state.
-    ///
-    /// Every component's paint is queued where [`declare`](Self::declare)
-    /// declared it and replayed once the whole tree is known, so this runs
-    /// exactly once per frame, with focus resolved. Order is declaration
-    /// order, and a component is queued at the point it opens — before its
-    /// descendants — so a container's background and border land beneath
-    /// what it declares inside itself without any care taken here.
-    ///
-    /// A component that draws nothing of its own leaves this defaulted.
-    fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, State>) {}
 
     /// The scope this component opens around its descendants. Read once, before
     /// [`declare`](Component::declare), so it cannot depend on paint.
@@ -1466,6 +1457,32 @@ pub trait Component<State, Msg> {
     fn interaction_area(&self, area: Rect) -> Rect {
         area
     }
+
+    /// Declare the component: lay out its area, declare its descendants, and
+    /// record whatever [`handle_event`](Self::handle_event) will need to read
+    /// back.
+    ///
+    /// This paints nothing. What belongs here is everything the answer to
+    /// "what exists, and where" is made of: layout arithmetic, child
+    /// declarations, and the retained geometry event routing hit-tests
+    /// against. None of it can depend on the interaction flags, which do not
+    /// exist yet — focus resolves against the tree this is still building.
+    ///
+    /// Anything that draws belongs in [`paint`](Self::paint).
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>);
+
+    /// Paint the component. `ctx` carries the paint surface, area, app state,
+    /// theme, and interaction state.
+    ///
+    /// Every component's paint is queued where [`declare`](Self::declare)
+    /// declared it and replayed once the whole tree is known, so this runs
+    /// exactly once per frame, with focus resolved. Order is declaration
+    /// order, and a component is queued at the point it opens — before its
+    /// descendants — so a container's background and border land beneath
+    /// what it declares inside itself without any care taken here.
+    ///
+    /// A component that draws nothing of its own leaves this defaulted.
+    fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, State>) {}
 
     /// Offer this component an event.
     ///
@@ -1501,17 +1518,6 @@ pub trait Component<State, Msg> {
     /// a focus change: the app's focus message is emitted whatever happens
     /// here.
     fn reveal_in_viewport(&mut self, _target: Rect, _state: &State, _ctx: &mut EventCtx<'_>) {}
-
-    /// Whether the component can hold focus, and so takes part in Tab
-    /// traversal. Defaults to `false`; interactive leaves answer from the
-    /// props they were declared with, so a disabled button says `false`.
-    /// Anything that has to be derived from app state is settled in
-    /// [`prepare`](Self::prepare) first. The runtime also requires
-    /// [`interaction_area`](Self::interaction_area) to return a non-empty
-    /// area.
-    fn is_focusable(&self) -> bool {
-        false
-    }
 }
 
 /// A [`Component`] that can report its preferred size before it is declared.

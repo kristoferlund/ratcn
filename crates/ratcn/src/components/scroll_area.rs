@@ -353,7 +353,7 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
     }
 
     fn scope_options(&self) -> ScopeOptions {
-        let options = ScopeOptions::default().focusable();
+        let options = ScopeOptions::default().focusable(true);
         if self.hover_focus {
             options.hover_focus()
         } else {
@@ -475,8 +475,8 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self) -> bool {
-            self.focusable
+        fn scope_options(&self) -> ScopeOptions {
+            ScopeOptions::default().focusable(self.focusable)
         }
     }
 
@@ -1295,8 +1295,8 @@ mod tests {
             }
         }
 
-        fn is_focusable(&self) -> bool {
-            true
+        fn scope_options(&self) -> ScopeOptions {
+            ScopeOptions::default().focusable(true)
         }
     }
 
