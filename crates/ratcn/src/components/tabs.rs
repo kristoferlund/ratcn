@@ -914,7 +914,7 @@ where
             .selected_item(selected)
             .focused_item(cursor)
             .disabled_items(&disabled)
-            .focused(ctx.focused)
+            .focused(ctx.focused())
             .hovered_item(hovered_item)
             .disabled(self.disabled)
             .size(self.size)

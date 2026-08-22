@@ -904,7 +904,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         let style = resolve_style(self.style.as_deref(), ctx.theme, ListStyle::from_theme);
         // One cursor, shown while the list is either focused or under the
         // pointer; where it sits was decided during declaration.
-        let cursor_visible = ctx.focused || ctx.hovered;
+        let cursor_visible = ctx.focused() || ctx.hovered();
         let selection_mode = if self.selected_many.is_some() {
             Some(true)
         } else if self.selected.is_some() {
@@ -959,7 +959,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                 .disabled_items(&disabled_items)
                 .style(style)
                 .focused(cursor_visible)
-                .hovered(ctx.hovered)
+                .hovered(ctx.hovered())
                 .disabled(self.disabled)
                 .focus_symbol(&self.focus_symbol),
             area,

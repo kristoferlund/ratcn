@@ -180,7 +180,7 @@ impl App {
         // settles once the whole tree is declared.
         let inner_area = Block::bordered().inner(panel_area);
         ctx.paint(move |ctx| {
-            let border = Self::panel_border(panel, ctx.contains_focus, pressed, ctx.theme);
+            let border = Self::panel_border(panel, ctx.contains_focus(), pressed, ctx.theme);
             debug_assert_eq!(
                 border.inner(panel_area),
                 inner_area,

@@ -53,8 +53,8 @@ impl Component<AppState, Msg> for MyComponent {
 Declaring and painting are two methods because they happen in two walks.
 `declare` lays the component out and declares its descendants, and paints
 nothing. `paint` writes cells, after the whole tree is declared and focus has
-resolved — which is why the interaction flags (`ctx.focused`,
-`ctx.contains_focus`, `ctx.hovered`, `ctx.contains_hover`) live on `PaintCtx`
+resolved — which is why the interaction flags (`ctx.focused()`,
+`ctx.contains_focus()`, `ctx.hovered()`, `ctx.contains_hover()`) live on `PaintCtx`
 and not on `DeclareCtx`: while `declare` runs, focus has nothing complete to
 resolve against yet. Hover is the exception, because it predates the frame
 rather than following from it: `DeclareCtx::pointer_within()` reports whether

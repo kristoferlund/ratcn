@@ -205,7 +205,7 @@ fn render_context_reports_each_declaration_area_and_state() {
     driver.render(&state, |ctx| {
         assert_eq!(ctx.area(), root_area);
         assert_eq!(*ctx.state(), state);
-        ctx.paint(|ctx| assert!(!ctx.contains_focus));
+        ctx.paint(|ctx| assert!(!ctx.contains_focus()));
         let scope_contains_focus = Rc::clone(&scope_contains_focus);
         ctx.scope(
             ChildId::Static("scope"),
@@ -216,7 +216,7 @@ fn render_context_reports_each_declaration_area_and_state() {
                 assert_eq!(*ctx.state(), state);
                 ctx.paint(move |ctx| {
                     assert_eq!(ctx.area(), scope_area);
-                    scope_contains_focus.borrow_mut().push(ctx.contains_focus);
+                    scope_contains_focus.borrow_mut().push(ctx.contains_focus());
                 });
                 ctx.component(
                     ChildId::Static("probe"),
@@ -514,6 +514,43 @@ fn caught_duplicate_id_panic_marks_the_whole_pass_as_failed() {
             ctx.component(ChildId::Static("duplicate"), Leaf, area);
             let caught = catch_unwind(AssertUnwindSafe(|| {
                 ctx.component(ChildId::Static("duplicate"), Leaf, area);
+            }));
+            assert!(caught.is_err());
+        });
+    }));
+
+    assert!(result.is_err());
+    assert_eq!(
+        driver.ratcn.declared_paths(),
+        vec![vec![ChildId::Static("stable")]]
+    );
+}
+
+/// The same for the scope form: `scope` validates sibling ids exactly as
+/// `component` does, so an app that catches the duplicate's panic and carries
+/// on must still be denied the commit — a half-declared tree would route
+/// against geometry the app believes it replaced.
+#[test]
+fn caught_duplicate_scope_id_panic_marks_the_whole_pass_as_failed() {
+    let mut driver = Driver::<(), ()>::new(10, 3);
+    render_leaf(&mut driver, &ChildId::Static("stable"));
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let area = driver.area();
+        driver.render(&(), |ctx| {
+            ctx.scope(
+                ChildId::Static("duplicate"),
+                area,
+                ScopeOptions::default(),
+                |_| {},
+            );
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                ctx.scope(
+                    ChildId::Static("duplicate"),
+                    area,
+                    ScopeOptions::default(),
+                    |_| {},
+                );
             }));
             assert!(caught.is_err());
         });

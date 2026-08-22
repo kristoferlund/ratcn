@@ -126,6 +126,68 @@ impl Component<State, Msg> for Leaf {
     }
 }
 
+/// Every paint inside a viewport lays out in one buffer the pass reuses, so
+/// what a paint reads where it has written nothing is blank. The seeding copy
+/// cannot answer for the logical rows the viewport does not show: they never
+/// reach the frame, so only blanking the buffer keeps one paint's leftovers
+/// out of the next one's layout.
+#[test]
+fn a_paint_inside_a_viewport_reads_blanks_where_it_has_not_written() {
+    let seen = Rc::new(RefCell::new(String::new()));
+    let read = Rc::clone(&seen);
+    let mut driver = Driver::<State, Msg>::new(4, 1);
+    driver.render(&State, move |ctx| {
+        ctx.viewport(Rect::new(0, 0, 4, 1), 4, 0, move |ctx| {
+            ctx.paint(|ctx| {
+                ctx.with_buffer(|buffer| {
+                    buffer[(0, 3)].set_symbol("X");
+                });
+            });
+            ctx.paint(move |ctx| {
+                ctx.with_buffer(|buffer| {
+                    read.borrow_mut().push_str(buffer[(0, 3)].symbol());
+                });
+            });
+        });
+    });
+
+    assert_eq!(*seen.borrow(), " ");
+}
+
+/// Paint that escaped a viewport's clip addresses the surface it lands on,
+/// read in logical coordinates: the frame shifted down by the scroll offset.
+/// A popup declared inside a viewport therefore reaches every row of its own
+/// canvas, including the rows the viewport itself does not show — the
+/// viewport's content rectangle is the allocation of the content it clips,
+/// and says nothing about what left the clip.
+#[test]
+fn escaped_paint_is_allocated_the_whole_surface_in_logical_coordinates() {
+    let mut driver = Driver::<State, Msg>::new(10, 4);
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 0, 6, 2), 8, 3, |ctx| {
+            ctx.popup(
+                "pop",
+                Rect::new(0, 3, 10, 4),
+                PopupOptions::default(),
+                |ctx| {
+                    ctx.defer_paint(|ctx| {
+                        let area = ctx.area();
+                        ctx.with_buffer(move |buffer| {
+                            buffer.set_string(area.x, area.y, "T", Style::default());
+                            buffer.set_string(area.x, area.bottom() - 1, "B", Style::default());
+                        });
+                    });
+                },
+            );
+        });
+    });
+
+    // Logical row 3 is the frame's first row at offset 3, and logical row 6
+    // its last.
+    assert_eq!(driver.row(0), "T         ");
+    assert_eq!(driver.row(3), "B         ");
+}
+
 struct PanicWidget;
 
 impl Widget for PanicWidget {

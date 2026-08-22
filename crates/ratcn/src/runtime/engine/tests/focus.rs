@@ -21,7 +21,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusComposite {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
         self.parent_rendered
             .borrow_mut()
-            .push((ctx.focused, ctx.contains_focus));
+            .push((ctx.focused(), ctx.contains_focus()));
     }
 
     fn handle_event(
@@ -54,7 +54,7 @@ impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
         self.rendered
             .borrow_mut()
-            .push((ctx.focused, ctx.contains_focus));
+            .push((ctx.focused(), ctx.contains_focus()));
     }
 
     fn scope_options(&self) -> ScopeOptions {
@@ -917,7 +917,7 @@ fn focusable_decorative_scope_receives_mouse_focus_and_hover_context() {
                     ctx.paint(move |ctx| {
                         rendered
                             .borrow_mut()
-                            .push((ctx.hovered, ctx.contains_hover));
+                            .push((ctx.hovered(), ctx.contains_hover()));
                     });
                 },
             );
@@ -950,7 +950,7 @@ impl Component<FocusTestState, FocusTestMsg> for ThunkProbe {
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {
         let log = Rc::clone(&self.0);
         ctx.paint(move |ctx| {
-            log.borrow_mut().push((ctx.focused, ctx.contains_focus));
+            log.borrow_mut().push((ctx.focused(), ctx.contains_focus()));
         });
     }
 
@@ -987,7 +987,7 @@ fn a_scope_thunk_reports_focus_within_its_subtree() {
                 ctx.paint(move |ctx| {
                     scope_flags
                         .borrow_mut()
-                        .push((ctx.focused, ctx.contains_focus));
+                        .push((ctx.focused(), ctx.contains_focus()));
                 });
                 ctx.component(ChildId::Static("leaf"), ThunkProbe(leaf_flags), area);
             },

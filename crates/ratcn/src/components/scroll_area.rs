@@ -1700,7 +1700,7 @@ mod tests {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
         fn paint(&mut self, ctx: &mut crate::runtime::PaintCtx<'_, '_, State>) {
-            self.hovered.set(ctx.hovered);
+            self.hovered.set(ctx.hovered());
         }
 
         fn handle_event(

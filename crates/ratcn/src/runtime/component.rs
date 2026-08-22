@@ -689,22 +689,61 @@ impl<Msg> PopupOptions<Msg> {
     }
 }
 
-/// Where paint lands: the frame for the base layer, a layer's canvas for
-/// paint that belongs to that layer.
+/// The surface paint lands on: the frame for the base layer, a layer's canvas
+/// for paint that belongs to that layer.
+enum PaintSurface<'a, 'frame> {
+    Frame(&'a mut Frame<'frame>),
+    Canvas(&'a mut super::engine::Canvas),
+}
+
+impl PaintSurface<'_, '_> {
+    /// The rectangle this surface covers.
+    fn area(&self) -> Rect {
+        match self {
+            Self::Frame(frame) => frame.area(),
+            Self::Canvas(canvas) => canvas.buffer.area,
+        }
+    }
+}
+
+/// Where paint lands, how it is projected on the way there, and the buffer it
+/// lays out in when it is projected.
 ///
 /// The three write forms are implemented once, here, because routing is the
 /// only thing they do that [`PaintCtx`] does not.
-pub(crate) enum PaintTarget<'a, 'frame> {
-    /// The frame itself.
-    Frame(&'a mut Frame<'frame>, Option<super::engine::Projection>),
-    /// A layer's canvas.
-    Canvas(
-        &'a mut super::engine::Canvas,
-        Option<super::engine::Projection>,
-    ),
+pub(crate) struct PaintTarget<'a, 'frame> {
+    surface: PaintSurface<'a, 'frame>,
+    projection: Option<super::engine::Projection>,
+    /// Where projected paint lays out before it is copied back. One buffer
+    /// serves the whole frame's paint calls, resized and blanked per call.
+    scratch: &'a mut Buffer,
 }
 
-impl PaintTarget<'_, '_> {
+impl<'a, 'frame> PaintTarget<'a, 'frame> {
+    pub(crate) fn frame(
+        frame: &'a mut Frame<'frame>,
+        projection: Option<super::engine::Projection>,
+        scratch: &'a mut Buffer,
+    ) -> Self {
+        Self {
+            surface: PaintSurface::Frame(frame),
+            projection,
+            scratch,
+        }
+    }
+
+    pub(crate) fn canvas(
+        canvas: &'a mut super::engine::Canvas,
+        projection: Option<super::engine::Projection>,
+        scratch: &'a mut Buffer,
+    ) -> Self {
+        Self {
+            surface: PaintSurface::Canvas(canvas),
+            projection,
+            scratch,
+        }
+    }
+
     /// Paint `area` through this target: `paint` receives the buffer to write
     /// and the rectangle to write it in.
     ///
@@ -712,46 +751,45 @@ impl PaintTarget<'_, '_> {
     /// routing — which buffer, which clip, which projection, what counts as
     /// painted — is settled once, here.
     fn paint_at<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
-        match self {
-            Self::Frame(frame, projection) => match *projection {
-                None => paint(area, frame.buffer_mut()),
-                Some(projection) => {
-                    with_projected_buffer(frame.buffer_mut(), projection, area, |buffer| {
-                        paint(area, buffer)
-                    })
-                }
-            },
-            Self::Canvas(canvas, projection) => match *projection {
-                None => {
-                    let clipped = canvas.clip(area);
-                    let result = paint(clipped, &mut canvas.buffer);
-                    canvas.mark_painted(clipped);
-                    result
-                }
-                Some(projection) => {
-                    let painted = projection.project_rect(area);
-                    let result =
-                        with_projected_buffer(&mut canvas.buffer, projection, area, |buffer| {
-                            paint(area, buffer)
-                        });
-                    canvas.mark_painted(painted);
-                    result
-                }
-            },
+        let surface = self.surface.area();
+        match (&mut self.surface, self.projection) {
+            (PaintSurface::Frame(frame), None) => paint(area, frame.buffer_mut()),
+            (PaintSurface::Frame(frame), Some(projection)) => with_projected_buffer(
+                frame.buffer_mut(),
+                self.scratch,
+                projection,
+                surface,
+                area,
+                |buffer| paint(area, buffer),
+            ),
+            (PaintSurface::Canvas(canvas), None) => {
+                let clipped = canvas.clip(area);
+                let result = paint(clipped, &mut canvas.buffer);
+                canvas.mark_painted(clipped);
+                result
+            }
+            (PaintSurface::Canvas(canvas), Some(projection)) => {
+                let painted = projection.project_rect(area, surface);
+                let result = with_projected_buffer(
+                    &mut canvas.buffer,
+                    self.scratch,
+                    projection,
+                    surface,
+                    area,
+                    |buffer| paint(area, buffer),
+                );
+                canvas.mark_painted(painted);
+                result
+            }
         }
     }
 
     /// The whole of what this target writes, in the coordinates its paint
     /// closure uses — the allocation a free-form [`Self::with_buffer`] covers.
     pub(crate) fn whole_area(&mut self) -> Rect {
-        match self {
-            Self::Frame(frame, projection) => {
-                (*projection).map_or_else(|| frame.area(), super::engine::Projection::allocation)
-            }
-            Self::Canvas(canvas, projection) => {
-                (*projection).map_or(canvas.buffer.area, super::engine::Projection::allocation)
-            }
-        }
+        let surface = self.surface.area();
+        self.projection
+            .map_or(surface, |projection| projection.allocation(surface))
     }
 
     fn widget(&mut self, widget: impl Widget, area: Rect) {
@@ -770,15 +808,18 @@ impl PaintTarget<'_, '_> {
 
 /// Paint `logical` into `target` through `projection`.
 ///
-/// The closure sees a scratch buffer covering exactly the logical rectangle,
-/// so a widget lays out against its declared allocation. The cells the
-/// projection reaches are seeded from the target beforehand and copied back
-/// afterwards, so what the closure leaves untouched keeps whatever was
-/// already there, and what falls outside the projection's clip stays out of
-/// the target.
+/// The closure sees `scratch` covering exactly the logical rectangle, so a
+/// widget lays out against its declared allocation. `scratch` is blanked
+/// first, so a widget reads a blank wherever it has written nothing. The
+/// cells the projection reaches are then seeded from the target beforehand
+/// and copied back afterwards, so what the closure leaves untouched keeps
+/// whatever was already there, and what falls outside the projection's clip
+/// stays out of the target.
 fn with_projected_buffer<R>(
     target: &mut Buffer,
+    scratch: &mut Buffer,
     projection: super::engine::Projection,
+    surface: Rect,
     logical: Rect,
     paint: impl FnOnce(&mut Buffer) -> R,
 ) -> R {
@@ -788,8 +829,9 @@ fn with_projected_buffer<R>(
         "a paint inside a viewport covers {logical}, {cells} cells; the maximum is {}",
         super::engine::MAX_VIEWPORT_CELLS
     );
-    let mut scratch = Buffer::empty(logical);
-    for (logical_position, screen_position) in projection.projected_positions(logical) {
+    scratch.resize(logical);
+    scratch.reset();
+    for (logical_position, screen_position) in projection.projected_positions(logical, surface) {
         if let (Some(source), Some(destination)) = (
             target.cell(screen_position),
             scratch.cell_mut(logical_position),
@@ -798,9 +840,9 @@ fn with_projected_buffer<R>(
         }
     }
 
-    let result = paint(&mut scratch);
+    let result = paint(scratch);
 
-    for (logical_position, screen_position) in projection.projected_positions(logical) {
+    for (logical_position, screen_position) in projection.projected_positions(logical, surface) {
         if let (Some(source), Some(destination)) = (
             scratch.cell(logical_position),
             target.cell_mut(screen_position),
@@ -828,26 +870,12 @@ fn with_projected_buffer<R>(
 /// to itself, so a paint call can read `ctx.theme`,
 /// [`ctx.state()`](Self::state), and the interaction flags while building its
 /// widget argument.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "two independent (leaf, within) flag pairs — focus and hover; the bools are the natural shape"
-)]
 pub struct PaintCtx<'a, 'frame, State> {
     pub(crate) target: PaintTarget<'a, 'frame>,
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
     pub theme: &'a Theme,
     pub(crate) area: Rect,
-    /// This declaration is the focused leaf.
-    pub focused: bool,
-    /// The focus path passes through or ends at this declaration (the
-    /// `focus-within` signal for e.g. pane border highlighting).
-    pub contains_focus: bool,
-    /// This declaration is the hovered leaf. Independent of `focused`: a
-    /// component can be hovered without being focused, and vice versa.
-    pub hovered: bool,
-    /// The hover path passes through or ends at this declaration (the
-    /// `hover-within` signal).
-    pub contains_hover: bool,
+    pub(crate) flags: InteractionFlags,
     pub(crate) hover_position: Option<Position>,
     pub(crate) state: &'a State,
 }
@@ -857,10 +885,7 @@ impl<State> fmt::Debug for PaintCtx<'_, '_, State> {
         f.debug_struct("PaintCtx")
             .field("area", &self.area)
             .field("theme", self.theme)
-            .field("focused", &self.focused)
-            .field("contains_focus", &self.contains_focus)
-            .field("hovered", &self.hovered)
-            .field("contains_hover", &self.contains_hover)
+            .field("flags", &self.flags)
             .field("hover_position", &self.hover_position)
             .finish_non_exhaustive()
     }
@@ -916,6 +941,34 @@ impl<'a, State> PaintCtx<'a, '_, State> {
     #[must_use]
     pub const fn area(&self) -> Rect {
         self.area
+    }
+
+    /// This declaration is the focused leaf.
+    #[must_use]
+    pub const fn focused(&self) -> bool {
+        self.flags.focused
+    }
+
+    /// The focus path passes through or ends at this declaration (the
+    /// `focus-within` signal for e.g. pane border highlighting).
+    #[must_use]
+    pub const fn contains_focus(&self) -> bool {
+        self.flags.contains_focus
+    }
+
+    /// This declaration is the hovered leaf. Independent of
+    /// [`focused`](Self::focused): a component can be hovered without being
+    /// focused, and vice versa.
+    #[must_use]
+    pub const fn hovered(&self) -> bool {
+        self.flags.hovered
+    }
+
+    /// The hover path passes through or ends at this declaration (the
+    /// `hover-within` signal).
+    #[must_use]
+    pub const fn contains_hover(&self) -> bool {
+        self.flags.contains_hover
     }
 
     /// The pointer position from the most recent mouse event, if it is still

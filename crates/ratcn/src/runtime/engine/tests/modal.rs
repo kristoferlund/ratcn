@@ -32,7 +32,7 @@ impl Component<ModalTestState, ModalTestMsg> for ModalFocusRoute {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
         self.rendered
             .borrow_mut()
-            .push((ctx.focused, ctx.contains_focus));
+            .push((ctx.focused(), ctx.contains_focus()));
     }
 
     fn handle_event(
@@ -636,7 +636,7 @@ impl Component<ModalTestState, ModalTestMsg> for ModalFocusLeaf {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
         self.rendered
             .borrow_mut()
-            .push((ctx.focused, ctx.contains_focus));
+            .push((ctx.focused(), ctx.contains_focus()));
     }
 
     fn handle_event(
