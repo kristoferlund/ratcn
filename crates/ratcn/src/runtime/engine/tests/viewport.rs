@@ -449,3 +449,110 @@ fn paint_inside_a_viewport_keeps_declaration_order_under_its_layers() {
         "a layer paints over the content around it"
     );
 }
+
+/// A modal escapes the viewport it was declared in: the scroll is undone
+/// once over its area, and a row carried above the top edge is held there.
+/// A modal opened from content scrolled out of sight is on screen, exclusive
+/// and visible together.
+#[test]
+fn a_modal_declared_from_a_scrolled_off_row_opens_on_the_screen() {
+    let mut driver = Driver::<State, Msg>::new(6, 3);
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 0, 6, 3), 20, 17, |ctx| {
+            ctx.modal_scope(
+                "dialog",
+                Rect::new(0, 1, 6, 1),
+                ScopeOptions::default(),
+                |ctx| {
+                    let area = ctx.area();
+                    ctx.paint_widget(Paragraph::new("MODAL"), area);
+                },
+            );
+        });
+    });
+
+    assert_eq!(driver.row(0), "MODAL ");
+}
+
+/// A modal leaves its viewport only while it is being declared. What the same
+/// declaration says afterwards is projected by that viewport as before, which
+/// is why the offset is put back rather than dropped.
+#[test]
+fn content_declared_after_a_modal_is_still_projected_by_its_viewport() {
+    let mut driver = Driver::<State, Msg>::new(4, 3);
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 0, 4, 2), 4, 2, |ctx| {
+            ctx.modal_scope(
+                "dialog",
+                Rect::new(0, 3, 4, 1),
+                ScopeOptions::default(),
+                |_| {},
+            );
+            ctx.paint_widget(Paragraph::new("AFTE"), Rect::new(0, 2, 4, 1));
+        });
+    });
+
+    assert_eq!(driver.row(0), "AFTE", "the viewport came back scrolled");
+    assert_eq!(
+        driver.row(2),
+        "    ",
+        "the paint landed in screen coordinates"
+    );
+}
+
+/// The one-viewport rule counts the viewports on one layer. A modal left the
+/// enclosing viewport behind, so it may open one of its own — a scroll area
+/// inside a dialog inside a scroll area.
+#[test]
+fn a_viewport_inside_a_modal_inside_a_viewport_declares_and_paints() {
+    let mut driver = Driver::<State, Msg>::new(6, 4);
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 0, 6, 2), 10, 4, |ctx| {
+            ctx.modal_scope(
+                "dialog",
+                Rect::new(0, 0, 6, 4),
+                ScopeOptions::default(),
+                |ctx| {
+                    ctx.viewport(Rect::new(0, 1, 6, 2), 4, 2, |ctx| {
+                        ctx.paint_widget(
+                            Paragraph::new("top\nhid\nAAA\nBBB"),
+                            Rect::new(0, 1, 3, 4),
+                        );
+                    });
+                },
+            );
+        });
+    });
+
+    assert_eq!(driver.row(1), "AAA   ");
+    assert_eq!(driver.row(2), "BBB   ");
+}
+
+/// A popup escapes the clip and keeps the coordinates: it is projected out of
+/// its viewport once, and what it declares is still in that viewport's
+/// logical space. A viewport declared inside one is therefore a viewport
+/// inside a viewport, and says so.
+#[test]
+fn a_viewport_inside_a_popup_inside_a_viewport_is_still_nested() {
+    let mut driver = Driver::<State, Msg>::new(6, 4);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        driver.render(&State, |ctx| {
+            ctx.viewport(Rect::new(0, 0, 6, 2), 10, 0, |ctx| {
+                ctx.popup(
+                    "panel",
+                    Rect::new(0, 0, 6, 4),
+                    PopupOptions::default(),
+                    |ctx| {
+                        ctx.viewport(Rect::new(0, 1, 6, 2), 4, 2, |_| {});
+                    },
+                );
+            });
+        });
+    }));
+    let panic = result.expect_err("a nested viewport must panic");
+    assert!(
+        panic_message(panic.as_ref()).contains("a viewport cannot be declared inside another"),
+        "{}",
+        panic_message(panic.as_ref())
+    );
+}

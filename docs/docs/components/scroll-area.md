@@ -106,10 +106,15 @@ The scrollbar is an indicator of where the view sits.
 
 ## Layers
 
-Hints, popups, modals, and `defer_paint` keep their normal layer behavior. They
-are translated from logical coordinates once and escape the viewport clip. A
-popup or hint whose declaring anchor is offscreen is dropped, so an invisible
-trigger leaves no overlay behind.
+Hints, popups, and `defer_paint` keep their normal layer behavior. They are
+translated from logical coordinates once and escape the viewport clip. A popup
+or hint whose declaring anchor is offscreen is dropped, so an invisible trigger
+leaves no overlay behind.
+
+A modal escapes the scroll area entirely. It opens at the place on screen its
+area names, holding at the top edge for a row scrolled past it, and everything
+it declares from there is in screen coordinates — so a scroll area inside a
+dialog inside a scroll area is ordinary nesting.
 
 ## Styling
 

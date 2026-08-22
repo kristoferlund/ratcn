@@ -79,7 +79,6 @@ pub struct DeclareCtx<'a, State, Msg> {
     pub theme: &'a Theme,
     pub(crate) hover_position: Option<Position>,
     pub(crate) transients: Option<&'a mut TransientMap>,
-    pub(crate) depth: usize,
     pub(crate) pass: &'a mut RenderPass<State, Msg>,
     pub(crate) state: &'a State,
 }
@@ -109,7 +108,6 @@ impl<State, Msg> fmt::Debug for DeclareCtx<'_, State, Msg> {
             .field("frame_area", &self.frame_area)
             .field("theme", self.theme)
             .field("hover_position", &self.hover_position)
-            .field("depth", &self.depth)
             .finish_non_exhaustive()
     }
 }
@@ -315,17 +313,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// no identity. [`EventCtx::with_area`] is a builder setter and a
     /// different thing.
     pub fn in_area(&mut self, area: Rect, declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>)) {
-        let mut ctx = DeclareCtx {
-            frame_area: self.frame_area,
-            area,
-            theme: self.theme,
-            hover_position: self.hover_position,
-            transients: self.transients.as_deref_mut(),
-            depth: self.depth,
-            pass: &mut *self.pass,
-            state: self.state,
-        };
-        declare(&mut ctx);
+        let (pass, env) = self.declaring(area);
+        pass.with_declare_ctx(env, declare);
     }
 
     /// Declare descendants in a vertically scrollable coordinate space.
@@ -339,9 +328,17 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// in the same logical coordinates, and paint outside the logical content
     /// is clipped away.
     ///
-    /// A popup, hint, modal, or [`defer_paint`](Self::defer_paint) closure
-    /// declared inside escapes the clip and is projected into screen
-    /// coordinates once.
+    /// A [`popup`](Self::popup), [`hint`](Self::hint), or
+    /// [`defer_paint`](Self::defer_paint) closure declared inside escapes the
+    /// clip and keeps these logical coordinates, projected into screen
+    /// coordinates once. A popup or hint anchored to a declaration the
+    /// viewport has scrolled out of sight is skipped for the frame, and comes
+    /// back with its anchor.
+    ///
+    /// A [`modal`](Self::modal) goes further and leaves the viewport behind:
+    /// it takes its area in these coordinates like any other layer, opens at
+    /// the place on screen they name, and declares in screen coordinates from
+    /// there — so it may hold a viewport of its own.
     ///
     /// This is the mechanism behind [`ScrollArea`](crate::ScrollArea), and
     /// what a component of your own builds a viewport from. The offset such a
@@ -350,8 +347,12 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     ///
     /// # Panics
     ///
-    /// Panics when a viewport is declared inside another, and when the logical
-    /// content exceeds 262,144 cells.
+    /// Panics when a viewport is declared inside another, and when the
+    /// logical content exceeds 262,144 cells. A [`modal`](Self::modal)
+    /// declared between the two ends the enclosing viewport, so a scroll area
+    /// inside a dialog inside a scroll area is ordinary nesting; a
+    /// [`popup`](Self::popup) or [`hint`](Self::hint) keeps the viewport it
+    /// was declared in, and a viewport inside one of those is nested.
     pub fn viewport(
         &mut self,
         screen: Rect,
@@ -377,7 +378,6 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
             state: self.state,
             theme: self.theme,
             transients: self.transients.as_deref_mut(),
-            depth: self.depth,
         };
         (&mut *self.pass, env)
     }
@@ -457,6 +457,15 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// An empty interaction area retains the modal path but excludes the modal
     /// and its descendants from focus, hit-testing, and event routing.
     ///
+    /// A modal escapes a [`viewport`](Self::viewport) it is declared inside.
+    /// `area` is in the coordinates of the declaration that gave it, as every
+    /// layer's is, and the modal opens at the place on screen those
+    /// coordinates name; a row the viewport has scrolled past the top names
+    /// the top edge. From there the modal is screen-level: its
+    /// [`area`](Self::area), its [`frame_area`](Self::frame_area), and
+    /// anything it declares are in screen coordinates, and it may open a
+    /// viewport of its own.
+    ///
     /// With [`Ratcn::modals`](super::Ratcn::modals) bound, a successful render
     /// must declare exactly the ids in the bound
     /// [`ModalState`](super::ModalState), in stack order.
@@ -489,6 +498,11 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// - Nothing outside is captured and nothing is dimmed.
     /// - Focus is never moved into it, and keys bubble through to whatever
     ///   declared it.
+    ///
+    /// A hint anchors to the declaration it was reached from, and follows it
+    /// out of sight: when a [`viewport`](Self::viewport) has scrolled that
+    /// declaration off screen, the hint is skipped for the frame and returns
+    /// when its anchor does.
     ///
     /// Because it takes no input, a hint has no dismissal of its own: whatever
     /// opened it — hover, focus — is what closes it, through your own state.
@@ -533,6 +547,11 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Keys bubble *through* the popup root to the declaring component, so an
     /// Esc nothing in the panel handles reaches whatever opened it.
     ///
+    /// A popup anchors to the declaration it was reached from, and follows it
+    /// out of sight: when a [`viewport`](Self::viewport) has scrolled that
+    /// declaration off screen, the popup is skipped for the frame and returns
+    /// when its anchor does.
+    ///
     /// # Panics
     ///
     /// Panics when `id` duplicates another child of the same parent.
@@ -573,7 +592,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     ///
     /// With [`Ratcn::modals`](super::Ratcn::modals) bound, the id counts
     /// toward the bound [`ModalState`](super::ModalState) like any other
-    /// modal root.
+    /// modal root, and it escapes an enclosing
+    /// [`viewport`](Self::viewport) exactly as [`modal`](Self::modal) does.
     ///
     /// # Panics
     ///

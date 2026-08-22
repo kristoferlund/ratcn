@@ -1108,6 +1108,33 @@ fn duplicate_modal_root_ids_fail_before_entering_their_layer() {
     }
 }
 
+/// A layer root carries its kind from the moment it exists, so a modal
+/// declared *inside* another modal is checked against the one enclosing it.
+#[test]
+fn a_duplicate_modal_id_nested_inside_a_modal_fails() {
+    let mut driver = Driver::<(), ()>::new(5, 2);
+    render_leaf(&mut driver, &ChildId::Static("stable"));
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        let area = driver.area();
+        driver.render(&(), |ctx| {
+            ctx.modal_scope(
+                ChildId::Static("same"),
+                area,
+                ScopeOptions::default(),
+                |ctx| {
+                    ctx.modal(ChildId::Static("same"), Leaf, area);
+                },
+            );
+        });
+    }));
+
+    assert!(failed.is_err());
+    assert_eq!(
+        driver.ratcn.declared_paths(),
+        vec![vec![ChildId::Static("stable")]]
+    );
+}
+
 #[test]
 fn base_and_modal_root_id_collision_fails_before_base_overlay_flush() {
     let painted = Arc::new(AtomicBool::new(false));

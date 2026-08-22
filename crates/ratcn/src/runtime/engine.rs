@@ -165,6 +165,16 @@ impl Viewport {
         }
     }
 
+    /// `area` with this viewport's scroll undone: the screen rectangle those
+    /// logical rows sit at, held against the top edge where the offset would
+    /// carry them above it.
+    fn unscrolled(self, area: Rect) -> Rect {
+        Rect {
+            y: area.y.saturating_sub(self.offset),
+            ..area
+        }
+    }
+
     /// The frame rectangle in this viewport's logical coordinates.
     fn logical_frame(self, frame: Rect) -> Rect {
         Rect {
@@ -251,6 +261,18 @@ struct ViewportRecord {
     layer: Option<usize>,
 }
 
+/// What the finished tree resolved this frame: the focus path paint styles
+/// from, and the path the pointer rests on.
+///
+/// Both are answered once declaring has ended, from the tree the pass built,
+/// and both travel into the replay together because every paint reads them
+/// together.
+#[derive(Debug, Clone, Copy)]
+struct Resolved<'a> {
+    focus: &'a FocusState,
+    hover: &'a [ChildId],
+}
+
 enum FocusAdvance {
     Move(FocusState),
     Consumed,
@@ -304,6 +326,12 @@ struct LayerPolicy {
     allows_focus: bool,
     /// A press outside this layer emits its dismiss hook.
     dismiss_on_outside_press: bool,
+    /// The layer belongs to the screen. It undoes the scroll of the viewport
+    /// it was declared in, once, over its own area, and declares from there in
+    /// screen coordinates — free to open a viewport of its own. The anchored
+    /// kinds keep that viewport's coordinates and are projected out of it
+    /// once.
+    screen_level: bool,
 }
 
 impl LayerPolicy {
@@ -318,6 +346,7 @@ impl LayerPolicy {
             hit_testable: true,
             allows_focus: true,
             dismiss_on_outside_press: false,
+            screen_level: false,
         }
     }
 }
@@ -326,12 +355,15 @@ impl LayerKind {
     /// The whole difference between the layer kinds, in one table.
     const fn policy(self) -> LayerPolicy {
         match self {
-            // Takes over: dims, claims interaction, holds focus, swallows keys.
+            // Takes over: dims, claims interaction, holds focus, swallows
+            // keys, and belongs to the screen rather than to whatever viewport
+            // declared it.
             Self::Modal => LayerPolicy {
                 dims: true,
                 exclusive: true,
                 holds_focus: true,
                 traps_keys: true,
+                screen_level: true,
                 ..LayerPolicy::base()
             },
             // Occludes its own footprint and dismisses on an outside press,
@@ -498,14 +530,9 @@ impl<State, Msg> Surface<State, Msg> {
     /// over. Both pairs are the same two questions — is this the named node,
     /// and does the named path run through it — asked without materializing a
     /// path on either side.
-    fn interaction_flags(
-        &self,
-        index: usize,
-        focus: &FocusState,
-        hover: &[ChildId],
-    ) -> InteractionFlags {
-        let (focused, contains_focus) = self.path_match(index, focus.path());
-        let (hovered, contains_hover) = self.path_match(index, hover);
+    fn interaction_flags(&self, index: usize, resolved: Resolved<'_>) -> InteractionFlags {
+        let (focused, contains_focus) = self.path_match(index, resolved.focus.path());
+        let (hovered, contains_hover) = self.path_match(index, resolved.hover);
         InteractionFlags {
             focused,
             contains_focus,
@@ -1152,12 +1179,11 @@ pub(crate) struct DeclarationEnv<'a, State> {
     pub(crate) state: &'a State,
     pub(crate) theme: &'a Theme,
     pub(crate) transients: Option<&'a mut TransientMap>,
-    pub(crate) depth: usize,
 }
 
 impl<'a, State> DeclarationEnv<'a, State> {
     /// The environment for a root declaration: the app's own closure, covering
-    /// the whole frame at depth zero.
+    /// the whole frame.
     fn root(
         frame_area: Rect,
         state: &'a State,
@@ -1170,16 +1196,11 @@ impl<'a, State> DeclarationEnv<'a, State> {
             state,
             theme,
             transients: Some(transients),
-            depth: 0,
         }
     }
 
     /// The same environment reborrowed for the declarations *inside* the node
-    /// just opened: one level deeper, over `area`.
-    ///
-    /// Depth counts declaration nesting rather than tree nesting, which is why
-    /// it advances here — at the point a node starts parenting others — and
-    /// not in [`RenderPass::begin_node`].
+    /// just opened, over `area`.
     fn nested(&mut self, area: Rect) -> DeclarationEnv<'_, State> {
         DeclarationEnv {
             frame_area: self.frame_area,
@@ -1187,7 +1208,6 @@ impl<'a, State> DeclarationEnv<'a, State> {
             state: self.state,
             theme: self.theme,
             transients: self.transients.as_deref_mut(),
-            depth: self.depth + 1,
         }
     }
 }
@@ -1247,8 +1267,9 @@ pub(crate) struct RenderPass<State, Msg> {
     /// when this pass started. Hover is pre-frame data — it was resolved
     /// against the last committed surface — so unlike focus it can be read
     /// while declaring, by [`DeclareCtx::pointer_within`]. The position itself
-    /// reaches paint as [`PaintCtx::hover_position`], and
-    /// [`Self::replay_paint`] derives the paint flags from the same path.
+    /// reaches paint as [`PaintCtx::hover_position`]; the path this frame
+    /// resolves travels into [`Self::replay_paint`] as [`Resolved`], the way
+    /// focus does.
     hover_position: Option<Position>,
     hover_path: Vec<ChildId>,
     /// Set when any declaration region unwinds — see [`Self::guarded`]. A
@@ -1263,6 +1284,12 @@ pub(crate) struct RenderPass<State, Msg> {
     /// The layer canvases open in declaration nesting order; the innermost
     /// decides where the next paint belongs.
     layer_stack: Vec<usize>,
+    /// The kind the next node declared roots a layer as, set by
+    /// [`Self::layer`] and taken by the [`Self::begin_node`] that opens that
+    /// root. A root carries its kind from the moment it exists, so the
+    /// subtree beneath it declares with the layer already visible to
+    /// [`Surface::modal_roots`] and to every policy read.
+    pending_layer_kind: Option<LayerKind>,
 }
 
 impl<State, Msg> RenderPass<State, Msg> {
@@ -1280,6 +1307,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             canvases: Vec::new(),
             open_viewport: None,
             layer_stack: Vec::new(),
+            pending_layer_kind: None,
         }
     }
 
@@ -1447,42 +1475,57 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Open a layer, declare its root subtree through `declare_root`, and
     /// close it.
     ///
-    /// The single place the layer lifecycle is written. The root index is
-    /// recorded *before* the subtree declares, so a layer declared inside this
-    /// one lands after it and `layer_roots` reads outermost-first — which is
-    /// what makes `top_layer_root` find the innermost.
-    fn layer(&mut self, kind: LayerKind, area: Rect, declare_root: impl FnOnce(&mut Self, usize)) {
-        self.begin_layer(area);
-        let index = self.surface.nodes.len();
-        self.surface.layer_roots.push(index);
-        declare_root(self, index);
-        self.surface.nodes[index].layer_kind = Some(kind);
-        self.end_layer();
-    }
-
-    /// Open a layer: subsequent declarations carry its tag, and their paint
-    /// lands on a fresh canvas composited after the frame.
-    fn begin_layer(&mut self, area: Rect) {
-        let area = self
-            .open_viewport
-            .map(|index| self.surface.viewports[index].viewport)
-            .map_or(area, |viewport| {
-                viewport.project_rect(area, self.frame_area)
-            });
-        self.canvases.push(Canvas::new(area));
-        self.layer_stack.push(self.canvases.len() - 1);
-    }
-
-    /// Close the innermost layer, queueing its deferred paint behind
-    /// everything the layer declared.
-    fn end_layer(&mut self) {
-        let Some(layer) = self.current_layer() else {
-            panic!("a declared layer is open when it closes");
+    /// The single place the layer lifecycle is written, coordinates included.
+    /// An anchored layer keeps the coordinates of the viewport it was declared
+    /// in, and takes that viewport's projection of `env.area` as its canvas. A
+    /// screen-level one undoes the viewport's scroll once — over its own area,
+    /// and over the frame its subtree reads — and then declares with no
+    /// viewport open at all, so what it declares is in screen coordinates and
+    /// may open a viewport of its own. Either way the viewport is back for
+    /// whatever the declaration goes on to say after the layer.
+    ///
+    /// `declare_root` is handed the index its root will take and opens exactly
+    /// one node there: [`Self::begin_node`] tags that node as the layer's root
+    /// and records it, so the subtree beneath declares with the layer already
+    /// in place. A layer declared inside this one lands after it, and
+    /// `layer_roots` reads outermost-first — which is what makes
+    /// `top_layer_root` find the innermost.
+    fn layer<'a>(
+        &mut self,
+        kind: LayerKind,
+        mut env: DeclarationEnv<'a, State>,
+        declare_root: impl FnOnce(&mut Self, DeclarationEnv<'a, State>, usize),
+    ) {
+        let enclosing = self.open_viewport;
+        let viewport = enclosing.map(|index| self.surface.viewports[index].viewport);
+        let canvas_area = if kind.policy().screen_level {
+            self.open_viewport = None;
+            env.frame_area = self.frame_area;
+            env.area = viewport.map_or(env.area, |viewport| viewport.unscrolled(env.area));
+            env.area
+        } else {
+            viewport.map_or(env.area, |viewport| {
+                viewport.project_rect(env.area, self.frame_area)
+            })
         };
+        self.canvases.push(Canvas::new(canvas_area));
+        let canvas = self.canvases.len() - 1;
+        self.layer_stack.push(canvas);
+
+        self.pending_layer_kind = Some(kind);
+        let root = self.surface.nodes.len();
+        declare_root(self, env, root);
+        assert_eq!(
+            self.surface.layer_roots.get(canvas).copied(),
+            Some(root),
+            "a layer's root is the first node its declaration opens"
+        );
+
+        self.layer_stack.pop();
         // Queued rather than run here: the layer's own content has only been
         // queued so far, and deferred paint has to land on top of it.
-        self.queue(PaintOp::FlushDeferred { layer });
-        self.layer_stack.pop();
+        self.queue(PaintOp::FlushDeferred { layer: canvas });
+        self.open_viewport = enclosing;
     }
 
     /// Run the deferred thunks registered in `layer` into that layer's canvas.
@@ -1546,6 +1589,13 @@ impl<State, Msg> RenderPass<State, Msg> {
         let index = self.surface.nodes.len();
         let layer = self.current_layer();
         let viewport = self.open_viewport;
+        // A layer's root is tagged as it is created, before its subtree
+        // declares, so everything that reads `layer_roots` — modal id
+        // validation, policy, focus — sees the layer while it is being built.
+        let layer_kind = self.pending_layer_kind.take();
+        if layer_kind.is_some() {
+            self.surface.layer_roots.push(index);
+        }
         self.surface.nodes.push(Node {
             id,
             parent,
@@ -1557,7 +1607,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             self_focusable,
             component: None,
             layer,
-            layer_kind: None,
+            layer_kind,
             on_dismiss: None,
         });
         if let Some(parent) = parent {
@@ -1632,8 +1682,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     ) {
         self.guarded(|pass| {
             pass.assert_unique_modal_id(&id);
-            let area = env.area;
-            pass.layer(LayerKind::Modal, area, |pass, _| {
+            pass.layer(LayerKind::Modal, env, |pass, env, _| {
                 pass.component(id, component, env);
             });
         });
@@ -1650,8 +1699,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     ) {
         self.guarded(|pass| {
             pass.assert_unique_modal_id(&id);
-            let area = env.area;
-            pass.layer(LayerKind::Modal, area, |pass, _| {
+            pass.layer(LayerKind::Modal, env, |pass, env, _| {
                 pass.scope(id, options, env, declare);
             });
         });
@@ -1677,20 +1725,21 @@ impl<State, Msg> RenderPass<State, Msg> {
             "a dismiss hook on a layer kind that never dismisses"
         );
         self.guarded(|pass| {
-            if matches!(kind, LayerKind::Popup | LayerKind::Hint)
-                && !pass.current_viewport_anchor_visible()
-            {
+            // Both kinds here are anchored, and an anchored layer goes where
+            // its declaration goes, out of sight included.
+            if !pass.current_viewport_anchor_visible() {
                 return;
             }
-            let area = env.area;
-            pass.layer(kind, area, |pass, index| {
+            pass.layer(kind, env, |pass, env, index| {
                 pass.scope(id, options, env, declare);
                 pass.surface.nodes[index].on_dismiss = on_dismiss;
             });
         });
     }
 
-    /// Whether the declaration a popup or hint would anchor to is on screen.
+    /// Whether the declaration an anchored layer would hang from is on
+    /// screen: the question that decides whether a popup or hint scrolled out
+    /// of its viewport is declared at all.
     fn current_viewport_anchor_visible(&self) -> bool {
         self.parent_stack.last().is_none_or(|&parent| {
             self.surface.viewport_visibility(parent) != ViewportVisibility::Hidden
@@ -1715,9 +1764,10 @@ impl<State, Msg> RenderPass<State, Msg> {
     }
 
     /// Run one declaration closure over the current parent node. The single
-    /// construction site for declaration [`DeclareCtx`]s: root, scope, modal, and
-    /// [`Component::declare`] all pass through here.
-    fn with_declare_ctx(
+    /// construction site for declaration [`DeclareCtx`]s: root, scope, modal,
+    /// [`DeclareCtx::in_area`], and [`Component::declare`] all pass through
+    /// here.
+    pub(crate) fn with_declare_ctx(
         &mut self,
         env: DeclarationEnv<'_, State>,
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
@@ -1728,7 +1778,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             state,
             theme,
             transients,
-            depth,
         } = env;
         let hover_position = self.hover_in(self.active_slot());
         self.guarded(|pass| {
@@ -1738,7 +1787,6 @@ impl<State, Msg> RenderPass<State, Msg> {
                 theme,
                 hover_position,
                 transients,
-                depth,
                 pass,
                 state,
             };
@@ -1765,7 +1813,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// here is that resolved path, not the app's stored one, and the flags
     /// each op paints with are derived from it now because there was nothing
     /// to derive them from earlier. The hover half needs no resolving: it is
-    /// the runtime's own path, fixed for the whole frame.
+    /// this frame's own answer, fixed once the tree is complete.
     ///
     /// Only a pass that has already passed every check gets here, so the
     /// queue is either run whole or not at all: an already-poisoned pass draws
@@ -1778,13 +1826,13 @@ impl<State, Msg> RenderPass<State, Msg> {
         frame: &mut Frame,
         state: &State,
         theme: &Theme,
-        focus: &FocusState,
+        resolved: Resolved<'_>,
     ) {
         for QueuedPaint { slot, op } in std::mem::take(&mut self.paint_queue) {
             let frame = &mut *frame;
             self.guarded(|pass| match op {
                 PaintOp::FlushDeferred { layer } => pass.flush_deferred_for(layer, theme, state),
-                PaintOp::Paint(op) => pass.paint_op(op, slot, frame, state, theme, focus),
+                PaintOp::Paint(op) => pass.paint_op(op, slot, frame, state, theme, resolved),
             });
         }
     }
@@ -1798,13 +1846,12 @@ impl<State, Msg> RenderPass<State, Msg> {
         frame: &mut Frame,
         state: &State,
         theme: &Theme,
-        focus: &FocusState,
+        resolved: Resolved<'_>,
     ) {
         // Read before the component borrow below, which needs the surface
         // mutably. The root declaration has no node, and so no flags.
         let flags = op.node().map_or_else(InteractionFlags::default, |index| {
-            self.surface
-                .interaction_flags(index, focus, &self.hover_path)
+            self.surface.interaction_flags(index, resolved)
         });
         let hover_position = self.hover_in(slot);
         let (area, paint) = match op {
@@ -1882,6 +1929,22 @@ impl<State, Msg> RenderPass<State, Msg> {
                 .iter()
                 .all(|node| node.is_scope || node.component.is_some()),
             "cannot commit a declaration pass with incomplete components"
+        );
+        // Nodes name their canvas by the layer number they carry, so the two
+        // lists are the same list read two ways: one root per canvas, each
+        // root knowing which kind it is.
+        assert!(
+            self.surface.layer_roots.len() == self.canvases.len(),
+            "cannot commit a declaration pass with {} layer roots and {} canvases",
+            self.surface.layer_roots.len(),
+            self.canvases.len()
+        );
+        assert!(
+            self.surface
+                .layer_roots
+                .iter()
+                .all(|&root| self.surface.nodes[root].layer_kind.is_some()),
+            "cannot commit a declaration pass with an untagged layer root"
         );
     }
 
@@ -2356,8 +2419,15 @@ impl<State, Msg> Ratcn<State, Msg> {
         // declaration was built from.
         let resolved_focus = pass.surface.resolve_focus(&focus_snapshot);
         let resolved_hover = self.resolve_hover(&pass.surface);
-        pass.hover_path.clone_from(&resolved_hover);
-        pass.replay_paint(frame, state, theme, &resolved_focus);
+        pass.replay_paint(
+            frame,
+            state,
+            theme,
+            Resolved {
+                focus: &resolved_focus,
+                hover: &resolved_hover,
+            },
+        );
         pass.assert_valid();
         pass.finish_frame(frame, state, theme);
         let next = pass.finish();
