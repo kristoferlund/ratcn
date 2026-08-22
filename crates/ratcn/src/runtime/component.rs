@@ -661,11 +661,11 @@ impl<Msg> PopupOptions<Msg> {
 /// only thing they do that [`PaintCtx`] does not.
 pub(crate) enum PaintTarget<'a, 'frame> {
     /// The frame itself.
-    Frame(&'a mut Frame<'frame>, Option<super::engine::Viewport>),
-    /// A layer's or a viewport's canvas.
+    Frame(&'a mut Frame<'frame>, Option<super::engine::Projection>),
+    /// A layer's canvas.
     Canvas(
         &'a mut super::engine::Canvas,
-        Option<super::engine::Viewport>,
+        Option<super::engine::Projection>,
     ),
 }
 
@@ -680,8 +680,8 @@ impl PaintTarget<'_, '_> {
         match self {
             Self::Frame(frame, projection) => match *projection {
                 None => paint(area, frame.buffer_mut()),
-                Some(viewport) => {
-                    with_projected_buffer(frame.buffer_mut(), viewport, area, |buffer| {
+                Some(projection) => {
+                    with_projected_buffer(frame.buffer_mut(), projection, area, |buffer| {
                         paint(area, buffer)
                     })
                 }
@@ -693,10 +693,10 @@ impl PaintTarget<'_, '_> {
                     canvas.mark_painted(clipped);
                     result
                 }
-                Some(viewport) => {
-                    let painted = viewport.project_rect(area, canvas.buffer.area);
+                Some(projection) => {
+                    let painted = projection.project_rect(area);
                     let result =
-                        with_projected_buffer(&mut canvas.buffer, viewport, area, |buffer| {
+                        with_projected_buffer(&mut canvas.buffer, projection, area, |buffer| {
                             paint(area, buffer)
                         });
                     canvas.mark_painted(painted);
@@ -711,12 +711,10 @@ impl PaintTarget<'_, '_> {
     pub(crate) fn whole_area(&mut self) -> Rect {
         match self {
             Self::Frame(frame, projection) => {
-                let area = frame.area();
-                (*projection).map_or(area, |viewport| viewport.logical_frame(area))
+                (*projection).map_or_else(|| frame.area(), super::engine::Projection::allocation)
             }
             Self::Canvas(canvas, projection) => {
-                let area = canvas.buffer.area;
-                (*projection).map_or(area, |viewport| viewport.logical_frame(area))
+                (*projection).map_or(canvas.buffer.area, super::engine::Projection::allocation)
             }
         }
     }
@@ -735,19 +733,28 @@ impl PaintTarget<'_, '_> {
     }
 }
 
-/// Paint `logical` into `target` through `viewport`.
+/// Paint `logical` into `target` through `projection`.
 ///
 /// The closure sees a scratch buffer covering exactly the logical rectangle,
-/// so a widget lays out against its declared allocation; the rows that project
-/// onto the target are copied back afterwards.
+/// so a widget lays out against its declared allocation. The cells the
+/// projection reaches are seeded from the target beforehand and copied back
+/// afterwards, so what the closure leaves untouched keeps whatever was
+/// already there, and what falls outside the projection's clip stays out of
+/// the target.
 fn with_projected_buffer<R>(
     target: &mut Buffer,
-    viewport: super::engine::Viewport,
+    projection: super::engine::Projection,
     logical: Rect,
     paint: impl FnOnce(&mut Buffer) -> R,
 ) -> R {
+    let cells = logical.area();
+    assert!(
+        cells <= super::engine::MAX_VIEWPORT_CELLS,
+        "a paint inside a viewport covers {logical}, {cells} cells; the maximum is {}",
+        super::engine::MAX_VIEWPORT_CELLS
+    );
     let mut scratch = Buffer::empty(logical);
-    for (logical_position, screen_position) in viewport.projected_positions(logical) {
+    for (logical_position, screen_position) in projection.projected_positions(logical) {
         if let (Some(source), Some(destination)) = (
             target.cell(screen_position),
             scratch.cell_mut(logical_position),
@@ -758,7 +765,7 @@ fn with_projected_buffer<R>(
 
     let result = paint(&mut scratch);
 
-    for (logical_position, screen_position) in viewport.projected_positions(logical) {
+    for (logical_position, screen_position) in projection.projected_positions(logical) {
         if let (Some(source), Some(destination)) = (
             scratch.cell(logical_position),
             target.cell_mut(screen_position),

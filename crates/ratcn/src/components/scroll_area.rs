@@ -84,7 +84,8 @@ type StyleFn = Box<dyn Fn(&Theme) -> ScrollAreaStyle>;
 /// # Panics
 ///
 /// A `ScrollArea` inside another `ScrollArea` panics, as does content larger
-/// than 262,144 cells.
+/// than 262,144 cells, as does a single paint inside one covering more than
+/// that.
 ///
 /// ```
 /// # use ratatui::layout::Rect;
@@ -1413,7 +1414,7 @@ mod tests {
     }
 
     #[test]
-    fn viewport_priming_preserves_earlier_enclosing_layer_cells() {
+    fn viewport_paint_preserves_earlier_enclosing_layer_cells() {
         for sparse in [false, true] {
             let mut driver = Driver::new(6, 4);
             let state = State::default();
