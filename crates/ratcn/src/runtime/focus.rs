@@ -1,3 +1,11 @@
+//! Keyboard focus: which component holds it, and how it moves.
+//!
+//! [`FocusState`] is the path of the focused component, and it lives in app
+//! state. Hand it to the runtime with [`Ratcn::focus`](super::Ratcn::focus),
+//! which pairs the accessor that reads it with the message that replaces it;
+//! the runtime then moves it as Tab, Shift+Tab, and pointer presses land.
+//! [`TabWrap`] decides what a focus scope does at its ends.
+
 use super::ChildId;
 
 /// Which component currently has keyboard focus, stored as a path.

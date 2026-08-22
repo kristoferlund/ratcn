@@ -64,7 +64,7 @@ it, then declare the dialog when that state says it is open:
 ```rust
 use ratcn::runtime::{ModalState, Ratcn};
 
-let ratcn = Ratcn::new()
+let mut ratcn = Ratcn::new()
     .focus(|s: &AppState| &s.focus, Msg::FocusChanged)
     .modals(|s: &AppState| &s.modals);
 

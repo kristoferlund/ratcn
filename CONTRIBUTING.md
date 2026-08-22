@@ -130,6 +130,10 @@ npm run docs:dev
 User-visible changes go in [`CHANGELOG.md`](CHANGELOG.md). Security issues have
 their own path — see [`SECURITY.md`](SECURITY.md).
 
+An entry runs one to four lines and covers a change a user can see; internal
+refactors and test work stay out. `**Breaking:**` entries come first within
+their section, and a rename gives the old name and the new one on one line.
+
 ## Commit and PR style
 
 Small, focused PRs review faster than large ones. If a change has a mechanical

@@ -1,3 +1,13 @@
+//! Modal layers: which are open, and where focus returns when they close.
+//!
+//! [`ModalState`] is the app's stack of open modal ids, innermost last, each
+//! paired with the focus to restore. [`open`](ModalState::open) and
+//! [`close`](ModalState::close) push and pop it,
+//! [`DeclareCtx::modal`](super::DeclareCtx::modal) declares the ids it holds,
+//! and binding it to [`Ratcn::modals`](super::Ratcn::modals) keeps routing and
+//! focus on the top layer. [`ModalOpenError`] reports an id the stack already
+//! carries.
+
 use std::{error::Error, fmt};
 
 use super::{ChildId, FocusState};

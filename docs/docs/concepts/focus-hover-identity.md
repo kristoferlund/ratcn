@@ -58,7 +58,7 @@ pane starts at its first focusable leaf again.
 
 **Parked focus.** If the focused component disappears, is disabled, or
 collapses to zero size, Ratcn keeps the stored path as-is rather than guessing
-a replacement — focus is *parked*. A parked target can still render as focused
+a replacement — focus is *parked*. A parked target can still paint as focused
 when it comes back, disabled controls ignore input meanwhile, and Tab simply
 moves on to an eligible target. The one exception is an open modal: a stored
 path that names something real outside it is pulled into the modal, because
