@@ -10,6 +10,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Checkbox`, with `CheckboxStyle` and `CheckboxWidget`: a labeled boolean
+  control — marker left, label right, the whole row one hit target. The
+  checked and unchecked markers are strings the app chooses (`[x]`/`[ ]`,
+  `[ON]`/`[off]`), so the same component is also the switch and toggle.
+- `Cycle`, with `CycleStyle` and `CycleWidget`: shows the current option and
+  advances on every act — Enter, Space, arrows, their vi letters, or a click —
+  wrapping at both ends. Built for settings rows: setting name left, cycle
+  right.
+- `selection_indicator::MarkerGlyphs`: the glyph pair a selection control
+  paints. `List::selected_marker`/`unselected_marker`,
+  `Select::selected_marker`/`unselected_marker`, and the same methods on both
+  paint widgets override the defaults per control.
 - `list_core::key_intent` and `linear_nav::Axis`: the one key map `List`,
   `Select`, and `Tabs` answer from, with the axis naming which arrows step.
   `RowViewport::wheel` is the same for the wheel.
@@ -106,6 +118,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking:** `selection_indicator::marker` takes a `MarkerGlyphs` pair
+  instead of a `multiple` flag, and `marker_line` follows it — the glyph pair
+  is now the app's to choose.
 - **Breaking:** `ButtonFill` and `ButtonStyle::mode`. A border color is
   `Option<Color>` per state; `Some` paints bordered.
 - **Breaking:** `Button::height`, `ButtonWidget::height`, `SelectWidget::height`,

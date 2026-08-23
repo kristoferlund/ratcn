@@ -204,6 +204,8 @@ export default defineConfig({
           items: [
             { text: 'BarChartWidget', link: '/docs/components/barchart' },
             { text: 'Button', link: '/docs/components/button' },
+            { text: 'Checkbox', link: '/docs/components/checkbox' },
+            { text: 'Cycle', link: '/docs/components/cycle' },
             { text: 'Dialog', link: '/docs/components/dialog' },
             { text: 'List', link: '/docs/components/list' },
             { text: 'ScrollArea', link: '/docs/components/scroll-area' },
