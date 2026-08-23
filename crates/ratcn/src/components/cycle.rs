@@ -282,12 +282,15 @@ impl<S, M> Cycle<S, M> {
     }
 
     /// The rect the current value paints in and answers events in: the Cycle
-    /// is exactly as wide as the text it shows.
+    /// is exactly as wide as the text it shows, and one row tall.
     fn value_area(&self, area: Rect) -> Rect {
-        Rect {
-            width: self.resolved_width.min(area.width),
-            ..area
-        }
+        crate::geometry::fixed_height(
+            Rect {
+                width: self.resolved_width.min(area.width),
+                ..area
+            },
+            1,
+        )
     }
 
     /// Advance one option. Forward past the end wraps to the first; backward

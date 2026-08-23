@@ -238,6 +238,7 @@ impl<'a> SelectWidget<'a> {
     /// Construct a closed select showing `value`, or an empty placeholder.
     #[must_use]
     pub const fn new(value: Option<&'a str>) -> Self {
+        let radio = selection_indicator::MarkerGlyphs::radio();
         Self {
             value,
             placeholder: "",
@@ -252,8 +253,8 @@ impl<'a> SelectWidget<'a> {
             focused: false,
             hovered: false,
             disabled: false,
-            selected_marker: selection_indicator::MarkerGlyphs::radio().selected,
-            unselected_marker: selection_indicator::MarkerGlyphs::radio().unselected,
+            selected_marker: radio.selected,
+            unselected_marker: radio.unselected,
             style: SelectStyle::fallback(),
         }
     }
