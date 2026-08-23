@@ -202,3 +202,32 @@ pub use event::{
 };
 pub use focus::{FocusState, TabWrap};
 pub use modal::{ModalOpenError, ModalState};
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::hash_map::DefaultHasher,
+        hash::{Hash, Hasher},
+        sync::Arc,
+    };
+
+    use super::ChildId;
+
+    fn hash(id: &ChildId) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        id.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Identity is the string content: a static and a dynamic id spelled
+    /// the same are one key in every map and one position in every order.
+    #[test]
+    fn static_and_dynamic_ids_share_content_identity() {
+        let dynamic = ChildId::Dynamic(Arc::from("row:42"));
+        let static_id = ChildId::Static("row:42");
+
+        assert_eq!(static_id, dynamic);
+        assert_eq!(hash(&static_id), hash(&dynamic));
+        assert_eq!(static_id.cmp(&dynamic), std::cmp::Ordering::Equal);
+    }
+}

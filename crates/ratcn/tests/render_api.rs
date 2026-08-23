@@ -26,7 +26,7 @@ impl Component<State, Msg> for Probe {
         assert_eq!(ctx.state().marker, 7);
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, State>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, State>) {
         assert_eq!(ctx.state().marker, 7);
         let area = ctx.area();
         ctx.with_buffer(|buf| assert!(buf.area.width >= area.width));

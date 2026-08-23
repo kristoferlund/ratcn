@@ -53,35 +53,55 @@ fn popup_occludes_its_footprint_and_leaves_the_rest_clickable() {
 
 /// Modal policy is about the modal's subtree, not about declaration
 /// order: a popup declared after the modal but outside it is still
-/// covered, so presses on it are consumed rather than routed.
+/// covered, so presses on it are consumed rather than routed — and it is
+/// painted beneath the modal, dimmed with the rest of what the modal covers,
+/// rather than compositing on top because its layer number is higher.
 #[test]
 fn a_popup_declared_after_a_modal_is_still_covered_by_it() {
+    use ratatui::style::{Color, Style};
+    use ratatui::widgets::Paragraph;
+
+    const INK: Color = Color::Rgb(250, 250, 250);
+
     let state = PointerState;
     let mut driver = Driver::<PointerState, PointerMsg>::new(10, 4);
     driver.render(&state, |ctx| {
         ctx.modal(
             ChildId::Static("dlg"),
-            RouteLeaf("dlg"),
+            HoverLeaf {
+                consume_move: false,
+                rendered: None,
+            },
             Rect::new(0, 2, 10, 2),
         );
         // Declared later, so it takes a higher layer number — but
         // it is a sibling of the modal, not inside it.
         ctx.popup(
             ChildId::Static("panel"),
-            Rect::new(0, 0, 5, 1),
+            Rect::new(0, 2, 5, 1),
             PopupOptions::default(),
             |ctx| {
+                ctx.paint_widget(
+                    Paragraph::new("PPPPP").style(Style::default().fg(INK)),
+                    Rect::new(0, 2, 5, 1),
+                );
                 ctx.component(
                     ChildId::Static("pi"),
                     RouteLeaf("pi"),
-                    Rect::new(0, 0, 5, 1),
+                    Rect::new(0, 2, 5, 1),
                 );
             },
         );
     });
 
+    let cell = driver.cell(1, 2);
+    assert_eq!(cell.symbol(), "P", "the popup's paint is still on screen");
+    assert_ne!(
+        cell.fg, INK,
+        "but beneath the modal, so dimmed with the rest"
+    );
     assert_eq!(
-        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state),
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 2), &state),
         EventResult::Consumed,
         "the modal covers it, so the press must not reach the popup's content"
     );

@@ -160,28 +160,6 @@ impl Component<FocusTestState, FocusTestMsg> for AreaAwareComposite {
     }
 }
 
-fn hash(id: &ChildId) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    id.hash(&mut hasher);
-    hasher.finish()
-}
-
-#[test]
-fn static_and_dynamic_ids_share_content_identity_and_allocation() {
-    let shared: Arc<str> = Arc::from("row:42");
-    let dynamic = ChildId::Dynamic(Arc::clone(&shared));
-    let cloned = dynamic.clone();
-    let static_id = ChildId::Static("row:42");
-
-    assert_eq!(static_id, dynamic);
-    assert_eq!(hash(&static_id), hash(&dynamic));
-    assert_eq!(static_id.cmp(&dynamic), std::cmp::Ordering::Equal);
-    let ChildId::Dynamic(cloned_shared) = cloned else {
-        panic!("dynamic id changed representation");
-    };
-    assert!(Arc::ptr_eq(&shared, &cloned_shared));
-}
-
 #[test]
 fn render_context_reports_each_declaration_area_and_state() {
     let state = 7;

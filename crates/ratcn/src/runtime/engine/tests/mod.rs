@@ -2,8 +2,6 @@
 
 use std::{
     cell::RefCell,
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
     sync::{
@@ -163,7 +161,7 @@ impl FocusLeaf {
 impl Component<FocusTestState, FocusTestMsg> for FocusLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, FocusTestState>) {
         if let Some(rendered) = &self.rendered {
             rendered
                 .borrow_mut()
@@ -263,7 +261,7 @@ struct HoverLeaf {
 impl Component<PointerState, PointerMsg> for HoverLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, PointerState>) {
         if let Some(rendered) = &self.rendered {
             rendered
                 .borrow_mut()
@@ -332,7 +330,7 @@ struct LoggingComponent {
 impl Component<FocusTestState, FocusTestMsg> for LoggingComponent {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
 
-    fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
+    fn paint(&mut self, _ctx: &mut PaintCtx<'_, FocusTestState>) {
         self.log.borrow_mut().push(self.name);
     }
 

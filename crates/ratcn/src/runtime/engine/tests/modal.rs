@@ -29,7 +29,7 @@ struct ModalFocusRoute {
 impl Component<ModalTestState, ModalTestMsg> for ModalFocusRoute {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, ModalTestState, ModalTestMsg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, ModalTestState>) {
         self.rendered
             .borrow_mut()
             .push((ctx.focused(), ctx.contains_focus()));
@@ -633,7 +633,7 @@ struct ModalFocusLeaf {
 impl Component<ModalTestState, ModalTestMsg> for ModalFocusLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, ModalTestState, ModalTestMsg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalTestState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, ModalTestState>) {
         self.rendered
             .borrow_mut()
             .push((ctx.focused(), ctx.contains_focus()));

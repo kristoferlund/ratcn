@@ -108,7 +108,7 @@ impl Component<(), ()> for BackdropParent {
         ctx.component(ChildId::Static("glyph"), GlyphLeaf("C"), area);
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ()>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, ()>) {
         let area = ctx.area();
         ctx.widget(
             ratatui::text::Line::from("#".repeat(area.width as usize)),
@@ -123,7 +123,7 @@ struct GlyphLeaf(&'static str);
 impl<S, M> Component<S, M> for GlyphLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let area = ctx.area();
         ctx.widget(
             ratatui::text::Line::from(self.0),
@@ -159,7 +159,7 @@ struct FillLeaf(&'static str);
 impl<S, M> Component<S, M> for FillLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let area = ctx.area();
         ctx.widget(
             ratatui::text::Line::from(self.0.repeat(area.width as usize)),
