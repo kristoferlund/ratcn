@@ -17,7 +17,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Cycle`, with `CycleStyle` and `CycleWidget`: shows the current option and
   advances on every act — Enter, Space, arrows, their vi letters, or a click —
   wrapping at both ends. Built for settings rows: setting name left, cycle
-  right.
+  right. The component paints and hit-tests exactly the columns its current
+  value occupies, so a row is as wide as the text it shows.
 - `selection_indicator::MarkerGlyphs`: the glyph pair a selection control
   paints. `List::selected_marker`/`unselected_marker`,
   `Select::selected_marker`/`unselected_marker`, and the same methods on both

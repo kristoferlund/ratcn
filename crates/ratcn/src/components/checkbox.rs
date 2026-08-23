@@ -6,9 +6,9 @@
 //!
 //! The whole row is one hit target — a click on the label checks the box just
 //! as a click on the marker does — and Enter or Space toggles while focused.
-//! Nothing paints a background and hover changes nothing: at rest a checkbox
-//! reads as text on the surface it sits on, not as a control wearing chrome.
-//! Focus is the one visible state, because keyboard users must find it.
+//! At rest a checkbox reads as text on the surface it sits on; hover and
+//! focus lay the quiet ghost-button fill over the row, so keyboard users can
+//! always find it and pointer users can see what they are about to flip.
 //!
 //! Because the checked and unchecked markers are yours to choose, the same
 //! component covers switches and toggles: `[x]`/`[ ]` for an ASCII look, or
@@ -29,7 +29,7 @@ use ratatui::{
 
 use crate::{
     Theme,
-    color::{DISABLED_DIM, dim},
+    color::{FOCUS_SHIFT, HOVER_SHIFT, away_from, dim},
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
         MouseKind, PaintCtx, ScopeOptions,
@@ -46,15 +46,20 @@ const UNCHECKED_MARKER: &str = "☐";
 ///
 /// At rest the label carries [`foreground`](Self::foreground), the checked
 /// marker [`checked_marker_color`](Self::checked_marker_color), and the
-/// unchecked marker [`unchecked_marker_color`](Self::unchecked_marker_color).
-/// Focus recolors the label so a keyboard user can find the box; disabled
-/// mutes everything, and wins over both.
+/// unchecked marker [`unchecked_marker_color`](Self::unchecked_marker_color),
+/// all on nothing — the surface shows through. Hover and focus lay their
+/// background over the row, the way a small ghost button raises; disabled
+/// mutes everything and wins over both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckboxStyle {
     /// Label color at rest.
     pub foreground: Color,
     /// Label color while focused.
     pub focused_foreground: Color,
+    /// Background while focused.
+    pub focused_background: Color,
+    /// Background while hovered.
+    pub hovered_background: Color,
     /// Label and marker color while disabled.
     pub disabled_foreground: Color,
     /// Checked marker color.
@@ -71,22 +76,25 @@ impl CheckboxStyle {
         Self {
             foreground: Color::Gray,
             focused_foreground: Color::Cyan,
+            focused_background: Color::DarkGray,
+            hovered_background: Color::DarkGray,
             disabled_foreground: Color::DarkGray,
             checked_marker_color: Color::Cyan,
             unchecked_marker_color: Color::Gray,
         }
     }
 
-    /// Colors derived from a theme.
-    ///
-    /// The unchecked marker sits with the muted text so an unchecked row of
-    /// boxes reads as a list of questions, and the checked marker takes the
-    /// primary accent so the answers stand out.
+    /// Colors derived from a theme, solving the ghost button's fills: both
+    /// climb away from the screen color, so they read as raised rather than
+    /// pressed.
     #[must_use]
     pub fn from_theme(theme: &Theme) -> Self {
+        let raised = away_from(theme.background);
         Self {
             foreground: theme.foreground,
             focused_foreground: theme.primary,
+            focused_background: dim(theme.secondary, raised, FOCUS_SHIFT),
+            hovered_background: dim(theme.secondary, raised, HOVER_SHIFT),
             disabled_foreground: theme.muted_foreground,
             checked_marker_color: theme.primary,
             unchecked_marker_color: theme.muted_foreground,
@@ -94,8 +102,14 @@ impl CheckboxStyle {
     }
 
     /// One paint pass's colors (see [`Self::from_theme`]). Disabled wins over
-    /// focus, which wins over rest.
-    fn resolve(self, checked: bool, focused: bool, disabled: bool) -> ResolvedCheckboxStyle {
+    /// focus, which wins over hover, which wins over rest.
+    fn resolve(
+        self,
+        checked: bool,
+        focused: bool,
+        hovered: bool,
+        disabled: bool,
+    ) -> ResolvedCheckboxStyle {
         let foreground = if disabled {
             self.disabled_foreground
         } else if focused {
@@ -110,24 +124,29 @@ impl CheckboxStyle {
         } else {
             self.unchecked_marker_color
         };
-        ResolvedCheckboxStyle { foreground, marker }
-    }
-
-    /// A copy with every role muted toward the surface, for a disabled box
-    /// derived by hand rather than from a theme.
-    #[must_use]
-    pub fn disabled(mut self, backdrop: Color) -> Self {
-        self.disabled_foreground = dim(self.disabled_foreground, backdrop, DISABLED_DIM);
-        self.checked_marker_color = dim(self.checked_marker_color, backdrop, DISABLED_DIM);
-        self.unchecked_marker_color = dim(self.unchecked_marker_color, backdrop, DISABLED_DIM);
-        self
+        let background = if disabled {
+            None
+        } else if focused {
+            Some(self.focused_background)
+        } else if hovered {
+            Some(self.hovered_background)
+        } else {
+            None
+        };
+        ResolvedCheckboxStyle {
+            foreground,
+            marker,
+            background,
+        }
     }
 }
 
-/// One paint pass's resolved colors (see [`CheckboxStyle::resolve`]).
+/// One paint pass's resolved colors (see [`CheckboxStyle::resolve`]). A `None`
+/// background leaves the surface behind the checkbox alone.
 struct ResolvedCheckboxStyle {
     foreground: Color,
     marker: Color,
+    background: Option<Color>,
 }
 
 /// A checkbox that only draws — an ordinary ratatui [`Widget`] with no focus,
@@ -142,6 +161,7 @@ pub struct CheckboxWidget<'a> {
     checked_marker: &'a str,
     unchecked_marker: &'a str,
     focused: bool,
+    hovered: bool,
     disabled: bool,
     theme: Option<Theme>,
     style: Option<CheckboxStyle>,
@@ -157,6 +177,7 @@ impl<'a> CheckboxWidget<'a> {
             checked_marker: CHECKED_MARKER,
             unchecked_marker: UNCHECKED_MARKER,
             focused: false,
+            hovered: false,
             disabled: false,
             theme: None,
             style: None,
@@ -194,10 +215,17 @@ impl<'a> CheckboxWidget<'a> {
         self
     }
 
-    /// Paint the focused label color.
+    /// Paint the focused label color and fill.
     #[must_use]
     pub const fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self
+    }
+
+    /// Paint the hovered fill.
+    #[must_use]
+    pub const fn hovered(mut self, hovered: bool) -> Self {
+        self.hovered = hovered;
         self
     }
 
@@ -238,14 +266,18 @@ impl Widget for CheckboxWidget<'_> {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let style = self
-            .resolved_style()
-            .resolve(self.checked, self.focused, self.disabled);
-        let marker_style = Style::default().fg(style.marker);
-        let label_style = Style::default().fg(style.foreground);
+        let style =
+            self.resolved_style()
+                .resolve(self.checked, self.focused, self.hovered, self.disabled);
+        let mut marker_style = Style::default().fg(style.marker);
+        let mut label_style = Style::default().fg(style.foreground);
+        if let Some(background) = style.background {
+            marker_style = marker_style.bg(background);
+            label_style = label_style.bg(background);
+            buf.set_style(area, Style::default().bg(background));
+        }
 
-        // Marker column, then one space, then as much label as fits. Only
-        // foregrounds are set: the surface behind shows through everywhere.
+        // Marker column, then one space, then as much label as fits.
         let marker = self.marker();
         let marker_width = text_width::display_width_u16(marker);
         let mut cursor = area.x;
@@ -404,6 +436,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
             .checked_marker(&self.checked_marker)
             .unchecked_marker(&self.unchecked_marker)
             .focused(ctx.focused())
+            .hovered(ctx.hovered())
             .disabled(self.disabled)
             .style(style);
         ctx.widget(widget, ctx.area());
@@ -451,7 +484,7 @@ impl<S, M> Checkbox<S, M> {
 mod tests {
 
     use super::*;
-    use crate::runtime::{ChildId, FocusState, Modifiers, Ratcn};
+    use crate::runtime::{ChildId, FocusState, Modifiers, Ratcn, TabWrap};
     use crate::test_support::{Driver, key, key_with, mouse};
 
     #[derive(Default)]
@@ -529,35 +562,59 @@ mod tests {
         );
     }
 
-    /// A checkbox is text on the surface, not a control wearing chrome: hover
-    /// must paint exactly what rest paints, cell for cell and style for style.
+    /// Hover and focus raise the row the ghost-button way: a fill appears
+    /// where rest had none. Pinned on the widget, where both are arguments.
     #[test]
-    fn hover_paints_the_same_frame_as_rest() {
-        let mut driver = driver();
-        let state = State::default();
-        render(&mut driver, &state);
-        let rest = driver.buffer().clone();
+    fn hover_and_focus_lay_a_fill_and_rest_does_not() {
+        let area = Rect::new(0, 0, 20, 1);
+        let theme = Theme::default_dark();
 
-        // Point at the row and redraw. The declaration is identical, so the
-        // only thing that could differ between the frames is hover.
-        driver.event(mouse(MouseKind::Moved, 8, 2), &state);
-        render(&mut driver, &state);
-
+        let mut rest = Buffer::empty(area);
+        CheckboxWidget::new("Vim bindings", true)
+            .themed(&theme)
+            .render(area, &mut rest);
         assert_eq!(
-            *driver.buffer(),
-            rest,
-            "hover changed what a checkbox paints"
+            rest.cell((3, 0)).expect("cell").bg,
+            Color::Reset,
+            "rest painted a background"
+        );
+
+        let mut hovered = Buffer::empty(area);
+        CheckboxWidget::new("Vim bindings", true)
+            .hovered(true)
+            .themed(&theme)
+            .render(area, &mut hovered);
+        assert_ne!(
+            hovered.cell((3, 0)).expect("cell").bg,
+            Color::Reset,
+            "hover must show what the pointer is about to flip"
+        );
+
+        let mut focused = Buffer::empty(area);
+        CheckboxWidget::new("Vim bindings", true)
+            .focused(true)
+            .themed(&theme)
+            .render(area, &mut focused);
+        assert_ne!(
+            focused.cell((3, 0)).expect("cell").bg,
+            Color::Reset,
+            "focus must be findable by its fill"
         );
     }
 
     #[test]
     fn a_resting_checkbox_paints_no_background() {
-        let mut driver = driver();
-        let state = State::default();
-        render(&mut driver, &state);
+        // Pinned on the widget: the runtime focuses the first focusable
+        // control it renders, so a driven frame would already be focused.
+        let theme = Theme::default_dark();
+        let area = Rect::new(0, 0, 22, 1);
+        let mut buffer = Buffer::empty(area);
+        CheckboxWidget::new("Vim bindings", true)
+            .themed(&theme)
+            .render(area, &mut buffer);
 
         for column in 0..22u16 {
-            let cell = driver.cell(column, 2);
+            let cell = buffer.cell((column, 0)).expect("cell");
             assert_eq!(
                 cell.bg,
                 Color::Reset,
@@ -610,5 +667,48 @@ mod tests {
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 8, 2), &state),
             EventResult::Ignored
         ));
+    }
+
+    /// Bound checkboxes are first-class traversal stops: Tab walks between
+    /// them like between any other controls.
+    #[test]
+    fn tab_walks_between_bound_checkboxes() {
+        let mut driver = Driver::with(
+            Ratcn::new()
+                .focus(|state: &State| &state.focus, Msg::Focus)
+                .tab_wrap(TabWrap::Wrap),
+            30,
+            6,
+        );
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("first"),
+                Checkbox::new("First").checked(|s: &State| s.vim, Msg::Vim),
+                Rect::new(2, 1, 20, 1),
+            );
+            ctx.component(
+                ChildId::Static("second"),
+                Checkbox::new("Second").checked(|s: &State| s.vim, Msg::Vim),
+                Rect::new(2, 3, 20, 1),
+            );
+        });
+
+        let EventResult::Emit(msg) = driver.event(key(KeyCode::Tab), &state) else {
+            panic!("Tab must reach the first checkbox");
+        };
+        let focus_after_first = match msg {
+            Msg::Focus(focus) => focus,
+            other => panic!("expected a focus message, got {other:?}"),
+        };
+        let state_after_first = State {
+            focus: focus_after_first,
+            ..State::default()
+        };
+
+        let EventResult::Emit(Msg::Focus(_)) = driver.event(key(KeyCode::Tab), &state_after_first)
+        else {
+            panic!("Tab must walk on to the second checkbox");
+        };
     }
 }
