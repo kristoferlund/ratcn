@@ -103,32 +103,26 @@ impl CheckboxStyle {
 
     /// One paint pass's colors (see [`Self::from_theme`]). Disabled wins over
     /// focus, which wins over hover, which wins over rest.
-    fn resolve(
-        self,
-        checked: bool,
-        focused: bool,
-        hovered: bool,
-        disabled: bool,
-    ) -> ResolvedCheckboxStyle {
-        let foreground = if disabled {
+    fn resolve(self, checked: bool, shown: Presentation) -> ResolvedCheckboxStyle {
+        let foreground = if shown.disabled {
             self.disabled_foreground
-        } else if focused {
+        } else if shown.focused {
             self.focused_foreground
         } else {
             self.foreground
         };
-        let marker = if disabled {
+        let marker = if shown.disabled {
             self.disabled_foreground
         } else if checked {
             self.checked_marker_color
         } else {
             self.unchecked_marker_color
         };
-        let background = if disabled {
+        let background = if shown.disabled {
             None
-        } else if focused {
+        } else if shown.focused {
             Some(self.focused_background)
-        } else if hovered {
+        } else if shown.hovered {
             Some(self.hovered_background)
         } else {
             None
@@ -139,6 +133,15 @@ impl CheckboxStyle {
             background,
         }
     }
+}
+
+/// How a checkbox is presented this paint pass, beneath what it shows:
+/// the three interaction states every control carries.
+#[derive(Debug, Clone, Copy)]
+struct Presentation {
+    focused: bool,
+    hovered: bool,
+    disabled: bool,
 }
 
 /// One paint pass's resolved colors (see [`CheckboxStyle::resolve`]). A `None`
@@ -152,17 +155,15 @@ struct ResolvedCheckboxStyle {
 /// A checkbox that only draws — an ordinary ratatui [`Widget`] with no focus,
 /// events, or state. One instantiation is one checkbox.
 ///
-/// The marker and label never paint a background, so the surface the checkbox
-/// sits on shows through everywhere.
+/// At rest nothing paints a background; hover and focus fill the row they are
+/// given.
 #[derive(Debug)]
 pub struct CheckboxWidget<'a> {
     label: &'a str,
     checked: bool,
     checked_marker: &'a str,
     unchecked_marker: &'a str,
-    focused: bool,
-    hovered: bool,
-    disabled: bool,
+    shown: Presentation,
     theme: Option<Theme>,
     style: Option<CheckboxStyle>,
 }
@@ -176,9 +177,11 @@ impl<'a> CheckboxWidget<'a> {
             checked,
             checked_marker: CHECKED_MARKER,
             unchecked_marker: UNCHECKED_MARKER,
-            focused: false,
-            hovered: false,
-            disabled: false,
+            shown: Presentation {
+                focused: false,
+                hovered: false,
+                disabled: false,
+            },
             theme: None,
             style: None,
         }
@@ -218,21 +221,21 @@ impl<'a> CheckboxWidget<'a> {
     /// Paint the focused label color and fill.
     #[must_use]
     pub const fn focused(mut self, focused: bool) -> Self {
-        self.focused = focused;
+        self.shown.focused = focused;
         self
     }
 
     /// Paint the hovered fill.
     #[must_use]
     pub const fn hovered(mut self, hovered: bool) -> Self {
-        self.hovered = hovered;
+        self.shown.hovered = hovered;
         self
     }
 
     /// Paint muted.
     #[must_use]
     pub const fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
+        self.shown.disabled = disabled;
         self
     }
 
@@ -266,9 +269,7 @@ impl Widget for CheckboxWidget<'_> {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let style =
-            self.resolved_style()
-                .resolve(self.checked, self.focused, self.hovered, self.disabled);
+        let style = self.resolved_style().resolve(self.checked, self.shown);
         let mut marker_style = Style::default().fg(style.marker);
         let mut label_style = Style::default().fg(style.foreground);
         if let Some(background) = style.background {
@@ -694,12 +695,10 @@ mod tests {
             );
         });
 
-        let EventResult::Emit(msg) = driver.event(key(KeyCode::Tab), &state) else {
+        let EventResult::Emit(Msg::Focus(focus_after_first)) =
+            driver.event(key(KeyCode::Tab), &state)
+        else {
             panic!("Tab must reach the first checkbox");
-        };
-        let focus_after_first = match msg {
-            Msg::Focus(focus) => focus,
-            other => panic!("expected a focus message, got {other:?}"),
         };
         let state_after_first = State {
             focus: focus_after_first,

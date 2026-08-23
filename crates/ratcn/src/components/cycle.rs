@@ -330,8 +330,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
         self.resolved_width = self
             .options
             .get(self.resolved_selected)
-            .map(|option| text_width::display_width_u16(option))
-            .unwrap_or(0);
+            .map_or(0, |option| text_width::display_width_u16(option));
     }
 
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {
