@@ -38,11 +38,8 @@ pub fn truncate_to_width(text: &str, width: usize) -> &str {
     // walk measured over `width`, and no earlier boundary can have overflowed
     // because prefix width never falls as a prefix grows.
     //
-    // That last property is how `unicode-width` happens to fold a string, not
-    // something Unicode or the crate's API promises. It holds for every text
-    // 0.2 measures; if a later version breaks it, an overflowing prefix fails
-    // the fit check below and [`measured_truncate`] — which measures every
-    // candidate and is the authority here — answers instead.
+    // `unicode-width` does not promise that property; if it ever fails, the
+    // fit check below rejects the cut and [`measured_truncate`] answers.
     let mut end = 0;
     let mut measured = 0;
     for (idx, grapheme) in text.grapheme_indices(true) {

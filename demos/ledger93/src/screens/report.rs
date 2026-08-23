@@ -60,7 +60,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         .outline()
         .size(ButtonSize::Large)
         .on_press(|| AppMsg::Report(Msg::ToggleSort));
-    let button_height = sort.height();
+    let button_height = ButtonSize::Large.height();
 
     let inner = crate::screens::declare_panel(ctx, area, None);
 

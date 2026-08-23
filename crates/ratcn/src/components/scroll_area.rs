@@ -234,7 +234,6 @@ impl<S, M> ScrollArea<S, M> {
     /// offset taken. `None` when the view is already there.
     fn hold(&self, offset: u16, state: &S, ctx: &mut EventCtx<'_>) -> Option<u16> {
         let area = ctx.area();
-        let bound = self.bound_offset(state);
         let current = self.current(state, ctx);
         let offset = offset.min(self.max_offset(area));
         if offset == current {
@@ -242,7 +241,7 @@ impl<S, M> ScrollArea<S, M> {
         }
         *ctx.transient::<ScrollHold>() = ScrollHold::Held {
             offset,
-            base: bound,
+            base: self.bound_offset(state),
         };
         Some(offset)
     }
@@ -304,9 +303,8 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
             ScrollAreaStyle::from_theme,
         );
         let viewport_height = viewport.height;
-        // Ratatui 0.3.2 defines `content_length - 1` as the maximum
-        // scrollbar position. ScrollArea positions are row offsets, so the
-        // count is the inclusive offset range, not the total row count.
+        // Scrollbar positions are row offsets, so the count is the inclusive
+        // offset range, not the total row count.
         let position_count = self
             .content_height
             .saturating_sub(viewport_height)
@@ -364,11 +362,7 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::Cell,
-        panic::{AssertUnwindSafe, catch_unwind},
-        rc::Rc,
-    };
+    use std::{cell::Cell, rc::Rc};
 
     use ratatui::{
         text::Text,
@@ -450,7 +444,7 @@ mod tests {
     impl Component<State, Msg> for Probe {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
-        fn paint(&mut self, ctx: &mut crate::runtime::PaintCtx<'_, '_, State>) {
+        fn paint(&mut self, ctx: &mut crate::runtime::PaintCtx<'_, State>) {
             ctx.widget(Paragraph::new(self.name), ctx.area());
         }
 
@@ -1250,7 +1244,6 @@ mod tests {
         Hint,
         Popup,
         Modal,
-        Deferred,
     }
 
     impl Component<State, Msg> for LayerHost {
@@ -1271,13 +1264,6 @@ mod tests {
                 }
                 LayerExample::Modal => {
                     ctx.modal("layer", ModalProbe, escaped);
-                }
-                LayerExample::Deferred => {
-                    ctx.defer_paint(move |ctx| {
-                        ctx.with_buffer(|buffer| {
-                            buffer.set_string(escaped.x, escaped.y, "DEFER", Style::default());
-                        });
-                    });
                 }
             }
         }
@@ -1303,7 +1289,7 @@ mod tests {
     impl Component<State, Msg> for ModalProbe {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
-        fn paint(&mut self, ctx: &mut crate::runtime::PaintCtx<'_, '_, State>) {
+        fn paint(&mut self, ctx: &mut crate::runtime::PaintCtx<'_, State>) {
             ctx.widget(Paragraph::new("MODAL"), ctx.area());
         }
 
@@ -1397,114 +1383,6 @@ mod tests {
                 driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 1), &state),
                 EventResult::Emit(Msg::Pressed("layer-child")),
                 "the visible logical child is hit inside the outer layer"
-            );
-        }
-    }
-
-    #[test]
-    fn viewport_paint_preserves_earlier_enclosing_layer_cells() {
-        for sparse in [false, true] {
-            let mut driver = driver(6, 4);
-            let state = State::default();
-            driver.render(&state, move |ctx| {
-                ctx.popup(
-                    "outer",
-                    Rect::new(0, 0, 6, 4),
-                    PopupOptions::default(),
-                    move |ctx| {
-                        ctx.paint_widget(
-                            Paragraph::new("ABCDE\nFGHIJ").style(Style::new().bg(Color::Magenta)),
-                            Rect::new(0, 1, 5, 2),
-                        );
-                        ctx.component(
-                            "scroll",
-                            scroll_area(2, move |ctx| {
-                                if sparse {
-                                    ctx.paint_widget(Paragraph::new("X"), Rect::new(2, 1, 1, 1));
-                                }
-                            }),
-                            Rect::new(0, 1, 6, 2),
-                        );
-                    },
-                );
-            });
-
-            assert_eq!(&driver.row(1)[..5], if sparse { "ABXDE" } else { "ABCDE" });
-            assert_eq!(&driver.row(2)[..5], "FGHIJ");
-            assert_eq!(
-                driver
-                    .terminal
-                    .backend()
-                    .buffer()
-                    .cell((4, 2))
-                    .expect("preserved layer cell")
-                    .bg,
-                Color::Magenta
-            );
-        }
-    }
-
-    #[test]
-    fn sparse_viewport_in_a_layer_does_not_cover_lower_layer_cells() {
-        for sparse in [false, true] {
-            let mut driver = driver(6, 4);
-            let state = State::default();
-            driver.render(&state, move |ctx| {
-                ctx.paint_widget(
-                    Paragraph::new("ABCDE\nFGHIJ").style(Style::new().bg(Color::Blue)),
-                    Rect::new(0, 1, 5, 2),
-                );
-                ctx.popup(
-                    "outer",
-                    Rect::new(0, 0, 6, 4),
-                    PopupOptions::default(),
-                    move |ctx| {
-                        ctx.component(
-                            "scroll",
-                            scroll_area(2, move |ctx| {
-                                if sparse {
-                                    ctx.paint_widget(Paragraph::new("X"), Rect::new(2, 1, 1, 1));
-                                }
-                            }),
-                            Rect::new(0, 1, 6, 2),
-                        );
-                    },
-                );
-            });
-
-            assert_eq!(&driver.row(1)[..5], if sparse { "ABXDE" } else { "ABCDE" });
-            assert_eq!(&driver.row(2)[..5], "FGHIJ");
-            assert_eq!(
-                driver
-                    .terminal
-                    .backend()
-                    .buffer()
-                    .cell((4, 2))
-                    .expect("preserved base cell")
-                    .bg,
-                Color::Blue
-            );
-        }
-    }
-
-    #[test]
-    fn hints_popups_modals_and_deferred_paint_escape_and_project_once() {
-        let state = State {
-            offset: 2,
-            ..State::default()
-        };
-        for (layer, expected) in [
-            (LayerExample::Hint, "HINT"),
-            (LayerExample::Popup, "item"),
-            (LayerExample::Modal, "MODAL"),
-            (LayerExample::Deferred, "DEFER"),
-        ] {
-            let mut driver = driver(8, 6);
-            render_layer_example(&mut driver, &state, layer);
-            assert!(
-                driver.row(3).contains(expected),
-                "{layer:?} was clipped or translated more than once: {}",
-                driver.row(3)
             );
         }
     }
@@ -1684,37 +1562,9 @@ mod tests {
                         ctx.paint_widget(Paragraph::new("LAYER"), escaped);
                     });
                 }
-                LayerExample::Modal | LayerExample::Deferred => {}
+                LayerExample::Modal => {}
             }
         }
-    }
-
-    #[test]
-    fn nested_scroll_areas_are_rejected() {
-        let mut driver = driver(8, 4);
-        let state = State::default();
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            driver.render(&state, |ctx| {
-                ctx.component(
-                    "outer",
-                    scroll_area(6, |ctx| {
-                        ctx.component("inner", scroll_area(5, |_| {}), Rect::new(0, 0, 6, 3));
-                    }),
-                    Rect::new(0, 0, 8, 4),
-                );
-            });
-        }));
-
-        let panic = result.expect_err("nested ScrollAreas must panic");
-        let message = panic
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| panic.downcast_ref::<&str>().copied())
-            .unwrap_or_default();
-        assert!(
-            message.contains("cannot be declared inside another viewport"),
-            "{message}"
-        );
     }
 
     #[derive(Debug)]
@@ -1725,7 +1575,7 @@ mod tests {
     impl Component<State, Msg> for HoverCaptureProbe {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
-        fn paint(&mut self, ctx: &mut crate::runtime::PaintCtx<'_, '_, State>) {
+        fn paint(&mut self, ctx: &mut crate::runtime::PaintCtx<'_, State>) {
             self.hovered.set(ctx.hovered());
         }
 

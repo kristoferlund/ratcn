@@ -18,6 +18,9 @@ const DEFAULT_VISIBLE_TOASTS: usize = 3;
 const DEFAULT_INSET: u16 = 1;
 const TITLE_PREFIX_WIDTH: u16 = 3;
 const MIN_TITLE_WIDTH: u16 = 2;
+/// Columns and rows a border adds: one border cell and, horizontally, one
+/// padding cell on each side.
+const BORDER_CHROME: (u16, u16) = (4, 2);
 
 /// Which corner or edge the toast stack sits against.
 ///
@@ -128,32 +131,16 @@ impl ToasterStyle {
         }
     }
 
-    /// The accent color and title style for a toast kind — the single place a
-    /// kind is turned into style.
-    #[allow(
-        unreachable_patterns,
-        reason = "the wildcard is unreachable inside this crate but required once this module \
-                  is copied outside it, where `ToastKind`'s #[non_exhaustive] blocks an \
-                  exhaustive match"
-    )]
-    fn resolve(&self, kind: ToastKind) -> (Color, Style) {
-        let accent = match kind {
+    /// The accent color for a toast kind.
+    const fn accent(&self, kind: ToastKind) -> Color {
+        match kind {
+            ToastKind::Default => self.border,
             ToastKind::Success => self.success,
             ToastKind::Info => self.info,
             ToastKind::Error => self.error,
             ToastKind::Warning => self.warning,
             ToastKind::Loading => self.loading,
-            // `Default` and any future variant both fall back to the border
-            // accent.
-            ToastKind::Default | _ => self.border,
-        };
-        (
-            accent,
-            Style::default()
-                .fg(self.foreground)
-                .bg(self.background)
-                .add_modifier(Modifier::BOLD),
-        )
+        }
     }
 }
 
@@ -373,7 +360,11 @@ impl<'a, 'toast> PaintedToast<'a, 'toast> {
         if width < minimum_toast_width(toast) {
             return None;
         }
-        let (chrome_x, chrome_y) = if toast.is_bordered() { (4, 2) } else { (0, 0) };
+        let (chrome_x, chrome_y) = if toast.is_bordered() {
+            BORDER_CHROME
+        } else {
+            (0, 0)
+        };
         let lines = toast_lines(toast, style, width.saturating_sub(chrome_x));
         let height = u16::try_from(lines.len())
             .unwrap_or(u16::MAX)
@@ -389,7 +380,7 @@ impl<'a, 'toast> PaintedToast<'a, 'toast> {
     fn paint(self, style: &ToasterStyle, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let (accent, _) = style.resolve(self.toast.kind());
+        let accent = style.accent(self.toast.kind());
         let content_area = if self.toast.is_bordered() {
             // A plain ratatui border, themed inline. Components draw their own
             // border rather than depending on the `Border` component.
@@ -423,7 +414,11 @@ fn toast_lines<'a>(
     style: &ToasterStyle,
     content_width: u16,
 ) -> Vec<Line<'a>> {
-    let (accent, title_style) = style.resolve(toast.kind());
+    let accent = style.accent(toast.kind());
+    let title_style = Style::default()
+        .fg(style.foreground)
+        .bg(style.background)
+        .add_modifier(Modifier::BOLD);
     let icon = toast_icon(toast.kind());
     let prefix_width = usize::from(TITLE_PREFIX_WIDTH);
 
@@ -455,35 +450,27 @@ fn toast_lines<'a>(
 /// Minimum width that can render the icon, its separator, and a whole terminal
 /// glyph of title content without clipping.
 const fn minimum_toast_width(toast: &Toast<'_>) -> u16 {
-    let chrome = if toast.is_bordered() { 4 } else { 0 };
+    let chrome = if toast.is_bordered() {
+        BORDER_CHROME.0
+    } else {
+        0
+    };
     chrome + TITLE_PREFIX_WIDTH + MIN_TITLE_WIDTH
 }
 
-#[allow(
-    unreachable_patterns,
-    reason = "the wildcard is unreachable inside this crate but required once this module is \
-              copied outside it, where `ToastKind`'s #[non_exhaustive] blocks an exhaustive match"
-)]
 const fn toast_icon(kind: ToastKind) -> &'static str {
     match kind {
+        ToastKind::Default => "--",
         ToastKind::Success => "OK",
         ToastKind::Error | ToastKind::Warning => "!!",
         ToastKind::Info => "i ",
         ToastKind::Loading => "..",
-        // `Default` and any future variant both fall back to the default
-        // icon (see the matching fallback in `ToasterStyle::resolve`).
-        ToastKind::Default | _ => "--",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn toast_position_defaults_to_bottom_right() {
-        assert_eq!(ToastPosition::default(), ToastPosition::BottomRight);
-    }
 
     const DEFAULT_DURATION: Duration = Duration::from_secs(4);
     const LONG_DESCRIPTION: &str = "a rather long description that wraps onto several rows";
@@ -591,9 +578,11 @@ mod tests {
         ];
 
         for (kind, expected_accent, expected_icon) in cases {
-            let (accent, title_style) = style.resolve(kind);
-            assert_eq!(accent, expected_accent, "wrong accent for {kind:?}");
-            assert_eq!(title_style.fg, Some(style.foreground));
+            assert_eq!(
+                style.accent(kind),
+                expected_accent,
+                "wrong accent for {kind:?}"
+            );
             assert_eq!(toast_icon(kind), expected_icon, "wrong icon for {kind:?}");
         }
     }

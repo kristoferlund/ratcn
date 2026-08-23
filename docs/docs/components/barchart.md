@@ -34,10 +34,9 @@ let bars = vec![
 frame.render_widget(BarChartWidget::new(bars).themed(&theme), area);
 ```
 
-Bars run upward by default; `BarChartWidget::vertical(...)` is the same
-constructor under a clearer name. `.width()` measures the vertical chart's bar
-grouping axis; horizontal charts expose that measurement through `.height()`.
-The other axis remains area-driven because it contains the scaled bar length.
+Bars run upward by default. `.span()` measures the bar grouping axis — the
+width of a vertical chart, the height of a horizontal one. The other axis
+remains area-driven because it contains the scaled bar length.
 
 ## Scale
 
@@ -84,7 +83,7 @@ grouped bars too. Set `.direction(Direction::Horizontal)` for horizontal groups
 `Forward`/`Backward` enum is `ratcn::runtime::Step`, a different type.
 Horizontal group labels occupy the space reserved by `.group_gap(...)` and are
 not painted when that gap is `0`. A group with no bars is dropped: it paints
-nothing, and it takes neither space nor a group gap in `.width()`/`.height()`.
+nothing, and it takes neither space nor a group gap in `.span()`.
 
 ```rust
 use ratcn::BarChartGroup;

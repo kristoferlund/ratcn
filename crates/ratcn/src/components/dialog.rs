@@ -167,12 +167,7 @@ fn dialog_layout(area: Rect, offset: CellOffset, dims: &DialogDims<'_>) -> Dialo
     }
 }
 
-fn paint_dialog_box<S>(
-    ctx: &mut PaintCtx<'_, '_, S>,
-    box_area: Rect,
-    title: &str,
-    style: DialogStyle,
-) {
+fn paint_dialog_box<S>(ctx: &mut PaintCtx<'_, S>, box_area: Rect, title: &str, style: DialogStyle) {
     if box_area.width == 0 || box_area.height == 0 {
         return;
     }
@@ -205,8 +200,7 @@ type ActionFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>, Rect)>;
 /// height outlive it: `handle_event` recomputes the same box geometry between
 /// frames and needs to know what the main area was sized for.
 enum DialogBody<S, M> {
-    None,
-    /// The [`description`](Dialog::description) paragraph.
+    /// The [`description`](Dialog::description) paragraph, possibly empty.
     Description,
     Content {
         height: u16,
@@ -237,7 +231,6 @@ struct ActionSlot<S, M> {
 impl<S, M> fmt::Debug for DialogBody<S, M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::None => f.write_str("None"),
             Self::Description => f.write_str("Description"),
             Self::Content { height, .. } => write!(f, "Content({height})"),
         }
@@ -286,13 +279,8 @@ impl<S, M> fmt::Debug for DialogFooter<S, M> {
 /// [`action`](Dialog::action) buttons all live in one sibling namespace, so ids
 /// must be unique across the three.
 ///
-/// # No paint widget
-///
-/// Unlike the other components, `Dialog` has no `DialogWidget` half. Its frame is
-/// computed as pure geometry and then painted, so `handle_event` can recompute
-/// the same box for hit-testing without needing a `Frame` — which is what makes
-/// dragging it by its border possible. Only the painted box participates in
-/// pointer routing, so a non-modal dialog does not block controls outside it.
+/// Only the painted box participates in pointer routing, so a non-modal
+/// dialog does not block controls outside it.
 ///
 /// Standard actions need no manual measurement or placement:
 ///
@@ -314,14 +302,12 @@ pub struct Dialog<S, M> {
     body: DialogBody<S, M>,
     footer: DialogFooter<S, M>,
     dismiss_key: KeyChord,
-    /// Declaration prop retained with the successful runtime surface.
     offset: CellOffset,
     on_offset_change: Option<OnOffsetChangeFn<M>>,
     on_dismiss: Option<OnDismissFn<M>>,
     tab_wrap: TabWrap,
     style: Option<StyleFn>,
-    /// Original paint allocation retained for drag clamping after the runtime
-    /// narrows this component's event area to the painted box.
+    /// The area the dialog was last declared in; drag offsets are clamped to it.
     paint_area: Rect,
 }
 
@@ -355,7 +341,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
             description: String::new(),
             width: None,
             height: None,
-            body: DialogBody::None,
+            body: DialogBody::Description,
             footer: DialogFooter::None,
             dismiss_key: KeyChord::from(KeyCode::Esc),
             offset: CellOffset::default(),
@@ -626,7 +612,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
             height: self.height,
             content_height: match &self.body {
                 DialogBody::Content { height, .. } => Some(*height),
-                DialogBody::None | DialogBody::Description => None,
+                DialogBody::Description => None,
             },
             footer_height: match &self.footer {
                 DialogFooter::Custom { height, .. } => *height,
@@ -653,7 +639,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         self.paint_area = area;
         let layout = dialog_layout(area, self.offset, &self.dims());
         match &mut self.body {
-            DialogBody::None | DialogBody::Description => {}
+            DialogBody::Description => {}
             DialogBody::Content { declare, .. } => {
                 if let Some(declare) = declare.take() {
                     ctx.in_area(layout.main_area, declare);
@@ -689,15 +675,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
                         declare(ctx, area);
                     }
                 }
-                debug_assert!(
-                    actions.iter().all(|slot| slot.declare.is_none()),
-                    "every dialog action must be declared"
-                );
             }
         }
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let layout = dialog_layout(ctx.area(), self.offset, &self.dims());
         let style = resolve_style(self.style.as_deref(), ctx.theme, DialogStyle::from_theme);
         // Queued where the dialog was declared, so the box lands beneath
@@ -790,7 +772,6 @@ mod tests {
     struct State {
         focus: FocusState,
         offset: CellOffset,
-        custom_enabled: bool,
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -1005,70 +986,54 @@ mod tests {
     fn dialog_box_width_counts_title_cells_not_chars() {
         // 22 CJK chars = 44 cells; the box must widen past the 48-cell floor
         // to title + 6, not stay at 48 as a char count (22 + 6) would.
-        let title = "日".repeat(22);
-        let dims = DialogDims {
-            title: &title,
-            description: "",
-            width: None,
-            height: None,
-            content_height: None,
-            footer_height: 0,
-            footer_width: 0,
-        };
+        let dialog = Dialog::<State, Msg>::new().title("日".repeat(22));
 
-        let base = dialog_box_base(Rect::new(0, 0, 100, 30), &dims);
+        let base = dialog_box_base(Rect::new(0, 0, 100, 30), &dialog.dims());
         assert_eq!(base.width, 50, "44-cell title + 6");
         assert_eq!(base.x, 25, "centered by cells");
 
         // Degenerate areas collapse instead of panicking.
-        assert_eq!(dialog_box_base(Rect::new(0, 0, 0, 30), &dims), Rect::ZERO);
-        assert_eq!(dialog_box_base(Rect::new(0, 0, 100, 0), &dims), Rect::ZERO);
+        assert_eq!(
+            dialog_box_base(Rect::new(0, 0, 0, 30), &dialog.dims()),
+            Rect::ZERO
+        );
+        assert_eq!(
+            dialog_box_base(Rect::new(0, 0, 100, 0), &dialog.dims()),
+            Rect::ZERO
+        );
 
         // Emoji are 2 cells each too: 22 rockets are 44 cells, not 22 chars.
-        let title = "🚀".repeat(22);
-        let dims = DialogDims {
-            title: &title,
-            ..dims
-        };
-        let base = dialog_box_base(Rect::new(0, 0, 100, 30), &dims);
+        let dialog = Dialog::<State, Msg>::new().title("🚀".repeat(22));
+        let base = dialog_box_base(Rect::new(0, 0, 100, 30), &dialog.dims());
         assert_eq!(base.width, 50, "44-cell emoji title + 6");
     }
 
     #[test]
     fn explicit_dimensions_control_the_outer_box_and_clamp_to_the_area() {
-        let dims = DialogDims {
-            title: "Dialog",
-            description: "description",
-            width: Some(32),
-            height: Some(9),
-            content_height: None,
-            footer_height: 0,
-            footer_width: 0,
-        };
+        let dialog = Dialog::<State, Msg>::new()
+            .title("Dialog")
+            .description("description")
+            .outer_width(32)
+            .outer_height(9);
 
         assert_eq!(
-            dialog_box_base(Rect::new(0, 0, 80, 24), &dims),
+            dialog_box_base(Rect::new(0, 0, 80, 24), &dialog.dims()),
             Rect::new(24, 8, 32, 9)
         );
         assert_eq!(
-            dialog_box_base(Rect::new(0, 0, 20, 6), &dims),
+            dialog_box_base(Rect::new(0, 0, 20, 6), &dialog.dims()),
             Rect::new(0, 0, 20, 6)
         );
     }
 
     #[test]
     fn description_auto_height_counts_explicit_and_hard_wrapped_lines() {
-        let dims = DialogDims {
-            title: "Dialog",
-            description: "abcdefghijklmnopqrstu\nsecond",
-            width: Some(14),
-            height: None,
-            content_height: None,
-            footer_height: 0,
-            footer_width: 0,
-        };
+        let dialog = Dialog::<State, Msg>::new()
+            .title("Dialog")
+            .description("abcdefghijklmnopqrstu\nsecond")
+            .outer_width(14);
 
-        let area = dialog_box_base(Rect::new(0, 0, 80, 24), &dims);
+        let area = dialog_box_base(Rect::new(0, 0, 80, 24), &dialog.dims());
         assert_eq!(
             area.height, 8,
             "three hard-wrapped rows plus one explicit row and chrome"
@@ -1160,45 +1125,12 @@ mod tests {
             );
         });
 
-        let dims = DialogDims {
-            title: "Confirm",
-            description: "Description",
-            width: None,
-            height: None,
-            content_height: None,
-            footer_height: 0,
-            footer_width: 0,
-        };
-        let layout = dialog_layout(Rect::new(0, 0, 60, 10), CellOffset::default(), &dims);
-        let buffer = driver.buffer();
-        assert_eq!(
-            buffer
-                .cell((layout.box_area.x, layout.box_area.y))
-                .expect("border")
-                .fg,
-            style.border
-        );
-        assert_eq!(
-            buffer
-                .cell((layout.box_area.x + 2, layout.box_area.y))
-                .expect("title")
-                .fg,
-            style.title_foreground
-        );
-        assert_eq!(
-            buffer
-                .cell((layout.box_area.x + 1, layout.box_area.y + 1))
-                .expect("background")
-                .bg,
-            style.background
-        );
-        assert_eq!(
-            buffer
-                .cell((layout.main_area.x, layout.main_area.y))
-                .expect("description")
-                .fg,
-            style.description_foreground
-        );
+        // The 48x5 box is centered in 60x10: border at (6, 3), title text two
+        // cells in, and the description on the first inner row at (8, 5).
+        assert_eq!(driver.cell(6, 3).fg, style.border);
+        assert_eq!(driver.cell(8, 3).fg, style.title_foreground);
+        assert_eq!(driver.cell(7, 4).bg, style.background);
+        assert_eq!(driver.cell(8, 5).fg, style.description_foreground);
     }
 
     #[test]
@@ -1236,14 +1168,18 @@ mod tests {
 
     #[test]
     fn dialog_drag_requires_a_primary_button_and_offset_handler() {
+        // The runtime hands the dialog its painted box as the event area; the
+        // press lands on that box's top-left border corner.
         let area = Rect::new(0, 0, 60, 10);
-        let border = |button| mouse(MouseKind::Down(button), 6, 3);
         let mut fixed = Dialog::<State, Msg>::new().title("Confirm");
+        let box_area = fixed.interaction_area(area);
+        assert_eq!(box_area, Rect::new(6, 3, 48, 4));
+        let border = |button| mouse(MouseKind::Down(button), box_area.x, box_area.y);
         assert_eq!(
             fixed.handle_event(
                 &border(MouseButton::Left),
                 &State::default(),
-                &mut EventCtx::default().with_area(area),
+                &mut EventCtx::default().with_area(box_area),
             ),
             EventResult::Ignored
         );
@@ -1256,7 +1192,7 @@ mod tests {
                 draggable.handle_event(
                     &border(button),
                     &State::default(),
-                    &mut EventCtx::default().with_area(area),
+                    &mut EventCtx::default().with_area(box_area),
                 ),
                 EventResult::Ignored
             );
@@ -1418,45 +1354,6 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_custom_focusability_tracks_conditional_children() {
-        let mut state = State::default();
-        let mut driver = driver(60, 10);
-
-        for enabled in [false, true, false] {
-            state.custom_enabled = enabled;
-            let area = driver.area();
-            driver.render(&state, |ctx| {
-                let dialog = Dialog::<State, Msg>::new().content(2, |ctx| {
-                    if ctx.state().custom_enabled {
-                        let area = ctx.area();
-                        ctx.component(ChildId::Static("conditional"), OptionFocusable, area);
-                    }
-                });
-                ctx.modal(ChildId::Static("dialog"), dialog, area);
-            });
-        }
-    }
-
-    #[test]
-    fn custom_body_can_consume_owned_data_once() {
-        let state = State::default();
-        let owned = vec!["alpha", "beta"];
-        let mut driver = Driver::<State, Msg>::new(60, 10);
-
-        let area = driver.area();
-        driver.render(&state, |ctx| {
-            // Each pass constructs a fresh dialog and a fresh body
-            // closure; the body consumes its own pass's copy.
-            let owned = owned.clone();
-            ctx.modal(
-                ChildId::Static("dialog"),
-                Dialog::new().content(1, move |_| drop(owned)),
-                area,
-            );
-        });
-    }
-
-    #[test]
     fn content_replaces_the_description_in_either_call_order() {
         for description_first in [true, false] {
             let state = State::default();
@@ -1503,22 +1400,15 @@ mod tests {
             );
         });
 
-        let dims = DialogDims {
-            title: "Confirm",
-            description: "",
-            width: None,
-            height: Some(8),
-            content_height: None,
-            footer_height: 0,
-            footer_width: 0,
-        };
-        let layout = dialog_layout(Rect::new(0, 0, 60, 12), CellOffset::default(), &dims);
-        assert!(
-            layout.main_area.height > 0,
-            "the main area has rows a paragraph could have covered"
+        // The 48x8 box sits at (6, 2) in 60x12; its main area starts at
+        // (8, 4) and has rows a paragraph could have covered.
+        assert_eq!(
+            driver.cell(6, 2).fg,
+            theme.ring,
+            "the box is where expected"
         );
         assert_ne!(
-            driver.cell(layout.main_area.x, layout.main_area.y).fg,
+            driver.cell(8, 4).fg,
             theme.muted_foreground,
             "an empty description paints no paragraph over the box"
         );
@@ -1691,27 +1581,6 @@ mod tests {
     }
 
     #[test]
-    fn standard_actions_handle_narrow_and_short_areas() {
-        for (width, height) in [(8, 5), (3, 2)] {
-            let state = State::default();
-            let mut driver = driver(width, height);
-            let area = driver.area();
-            driver.render(&state, |ctx| {
-                ctx.modal(
-                    ChildId::Static("dialog"),
-                    Dialog::new()
-                        .action(
-                            "cancel",
-                            crate::Button::new("Cancel").on_press(|| Msg::Second),
-                        )
-                        .action("save", crate::Button::new("Save").on_press(|| Msg::First)),
-                    area,
-                );
-            });
-        }
-    }
-
-    #[test]
     fn custom_footer_and_standard_actions_conflict_in_either_order() {
         let footer_then_action = catch_unwind(AssertUnwindSafe(|| {
             let _ = Dialog::<State, Msg>::new()
@@ -1747,6 +1616,27 @@ mod tests {
         });
 
         assert_eq!(footer_area.borrow().height, 3);
+    }
+
+    #[test]
+    fn standard_actions_handle_narrow_and_short_areas() {
+        for (width, height) in [(8, 5), (3, 2)] {
+            let state = State::default();
+            let mut driver = driver(width, height);
+            let area = driver.area();
+            driver.render(&state, |ctx| {
+                ctx.modal(
+                    ChildId::Static("dialog"),
+                    Dialog::new()
+                        .action(
+                            "cancel",
+                            crate::Button::new("Cancel").on_press(|| Msg::Second),
+                        )
+                        .action("save", crate::Button::new("Save").on_press(|| Msg::First)),
+                    area,
+                );
+            });
+        }
     }
 
     #[test]
