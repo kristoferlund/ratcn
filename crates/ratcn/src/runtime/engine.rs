@@ -34,6 +34,12 @@ use super::{
     gesture::{Gestures, Press},
 };
 
+/// `begin_node`'s node kind, spelled out at each call site: a component node
+/// occupies the area it was declared with and carries a [`Component`]; a scope
+/// node is kept for identity and parents a subtree.
+const COMPONENT_NODE: bool = false;
+const SCOPE_NODE: bool = true;
+
 // The largest rectangle a viewport declares as its content, and the largest a
 // single paint inside one covers: each becomes a scratch buffer of one Ratatui
 // cell per cell.
@@ -612,6 +618,12 @@ impl<State, Msg> Surface<State, Msg> {
     fn takeover_root(&self) -> Option<usize> {
         self.top_layer(|layer| layer.kind.policy().takes_over)
             .map(|layer| layer.root)
+    }
+
+    /// Whether the canvas `index` backs lies beneath the layer that has taken
+    /// the screen over, when one is open.
+    fn covered_by_takeover(&self, index: usize, takeover: Option<usize>) -> bool {
+        takeover.is_some_and(|root| !self.inside(self.layers[index].root, root))
     }
 
     /// Every modal root, outermost first — what `Ratcn::modals` validates the
@@ -1516,7 +1528,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             // The node hit-tests against `interaction_area`, but its children
             // are declared over the full paint `area`: a component may narrow
             // what it responds to without narrowing where it draws.
-            let index = pass.begin_node(id, interaction_area, options, false);
+            let index = pass.begin_node(id, interaction_area, options, COMPONENT_NODE);
             pass.enter_node(index);
             // Queued before the subtree declares, so the component's own
             // paint replays ahead of its descendants' — the paint-before-
@@ -1624,7 +1636,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     ) {
         self.guarded(|pass| {
             let area = env.area;
-            let index = pass.begin_node(id, area, options, true);
+            let index = pass.begin_node(id, area, options, SCOPE_NODE);
             pass.enter_node(index);
             pass.with_declare_ctx(env.nested(area), declare);
             pass.leave_node();
@@ -1757,39 +1769,48 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// takeover covers is inert, and so must not paint above it either.
     fn finish_frame(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
         let mut deferred = std::mem::take(&mut self.deferred);
-        let covered = |index: usize| {
-            self.surface.takeover_root().is_some_and(|takeover| {
-                !self
-                    .surface
-                    .inside(self.surface.layers[index].root, takeover)
-            })
-        };
-        let layers = 0..self.canvases.len();
-        let order: Vec<usize> = layers
-            .clone()
-            .filter(|&index| covered(index))
-            .chain(layers.filter(|&index| !covered(index)))
-            .collect();
-        for index in order {
-            if self.surface.policy(Some(index)).takes_over {
-                dim_background(
-                    frame.buffer_mut(),
-                    self.canvases[index].buffer.area,
-                    theme.background,
-                );
+        let takeover = self.surface.takeover_root();
+        for index in 0..self.canvases.len() {
+            if self.surface.covered_by_takeover(index, takeover) {
+                self.composite_layer(index, &mut deferred, frame, state, theme);
             }
-            self.flush_deferred(&mut deferred, Some(index), frame, state, theme);
-            let frame_area = frame.area();
-            let canvas = &self.canvases[index];
-            for &rect in &canvas.painted {
-                copy_rect(
-                    &canvas.buffer,
-                    frame.buffer_mut(),
-                    rect.intersection(frame_area),
-                );
+        }
+        for index in 0..self.canvases.len() {
+            if !self.surface.covered_by_takeover(index, takeover) {
+                self.composite_layer(index, &mut deferred, frame, state, theme);
             }
         }
         self.flush_deferred(&mut deferred, None, frame, state, theme);
+    }
+
+    /// Copy one layer's canvas onto the frame — dimming beneath it first when
+    /// it takes the screen over — and flush the deferred thunks that belong
+    /// to it.
+    fn composite_layer(
+        &mut self,
+        index: usize,
+        deferred: &mut Vec<QueuedPaint<State>>,
+        frame: &mut Frame,
+        state: &State,
+        theme: &Theme,
+    ) {
+        if self.surface.policy(Some(index)).takes_over {
+            dim_background(
+                frame.buffer_mut(),
+                self.canvases[index].buffer.area,
+                theme.background,
+            );
+        }
+        self.flush_deferred(deferred, Some(index), frame, state, theme);
+        let frame_area = frame.area();
+        let canvas = &self.canvases[index];
+        for &rect in &canvas.painted {
+            copy_rect(
+                &canvas.buffer,
+                frame.buffer_mut(),
+                rect.intersection(frame_area),
+            );
+        }
     }
 
     /// Run the thunks `deferred` holds for `layer`, in registration order,
