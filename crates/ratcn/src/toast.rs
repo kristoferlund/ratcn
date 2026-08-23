@@ -9,12 +9,6 @@
 //! [`ToasterWidget`](crate::ToasterWidget) — the paint half — stay
 //! in the copyable `components::toast` module; this state travels with the
 //! library so `ratcn::toast::ToasterState` stays one type across copies.
-//!
-//! Accessor naming: builders take a `with_` prefix
-//! ([`Toast::with_description`], [`Toast::with_kind`], [`Toast::with_id`]), the
-//! plain nouns are the getters ([`Toast::description`], [`Toast::kind`],
-//! [`Toast::id`]), and bool getters use `is_`/`has_`
-//! ([`Toast::is_bordered`]).
 
 use std::borrow::Cow;
 use std::time::Duration;
@@ -23,7 +17,6 @@ const DEFAULT_DURATION: Duration = Duration::from_secs(4);
 
 /// What a toast is telling the user, which picks its accent color and icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
 pub enum ToastKind {
     /// Neutral. No particular good or bad news.
     #[default]

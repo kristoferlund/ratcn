@@ -155,7 +155,8 @@ let options = ["Mango", "Papaya", "Lychee", "Durian"];
 frame.render_widget(
     SelectWidget::new(selected_label)
         .placeholder("Pick a fruit...")
-        .open(&options)
+        .open(true)
+        .options(&options)
         .focused_item(Some(cursor_index))
         .selected_item(selected_index)
         .disabled_items(&[false, false, true, false])

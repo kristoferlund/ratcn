@@ -169,7 +169,7 @@ impl demo_shared::Demo for App {
             self.update(AppMsg::ScreensaverDismissed);
             return true;
         }
-        let modal_active = self.state.modals_state.top().is_some() || self.ratcn.modal_is_open();
+        let modal_active = self.state.modals_state.top().is_some();
         if !modal_active && self.app_hotkeys(&event) {
             return true;
         }

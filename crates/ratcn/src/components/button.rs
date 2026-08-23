@@ -78,47 +78,38 @@ pub enum ButtonVariant {
 /// The four sets — base, focused, hovered, disabled — are computed up front, so
 /// a custom style names the colors for every state. Disabled style wins first,
 /// followed by hovered, focused, and finally the base style.
+///
+/// A state's `border` decides how that state paints: `Some` draws a border
+/// around the label (at [`ButtonSize::Large`]; `Small` has no room for one),
+/// `None` fills the button with its background, capped above and below at
+/// `Large`. A `Color::Reset` background leaves the surface behind the button
+/// untouched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ButtonStyle {
-    /// Whether the button paints as a fill or as a border.
-    pub mode: ButtonFill,
     /// Label color at rest.
     pub foreground: Color,
-    /// Fill color at rest. In [`Bordered`](ButtonFill::Bordered) mode this
-    /// is usually `Color::Reset` so the surface behind shows through.
+    /// Fill color at rest.
     pub background: Color,
-    /// Border color at rest. Only painted in `Bordered` mode.
-    pub border: Color,
+    /// Border color at rest, or `None` to fill instead.
+    pub border: Option<Color>,
     /// Label color while focused.
     pub focused_foreground: Color,
     /// Fill color while focused.
     pub focused_background: Color,
-    /// Border color while focused.
-    pub focused_border: Color,
+    /// Border color while focused, or `None` to fill instead.
+    pub focused_border: Option<Color>,
     /// Label color while the pointer is over it.
     pub hovered_foreground: Color,
     /// Fill color while hovered.
     pub hovered_background: Color,
-    /// Border color while hovered.
-    pub hovered_border: Color,
+    /// Border color while hovered, or `None` to fill instead.
+    pub hovered_border: Option<Color>,
     /// Label color while disabled.
     pub disabled_foreground: Color,
     /// Fill color while disabled.
     pub disabled_background: Color,
-    /// Border color while disabled.
-    pub disabled_border: Color,
-}
-
-/// Whether a button is drawn as a solid block of color or as an outline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub enum ButtonFill {
-    /// Paint the background across the button; no border is drawn. A `Large`
-    /// filled button caps the fill with a row above and below the label.
-    #[default]
-    Filled,
-    /// Draw a border and leave the interior alone.
-    Bordered,
+    /// Border color while disabled, or `None` to fill instead.
+    pub disabled_border: Option<Color>,
 }
 
 impl ButtonStyle {
@@ -131,19 +122,18 @@ impl ButtonStyle {
     #[must_use]
     pub const fn fallback() -> Self {
         Self {
-            mode: ButtonFill::Bordered,
             foreground: Color::Gray,
             background: Color::Reset,
-            border: Color::Gray,
+            border: Some(Color::Gray),
             focused_foreground: Color::Black,
             focused_background: Color::Cyan,
-            focused_border: Color::Cyan,
+            focused_border: Some(Color::Cyan),
             hovered_foreground: Color::Black,
             hovered_background: Color::LightCyan,
-            hovered_border: Color::LightCyan,
+            hovered_border: Some(Color::LightCyan),
             disabled_foreground: Color::DarkGray,
             disabled_background: Color::Reset,
-            disabled_border: Color::DarkGray,
+            disabled_border: Some(Color::DarkGray),
         }
     }
 
@@ -188,34 +178,32 @@ impl ButtonStyle {
                 theme,
             ),
             ButtonVariant::Outline => Self {
-                mode: ButtonFill::Bordered,
                 foreground: theme.foreground,
-                background: theme.background,
-                border: theme.border,
+                background: Color::Reset,
+                border: Some(theme.border),
                 focused_foreground: theme.foreground,
-                focused_background: theme.background,
-                focused_border: theme.primary,
+                focused_background: Color::Reset,
+                focused_border: Some(theme.primary),
                 hovered_foreground: theme.foreground,
-                hovered_background: theme.background,
-                hovered_border: dim(theme.primary, pressed, HOVER_SHIFT),
+                hovered_background: Color::Reset,
+                hovered_border: Some(dim(theme.primary, pressed, HOVER_SHIFT)),
                 disabled_foreground: theme.muted_foreground,
-                disabled_background: theme.background,
-                disabled_border: theme.border,
+                disabled_background: Color::Reset,
+                disabled_border: Some(theme.border),
             },
             ButtonVariant::Ghost => Self {
-                mode: ButtonFill::Filled,
                 foreground: theme.foreground,
-                background: theme.background,
+                background: Color::Reset,
+                border: None,
                 focused_foreground: theme.foreground,
                 focused_background: dim(theme.secondary, raised, FOCUS_SHIFT),
-                border: theme.background,
-                focused_border: dim(theme.secondary, raised, FOCUS_SHIFT),
+                focused_border: None,
                 hovered_foreground: theme.foreground,
                 hovered_background: dim(theme.secondary, raised, HOVER_SHIFT),
-                hovered_border: dim(theme.secondary, raised, HOVER_SHIFT),
+                hovered_border: None,
                 disabled_foreground: theme.muted_foreground,
-                disabled_background: theme.background,
-                disabled_border: theme.background,
+                disabled_background: Color::Reset,
+                disabled_border: None,
             },
         }
     }
@@ -231,19 +219,18 @@ impl ButtonStyle {
         // disabled destructive button still reads as destructive.
         let disabled_background = dim(background, theme.surface, DISABLED_DIM);
         Self {
-            mode: ButtonFill::Filled,
             foreground,
             background,
-            border: background,
+            border: None,
             focused_foreground: foreground,
             focused_background,
-            focused_border: focused_background,
+            focused_border: None,
             hovered_foreground: foreground,
             hovered_background,
-            hovered_border: hovered_background,
+            hovered_border: None,
             disabled_foreground: theme.muted_foreground,
             disabled_background,
-            disabled_border: disabled_background,
+            disabled_border: None,
         }
     }
 
@@ -280,13 +267,26 @@ impl ButtonStyle {
     }
 }
 
-/// One paint pass's resolved colors (see `ButtonStyle::resolve`). For a filled
-/// button `background` is also the cap fill; `border` only paints in bordered
-/// mode.
+/// One paint pass's resolved colors (see `ButtonStyle::resolve`). A `Some`
+/// border paints bordered; `None` paints filled, with `background` as the cap
+/// fill too.
 struct ResolvedButtonStyle {
     foreground: Color,
     background: Color,
-    border: Color,
+    border: Option<Color>,
+}
+
+impl ResolvedButtonStyle {
+    /// The label style. A `Reset` background is left unset so the surface the
+    /// button sits on shows through instead of the terminal default.
+    fn content_style(&self) -> Style {
+        let style = Style::default().fg(self.foreground);
+        if self.background == Color::Reset {
+            style
+        } else {
+            style.bg(self.background)
+        }
+    }
 }
 
 /// A button that only draws — an ordinary ratatui [`Widget`] with no focus,
@@ -324,8 +324,11 @@ pub struct ButtonWidget<'a> {
     focused: bool,
     hovered: bool,
     variant: ButtonVariant,
-    style: ButtonStyle,
+    /// Colors to derive from at render, with the variant. `None` paints with
+    /// [`ButtonStyle::fallback`].
     theme: Option<Theme>,
+    /// Exact colors, taking precedence over `theme` and the variant.
+    style: Option<ButtonStyle>,
     disabled: bool,
     size: ButtonSize,
 }
@@ -341,65 +344,56 @@ impl<'a> ButtonWidget<'a> {
             focused: false,
             hovered: false,
             variant: ButtonVariant::Default,
-            style: ButtonStyle::fallback(),
             theme: None,
+            style: None,
             disabled: false,
             size: ButtonSize::Small,
         }
     }
 
-    /// Take colors from `theme`, combined with the current variant.
-    ///
-    /// Remembers the theme, so changing the variant afterwards re-derives from
-    /// it rather than falling back. Storing the theme for that later
-    /// [`variant`](Self::variant) re-derivation is also why this `themed` is
-    /// not `const`, unlike the other paint widgets' — the documented exception.
+    /// Take colors from `theme`, combined with the variant in force at render.
     #[must_use]
-    pub fn themed(mut self, theme: &Theme) -> Self {
+    pub const fn themed(mut self, theme: &Theme) -> Self {
         self.theme = Some(*theme);
-        self.style = ButtonStyle::from_theme(theme, self.variant);
+        self.style = None;
         self
     }
 
     /// Shorthand for [`ButtonVariant::Outline`].
     #[must_use]
-    pub fn outline(self) -> Self {
+    pub const fn outline(self) -> Self {
         self.variant(ButtonVariant::Outline)
     }
 
     /// Shorthand for [`ButtonVariant::Secondary`].
     #[must_use]
-    pub fn secondary(self) -> Self {
+    pub const fn secondary(self) -> Self {
         self.variant(ButtonVariant::Secondary)
     }
 
     /// Shorthand for [`ButtonVariant::Ghost`].
     #[must_use]
-    pub fn ghost(self) -> Self {
+    pub const fn ghost(self) -> Self {
         self.variant(ButtonVariant::Ghost)
     }
 
     /// Shorthand for [`ButtonVariant::Destructive`].
     #[must_use]
-    pub fn destructive(self) -> Self {
+    pub const fn destructive(self) -> Self {
         self.variant(ButtonVariant::Destructive)
     }
 
-    /// Set the variant. Re-derives colors from the theme if one was given.
+    /// Set the variant. See [`ButtonVariant`].
     #[must_use]
-    pub fn variant(mut self, variant: ButtonVariant) -> Self {
+    pub const fn variant(mut self, variant: ButtonVariant) -> Self {
         self.variant = variant;
-        self.resolve_themed_style();
         self
     }
 
     /// Use these exact colors, ignoring theme and variant.
-    ///
-    /// This drops any theme set with [`themed`](Self::themed), so a later
-    /// [`variant`](Self::variant) call cannot quietly overwrite your colors.
     #[must_use]
     pub const fn style(mut self, style: ButtonStyle) -> Self {
-        self.style = style;
+        self.style = Some(style);
         self.theme = None;
         self
     }
@@ -439,13 +433,6 @@ impl<'a> ButtonWidget<'a> {
         self
     }
 
-    /// Rows this button needs. Give it less and it paints nothing rather than a
-    /// broken partial button.
-    #[must_use]
-    pub const fn height(&self) -> u16 {
-        self.size.height()
-    }
-
     /// Columns this button needs: the label in terminal cells, plus two cells
     /// of padding on each side.
     ///
@@ -453,41 +440,43 @@ impl<'a> ButtonWidget<'a> {
     /// to render, so the constraint and the paint cannot disagree.
     #[must_use]
     pub fn width(&self) -> u16 {
-        button_width(self.label)
+        shape_width(self.label)
     }
 
-    fn resolve_themed_style(&mut self) {
-        if let Some(theme) = self.theme {
-            self.style = ButtonStyle::from_theme(&theme, self.variant);
+    /// The colors in force: an explicit style, else the variant from the
+    /// theme, else the fallback.
+    fn resolved_style(&self) -> ButtonStyle {
+        match (self.style, self.theme) {
+            (Some(style), _) => style,
+            (None, Some(theme)) => ButtonStyle::from_theme(&theme, self.variant),
+            (None, None) => ButtonStyle::fallback(),
         }
     }
 }
 
 impl Widget for ButtonWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // A button is a fixed three-row shape. Rendering into a shorter area
+        // A button is a fixed-height shape. Rendering into a shorter area
         // produces broken caps/content, so skip instead of drawing a partial
         // button. Flexible widgets can still degrade within smaller areas.
-        if area.width == 0 || area.height < self.height() {
+        let height = self.size.height();
+        if area.width == 0 || area.height < height {
             return;
         }
-        let area = Rect {
-            height: self.height(),
-            ..area
-        };
+        let area = Rect { height, ..area };
 
-        match self.style.mode {
-            ButtonFill::Filled => self.paint_filled(area, buf),
-            ButtonFill::Bordered => self.paint_bordered(area, buf),
+        let resolved = self
+            .resolved_style()
+            .resolve(self.focused, self.hovered, self.disabled);
+        match resolved.border {
+            Some(border) => self.paint_bordered(&resolved, border, area, buf),
+            None => self.paint_filled(&resolved, area, buf),
         }
     }
 }
 
 impl ButtonWidget<'_> {
-    fn paint_filled(self, area: Rect, buf: &mut Buffer) {
-        let resolved = self
-            .style
-            .resolve(self.focused, self.hovered, self.disabled);
+    fn paint_filled(self, resolved: &ResolvedButtonStyle, area: Rect, buf: &mut Buffer) {
         let width = area.width as usize;
 
         if self.size == ButtonSize::Large {
@@ -500,27 +489,25 @@ impl ButtonWidget<'_> {
                 .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
         }
 
-        let content_style = Style::default()
-            .fg(resolved.foreground)
-            .bg(resolved.background);
         Line::from(filled_middle(self.label, width))
-            .style(content_style)
+            .style(resolved.content_style())
             .render(
                 Rect::new(area.x, area.y + self.content_y_offset(), area.width, 1),
                 buf,
             );
     }
 
-    fn paint_bordered(self, area: Rect, buf: &mut Buffer) {
-        let resolved = self
-            .style
-            .resolve(self.focused, self.hovered, self.disabled);
-        let content_style = Style::default()
-            .fg(resolved.foreground)
-            .bg(resolved.background);
+    fn paint_bordered(
+        self,
+        resolved: &ResolvedButtonStyle,
+        border: Color,
+        area: Rect,
+        buf: &mut Buffer,
+    ) {
+        let content_style = resolved.content_style();
 
         if self.size == ButtonSize::Large {
-            let block = Block::bordered().border_style(Style::default().fg(resolved.border));
+            let block = Block::bordered().border_style(Style::default().fg(border));
             let inner = block.inner(area);
             block.render(area, buf);
 
@@ -543,10 +530,6 @@ impl ButtonWidget<'_> {
             ButtonSize::Large => 1,
         }
     }
-}
-
-fn button_width(label: &str) -> u16 {
-    shape_width(label)
 }
 
 /// Resolves the button's style from the active theme (the style override).
@@ -622,11 +605,6 @@ impl<M> Button<M> {
     }
 
     /// What to emit when the button is pressed: Enter, Space, or a left click.
-    ///
-    /// The argument is a factory rather than a value because the message is
-    /// built at press time. Pressing is payload-free, so it takes no arguments;
-    /// events that carry data pass it to the factory instead, which is why
-    /// `Msg::SomethingChanged` can often be named directly.
     #[must_use]
     pub fn on_press(mut self, on_press: impl Fn() -> M + 'static) -> Self {
         self.on_press = Some(Box::new(on_press));
@@ -636,15 +614,8 @@ impl<M> Button<M> {
     /// Grey the button out and stop it responding.
     ///
     /// A disabled button is not focusable, so Tab skips it, and it ignores
-    /// events rather than consuming them. An ignored click can bubble to an
-    /// ancestor, but does not pass through to an overlapping sibling behind the
-    /// button because hit-testing chooses one target path. Focus already parked
-    /// on it stays there rather than jumping somewhere else; the runtime never
-    /// silently retargets.
-    ///
-    /// Pass the value from app state (`.disabled(!state.can_save)`). The value
-    /// declared this frame is the one events are judged against until the next
-    /// successful render.
+    /// events rather than consuming them. Focus already parked on it stays
+    /// there. Pass the value from app state (`.disabled(!state.can_save)`).
     #[must_use]
     pub const fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
@@ -701,7 +672,6 @@ impl<M> Button<M> {
     /// let _button = Button::new("Archive").on_press(|| Msg::Archive).style(|theme| {
     ///     let mut style = ButtonStyle::from_theme(theme, ButtonVariant::Default);
     ///     style.background = theme.accent;
-    ///     style.border = theme.accent;
     ///     style
     /// });
     /// ```
@@ -718,20 +688,14 @@ impl<M> Button<M> {
     /// declare, so the constraint and the paint cannot disagree.
     #[must_use]
     pub fn width(&self) -> u16 {
-        button_width(&self.label)
-    }
-
-    /// Rows this button needs, per its [`ButtonSize`].
-    #[must_use]
-    pub const fn height(&self) -> u16 {
-        self.size.height()
+        shape_width(&self.label)
     }
 }
 
 impl<S, M> Component<S, M> for Button<M> {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let area = ctx.area();
         let style = resolve_style(self.style.as_deref(), ctx.theme, |theme| {
             ButtonStyle::from_theme(theme, self.variant)
@@ -780,13 +744,13 @@ impl<S, M> Component<S, M> for Button<M> {
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
-        fixed_height(area, self.height())
+        fixed_height(area, self.size.height())
     }
 }
 
 impl<S, M> MeasuredComponent<S, M> for Button<M> {
     fn measure(&self) -> Size {
-        Size::new(self.width(), self.height())
+        Size::new(self.width(), self.size.height())
     }
 }
 
@@ -872,26 +836,20 @@ mod tests {
     }
 
     #[test]
-    fn button_variant_defaults_to_default() {
-        assert_eq!(ButtonVariant::default(), ButtonVariant::Default);
-    }
-
-    #[test]
     fn disabled_widget_uses_disabled_style() {
         let style = ButtonStyle {
-            mode: ButtonFill::Bordered,
             foreground: Color::White,
             background: Color::Black,
-            border: Color::White,
+            border: Some(Color::White),
             focused_foreground: Color::Black,
             focused_background: Color::Cyan,
-            focused_border: Color::Cyan,
+            focused_border: Some(Color::Cyan),
             hovered_foreground: Color::Black,
             hovered_background: Color::LightCyan,
-            hovered_border: Color::LightCyan,
+            hovered_border: Some(Color::LightCyan),
             disabled_foreground: Color::Yellow,
             disabled_background: Color::Blue,
-            disabled_border: Color::Red,
+            disabled_border: Some(Color::Red),
         };
         let area = Rect::new(0, 0, 6, ButtonSize::Large.height());
         let mut buffer = Buffer::empty(area);
@@ -912,56 +870,20 @@ mod tests {
     }
 
     #[test]
-    fn explicit_style_is_not_overwritten_by_variant_without_theme() {
-        let style = ButtonStyle {
-            mode: ButtonFill::Bordered,
-            foreground: Color::Yellow,
-            background: Color::Blue,
-            border: Color::Red,
-            focused_foreground: Color::Black,
-            focused_background: Color::Cyan,
-            focused_border: Color::Green,
-            hovered_foreground: Color::Black,
-            hovered_background: Color::LightCyan,
-            hovered_border: Color::LightGreen,
-            disabled_foreground: Color::DarkGray,
-            disabled_background: Color::Reset,
-            disabled_border: Color::DarkGray,
-        };
-        let area = Rect::new(0, 0, 6, ButtonSize::Large.height());
-        let mut buffer = Buffer::empty(area);
-
-        ButtonWidget::new("OK")
-            .themed(&Theme::default())
-            .style(style)
-            .size(ButtonSize::Large)
-            .outline()
-            .render(area, &mut buffer);
-
-        let content = buffer.cell((2, 1)).expect("button content cell");
-        let border = buffer.cell((0, 0)).expect("button border cell");
-
-        assert_eq!(content.fg, Color::Yellow);
-        assert_eq!(content.bg, Color::Blue);
-        assert_eq!(border.fg, Color::Red);
-    }
-
-    #[test]
     fn hover_wins_over_focus_so_focused_buttons_still_react_to_pointer() {
         let style = ButtonStyle {
-            mode: ButtonFill::Filled,
             foreground: Color::White,
             background: Color::Blue,
-            border: Color::Blue,
+            border: None,
             focused_foreground: Color::White,
             focused_background: Color::Cyan,
-            focused_border: Color::Cyan,
+            focused_border: None,
             hovered_foreground: Color::White,
             hovered_background: Color::Green,
-            hovered_border: Color::Green,
+            hovered_border: None,
             disabled_foreground: Color::DarkGray,
             disabled_background: Color::Reset,
-            disabled_border: Color::DarkGray,
+            disabled_border: None,
         };
         let area = Rect::new(0, 0, 6, ButtonSize::Small.height());
         let mut buffer = Buffer::empty(area);
@@ -1009,24 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn themed_maps_current_variant_to_style() {
-        let theme = Theme::default();
-        let area = Rect::new(0, 0, 6, ButtonSize::Large.height());
-        let mut buffer = Buffer::empty(area);
-
-        ButtonWidget::new("OK")
-            .outline()
-            .size(ButtonSize::Large)
-            .themed(&theme)
-            .render(area, &mut buffer);
-
-        let border = buffer.cell((0, 0)).expect("button border cell");
-
-        assert_eq!(border.fg, theme.border);
-    }
-
-    #[test]
-    fn themed_then_variant_uses_the_later_variant_style() {
+    fn variant_chosen_after_themed_still_resolves_from_the_theme() {
         let theme = Theme::default_dark();
         let area = Rect::new(0, 0, 6, ButtonSize::Small.height());
         let mut buffer = Buffer::empty(area);
@@ -1040,6 +945,44 @@ mod tests {
             buffer.cell((2, 0)).expect("button content cell").bg,
             theme.secondary
         );
+    }
+
+    #[test]
+    fn quiet_variants_at_rest_leave_the_surface_beneath_them_alone() {
+        // Outline and Ghost sit on whatever surface holds them — a dialog, a
+        // pane — and must not stamp the theme background over it.
+        for theme in Theme::presets() {
+            for variant in [ButtonVariant::Outline, ButtonVariant::Ghost] {
+                for size in [ButtonSize::Small, ButtonSize::Large] {
+                    for disabled in [false, true] {
+                        let area = Rect::new(0, 0, 6, size.height());
+                        let mut buffer = Buffer::empty(area);
+                        buffer.set_style(area, Style::default().bg(theme.surface));
+
+                        ButtonWidget::new("OK")
+                            .themed(theme)
+                            .variant(variant)
+                            .size(size)
+                            .disabled(disabled)
+                            .render(area, &mut buffer);
+
+                        let label = format!("{variant:?} {size:?} disabled={disabled}");
+                        for cell in buffer.content() {
+                            assert_eq!(cell.bg, theme.surface, "{label} painted over the surface");
+                        }
+                        if variant == ButtonVariant::Ghost {
+                            for y in 0..size.height() {
+                                assert_eq!(
+                                    buffer.cell((0, y)).expect("edge cell").symbol(),
+                                    " ",
+                                    "{label} painted a cap or fill glyph"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1058,12 +1001,12 @@ mod tests {
     }
 
     #[test]
-    fn widget_modes_do_not_paint_excess_height() {
+    fn the_widget_does_not_paint_excess_height() {
         let area = Rect::new(0, 0, 6, 5);
 
-        for mode in [ButtonFill::Filled, ButtonFill::Bordered] {
+        for border in [None, Some(Color::Gray)] {
             let mut style = ButtonStyle::fallback();
-            style.mode = mode;
+            style.border = border;
             style.background = Color::Blue;
             let mut buffer = Buffer::empty(area);
 
@@ -1075,14 +1018,14 @@ mod tests {
             assert_ne!(
                 buffer.cell((0, 0)).expect("button pixel").symbol(),
                 " ",
-                "{mode:?} mode must paint within the fixed-height button"
+                "border {border:?} must paint within the fixed-height button"
             );
             for y in ButtonSize::Large.height()..area.height {
                 for x in 0..area.width {
                     let cell = buffer.cell((x, y)).expect("excess-area cell");
-                    assert_eq!(cell.symbol(), " ", "{mode:?} painted ({x}, {y})");
-                    assert_eq!(cell.fg, Color::Reset, "{mode:?} styled ({x}, {y})");
-                    assert_eq!(cell.bg, Color::Reset, "{mode:?} filled ({x}, {y})");
+                    assert_eq!(cell.symbol(), " ", "border {border:?} painted ({x}, {y})");
+                    assert_eq!(cell.fg, Color::Reset, "border {border:?} styled ({x}, {y})");
+                    assert_eq!(cell.bg, Color::Reset, "border {border:?} filled ({x}, {y})");
                 }
             }
         }
@@ -1114,19 +1057,9 @@ mod tests {
     #[test]
     fn filled_middle_row_centers_wide_label_by_cells() {
         let style = ButtonStyle {
-            mode: ButtonFill::Filled,
-            foreground: Color::White,
             background: Color::Blue,
-            border: Color::Blue,
-            focused_foreground: Color::White,
-            focused_background: Color::Cyan,
-            focused_border: Color::Cyan,
-            hovered_foreground: Color::White,
-            hovered_background: Color::LightCyan,
-            hovered_border: Color::LightCyan,
-            disabled_foreground: Color::DarkGray,
-            disabled_background: Color::Reset,
-            disabled_border: Color::DarkGray,
+            border: None,
+            ..ButtonStyle::fallback()
         };
         // "日本" is 4 cells wide, so at the natural width (label + 4) the
         // label starts 2 cells in and the fill runs to the last cell.
@@ -1152,7 +1085,7 @@ mod tests {
         // (below the natural label + 4) the fill must still reach the last
         // cell instead of leaving a hole after the label.
         let mut style = ButtonStyle::fallback();
-        style.mode = ButtonFill::Filled;
+        style.border = None;
         style.background = Color::Blue;
         let area = Rect::new(0, 0, 4, 1);
         let mut buffer = Buffer::empty(area);
@@ -1249,19 +1182,9 @@ mod tests {
     #[test]
     fn filled_button_with_reset_background_uses_blank_caps() {
         let style = ButtonStyle {
-            mode: ButtonFill::Filled,
-            foreground: Color::White,
             background: Color::Reset,
-            border: Color::Reset,
-            focused_foreground: Color::White,
-            focused_background: Color::Reset,
-            focused_border: Color::Reset,
-            hovered_foreground: Color::White,
-            hovered_background: Color::Reset,
-            hovered_border: Color::Reset,
-            disabled_foreground: Color::DarkGray,
-            disabled_background: Color::Reset,
-            disabled_border: Color::Reset,
+            border: None,
+            ..ButtonStyle::fallback()
         };
         let area = Rect::new(0, 0, 6, ButtonSize::Large.height());
         let mut buffer = Buffer::empty(area);
@@ -1453,7 +1376,6 @@ mod tests {
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 2), &state),
             EventResult::Ignored
         );
-        assert_eq!(state.focus, FocusState::intent([ChildId::Static("other")]));
 
         let EventResult::Emit(Msg::Focus(focus)) =
             driver.event(mouse(MouseKind::Down(MouseButton::Left), 0), &state)

@@ -257,7 +257,7 @@ impl Component<AppState, Msg> for KanbanCard {
         });
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, AppState>) {
         let area = ctx.area();
         let theme = ctx.theme;
         let dragging = ctx

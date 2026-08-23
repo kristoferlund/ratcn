@@ -155,13 +155,6 @@ impl<'a> BarChartWidget<'a> {
         Self::with_groups([BarChartGroup::new(bars)])
     }
 
-    /// The same as [`new`](Self::new), named for when the direction matters to
-    /// the reader.
-    #[must_use]
-    pub fn vertical(bars: impl IntoIterator<Item = Bar<'a>>) -> Self {
-        Self::new(bars)
-    }
-
     /// A chart whose bars run left to right. Useful when labels are long, since
     /// a horizontal bar has a whole row for its label.
     #[must_use]
@@ -226,11 +219,6 @@ impl<'a> BarChartWidget<'a> {
     }
 
     /// Whether bars run up (`Vertical`, the default) or across (`Horizontal`).
-    ///
-    /// This takes ratatui's [`ratatui::layout::Direction`] — the layout axis.
-    /// The runtime's own `Forward`/`Backward` enum for stepping through items
-    /// is [`Step`](crate::runtime::Step), a different type under a different
-    /// name.
     #[must_use]
     pub const fn direction(mut self, direction: Direction) -> Self {
         self.direction = direction;
@@ -246,34 +234,6 @@ impl<'a> BarChartWidget<'a> {
     pub const fn show_values(mut self, show_values: bool) -> Self {
         self.show_values = show_values;
         self
-    }
-
-    /// Minimum width for a vertical chart's bar grouping axis, in cells.
-    ///
-    /// Horizontal charts size their bar lengths from the supplied paint area, so
-    /// this returns zero for them. Group labels and value text can require more
-    /// space on the other axis; this measures the bar axis alone.
-    #[must_use]
-    pub fn width(&self) -> u16 {
-        if self.direction == Direction::Vertical {
-            self.grouping_span()
-        } else {
-            0
-        }
-    }
-
-    /// Minimum height for a horizontal chart's bar grouping axis, in rows.
-    ///
-    /// Vertical charts size their bar lengths from the supplied paint area, so
-    /// this returns zero for them. Group labels and value text can require more
-    /// space on the other axis; this measures the bar axis alone.
-    #[must_use]
-    pub fn height(&self) -> u16 {
-        if self.direction == Direction::Horizontal {
-            self.grouping_span()
-        } else {
-            0
-        }
     }
 
     /// Cells across each bar. Defaults to 3, which leaves room for a two-digit
@@ -313,15 +273,16 @@ impl<'a> BarChartWidget<'a> {
         self
     }
 
-    /// Cells the whole chart spans along its grouping axis.
+    /// Cells the chart needs along its grouping axis: the width of a vertical
+    /// chart, the height of a horizontal one. The other axis holds the scaled
+    /// bar lengths and is sized by the paint area. Group labels and value text
+    /// may need more room on that other axis; this measures the bars alone.
     ///
     /// A [`bar_gap`](Self::bar_gap) sits between every adjacent pair of bars,
-    /// including the pair either side of a group boundary — ratatui advances by
-    /// `bar_gap + bar_width` after every bar and only then adds the
-    /// [`group_gap`](Self::group_gap), which is why that gap is documented as
-    /// extra space *on top of* the bar gap. So the span is every bar's width,
-    /// one bar gap per gap between bars, and one group gap per boundary.
-    fn grouping_span(&self) -> u16 {
+    /// including the pair either side of a group boundary, and a
+    /// [`group_gap`](Self::group_gap) is added on top at each boundary.
+    #[must_use]
+    pub fn span(&self) -> u16 {
         let bars: usize = self.groups.iter().map(|group| group.bars.len()).sum();
         let boundaries = u16::try_from(self.groups.len().saturating_sub(1)).unwrap_or(u16::MAX);
         bar_span(bars, self.bar_width, self.bar_gap)
@@ -409,8 +370,8 @@ mod tests {
         );
         let from_vec = BarChartWidget::new(vec![Bar::default().value(3), Bar::default().value(7)]);
         assert_eq!(
-            from_iterator.width(),
-            from_vec.width(),
+            from_iterator.span(),
+            from_vec.span(),
             "the filtered iterator yields the same two bars a vec would"
         );
 
@@ -420,12 +381,12 @@ mod tests {
                 .map(|label| BarChartGroup::new([Bar::default().value(1)]).label(label)),
         );
         assert_eq!(
-            grouped.width(),
+            grouped.span(),
             BarChartWidget::grouped(vec![
                 BarChartGroup::new([Bar::default().value(1)]).label("a"),
                 BarChartGroup::new([Bar::default().value(1)]).label("b"),
             ])
-            .width()
+            .span()
         );
     }
 
@@ -769,7 +730,7 @@ mod tests {
 
     #[test]
     fn vertical_width_measures_exactly_what_paints() {
-        // Three 2-wide bars with 1-cell gaps: width() must be 2+1+2+1+2 = 8,
+        // Three 2-wide bars with 1-cell gaps: span() must be 2+1+2+1+2 = 8,
         // and a buffer of exactly that width must hold the last bar whole.
         let chart = || {
             BarChartWidget::new(vec![
@@ -782,7 +743,7 @@ mod tests {
             .bar_width(2)
             .bar_gap(1)
         };
-        let width = chart().width();
+        let width = chart().span();
         assert_eq!(width, 8);
 
         let area = Rect::new(0, 0, width, 1);
@@ -809,7 +770,7 @@ mod tests {
 
     #[test]
     fn grouped_horizontal_height_measures_exactly_what_paints() {
-        // Two groups of two 1-row bars with a 1-row group gap: height() must be
+        // Two groups of two 1-row bars with a 1-row group gap: span() must be
         // 2+1+2 = 5, and a buffer of exactly that height holds the last bar.
         let chart = || {
             BarChartWidget::grouped(vec![
@@ -823,7 +784,7 @@ mod tests {
             .bar_gap(0)
             .group_gap(1)
         };
-        let height = chart().height();
+        let height = chart().span();
         assert_eq!(height, 5);
 
         let area = Rect::new(0, 0, 4, height);
@@ -855,7 +816,7 @@ mod tests {
         // painting — so it must not claim a group gap in the measurement
         // either, wherever in the list it sits. A chart measured wider than it
         // paints leaves a stripe of unused cells in every layout that trusts
-        // `width()`/`height()`.
+        // `span()`.
         let bar_cells = |buffer: &Buffer| {
             buffer
                 .content()
@@ -879,13 +840,6 @@ mod tests {
                 };
                 let bar = || BarChartGroup::new(vec![Bar::default().value(1)]);
                 let empty = || BarChartGroup::new(Vec::new());
-                let grouping_span = |chart: &BarChartWidget<'_>| {
-                    if direction == Direction::Vertical {
-                        chart.width()
-                    } else {
-                        chart.height()
-                    }
-                };
                 let area = |span: u16| {
                     if direction == Direction::Vertical {
                         Rect::new(0, 0, span, 1)
@@ -898,7 +852,7 @@ mod tests {
                 let two_groups = chart(vec![bar(), bar()]);
                 // Two 1-cell bars either side of one boundary, which costs the
                 // bar gap plus the 1-cell group gap.
-                let measured = grouping_span(&two_groups);
+                let measured = two_groups.span();
                 assert_eq!(measured, 3 + bar_gap, "{label}");
                 let mut painted = Buffer::empty(area(measured));
                 two_groups.render(area(measured), &mut painted);
@@ -911,7 +865,7 @@ mod tests {
                 ] {
                     let with_empty = chart(groups);
                     assert_eq!(
-                        grouping_span(&with_empty),
+                        with_empty.span(),
                         measured,
                         "a {position} empty group must not be measured ({label})"
                     );
@@ -965,11 +919,7 @@ mod tests {
                                 .bar_width(bar_width)
                                 .bar_gap(bar_gap)
                                 .group_gap(group_gap);
-                            let measured = if direction == Direction::Vertical {
-                                chart.width()
-                            } else {
-                                chart.height()
-                            };
+                            let measured = chart.span();
                             let area = if direction == Direction::Vertical {
                                 Rect::new(0, 0, measured, 1)
                             } else {
@@ -1021,7 +971,7 @@ mod tests {
 
         // Four 3-cell bars, a 1-cell bar gap between each adjacent pair, and the
         // 2-cell group gap on top of the boundary's bar gap: 12 + 3 + 2.
-        assert_eq!(chart().width(), 17);
+        assert_eq!(chart().span(), 17);
 
         let area = Rect::new(0, 0, 17, 2);
         let mut buffer = Buffer::empty(area);

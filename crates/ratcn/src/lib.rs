@@ -154,7 +154,7 @@ pub mod toast;
 #[doc(inline)]
 pub use components::{
     barchart::{BarChartGroup, BarChartStyle, BarChartWidget},
-    button::{Button, ButtonFill, ButtonSize, ButtonStyle, ButtonVariant, ButtonWidget},
+    button::{Button, ButtonSize, ButtonStyle, ButtonVariant, ButtonWidget},
     dialog::{Dialog, DialogStyle},
     list::{List, ListStyle, ListWidget},
     scroll_area::{ScrollArea, ScrollAreaStyle},

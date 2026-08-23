@@ -59,7 +59,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         ctx.with_buffer(|buf| buf.set_style(left_padding, Style::default().bg(theme.field)));
         let bars = MONTHLY_CONTRIBUTIONS.map(|(label, value)| Bar::with_label(label, value));
         ctx.widget(
-            BarChartWidget::vertical(bars)
+            BarChartWidget::new(bars)
                 .themed(theme)
                 .max_value(24)
                 .show_values(false)
