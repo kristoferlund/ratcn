@@ -19,7 +19,6 @@ use std::{
     fmt,
 };
 
-use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::widgets::{StatefulWidget, Widget};
@@ -27,6 +26,7 @@ use ratatui::widgets::{StatefulWidget, Widget};
 use crate::Theme;
 
 use super::engine::{DeclarationEnv, LayerKind, RenderPass};
+use super::gesture::Press;
 use super::{ChildId, Event, EventResult, KeyChord, MouseButton, MouseEvent, TabWrap};
 
 /// Everything available while declaring one frame: how to declare children,
@@ -65,7 +65,7 @@ pub struct DeclareCtx<'a, State, Msg> {
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
     pub theme: &'a Theme,
     pub(crate) hover_position: Option<Position>,
-    pub(crate) transients: Option<&'a mut TransientMap>,
+    pub(crate) transients: &'a mut TransientMap,
     pub(crate) pass: &'a mut RenderPass<State, Msg>,
     pub(crate) state: &'a State,
 }
@@ -123,7 +123,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// identity of its own — paint queued there always reports all four as
     /// false. Enter a named [`scope`](Self::scope) when container chrome needs
     /// to know whether focus or the pointer is somewhere inside it.
-    pub fn paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static) {
+    pub fn paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
         let area = self.area;
         self.pass.queue_thunk(area, paint);
     }
@@ -170,38 +170,11 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
         self.frame_area
     }
 
-    /// Whether the pointer rests on this declaration or on something inside
-    /// it.
-    ///
-    /// Hover belongs to the runtime, and unlike focus it is known *before* the
-    /// pass: a declaration may read it, and structure may depend on it — this
-    /// is how a tooltip decides to declare its bubble. The paint-time twin is
-    /// [`PaintCtx::contains_hover`].
-    ///
-    /// The subtree is the current declaration's: called from a component's
-    /// [`declare`](Component::declare) it means that component and its children,
-    /// inside a [`scope`](Self::scope) it means the scope, and from the root
-    /// closure it means "the pointer is on something declared at all".
-    /// Subtree identity is global across layers: an escaped popup belongs to
-    /// the component that declared it, wherever its geometry lands.
-    ///
-    /// # It answers with the last resolved hover
-    ///
-    /// This is the value the *previous* frame resolved, against the previous
-    /// surface. The paint flags are this frame's, resolved against the tree
-    /// this declaration is building, so the two can disagree for one frame —
-    /// and where they disagree, structure lags. Pointer motion is not the
-    /// case that shows it: a motion returns a non-`Ignored` result, the host
-    /// redraws, and the frame that redraws sees the new hover. What lags is
-    /// hover changing without the pointer moving — a modal opening over the
-    /// hovered node, geometry sliding out from under it — where this frame
-    /// paints the new answer and structure follows on the next one. A tooltip
-    /// whose trigger a modal has just covered keeps its bubble for that one
-    /// frame.
-    ///
-    /// It also reports what a gesture froze: while a button is held, hover
-    /// stays on whatever the gesture started on rather than following the
-    /// pointer.
+    /// Whether the hover the previous frame resolved rests on the current
+    /// declaration or on something inside it — a component and its children,
+    /// a [`scope`](Self::scope), or from the root closure anything declared
+    /// at all. Structure may depend on it; hover that changes without the
+    /// pointer moving reaches it one frame after [`PaintCtx::contains_hover`].
     #[must_use]
     pub fn pointer_within(&self) -> bool {
         self.pass.pointer_within_current()
@@ -245,9 +218,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// `T`, and reader and writer must agree on it.
     #[must_use]
     pub fn transient<T: 'static>(&self) -> Option<&T> {
-        let transients = self.transients.as_deref()?;
         let path = self.pass.current_path()?;
-        Some(transients.get(path)?.expect_ref(path))
+        Some(self.transients.get(path)?.expect_ref(path))
     }
 
     /// [`transient`](Self::transient), for the rare value a declaration has to
@@ -278,9 +250,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Panics if the stored transient has a different type: one path holds one
     /// `T`, and reader and writer must agree on it.
     pub fn transient_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        let path = self.pass.current_path()?.to_vec();
-        let transients = self.transients.as_deref_mut()?;
-        Some(transients.get_mut(&path)?.expect_mut(&path))
+        let path = self.pass.current_path()?;
+        Some(self.transients.get_mut(path)?.expect_mut(path))
     }
 
     /// The app state supplied to the current declaration pass.
@@ -364,7 +335,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
             area,
             state: self.state,
             theme: self.theme,
-            transients: self.transients.as_deref_mut(),
+            transients: &mut *self.transients,
         };
         (&mut *self.pass, env)
     }
@@ -431,9 +402,10 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// The modal becomes a child of whatever is currently declaring, so its
     /// identity path, focus scope, and event bubbling anchor there, and a
     /// component can own its own confirmation dialog with one declaration
-    /// guarded by one app-state flag. Layer stacking is declaration order:
-    /// each modal or [`popup`](Self::popup) paints above all layers declared
-    /// before it, wherever in the tree the declarations happen.
+    /// guarded by one app-state flag. Layers composite in declaration order,
+    /// wherever in the tree they are declared — except that a layer declared
+    /// outside the topmost modal composites beneath it whatever the order,
+    /// and is dimmed with everything else the modal covers.
     ///
     /// Modal policy: the area behind the modal is dimmed, events outside it
     /// are consumed rather than routed, focus resolves into it, and Tab wraps
@@ -617,7 +589,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// not get a `DeclareCtx`. It is `'static` and receives a [`PaintCtx`],
     /// which carries the theme and the app state the pass was declared with;
     /// anything else it needs must be moved into the closure here.
-    pub fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, '_, State>) + 'static) {
+    pub fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
         self.pass.defer_paint(paint);
     }
 }
@@ -678,16 +650,16 @@ impl<Msg> PopupOptions<Msg> {
 
 /// The surface paint lands on: the frame for the base layer, a layer's canvas
 /// for paint that belongs to that layer.
-enum PaintSurface<'a, 'frame> {
-    Frame(&'a mut Frame<'frame>),
+enum PaintSurface<'a> {
+    Frame(&'a mut Buffer),
     Canvas(&'a mut super::engine::Canvas),
 }
 
-impl PaintSurface<'_, '_> {
+impl PaintSurface<'_> {
     /// The rectangle this surface covers.
     fn area(&self) -> Rect {
         match self {
-            Self::Frame(frame) => frame.area(),
+            Self::Frame(buffer) => buffer.area,
             Self::Canvas(canvas) => canvas.buffer.area,
         }
     }
@@ -698,22 +670,22 @@ impl PaintSurface<'_, '_> {
 ///
 /// The three write forms are implemented once, here, because routing is the
 /// only thing they do that [`PaintCtx`] does not.
-pub(crate) struct PaintTarget<'a, 'frame> {
-    surface: PaintSurface<'a, 'frame>,
+pub(crate) struct PaintTarget<'a> {
+    surface: PaintSurface<'a>,
     projection: Option<super::engine::Projection>,
     /// Where projected paint lays out before it is copied back. One buffer
     /// serves the whole frame's paint calls, resized and blanked per call.
     scratch: &'a mut Buffer,
 }
 
-impl<'a, 'frame> PaintTarget<'a, 'frame> {
+impl<'a> PaintTarget<'a> {
     pub(crate) fn frame(
-        frame: &'a mut Frame<'frame>,
+        buffer: &'a mut Buffer,
         projection: Option<super::engine::Projection>,
         scratch: &'a mut Buffer,
     ) -> Self {
         Self {
-            surface: PaintSurface::Frame(frame),
+            surface: PaintSurface::Frame(buffer),
             projection,
             scratch,
         }
@@ -740,15 +712,12 @@ impl<'a, 'frame> PaintTarget<'a, 'frame> {
     fn paint_at<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
         let surface = self.surface.area();
         match (&mut self.surface, self.projection) {
-            (PaintSurface::Frame(frame), None) => paint(area, frame.buffer_mut()),
-            (PaintSurface::Frame(frame), Some(projection)) => with_projected_buffer(
-                frame.buffer_mut(),
-                self.scratch,
-                projection,
-                surface,
-                area,
-                |buffer| paint(area, buffer),
-            ),
+            (PaintSurface::Frame(buffer), None) => paint(area, buffer),
+            (PaintSurface::Frame(buffer), Some(projection)) => {
+                with_projected_buffer(buffer, self.scratch, projection, surface, area, |buffer| {
+                    paint(area, buffer)
+                })
+            }
             (PaintSurface::Canvas(canvas), None) => {
                 let clipped = canvas.clip(area);
                 let result = paint(clipped, &mut canvas.buffer);
@@ -853,12 +822,12 @@ fn with_projected_buffer<R>(
 ///
 /// Painting goes through [`widget`](Self::widget),
 /// [`stateful_widget`](Self::stateful_widget), and
-/// [`with_buffer`](Self::with_buffer). The context keeps the ratatui `Frame`
+/// [`with_buffer`](Self::with_buffer). The context keeps the frame's buffer
 /// to itself, so a paint call can read `ctx.theme`,
 /// [`ctx.state()`](Self::state), and the interaction flags while building its
 /// widget argument.
-pub struct PaintCtx<'a, 'frame, State> {
-    pub(crate) target: PaintTarget<'a, 'frame>,
+pub struct PaintCtx<'a, State> {
+    pub(crate) target: PaintTarget<'a>,
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
     pub theme: &'a Theme,
     pub(crate) area: Rect,
@@ -867,7 +836,7 @@ pub struct PaintCtx<'a, 'frame, State> {
     pub(crate) state: &'a State,
 }
 
-impl<State> fmt::Debug for PaintCtx<'_, '_, State> {
+impl<State> fmt::Debug for PaintCtx<'_, State> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PaintCtx")
             .field("area", &self.area)
@@ -878,11 +847,11 @@ impl<State> fmt::Debug for PaintCtx<'_, '_, State> {
     }
 }
 
-impl<'a, State> PaintCtx<'a, '_, State> {
+impl<'a, State> PaintCtx<'a, State> {
     /// Paint a ratatui widget onto the active paint surface.
     ///
     /// The widget is consumed here; nothing is deferred or allocated. Because
-    /// the context never lends out the frame, the widget expression may read
+    /// the context never lends out the buffer, the widget expression may read
     /// `ctx` freely (`ctx.theme`, [`state`](Self::state), interaction flags)
     /// in argument position.
     ///
@@ -1148,13 +1117,23 @@ pub(crate) type TransientMap = HashMap<Vec<ChildId>, TransientValue>;
 pub struct EventCtx<'a> {
     path: Vec<ChildId>,
     area: Rect,
-    transients: Option<&'a mut TransientMap>,
-    /// Stands in for the runtime's store when this context was built without
-    /// one, so a component under unit test can use
-    /// [`transient`](Self::transient) without special-casing. Values live and
-    /// die with this context, which is exactly what "no dispatch" means.
-    detached_transients: Option<Box<TransientMap>>,
+    transients: TransientStore<'a>,
     pub(super) pointer: PointerInputs<'a>,
+}
+
+/// Where a context's transients live: the runtime's store during dispatch,
+/// otherwise one owned by the context — so a component under unit test can
+/// use [`EventCtx::transient`], with values that live and die with the
+/// context.
+enum TransientStore<'a> {
+    Runtime(&'a mut TransientMap),
+    Detached(TransientMap),
+}
+
+impl Default for TransientStore<'_> {
+    fn default() -> Self {
+        Self::Detached(TransientMap::new())
+    }
 }
 
 /// The pointer facts one dispatch carries into an [`EventCtx`].
@@ -1166,13 +1145,20 @@ pub(crate) struct PointerInputs<'a> {
     pub(crate) button: Option<MouseButton>,
     /// The event as it arrived, before any declaration-space projection.
     pub(crate) screen_mouse: Option<MouseEvent>,
+    /// The press that opened the gesture this event continues, when the
+    /// event reached this component through its capture claim. `None` for an
+    /// event that arrived by hit-test.
+    pub(crate) captured_press: Option<Press>,
 }
 
 impl fmt::Debug for EventCtx<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EventCtx")
             .field("path", &self.path)
-            .field("transients_available", &self.transients.is_some())
+            .field(
+                "transients_available",
+                &matches!(self.transients, TransientStore::Runtime(_)),
+            )
             .field("capture_button", &self.pointer.button)
             .field("screen_mouse", &self.pointer.screen_mouse)
             .finish()
@@ -1191,8 +1177,7 @@ impl<'a> EventCtx<'a> {
         Self {
             path,
             area,
-            transients: Some(transients),
-            detached_transients: None,
+            transients: TransientStore::Runtime(transients),
             pointer,
         }
     }
@@ -1205,8 +1190,8 @@ impl<'a> EventCtx<'a> {
     /// key, so the two are borrowed together.
     fn transient_slot(&mut self) -> (&mut TransientMap, &[ChildId]) {
         let store = match &mut self.transients {
-            Some(transients) => &mut **transients,
-            None => self.detached_transients.get_or_insert_with(Box::default),
+            TransientStore::Runtime(transients) => &mut **transients,
+            TransientStore::Detached(transients) => transients,
         };
         (store, &self.path)
     }
@@ -1471,7 +1456,7 @@ pub trait Component<State, Msg> {
     /// what it declares inside itself without any care taken here.
     ///
     /// A component that draws nothing of its own leaves this defaulted.
-    fn paint(&mut self, _ctx: &mut PaintCtx<'_, '_, State>) {}
+    fn paint(&mut self, _ctx: &mut PaintCtx<'_, State>) {}
 
     /// Offer this component an event.
     ///

@@ -15,7 +15,7 @@ struct ModalHoverLeaf {
 impl Component<ModalPointerState, PointerMsg> for ModalHoverLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, ModalPointerState, PointerMsg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, ModalPointerState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, ModalPointerState>) {
         self.rendered
             .borrow_mut()
             .push((ctx.hovered(), ctx.contains_hover()));
@@ -63,7 +63,7 @@ struct CapturingHoverLeaf {
 impl Component<PointerState, PointerMsg> for CapturingHoverLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, PointerState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, PointerState>) {
         self.rendered
             .borrow_mut()
             .push((ctx.hovered(), ctx.contains_hover()));
@@ -853,5 +853,32 @@ fn hovered_and_contains_hover_are_distinct_at_the_leaf_and_its_ancestor() {
         *scope_flags.borrow(),
         [(false, true)],
         "the scope contains the pointer without being under it"
+    );
+}
+
+/// A backend in button-event mode reports no motion before a press, so the
+/// press is the first word on where the pointer is: hover follows it to the
+/// pressed node, and the gesture then holds it there.
+#[test]
+fn a_press_with_no_motion_before_it_moves_hover_to_the_pressed_node() {
+    let state = PointerState;
+    let mut driver = Driver::<PointerState, PointerMsg>::new(10, 1);
+    let render = |driver: &mut Driver<PointerState, PointerMsg>| {
+        driver.render(&state, |ctx| {
+            ctx.component(ChildId::Static("a"), RouteLeaf("a"), Rect::new(0, 0, 5, 1));
+            ctx.component(ChildId::Static("b"), RouteLeaf("b"), Rect::new(5, 0, 5, 1));
+        });
+    };
+    render(&mut driver);
+    driver.event(mouse(MouseKind::Moved, 1, 0), &state);
+    assert_eq!(driver.ratcn.hover_path(), [ChildId::Static("a")]);
+
+    driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state);
+    assert_eq!(driver.ratcn.hover_path(), [ChildId::Static("b")]);
+    render(&mut driver);
+    assert_eq!(
+        driver.ratcn.hover_path(),
+        [ChildId::Static("b")],
+        "the held press freezes hover on what it pressed, not on what was hovered before"
     );
 }

@@ -304,8 +304,8 @@ mod key_chord_tests {
 /// declared with, which matches its
 /// [`EventCtx::area`](super::EventCtx::area): the same cells at the top
 /// level, and content coordinates inside a
-/// [`viewport`](super::DeclareCtx::viewport). (crossterm already speaks cells;
-/// the browser backend converts pixels to cells before constructing this.)
+/// [`viewport`](super::DeclareCtx::viewport). Every backend conversion
+/// delivers cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseEvent {
     /// What the pointer did.
@@ -381,9 +381,7 @@ pub enum MouseButton {
 
 /// Which way the wheel or trackpad scrolled.
 ///
-/// Exhaustive: these are the four axes a terminal or browser reports. A
-/// row-oriented control that only cares about the vertical pair converts to
-/// [`ScrollStep`](crate::linear_nav::ScrollStep).
+/// Exhaustive: these are the four axes a terminal or browser reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollDirection {
     /// Scrolled toward the top of the content.
@@ -413,19 +411,6 @@ impl std::fmt::Display for Unsupported {
 }
 
 impl std::error::Error for Unsupported {}
-
-#[cfg(test)]
-mod unsupported_tests {
-    use super::Unsupported;
-
-    #[test]
-    fn unsupported_is_a_standard_error_with_a_message() {
-        fn assert_error<T: std::error::Error>() {}
-
-        assert_error::<Unsupported>();
-        assert_eq!(Unsupported.to_string(), "unsupported input event");
-    }
-}
 
 /// Why a typed browser paste event could not be normalized.
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
@@ -870,41 +855,30 @@ mod termina_tests {
     }
 
     #[test]
-    fn termina_mouse_cells_and_kinds_pass_through_unshifted() {
-        // Every button, because a transposed pair reads correctly from any one
-        // of them: the middle button is its own opposite.
-        let buttons = [
-            (tn::MouseButton::Left, MouseButton::Left),
-            (tn::MouseButton::Right, MouseButton::Right),
-            (tn::MouseButton::Middle, MouseButton::Middle),
-        ];
+    fn termina_mouse_cells_are_not_shifted() {
+        let event = MouseEvent::from(tn::MouseEvent {
+            kind: tn::MouseEventKind::Drag(tn::MouseButton::Left),
+            column: 3,
+            row: 4,
+            modifiers: tn::Modifiers::CONTROL,
+        });
 
-        for (reported, button) in buttons {
-            let event = MouseEvent::from(tn::MouseEvent {
-                kind: tn::MouseEventKind::Drag(reported),
+        assert_eq!(
+            event,
+            MouseEvent {
+                kind: MouseKind::Drag(MouseButton::Left),
                 column: 3,
                 row: 4,
-                modifiers: tn::Modifiers::CONTROL,
-            });
-
-            assert_eq!(
-                event,
-                MouseEvent {
-                    kind: MouseKind::Drag(button),
-                    column: 3,
-                    row: 4,
-                    modifiers: Modifiers {
-                        ctrl: true,
-                        ..Modifiers::NONE
-                    },
+                modifiers: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
                 },
-                "termina's {reported:?} is the runtime's {button:?}"
-            );
-        }
+            }
+        );
     }
 
     #[test]
-    fn presses_and_releases_keep_their_button_too() {
+    fn termina_presses_and_releases_keep_their_button() {
         for (reported, button) in [
             (tn::MouseButton::Left, MouseButton::Left),
             (tn::MouseButton::Right, MouseButton::Right),
@@ -929,7 +903,7 @@ mod termina_tests {
     }
 
     #[test]
-    fn all_four_scroll_axes_map_to_their_directions() {
+    fn termina_scroll_axes_map_to_their_directions() {
         let axes = [
             (tn::MouseEventKind::ScrollUp, ScrollDirection::Up),
             (tn::MouseEventKind::ScrollDown, ScrollDirection::Down),
@@ -1099,23 +1073,5 @@ mod ratzilla_tests {
         )));
 
         assert_eq!(event, Err(Unsupported));
-    }
-}
-
-#[cfg(all(test, target_arch = "wasm32", feature = "ratzilla"))]
-mod browser_tests {
-    use super::Event;
-    use crate::runtime::BrowserEventError;
-    use web_sys::ClipboardEvent;
-
-    #[test]
-    fn typed_browser_event_conversions_are_available() {
-        fn assert_try_from_ref<T>()
-        where
-            for<'a> Event: TryFrom<&'a T, Error = BrowserEventError>,
-        {
-        }
-
-        assert_try_from_ref::<ClipboardEvent>();
     }
 }

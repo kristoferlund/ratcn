@@ -35,7 +35,7 @@ use super::{ChildId, FocusState};
 /// binding in place the runtime notices that mismatch and swallows events until
 /// the two agree, so a keypress can't land on a dialog the app already
 /// considers closed.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModalState {
     /// One entry per open modal, innermost last: its id and the focus that was
     /// current when it opened.
@@ -43,7 +43,7 @@ pub struct ModalState {
 }
 
 /// One open modal: its id, and the focus to restore when it closes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct OpenModal {
     id: ChildId,
     return_focus: FocusState,

@@ -288,6 +288,45 @@ fn drag_helper_stays_captured_across_rebuild_and_ends_outside() {
     );
 }
 
+/// A gesture the runtime abandons — here because the pointer left the
+/// terminal — takes its drag with it. A later press elsewhere whose motion
+/// reaches the component by hit-test is a new gesture that never started
+/// here: nothing moves, and its release is not eaten as a drag end.
+#[test]
+fn an_abandoned_drag_does_not_resume_on_a_later_gesture_that_reaches_it_by_hit_test() {
+    let state = PointerState;
+    let mut driver = Driver::new(20, 4);
+    let component = Some(LifecycleDrag {
+        offset: CellOffset::default(),
+        can_start: true,
+    });
+    render_lifecycle_drag(&mut driver, &state, component, Rect::new(0, 0, 4, 2));
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state),
+        EventResult::Emit(PointerMsg::Drag(DragPhase::Down))
+    );
+    assert!(matches!(
+        driver.event(mouse(MouseKind::Moved, 3, 1), &state),
+        EventResult::Emit(PointerMsg::Drag(DragPhase::Moved { .. }))
+    ));
+    driver.event(mouse(MouseKind::Exited, 0, 0), &state);
+    render_lifecycle_drag(&mut driver, &state, component, Rect::new(0, 0, 4, 2));
+
+    // Press on empty space, then move into the component.
+    driver.event(mouse(MouseKind::Down(MouseButton::Left), 10, 3), &state);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Moved, 2, 1), &state),
+        EventResult::Ignored,
+        "motion of a gesture that did not start here must not move it"
+    );
+    assert_eq!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 2, 1), &state),
+        EventResult::Ignored,
+        "and its release is not the end of a drag"
+    );
+    assert!(driver.ratcn.transients.is_empty());
+}
+
 #[test]
 fn drag_helper_path_removal_cleans_transient_and_suppresses_capture() {
     let state = PointerState;

@@ -104,7 +104,7 @@ struct Leaf;
 impl Component<State, Msg> for Leaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, State>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, State>) {
         ctx.widget(Paragraph::new("stable"), ctx.area());
     }
 

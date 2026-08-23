@@ -18,7 +18,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusComposite {
         );
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, FocusTestState>) {
         self.parent_rendered
             .borrow_mut()
             .push((ctx.focused(), ctx.contains_focus()));
@@ -51,7 +51,7 @@ struct EmptyComposite {
 impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, FocusTestState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, FocusTestState>) {
         self.rendered
             .borrow_mut()
             .push((ctx.focused(), ctx.contains_focus()));
