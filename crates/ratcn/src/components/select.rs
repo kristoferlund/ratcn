@@ -226,6 +226,11 @@ pub struct SelectWidget<'a> {
     focused: bool,
     hovered: bool,
     disabled: bool,
+    /// The marker shown on a selected option, when the panel paints its own
+    /// rows.
+    selected_marker: &'a str,
+    /// The marker shown on an unselected option.
+    unselected_marker: &'a str,
     style: SelectStyle,
 }
 
@@ -247,8 +252,27 @@ impl<'a> SelectWidget<'a> {
             focused: false,
             hovered: false,
             disabled: false,
+            selected_marker: selection_indicator::MarkerGlyphs::radio().selected,
+            unselected_marker: selection_indicator::MarkerGlyphs::radio().unselected,
             style: SelectStyle::fallback(),
         }
+    }
+
+    /// The marker shown on a selected option.
+    ///
+    /// Any string works, including multi-character pairs like `[x]`; the row
+    /// indents the label by the marker's width plus one space.
+    #[must_use]
+    pub const fn selected_marker(mut self, marker: &'a str) -> Self {
+        self.selected_marker = marker;
+        self
+    }
+
+    /// The marker shown on an unselected option.
+    #[must_use]
+    pub const fn unselected_marker(mut self, marker: &'a str) -> Self {
+        self.unselected_marker = marker;
+        self
     }
 
     /// Take colors from `theme`.
@@ -491,12 +515,15 @@ impl Widget for SelectPanelWidget<'_> {
             selection_indicator::marker_line(
                 widget.options[index],
                 selected,
-                false,
                 disabled,
                 selection_indicator::MarkerColors {
                     disabled: widget.style.disabled_foreground,
                     selected: widget.style.selected_marker,
                     unselected: widget.style.unselected_marker,
+                },
+                selection_indicator::MarkerGlyphs {
+                    selected: widget.selected_marker,
+                    unselected: widget.unselected_marker,
                 },
             )
             .render(row_area, buf);
@@ -598,6 +625,9 @@ pub struct Select<T, S, M> {
     disabled: bool,
     paint_item: Option<PaintItemFn<S, T>>,
     row_height: u16,
+    /// The markers the option rows show, overriding the radio defaults.
+    selected_marker: Option<String>,
+    unselected_marker: Option<String>,
     style: Option<StyleFn>,
     resolved_open: bool,
     page_size: usize,
@@ -634,6 +664,8 @@ impl<T, S, M> Select<T, S, M> {
             disabled: false,
             paint_item: None,
             row_height: 1,
+            selected_marker: None,
+            unselected_marker: None,
             style: None,
             resolved_open: false,
             page_size: 1,
@@ -766,6 +798,23 @@ impl<T, S, M> Select<T, S, M> {
     #[must_use]
     pub fn style(mut self, style: impl Fn(&Theme) -> SelectStyle + 'static) -> Self {
         self.style = Some(Rc::new(style));
+        self
+    }
+
+    /// The marker shown on the selected option, instead of `●`.
+    ///
+    /// Any string works, including multi-character pairs like `[x]`; the row
+    /// indents the label by the marker's width plus one space.
+    #[must_use]
+    pub fn selected_marker(mut self, marker: impl Into<String>) -> Self {
+        self.selected_marker = Some(marker.into());
+        self
+    }
+
+    /// The marker shown on an unselected option, instead of `○`.
+    #[must_use]
+    pub fn unselected_marker(mut self, marker: impl Into<String>) -> Self {
+        self.unselected_marker = Some(marker.into());
         self
     }
 
@@ -957,6 +1006,8 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             selected: self.selected.clone(),
             on_select: self.on_select.clone(),
             paint_item: self.paint_item.clone(),
+            selected_marker: self.selected_marker.clone(),
+            unselected_marker: self.unselected_marker.clone(),
             style,
             panel_area,
             inner,
@@ -1024,6 +1075,8 @@ struct SelectPanel<T, S, M> {
     selected: Option<ReadFn<S, T>>,
     on_select: Option<OnChangeFn<T, M>>,
     paint_item: Option<PaintItemFn<S, T>>,
+    selected_marker: Option<String>,
+    unselected_marker: Option<String>,
     style: SelectStyle,
     panel_area: Rect,
     /// `panel_area` inside its border: the rows the options themselves occupy.
@@ -1101,6 +1154,12 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
             .disabled_items(&disabled)
             .first_item(self.viewport.painted_offset())
             .style(self.style);
+        if let Some(marker) = self.selected_marker.as_deref() {
+            widget = widget.selected_marker(marker);
+        }
+        if let Some(marker) = self.unselected_marker.as_deref() {
+            widget = widget.unselected_marker(marker);
+        }
         if let Some(rows) = &rows {
             widget = widget.visible_item_rows(rows);
         }

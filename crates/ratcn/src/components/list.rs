@@ -514,6 +514,9 @@ pub struct List<T, S, M> {
     paint_item: Option<PaintItemFn<S, T>>,
     style: Option<StyleFn>,
     focus_symbol: String,
+    /// The markers selection rows show, overriding the radio/checkbox defaults.
+    selected_marker: Option<String>,
+    unselected_marker: Option<String>,
     /// Row height plus the painted offset — render-derived runtime state kept
     /// so hit-testing and wheel arithmetic work against what is on screen,
     /// never a second copy of app-owned scroll.
@@ -555,6 +558,8 @@ impl<T, S, M> List<T, S, M> {
             paint_item: None,
             style: None,
             focus_symbol: String::new(),
+            selected_marker: None,
+            unselected_marker: None,
             viewport: RowViewport::new(1),
         }
     }
@@ -723,6 +728,27 @@ impl<T, S, M> List<T, S, M> {
         self
     }
 
+    /// The marker shown on a selected row, instead of the shape selection
+    /// picks: `●` for a pick-one list, `■` for a multi-select.
+    ///
+    /// Any string works, including multi-character pairs like `[x]`; the row
+    /// indents the label by the marker's width plus one space. Pair it with
+    /// [`unselected_marker`](Self::unselected_marker) so both states read as
+    /// one style of control — `[x]`/`[ ]` turns a multi-select into an ASCII
+    /// checklist.
+    #[must_use]
+    pub fn selected_marker(mut self, marker: impl Into<String>) -> Self {
+        self.selected_marker = Some(marker.into());
+        self
+    }
+
+    /// The marker shown on an unselected row, instead of `○` or `□`.
+    #[must_use]
+    pub fn unselected_marker(mut self, marker: impl Into<String>) -> Self {
+        self.unselected_marker = Some(marker.into());
+        self
+    }
+
     /// Replace the theme-derived [`ListStyle`].
     ///
     /// The closure receives the active theme each render, so a style built from
@@ -884,6 +910,23 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         } else {
             None
         };
+        // The pair selection rows show: the shape selection picks, with any
+        // marker overrides the app supplied taking each half.
+        let default_glyphs = if selection_mode == Some(true) {
+            selection_indicator::MarkerGlyphs::checkbox()
+        } else {
+            selection_indicator::MarkerGlyphs::radio()
+        };
+        let glyphs = selection_indicator::MarkerGlyphs {
+            selected: self
+                .selected_marker
+                .as_deref()
+                .unwrap_or(default_glyphs.selected),
+            unselected: self
+                .unselected_marker
+                .as_deref()
+                .unwrap_or(default_glyphs.unselected),
+        };
         let rows_per_item = self.viewport.rows_per_item();
         // Only the rows on screen are built, however long the list is. The
         // count rounds up because the area's trailing rows still paint the item
@@ -913,7 +956,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                 }
                 match &self.paint_item {
                     Some(paint_item) => paint_item(state, row),
-                    None => default_item_line(&row, selection_mode, &style),
+                    None => default_item_line(&row, selection_mode.is_some(), glyphs, &style),
                 }
             },
         );
@@ -979,22 +1022,23 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
 
 fn default_item_line<T>(
     row: &ListItemState<'_, T>,
-    selection_mode: Option<bool>,
+    has_markers: bool,
+    glyphs: selection_indicator::MarkerGlyphs<'_>,
     style: &ListStyle,
 ) -> Text<'static> {
-    let Some(multiple) = selection_mode else {
+    if !has_markers {
         return Text::from(row.label.to_string());
-    };
+    }
     Text::from(selection_indicator::marker_line(
         row.label,
         row.selected,
-        multiple,
         row.disabled,
         selection_indicator::MarkerColors {
             disabled: style.disabled_foreground,
             selected: style.selected_marker,
             unselected: style.unselected_marker,
         },
+        glyphs,
     ))
 }
 

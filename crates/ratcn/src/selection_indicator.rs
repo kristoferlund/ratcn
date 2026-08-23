@@ -22,14 +22,47 @@ pub struct MarkerColors {
     pub unselected: Color,
 }
 
+/// The glyph pair one selection control paints: what a selected item shows and
+/// what an unselected one does.
+///
+/// The presets name the two shapes a selection takes — a lone circle for
+/// picking one of many, a box for ticking any number — and any other pair can
+/// be supplied where a control offers its markers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkerGlyphs<'a> {
+    /// The marker on a selected item.
+    pub selected: &'a str,
+    /// The marker on an unselected item.
+    pub unselected: &'a str,
+}
+
+impl MarkerGlyphs<'_> {
+    /// The circles a pick-one control paints by default.
+    #[must_use]
+    pub const fn radio() -> Self {
+        Self {
+            selected: "●",
+            unselected: "○",
+        }
+    }
+
+    /// The boxes a tick-any-number control paints by default.
+    #[must_use]
+    pub const fn checkbox() -> Self {
+        Self {
+            selected: "■",
+            unselected: "□",
+        }
+    }
+}
+
 /// Marker glyph for a selected or unselected item.
 #[must_use]
-pub const fn marker(selected: bool, multiple: bool) -> &'static str {
-    match (multiple, selected) {
-        (true, true) => "■",
-        (true, false) => "□",
-        (false, true) => "●",
-        (false, false) => "○",
+pub const fn marker(selected: bool, glyphs: MarkerGlyphs<'_>) -> &str {
+    if selected {
+        glyphs.selected
+    } else {
+        glyphs.unselected
     }
 }
 
@@ -54,17 +87,18 @@ pub const fn color(disabled: bool, selected: bool, colors: MarkerColors) -> Colo
 /// label carries no color of its own, leaving it to inherit whatever row style
 /// is painted beneath it.
 ///
-/// `multiple` picks the checkbox glyphs over the radio ones, as it does in
-/// [`marker`].
+/// `glyphs` picks the pair: [`MarkerGlyphs::radio`] where one option wins,
+/// [`MarkerGlyphs::checkbox`] where any number can be ticked, or whatever the
+/// app supplies.
 #[must_use]
 pub fn marker_line(
     label: &str,
     selected: bool,
-    multiple: bool,
     disabled: bool,
     colors: MarkerColors,
+    glyphs: MarkerGlyphs<'_>,
 ) -> Line<'static> {
-    let marker = marker(selected, multiple);
+    let marker = marker(selected, glyphs);
     Line::from(vec![
         Span::styled(
             format!(" {marker}"),
@@ -88,7 +122,7 @@ mod tests {
             selected: Color::Green,
             unselected: Color::Blue,
         };
-        let line = marker_line("Alpha", true, false, false, colors);
+        let line = marker_line("Alpha", true, false, colors, MarkerGlyphs::radio());
 
         assert_eq!(line.to_string(), " ● Alpha");
         assert_eq!(line.spans[0].style.fg, Some(Color::Green));
@@ -98,15 +132,34 @@ mod tests {
             "the label inherits the row style painted beneath it"
         );
         assert_eq!(
-            marker_line("Alpha", true, true, true, colors).spans[0]
+            marker_line("Alpha", true, true, colors, MarkerGlyphs::checkbox()).spans[0]
                 .style
                 .fg,
             Some(Color::DarkGray),
-            "disabled wins over selected, and multiple picks the checkbox glyph"
+            "disabled wins over selected"
         );
         assert_eq!(
-            marker_line("Alpha", true, true, false, colors).to_string(),
+            marker_line("Alpha", true, false, colors, MarkerGlyphs::checkbox()).to_string(),
             " ■ Alpha"
+        );
+    }
+
+    /// A control's markers are the app's to choose: the same call paints any
+    /// pair it is handed.
+    #[test]
+    fn the_glyph_pair_is_yours_to_choose() {
+        let glyphs = MarkerGlyphs {
+            selected: "[x]",
+            unselected: "[ ]",
+        };
+        let colors = MarkerColors {
+            disabled: Color::DarkGray,
+            selected: Color::Green,
+            unselected: Color::Gray,
+        };
+        assert_eq!(
+            marker_line("Vim bindings", true, false, colors, glyphs).to_string(),
+            " [x] Vim bindings"
         );
     }
 }
