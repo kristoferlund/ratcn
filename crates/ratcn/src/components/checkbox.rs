@@ -70,14 +70,14 @@ pub struct CheckboxStyle {
 
 impl CheckboxStyle {
     /// The no-theme starting point: plain ANSI colors that render on any
-    /// terminal.
+    /// terminal, with the same raised fills the ghost button falls back to.
     #[must_use]
     pub const fn fallback() -> Self {
         Self {
             foreground: Color::Gray,
             focused_foreground: Color::Cyan,
-            focused_background: Color::DarkGray,
-            hovered_background: Color::DarkGray,
+            focused_background: Color::Cyan,
+            hovered_background: Color::LightCyan,
             disabled_foreground: Color::DarkGray,
             checked_marker_color: Color::Cyan,
             unchecked_marker_color: Color::Gray,
@@ -245,7 +245,11 @@ impl<'a> CheckboxWidget<'a> {
     /// Columns this checkbox paints: marker, one space, label.
     #[must_use]
     pub fn width(&self) -> u16 {
-        text_width::display_width_u16(self.marker())
+        let marker = text_width::display_width_u16(self.marker());
+        if self.label.is_empty() {
+            return marker;
+        }
+        marker
             .saturating_add(1)
             .saturating_add(text_width::display_width_u16(self.label))
     }
@@ -471,6 +475,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
 
     fn scope_options(&self) -> ScopeOptions {
         ScopeOptions::default().focusable(self.can_act())
+    }
+
+    fn interaction_area(&self, area: Rect) -> Rect {
+        // A checkbox is one row tall; a taller declaration must not leave a
+        // strip of itself clickable.
+        crate::geometry::fixed_height(area, 1)
     }
 }
 

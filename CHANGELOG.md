@@ -21,8 +21,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   value occupies, so a row is as wide as the text it shows.
 - `selection_indicator::MarkerGlyphs`: the glyph pair a selection control
   paints. `List::selected_marker`/`unselected_marker`,
-  `Select::selected_marker`/`unselected_marker`, and the same methods on both
-  paint widgets override the defaults per control.
+  `Select::selected_marker`/`unselected_marker`, and the same methods on
+  `SelectWidget` override the defaults per control.
 - `list_core::key_intent` and `linear_nav::Axis`: the one key map `List`,
   `Select`, and `Tabs` answer from, with the axis naming which arrows step.
   `RowViewport::wheel` is the same for the wheel.
