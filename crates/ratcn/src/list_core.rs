@@ -15,12 +15,13 @@
 //! laid out — [`Tabs`](crate::Tabs) uses it for a row of tabs, and so is
 //! [`ListItem`] itself, which a tab is. Everything else here —
 //! [`RowViewport`], [`WheelHold`], [`windowed_rows`], [`row_intent`] — assumes
-//! items stacked in a scrolling column of uniform-height rows.
+//! items stacked in a scrolling column of uniform-height rows. [`key_intent`]
+//! sits between: it takes the [`Axis`] the items run along.
 //!
-//! Nothing here paints or emits. [`row_intent`] decides what a pointer gesture
-//! over a row means, but not what to say about it: components own their look,
-//! their bindings, and their messages, and this module answers only the
-//! questions every one of them asks.
+//! Nothing here paints or emits. [`row_intent`] and [`key_intent`] decide what
+//! a gesture or a key means, but not what to say about it: components own
+//! their look, their bindings, and their messages, and this module answers
+//! only the questions every one of them asks.
 
 use std::ops::Range;
 
@@ -29,8 +30,10 @@ use ratatui::{
     text::{Line, Text},
 };
 
-use crate::linear_nav::{self};
-use crate::runtime::{DeclareCtx, MouseButton, MouseKind};
+use crate::linear_nav::{self, Axis, NavOutcome};
+use crate::runtime::{
+    DeclareCtx, EventCtx, KeyCode, KeyEvent, MouseButton, MouseKind, ScrollDirection,
+};
 
 /// Items a wheel notch moves the view by, shared so two list-shaped
 /// components can never scroll at different speeds.
@@ -318,12 +321,13 @@ pub fn fit_to_height(mut text: Text<'static>, height: u16) -> Text<'static> {
 /// Map the window `rows` of `items` to the lines a widget paints, each forced to
 /// `row_height` lines.
 ///
-/// `row` is handed each item with its index *in the whole list*, never in the
-/// window: focus, selection, and the arithmetic that turns a click's screen row
-/// back into an item all count from the start of the list, so a windowed paint
-/// that renumbered its rows would light up and answer for the wrong one. Both
-/// list-shaped components build their painted rows through here, so neither can
-/// renumber them.
+/// `row` is handed each item's [`ListItemState`] with its index *in the whole
+/// list*, never in the window: focus, selection, and the arithmetic that turns
+/// a click's screen row back into an item all count from the start of the
+/// list, so a windowed paint that renumbered its rows would light up and
+/// answer for the wrong one. `cursor` is the row that paints as focused,
+/// `selected` is asked per painted row, and `disabled` marks every row
+/// disabled on top of the items' own flags.
 ///
 /// The result is one row per item in `rows`, each exactly `row_height` lines
 /// tall — see [`fit_to_height`] for why that is not the closure's choice.
@@ -336,13 +340,27 @@ pub fn windowed_rows<T>(
     items: &[ListItem<T>],
     rows: Range<usize>,
     row_height: u16,
-    mut row: impl FnMut(usize, &ListItem<T>) -> Text<'static>,
+    cursor: Option<usize>,
+    disabled: bool,
+    mut selected: impl FnMut(usize, &T) -> bool,
+    mut row: impl FnMut(ListItemState<'_, T>) -> Text<'static>,
 ) -> Vec<Text<'static>> {
     let first = rows.start;
     items[rows]
         .iter()
         .enumerate()
-        .map(|(position, item)| fit_to_height(row(first + position, item), row_height))
+        .map(|(position, item)| {
+            let index = first + position;
+            let state = ListItemState {
+                index,
+                value: &item.value,
+                label: &item.label,
+                focused: cursor == Some(index),
+                selected: selected(index, &item.value),
+                disabled: disabled || item.disabled,
+            };
+            fit_to_height(row(state), row_height)
+        })
         .collect()
 }
 
@@ -409,6 +427,56 @@ pub fn row_intent<T>(
         MouseKind::Click(MouseButton::Left) if commits => RowIntent::Commit(index),
         MouseKind::Moved | MouseKind::Click(MouseButton::Left) => RowIntent::Focus(index),
         _ => RowIntent::Bubble,
+    }
+}
+
+/// What a key asks of a cursor over value-keyed items.
+///
+/// The answer [`key_intent`] gives, kept separate from any component's
+/// messages for the same reason [`RowIntent`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyIntent {
+    /// Move the cursor to this index.
+    Move(usize),
+    /// A navigation key with nowhere new to go: consume it.
+    Stay,
+    /// Commit the row under the cursor.
+    Commit(usize),
+}
+
+/// What a key asks of a cursor over `items` running along `axis`: the shared
+/// decision behind every item control's key handling.
+///
+/// Navigation keys resolve through [`linear_nav::nav_key_target`] with
+/// `page_size` items to a page. Enter and Space commit the cursor's row, but
+/// only an enabled one. Every other key, and any key with a modifier held that
+/// is not one of the navigation chords, is `None`: it belongs to the app.
+#[must_use]
+pub fn key_intent<T>(
+    key: KeyEvent,
+    axis: Axis,
+    items: &[ListItem<T>],
+    cursor: Option<usize>,
+    page_size: usize,
+) -> Option<KeyIntent> {
+    // Navigation is asked first because it owns the Ctrl chords that the
+    // modifier gate below rejects.
+    let outcome =
+        linear_nav::nav_key_target(key, axis, items.len(), cursor, page_size.max(1), |i| {
+            disabled_at(items, i)
+        });
+    if let Some(outcome) = outcome {
+        return Some(match outcome {
+            NavOutcome::Move(index) => KeyIntent::Move(index),
+            NavOutcome::Stay => KeyIntent::Stay,
+        });
+    }
+    if key.modifiers.any() || !matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
+        return None;
+    }
+    match cursor {
+        Some(index) if !disabled_at(items, index) => Some(KeyIntent::Commit(index)),
+        _ => None,
     }
 }
 
@@ -537,6 +605,35 @@ impl RowViewport {
             return None;
         }
         linear_nav::index_at_row(len, self.painted_offset, local_row / rows_per_item)
+    }
+
+    /// Scroll one wheel notch in `direction`: the view moves [`SCROLL_STEP`]
+    /// items from the painted offset and is held there against `items` as the
+    /// `cursor` sits in them (see [`WheelHold::hold`]), and this viewport
+    /// records the new offset so hit-testing stays aligned with the next
+    /// paint. Answers the held offset, or `None` for a horizontal notch, which
+    /// a column of rows leaves alone.
+    ///
+    /// The cursor never moves on the wheel; what the control emits about the
+    /// new offset, if anything, is its own decision.
+    pub fn wheel<T: Clone + PartialEq + 'static>(
+        &mut self,
+        direction: ScrollDirection,
+        items: &[ListItem<T>],
+        cursor: Option<usize>,
+        area: Rect,
+        ctx: &mut EventCtx<'_>,
+    ) -> Option<usize> {
+        let next = linear_nav::wheel_offset(
+            items.len(),
+            self.visible_items(area),
+            self.painted_offset,
+            direction,
+            SCROLL_STEP,
+        )?;
+        ctx.transient::<WheelHold<T>>().hold(next, items, cursor);
+        self.painted_offset = next;
+        Some(next)
     }
 
     /// The offset that keeps `cursor` visible in `area`, starting from a
@@ -730,14 +827,130 @@ mod tests {
         }
     }
 
+    /// The one key map, as every item control answers it. The axis-specific
+    /// keys differ (Down for a column, Right for a row); everything else — the
+    /// chords, Home/End, the commit keys, and what bubbles — must not.
+    #[test]
+    fn list_select_and_tabs_answer_the_shared_keys_alike() {
+        use crate::runtime::{Component, EventCtx, EventResult, Modifiers};
+        use crate::test_support::{key, key_with};
+        use crate::{List, Select, Tabs};
+
+        #[derive(Debug, PartialEq)]
+        enum Msg {
+            Focused(char),
+            Selected(char),
+            Opened(bool),
+        }
+        #[derive(Debug, PartialEq)]
+        enum Answer {
+            Move(char),
+            Stay,
+            Commit(char),
+            Bubble,
+        }
+        let answer = |result: EventResult<Msg>| match result {
+            EventResult::Emit(Msg::Focused(value)) => Answer::Move(value),
+            EventResult::Emit(Msg::Selected(value)) => Answer::Commit(value),
+            EventResult::Consumed => Answer::Stay,
+            EventResult::Ignored => Answer::Bubble,
+            EventResult::Emit(other) => panic!("unexpected {other:?}"),
+        };
+        let ctrl = |code: char| {
+            key_with(
+                KeyCode::Char(code),
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                },
+            )
+        };
+        let shift = |code: KeyCode| {
+            key_with(
+                code,
+                Modifiers {
+                    shift: true,
+                    ..Modifiers::NONE
+                },
+            )
+        };
+        let items = || {
+            [
+                ListItem::new('a', "A"),
+                ListItem::new('b', "B").disabled(true),
+                ListItem::new('c', "C"),
+            ]
+        };
+        // The cursor sits on A in every control; the Select is open.
+        let state = ();
+        let area = Rect::new(0, 0, 20, 3);
+        let mut list = List::new(items())
+            .item_focus(|(): &()| Some('a'), |value, _| Msg::Focused(value))
+            .selection(|(): &()| None, Msg::Selected);
+        let mut select = Select::new(items())
+            .open(|(): &()| true, Msg::Opened)
+            .item_focus(|(): &()| Some('a'), Msg::Focused)
+            .selection(|(): &()| None, Msg::Selected);
+        select.prepare(&state);
+        let mut tabs = Tabs::new(items())
+            .item_focus(|(): &()| Some('a'), Msg::Focused)
+            .selection(|(): &()| None, Msg::Selected);
+
+        for (event, expected) in [
+            (ctrl('n'), Answer::Move('c')),
+            (ctrl('p'), Answer::Stay),
+            (key(KeyCode::Home), Answer::Stay),
+            (key(KeyCode::End), Answer::Move('c')),
+            (key(KeyCode::Enter), Answer::Commit('a')),
+            (key(KeyCode::Char(' ')), Answer::Commit('a')),
+            (shift(KeyCode::Enter), Answer::Bubble),
+            (ctrl('s'), Answer::Bubble),
+            (key(KeyCode::Char('x')), Answer::Bubble),
+        ] {
+            let mut ctx = EventCtx::default().with_area(area);
+            assert_eq!(
+                answer(list.handle_event(&event, &state, &mut ctx)),
+                expected,
+                "List on {event:?}"
+            );
+            assert_eq!(
+                answer(select.handle_event(&event, &state, &mut ctx)),
+                expected,
+                "Select on {event:?}"
+            );
+            assert_eq!(
+                answer(tabs.handle_event(&event, &state, &mut ctx)),
+                expected,
+                "Tabs on {event:?}"
+            );
+        }
+    }
+
     /// A windowed paint numbers its rows by their position in the whole list, or
     /// the row a click lands on is not the row that was drawn there.
     #[test]
     fn windowed_rows_hands_out_global_indices_and_a_uniform_height() {
-        let items: Vec<ListItem<u8>> = (0..6).map(|value| ListItem::new(value, "row")).collect();
-        let rows = windowed_rows(&items, 2..5, 2, |index, item| {
-            Text::from(format!("{index}:{}", item.value()))
-        });
+        let items: Vec<ListItem<u8>> = (0..6)
+            .map(|value| ListItem::new(value, "row").disabled(value == 4))
+            .collect();
+        let rows = windowed_rows(
+            &items,
+            2..5,
+            2,
+            Some(3),
+            false,
+            |index, _| index == 2,
+            |row| {
+                Text::from(format!(
+                    "{}:{} {}{}{}",
+                    row.index,
+                    row.value,
+                    if row.focused { "f" } else { "" },
+                    if row.selected { "s" } else { "" },
+                    if row.disabled { "d" } else { "" },
+                ))
+            },
+        );
 
         assert_eq!(rows.len(), 3);
         assert!(
@@ -748,8 +961,8 @@ mod tests {
             rows.iter()
                 .map(|row| row.lines[0].to_string())
                 .collect::<Vec<_>>(),
-            ["2:2", "3:3", "4:4"],
-            "the window's third item is item 4, not item 2"
+            ["2:2 s", "3:3 f", "4:4 d"],
+            "the window's third item is item 4, not item 2, and each row carries its own state"
         );
     }
 
