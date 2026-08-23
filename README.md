@@ -10,9 +10,8 @@ over your app loop.
 This is a preview release. Three things are worth knowing before you build on
 it:
 
-- **The API will break.** The public surface is still moving — recent releases
-  have renamed methods, changed signatures, and removed components outright.
-  Pin an exact version and expect to edit when you upgrade.
+- **The API will break.** The public surface is still moving. Pin an exact
+  version and expect to edit when you upgrade.
 - **There is no install command.** The shadcn resemblance is in how the code is
   structured, not yet in tooling. Copying a component into your project is a
   manual file copy today. A CLI is intended, but it does not exist.
@@ -57,6 +56,12 @@ cargo add ratcn --features ratzilla
 cargo add ratatui --no-default-features --features layout-cache,std
 cargo add ratzilla
 ```
+
+The crate also ships a terminal host of its own: `ratcn::terminal::Session`
+(feature `termina`) opens the terminal, asks it for its background and
+foreground, solves a `Theme` from the pair with `Theme::adaptive`, and
+re-solves when the user changes it. Use it in place of crossterm when you want
+the app to paint in the terminal's own colors.
 
 ## Copying a component
 

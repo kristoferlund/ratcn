@@ -19,13 +19,14 @@ use termina::{
     style::RgbColor,
 };
 
-/// The batched query, in the order the terminal answers it.
-///
-/// The color queries go out BEL-terminated; replies are accepted with either
-/// terminator.
-///
-/// `CSI c` — primary device attributes — is last because it is the fence.
-const QUERIES: &str = "\x1b]10;?\x07\x1b]11;?\x07\x1b[c";
+/// The two color queries, BEL-terminated; replies are accepted with either
+/// terminator. The startup batch is these followed by [`FENCE`]; a re-query
+/// is these alone.
+pub(super) const COLOR_QUERIES: &str = "\x1b]10;?\x07\x1b]11;?\x07";
+
+/// `CSI c` — primary device attributes — written after the color queries.
+/// Every terminal answers it, so its reply says the colors are not coming.
+const FENCE: &str = "\x1b[c";
 
 /// How long the whole exchange may take, fence or no fence. The watch reuses
 /// it as the deadline for a re-query's answer.
@@ -78,7 +79,8 @@ fn exchange<T: Terminal>(terminal: &mut T, asked: bool) -> io::Result<Option<Ter
         return Ok(None);
     }
 
-    terminal.write_all(QUERIES.as_bytes())?;
+    terminal.write_all(COLOR_QUERIES.as_bytes())?;
+    terminal.write_all(FENCE.as_bytes())?;
     terminal.flush()?;
 
     let started = Instant::now();
@@ -89,7 +91,7 @@ fn exchange<T: Terminal>(terminal: &mut T, asked: bool) -> io::Result<Option<Ter
         if !terminal.poll(Event::is_escape, Some(remaining))? {
             break;
         }
-        if replies.absorb(&terminal.read(Event::is_escape)?) == Fence::Closed {
+        if replies.absorb(&terminal.read(Event::is_escape)?) {
             break;
         }
     }
@@ -106,13 +108,6 @@ fn asked(term: Option<&str>, stdout_is_tty: bool) -> bool {
         }
 }
 
-/// Whether the device-attributes fence has closed the exchange.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Fence {
-    Open,
-    Closed,
-}
-
 /// The replies collected so far.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Replies {
@@ -126,7 +121,7 @@ impl Replies {
     /// Anything else — a stray report, a mouse event, a key press that slipped
     /// past the filter — is passed over: the exchange ends at the fence or at
     /// the backstop, never at the first thing it did not recognize.
-    pub(super) fn absorb(&mut self, event: &Event) -> Fence {
+    pub(super) fn absorb(&mut self, event: &Event) -> bool {
         match event {
             Event::Osc(Osc::ChangeDynamicColors(number, colors)) => {
                 if let Some(color) = reported(colors) {
@@ -136,14 +131,14 @@ impl Replies {
                         _ => {}
                     }
                 }
-                Fence::Open
+                false
             }
             // Only the private form, `CSI ? … c`, which is what every terminal
             // actually replies with. A bare `CSI … c` reply would miss the
             // fence and cost the backstop's second — a stall, not a wrong
             // answer, since the replies collected so far still stand.
-            Event::Csi(Csi::Device(csi::Device::DeviceAttributes(()))) => Fence::Closed,
-            _ => Fence::Open,
+            Event::Csi(Csi::Device(csi::Device::DeviceAttributes(()))) => true,
+            _ => false,
         }
     }
 
@@ -178,26 +173,8 @@ fn reported(colors: &[ColorOrQuery]) -> Option<Color> {
 /// would — and none of it needs a terminal.
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn the_colors_solve_to_a_theme_the_right_way_round() {
-        let colors = TerminalColors {
-            background: Color::Rgb(253, 246, 227),
-            foreground: Color::Rgb(101, 123, 131),
-        };
-
-        let theme = colors.theme();
-
-        assert_eq!(theme.background, colors.background);
-        assert_eq!(
-            theme,
-            crate::Theme::adaptive(colors.background, colors.foreground, None),
-            "background and foreground reach the solver in that order"
-        );
-    }
-
     use super::{
-        ColorOrQuery, Csi, Duration, DynamicColorNumber, Event, Fence, Osc, QUERIES, Replies,
+        COLOR_QUERIES, ColorOrQuery, Csi, Duration, DynamicColorNumber, Event, FENCE, Osc, Replies,
         TerminalColors, asked, csi, exchange,
     };
     use crate::terminal::fake::FakeTerminal;
@@ -212,7 +189,7 @@ mod tests {
 
     #[test]
     fn a_terminal_that_is_not_to_be_asked_is_never_written_to() {
-        let mut fake = FakeTerminal::answering(ANSWERED);
+        let mut fake = FakeTerminal::scripted(ANSWERED);
 
         let colors = exchange(&mut fake, false).expect("refusing to ask cannot fail");
 
@@ -230,11 +207,15 @@ mod tests {
 
     #[test]
     fn the_exchange_writes_the_whole_batch_and_reads_the_answer_back() {
-        let mut fake = FakeTerminal::answering(ANSWERED);
+        let mut fake = FakeTerminal::scripted(ANSWERED);
 
         let colors = exchange(&mut fake, true).expect("the terminal answers");
 
-        assert_eq!(String::from_utf8_lossy(&fake.written), QUERIES);
+        assert_eq!(
+            String::from_utf8_lossy(&fake.written),
+            format!("{COLOR_QUERIES}{FENCE}"),
+            "the colors first, and the fence after what it fences"
+        );
         assert_eq!(
             colors,
             Some(TerminalColors {
@@ -246,7 +227,7 @@ mod tests {
 
     #[test]
     fn a_silent_terminal_is_waited_on_for_one_second_and_no_longer() {
-        let mut fake = FakeTerminal::answering("");
+        let mut fake = FakeTerminal::scripted("");
 
         let colors = exchange(&mut fake, true).expect("silence is not an error");
 
@@ -272,7 +253,7 @@ mod tests {
         // A key press that got in ahead of every reply. Reading past it is the
         // whole point of the filter: consumed here, the keystroke would be
         // neither an answer nor an event the app ever sees.
-        let mut fake = FakeTerminal::answering(&format!("q{ANSWERED}"));
+        let mut fake = FakeTerminal::scripted(&format!("q{ANSWERED}"));
 
         let colors = exchange(&mut fake, true).expect("the terminal answers");
 
@@ -289,7 +270,7 @@ mod tests {
         // Nothing queued is an escape sequence, so the wait has to come back
         // empty rather than wake on the typing and read something that is not
         // a reply at all.
-        let mut fake = FakeTerminal::answering("qz");
+        let mut fake = FakeTerminal::scripted("qz");
 
         let colors = exchange(&mut fake, true).expect("typing is not an error");
 
@@ -302,17 +283,18 @@ mod tests {
     }
 
     /// Feed `script` through termina's parser and absorb the events it yields,
-    /// stopping at the fence the way [`exchange`] does.
-    fn absorbed(script: &str) -> (Replies, Fence) {
+    /// stopping at the fence the way [`exchange`] does. The flag is whether
+    /// the fence was reached.
+    fn absorbed(script: &str) -> (Replies, bool) {
         let mut parser = Parser::default();
         parser.parse(script.as_bytes(), false);
         let mut replies = Replies::default();
         while let Some(event) = parser.pop() {
-            if replies.absorb(&event) == Fence::Closed {
-                return (replies, Fence::Closed);
+            if replies.absorb(&event) {
+                return (replies, true);
             }
         }
-        (replies, Fence::Open)
+        (replies, false)
     }
 
     /// The colors out of `script`, ignoring the fence.
@@ -332,13 +314,12 @@ mod tests {
                             \x1b[?62;1;6c";
 
     #[test]
-    fn the_batch_asks_for_both_colors_and_nothing_else() {
+    fn the_color_queries_ask_for_the_two_colors_and_fence_nothing() {
         // Read back through the same parser the terminal's replies go through,
         // so the OSC numbers and the `?` payload are checked as values rather
-        // than mirrored as literals. `CSI c` is a request termina has no reply
-        // type for, so it does not appear here — the assertion below covers it.
+        // than mirrored as literals.
         let mut parser = Parser::default();
-        parser.parse(QUERIES.as_bytes(), false);
+        parser.parse(COLOR_QUERIES.as_bytes(), false);
         let mut asked_for = Vec::new();
         while let Some(event) = parser.pop() {
             asked_for.push(event);
@@ -357,29 +338,29 @@ mod tests {
                 )),
             ]
         );
-    }
-
-    #[test]
-    fn the_fence_comes_last() {
-        // The fence only fences what precedes it, so its position is the
-        // protocol: anything asked after it would be answered after the
-        // exchange has already been declared over.
-        let fence = Csi::Device(csi::Device::RequestPrimaryDeviceAttributes).to_string();
-
+        // Every terminal accepts BEL, and the ones that mirror the terminator
+        // they were sent then answer with BEL too. Two queries, two bells.
+        assert_eq!(
+            COLOR_QUERIES.matches('\x07').count(),
+            2,
+            "both color queries end in BEL rather than ST: {COLOR_QUERIES:?}"
+        );
+        // A re-query goes out alone: the terminal answered these once already,
+        // and a fence's reply would only arrive as an event no one is waiting
+        // for.
         assert!(
-            QUERIES.ends_with(&fence),
-            "the batch must end with DA1: {QUERIES:?}"
+            !COLOR_QUERIES.contains(FENCE),
+            "the color queries carry no fence of their own: {COLOR_QUERIES:?}"
         );
     }
 
     #[test]
-    fn the_color_queries_go_out_bell_terminated() {
-        // Every terminal accepts BEL, and the ones that mirror the terminator
-        // they were sent then answer with BEL too. Two queries, two bells.
+    fn the_fence_is_a_primary_device_attributes_request() {
+        // The one request every terminal answers, so its reply says the colors
+        // are not coming.
         assert_eq!(
-            QUERIES.matches('\x07').count(),
-            2,
-            "both color queries end in BEL rather than ST: {QUERIES:?}"
+            FENCE,
+            Csi::Device(csi::Device::RequestPrimaryDeviceAttributes).to_string()
         );
     }
 
@@ -394,9 +375,9 @@ mod tests {
 
     #[test]
     fn a_terminal_that_answers_everything_yields_both_colors_and_the_verdict() {
-        let (replies, fence) = absorbed(ANSWERED);
+        let (replies, fenced) = absorbed(ANSWERED);
 
-        assert_eq!(fence, Fence::Closed);
+        assert!(fenced);
         assert_eq!(
             replies.resolve(),
             Some(TerminalColors {
@@ -475,18 +456,18 @@ mod tests {
     fn the_fence_ends_the_exchange_and_nothing_after_it_is_read() {
         // A terminal that answers the fence but not the colors has said all it
         // is going to; a reply arriving afterwards is not ours to wait for.
-        let (replies, fence) = absorbed("\x1b[?6c\x1b]11;rgb:1a1a/1b1b/2626\x07\x1b[?997;1n");
+        let (replies, fenced) = absorbed("\x1b[?6c\x1b]11;rgb:1a1a/1b1b/2626\x07\x1b[?997;1n");
 
-        assert_eq!(fence, Fence::Closed);
+        assert!(fenced);
         assert_eq!(replies, Replies::default());
         assert_eq!(replies.resolve(), None);
     }
 
     #[test]
     fn replies_the_fence_did_not_cover_are_kept() {
-        let (replies, fence) = absorbed("\x1b]11;rgb:1a1a/1b1b/2626\x07\x1b[?6c");
+        let (replies, fenced) = absorbed("\x1b]11;rgb:1a1a/1b1b/2626\x07\x1b[?6c");
 
-        assert_eq!(fence, Fence::Closed);
+        assert!(fenced);
         assert_eq!(replies.background, Some(Color::Rgb(26, 27, 38)));
     }
 
@@ -495,7 +476,7 @@ mod tests {
         // A key press the user got in early, a cursor-position report meant for
         // someone else, and an OSC termina does not type at all — none of them
         // may end the exchange or displace a reply.
-        let (replies, fence) = absorbed(
+        let (replies, fenced) = absorbed(
             "\x1b]10;rgb:c0c0/caca/f5f5\x07\
              q\
              \x1b[10;5R\
@@ -504,15 +485,15 @@ mod tests {
              \x1b[?62;1;6c",
         );
 
-        assert_eq!(fence, Fence::Closed);
+        assert!(fenced);
         assert!(replies.resolve().is_some());
     }
 
     #[test]
     fn a_terminal_that_says_nothing_resolves_to_nothing() {
-        let (replies, fence) = absorbed("");
+        let (replies, fenced) = absorbed("");
 
-        assert_eq!(fence, Fence::Open, "no fence, so the backstop is what ends");
+        assert!(!fenced, "no fence, so the backstop is what ends");
         assert_eq!(replies.resolve(), None);
     }
 

@@ -26,10 +26,13 @@ impl Backend {
 
     pub const fn dependency_commands(self) -> &'static [&'static str] {
         match self {
-            Backend::Terminal => &["cargo add ratcn --features crossterm", "cargo add ratatui"],
+            Backend::Terminal => &[
+                "cargo add ratcn --features crossterm",
+                "cargo add ratatui --no-default-features --features layout-cache,std,crossterm",
+            ],
             Backend::Browser => &[
                 "cargo add ratcn --features ratzilla",
-                "cargo add ratatui --no-default-features --features layout-cache",
+                "cargo add ratatui --no-default-features --features layout-cache,std",
                 "cargo add ratzilla",
             ],
         }
@@ -132,7 +135,10 @@ mod tests {
 
         assert_eq!(
             choices.dependency_commands(),
-            ["cargo add ratcn --features crossterm", "cargo add ratatui",]
+            [
+                "cargo add ratcn --features crossterm",
+                "cargo add ratatui --no-default-features --features layout-cache,std,crossterm",
+            ]
         );
 
         choices.update(ChoiceMsg::SetBackend(Backend::Browser));
@@ -141,7 +147,7 @@ mod tests {
             choices.dependency_commands(),
             [
                 "cargo add ratcn --features ratzilla",
-                "cargo add ratatui --no-default-features --features layout-cache",
+                "cargo add ratatui --no-default-features --features layout-cache,std",
                 "cargo add ratzilla",
             ]
         );

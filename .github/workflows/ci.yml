@@ -49,9 +49,9 @@ jobs:
       - name: Tests, all features
         run: cargo test -p ratcn --all-features --locked
       # The demo crates have tests of their own. The clippy steps below compile
-      # them; only this step runs them.
+      # them; only this step runs them. ratcn's own ran above.
       - name: Tests, workspace
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --exclude ratcn --locked
 
       # The copy-out promise: every component module must compile against
       # ratcn's public API alone. copy-fixture's build script makes the copy a

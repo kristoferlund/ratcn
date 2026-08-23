@@ -15,12 +15,12 @@ use std::io;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::Style,
+    style::{Color, Style},
     widgets::{Block, Paragraph},
 };
 use ratcn::{
     Theme,
-    color::darken,
+    color::dim,
     runtime::{
         CellOffset, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx, EventResult,
         PaintCtx, Ratcn, clamp_offset, offset_rect,
@@ -112,11 +112,11 @@ struct DraggableBlock {
 impl Component<AppState, Msg> for DraggableBlock {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, AppState, Msg>) {}
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, AppState>) {
         let area = ctx.area();
         let theme = ctx.theme;
         let background_color = if ctx.hovered() {
-            darken(theme.surface, HOVER_DARKEN_PERCENT)
+            dim(theme.surface, Color::Black, HOVER_DARKEN_PERCENT)
         } else {
             theme.surface
         };

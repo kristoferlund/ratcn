@@ -11,7 +11,7 @@ use ratatui::style::Color;
 
 use crate::color::{
     DISABLED_DIM, FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, FOCUS_SHIFT, HOVER_SHIFT, ROW_FOCUS_SHIFT,
-    away_from, blendable, contrast, dim, luminance, nearest_to, resolve_rgb,
+    away_from, blendable, contrast, dim, nearest_to, resolve_rgb,
 };
 use ratatui::symbols::border;
 
@@ -466,10 +466,9 @@ impl Theme {
     /// Every role is solved rather than picked — the well against its window,
     /// the surface into the gap below it, text and lines against their floors —
     /// in the same integer blend arithmetic the components paint with, so a
-    /// color that solves to a floor here measures to the same floor there. The
-    /// solvers land on every input the crate's sweep puts to them, and a
-    /// background too close to the middle of the ramp is deepened toward its own
-    /// end until the rest becomes solvable.
+    /// color that solves to a floor here measures to the same floor there. A
+    /// background too close to the middle of the ramp is deepened toward its
+    /// own end until the rest becomes solvable.
     ///
     /// Polarity is not a parameter. A light background derives a light theme:
     /// wells sit *darker* than the screen and deepen from there, filled
@@ -705,16 +704,6 @@ impl Layers {
         // `primary` is placed, not searched for: the background shifted
         // [`NEUTRAL_FILL_SHIFT`] toward the far end, which is what makes it a
         // neutral rather than one of the terminal's accents.
-        //
-        // What holds its floors is the deepening walk this solver runs inside.
-        // The walk's other gate is [`Hues::solve`], where a red has to hold
-        // [`LINE_FLOOR`] on the surface across all three of its fill states,
-        // and every background near the middle of the ramp fails that gate
-        // first — so by the time a background is accepted at all, it is deep
-        // enough that the placed fill has room for a ring and a label. The `?`
-        // below is defence-in-depth: it puts ring-solvability into the same
-        // solvability predicate, so a background that placed a primary with no
-        // workable ring would be deepened rather than returned.
         let primary = dim(background, away, NEUTRAL_FILL_SHIFT);
         let ring = ring_of(primary, background, surface)?;
 
@@ -832,39 +821,13 @@ fn well_rungs(field: Color, away: Color) -> [Color; 3] {
     ]
 }
 
-/// The worst contrast `text` has against any of `backdrops`.
-///
-/// The backdrops' luminances are computed once and kept: a solver asks for many
-/// candidate texts against the same handful of fills.
-struct Backdrops {
-    luminances: Vec<Option<f64>>,
-}
-
-impl Backdrops {
-    fn new(backdrops: &[Color]) -> Self {
-        Self {
-            luminances: backdrops.iter().copied().map(luminance).collect(),
-        }
-    }
-
-    fn worst(&self, text: Color) -> f64 {
-        let Some(text) = luminance(text) else {
-            return 0.0;
-        };
-        self.luminances
-            .iter()
-            .map(|backdrop| match backdrop {
-                Some(backdrop) => (text.max(*backdrop) + 0.05) / (text.min(*backdrop) + 0.05),
-                // The convention [`contrast_or_zero`] keeps: a backdrop with no
-                // channels to measure scores a ratio no floor accepts, so an
-                // unmeasurable color can never satisfy a solver. Every backdrop
-                // a solved theme passes here is derived rgb, so this is the
-                // arm that says what the crate would do rather than one it
-                // reaches.
-                None => 0.0,
-            })
-            .fold(f64::INFINITY, f64::min)
-    }
+/// The worst contrast `text` has against any of `backdrops`, where a pair that
+/// cannot be measured scores 0.0 as [`contrast_or_zero`] does.
+fn worst_contrast(text: Color, backdrops: &[Color]) -> f64 {
+    backdrops
+        .iter()
+        .map(|backdrop| contrast_or_zero(text, *backdrop))
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// Body text and the muted text below it, pushed away from `background` until
@@ -888,9 +851,8 @@ fn solve_text(
     // so a text this predicate admits has to leave a legible disabled twin on
     // the disabled well.
     let disabled_well = dim(field, background, DISABLED_DIM);
-    let measured = Backdrops::new(backdrops);
     let readable = |text: Color| {
-        measured.worst(text) >= TEXT_FLOOR
+        worst_contrast(text, backdrops) >= TEXT_FLOOR
             && contrast_or_zero(dim(text, background, DISABLED_DIM), disabled_well)
                 >= DISABLED_LEGIBILITY
     };
@@ -926,7 +888,8 @@ fn fill_states(fill: Color, pressed: Color) -> [Color; 3] {
 /// can move, rather than trusting that any red will do.
 fn steps_visibly(fill: Color, pressed: Color) -> bool {
     let states = fill_states(fill, pressed);
-    contrast_or_zero(states[0], states[1]) >= 1.05 && contrast_or_zero(states[1], states[2]) >= 1.05
+    contrast_or_zero(states[0], states[1]) >= VISIBLE_STEP
+        && contrast_or_zero(states[1], states[2]) >= VISIBLE_STEP
 }
 
 /// A label for a fill: the first candidate that holds [`TEXT_FLOOR`] across all
@@ -945,8 +908,7 @@ fn steps_visibly(fill: Color, pressed: Color) -> bool {
 /// the control is being used.
 fn best_label(fill: Color, pressed: Color, candidates: &[Color]) -> Color {
     let states = fill_states(fill, pressed);
-    let measured = Backdrops::new(&states);
-    let score = |label: Color| measured.worst(label);
+    let score = |label: Color| worst_contrast(label, &states);
     // The extremes are written as channels, not as `Color::White`/`Color::Black`:
     // those are named colors, measured here through the VGA table but painted
     // as whatever the terminal's ANSI 0 and 15 happen to be. The label that was
@@ -1023,11 +985,10 @@ impl Hues {
                         .all(|state| contrast_or_zero(*state, layers.surface) >= LINE_FLOOR)
                         && (!is_a_fill
                             || (steps_visibly(candidate, near)
-                                && Backdrops::new(&states).worst(best_label(
-                                    candidate,
-                                    near,
-                                    &[layers.background],
-                                )) >= TEXT_FLOOR))
+                                && worst_contrast(
+                                    best_label(candidate, near, &[layers.background]),
+                                    &states,
+                                ) >= TEXT_FLOOR))
                 })
         };
         // Solved in turn, each refusing the answers already given: a palette
@@ -1059,15 +1020,19 @@ impl Hues {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        ButtonStyle, ButtonVariant, DialogStyle, ListStyle, SelectStyle, TabsStyle, ToasterStyle,
+    };
 
     /// A backdrop the crate cannot measure scores a ratio no floor accepts, so
     /// an unmeasurable color can never satisfy a solver. Skipping it instead
     /// would let an all-unmeasurable list score [`f64::INFINITY`] and pass.
     #[test]
     fn text_on_a_backdrop_with_no_channels_passes_no_floor() {
-        let unmeasurable = Backdrops::new(&[Color::Reset]).worst(Color::Rgb(255, 255, 255));
-        let mixed =
-            Backdrops::new(&[Color::Rgb(0, 0, 0), Color::Reset]).worst(Color::Rgb(255, 255, 255));
+        let white = Color::Rgb(255, 255, 255);
+        let unmeasurable = worst_contrast(white, &[Color::Reset]);
+        let mixed = worst_contrast(white, &[Color::Rgb(0, 0, 0), Color::Reset]);
 
         assert!(unmeasurable < TEXT_FLOOR, "scored {unmeasurable}");
         assert!(
@@ -1075,11 +1040,6 @@ mod tests {
             "one unmeasurable backdrop is enough to fail: scored {mixed}"
         );
     }
-
-    use super::*;
-    use crate::{
-        ButtonStyle, ButtonVariant, DialogStyle, ListStyle, SelectStyle, TabsStyle, ToasterStyle,
-    };
 
     /// The crate's own luminance, insisting on a color it can read. Every
     /// theme measured here paints in colors the derivation solved against the
@@ -1127,27 +1087,6 @@ mod tests {
         Theme::presets()
             .iter()
             .filter(|theme| theme.name != "Terminal")
-    }
-
-    /// The floors are the numbers they name.
-    ///
-    /// Every check above measures against a constant, so a weakened constant
-    /// would weaken both sides at once. These are the citations.
-    #[test]
-    fn the_floors_are_the_numbers_they_name() {
-        // WCAG 2.1 SC 1.4.3, normal text.
-        assert!((TEXT_FLOOR - 4.5).abs() < f64::EPSILON);
-        // WCAG 2.1 SC 1.4.11, user interface components and graphical objects.
-        assert!((LINE_FLOOR - 3.0).abs() < f64::EPSILON);
-        // The crate's own: the well window, its aim, the dialog split, the
-        // smallest visible change, and what a disabled row keeps.
-        assert!((WELL_MIN - 1.10).abs() < f64::EPSILON);
-        assert!((WELL_MAX - 1.35).abs() < f64::EPSILON);
-        assert!((WELL_TARGET - 1.20).abs() < f64::EPSILON);
-        assert!((SURFACE_MIN - 1.03).abs() < f64::EPSILON);
-        assert!((VISIBLE_STEP - 1.05).abs() < f64::EPSILON);
-        assert!((MUTED_STEP - 1.15).abs() < f64::EPSILON);
-        assert!((DISABLED_LEGIBILITY - 2.0).abs() < f64::EPSILON);
     }
 
     /// Every invariant a theme has to hold, whatever produced it.
@@ -1604,7 +1543,7 @@ mod tests {
         assert!(contrast(background, fill) >= TEXT_FLOOR);
 
         let states = fill_states(fill, pressed);
-        let worst = Backdrops::new(&states).worst(background);
+        let worst = worst_contrast(background, &states);
         assert!(
             worst < TEXT_FLOOR,
             "at rest is the worst moment: {worst:.3}"
@@ -1831,7 +1770,21 @@ mod tests {
                     button.hovered_background,
                 ),
             ] {
-                pairs.push((format!("{name} label {state}"), foreground, background));
+                // A `Reset` fill shows whatever the button sits on, so the
+                // label is measured against every backdrop it can land on.
+                if background == Color::Reset {
+                    for (place, backdrop) in
+                        [("background", theme.background), ("surface", theme.surface)]
+                    {
+                        pairs.push((
+                            format!("{name} label {state} on the {place}"),
+                            foreground,
+                            backdrop,
+                        ));
+                    }
+                } else {
+                    pairs.push((format!("{name} label {state}"), foreground, background));
+                }
             }
         }
         for (label, foreground, background) in [

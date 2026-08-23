@@ -131,7 +131,8 @@ impl demo_shared::Demo for App {
                     let marker = if row.selected { "[x]" } else { "[ ]" };
                     Text::from(vec![
                         Line::from(format!("{marker}  {}", row.label)),
-                        // Row colors replace span colors, but modifiers remain.
+                        // The row style paints under the text; a span's own
+                        // colors and modifiers stay on top of it.
                         Line::from(Span::styled(
                             format!("     {}", state.title_for(row.label)),
                             Style::default().add_modifier(Modifier::DIM),

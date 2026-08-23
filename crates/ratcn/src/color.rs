@@ -9,8 +9,6 @@
 //! `Rgb` near it. `Indexed` and `Reset` carry no channels to resolve and pass
 //! through unchanged.
 
-use std::sync::LazyLock;
-
 use ratatui::style::Color;
 
 // The standard amounts the library shifts a color by to express state, applied
@@ -103,26 +101,18 @@ pub const fn resolve_rgb(color: Color) -> Option<(u8, u8, u8)> {
 #[must_use]
 pub fn luminance(color: Color) -> Option<f64> {
     let (r, g, b) = resolve_rgb(color)?;
-    let channel = &*LINEAR_CHANNEL;
-    Some(0.2126 * channel[r as usize] + 0.7152 * channel[g as usize] + 0.0722 * channel[b as usize])
+    Some(0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b))
 }
 
-/// The sRGB transfer function, one entry per channel value — a u8 channel is
-/// the whole domain, so the table is exact.
-static LINEAR_CHANNEL: LazyLock<[f64; 256]> = LazyLock::new(|| {
-    std::array::from_fn(|value| {
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "the index is 0..=255, which f64 represents exactly"
-        )]
-        let value = value as f64 / 255.0;
-        if value <= 0.039_28 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
-    })
-});
+/// The sRGB transfer function: one channel, linearised.
+fn linear(channel: u8) -> f64 {
+    let value = f64::from(channel) / 255.0;
+    if value <= 0.039_28 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
 
 /// The WCAG 2.1 contrast ratio between two colors, from 1.0 to 21.0 — `None`
 /// if either carries no channels to measure.
@@ -193,16 +183,6 @@ pub const fn blendable(color: Color, fallback: Color) -> Color {
     }
 }
 
-/// Darken a color toward black by `amount` percent — [`dim`] against
-/// [`Color::Black`]. Amounts above 100 are treated as 100.
-///
-/// Channels come from [`resolve_rgb`]; `Indexed` and [`Color::Reset`] pass
-/// through unchanged.
-#[must_use]
-pub const fn darken(color: Color, amount: u16) -> Color {
-    dim(color, Color::Black, amount)
-}
-
 /// Blend `color` toward `toward` by `amount` percent, keeping a fraction of the
 /// original hue so a dimmed control isn't flattened to a neutral grey (a
 /// disabled destructive button stays red-ish). Amounts above 100 are treated
@@ -240,7 +220,7 @@ mod tests {
         let color = Color::Rgb(20, 40, 60);
         let toward = Color::Rgb(100, 120, 140);
 
-        assert_eq!(darken(color, 101), Color::Rgb(0, 0, 0));
+        assert_eq!(dim(color, Color::Black, 101), Color::Rgb(0, 0, 0));
         assert_eq!(
             dim(color, Color::White, u16::MAX),
             Color::Rgb(255, 255, 255)
@@ -254,40 +234,49 @@ mod tests {
         // equivalent `Rgb`, so focus/hover/disabled stay visible on
         // named-color themes.
         assert_eq!(
-            darken(Color::LightBlue, 10),
-            darken(Color::Rgb(0, 0, 255), 10)
+            dim(Color::LightBlue, Color::Black, 10),
+            dim(Color::Rgb(0, 0, 255), Color::Black, 10)
         );
-        assert_ne!(darken(Color::LightBlue, 10), Color::LightBlue);
+        assert_ne!(dim(Color::LightBlue, Color::Black, 10), Color::LightBlue);
         assert_eq!(
             dim(Color::Red, Color::Black, 50),
             dim(Color::Rgb(128, 0, 0), Color::Rgb(0, 0, 0), 50)
         );
     }
 
-    /// `darken` is `dim` against black, so it has to round the way a blend
-    /// toward an endpoint rounds. The boundaries are where a rounding
-    /// difference would show.
+    /// A blend toward either endpoint rounds to nearest. The boundaries are
+    /// where a rounding difference would show.
     #[test]
-    fn darkening_rounds_as_a_blend_toward_the_endpoints() {
+    fn dimming_rounds_to_nearest_at_both_endpoints() {
         let gray = Color::Rgb(128, 128, 128);
 
-        assert_eq!(darken(gray, 0), gray, "nothing moves at all");
+        assert_eq!(dim(gray, Color::Black, 0), gray, "nothing moves at all");
         assert_eq!(dim(gray, Color::White, 0), gray);
-        assert_eq!(darken(gray, 100), Color::Rgb(0, 0, 0), "all the way down");
+        assert_eq!(
+            dim(gray, Color::Black, 100),
+            Color::Rgb(0, 0, 0),
+            "all the way down"
+        );
         assert_eq!(
             dim(gray, Color::White, 100),
             Color::Rgb(255, 255, 255),
             "all the way up"
         );
         // Halves round away from zero, in both directions and at both ends.
-        assert_eq!(darken(Color::Rgb(1, 1, 1), 50), Color::Rgb(1, 1, 1));
-        assert_eq!(darken(Color::Rgb(3, 3, 3), 50), Color::Rgb(2, 2, 2));
+        assert_eq!(
+            dim(Color::Rgb(1, 1, 1), Color::Black, 50),
+            Color::Rgb(1, 1, 1)
+        );
+        assert_eq!(
+            dim(Color::Rgb(3, 3, 3), Color::Black, 50),
+            Color::Rgb(2, 2, 2)
+        );
         assert_eq!(
             dim(Color::Rgb(254, 254, 254), Color::White, 50),
             Color::Rgb(255, 255, 255)
         );
         assert_eq!(
-            darken(Color::Rgb(255, 255, 255), 1),
+            dim(Color::Rgb(255, 255, 255), Color::Black, 1),
             Color::Rgb(252, 252, 252)
         );
     }
@@ -313,7 +302,7 @@ mod tests {
 
     #[test]
     fn unresolvable_colors_pass_through() {
-        assert_eq!(darken(Color::Reset, 10), Color::Reset);
+        assert_eq!(dim(Color::Reset, Color::Black, 10), Color::Reset);
         assert_eq!(
             dim(Color::Indexed(42), Color::White, 10),
             Color::Indexed(42)
