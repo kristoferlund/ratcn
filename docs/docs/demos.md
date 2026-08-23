@@ -53,6 +53,8 @@ the previews embedded on the [component pages](./components/button).
 | [Dialog](./components/dialog) | `dialog` — a modal layer with actions, draggable by its border |
 | [Toast](./components/toast) | `toast` — transient notifications your app owns |
 | [Tooltip](./components/tooltip) | `tooltip` — hover or Tab to a button and its bubble floats above |
+| [Checkbox](./components/checkbox) | `checkbox` — one component as checkbox, ASCII checklist, and switch |
+| [Cycle](./components/cycle) | `cycle` — settings rows with the value cycling in place |
 | [BarChart](./components/barchart) | `barchart`, `barchart-horizontal` — a paint-only widget, no runtime needed |
 
 ## Running them in the browser
