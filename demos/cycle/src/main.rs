@@ -1,20 +1,30 @@
-//! Settings rows: the setting's name on the left, a [`Cycle`] right-aligned.
+//! Settings rows: the setting's name on the left, a [`Cycle`] on the right.
 //!
-//! The pattern most settings screens want — each row reads "name: value", and
-//! the value cycles in place through its options. Tab moves between rows;
-//! Enter, Space, an arrow, or a click advances the focused one.
+//! The pattern most settings screens want — each row reads "name: value",
+//! and the value cycles in place through its options. A Cycle is exactly as
+//! wide as the value it currently shows, so each row hugs its text; here they
+//! are right-aligned against the panel's edge.
+//!
+//! Tab moves between rows. Enter, Space, an arrow, or a click advances the
+//! focused one, wrapping at both ends.
 
 use std::io;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Layout, Margin},
     style::Style,
+    text::Line,
 };
+use ratcn::text_width;
 use ratcn::{
     Cycle, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn},
+    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
+
+const DEMO_WIDTH: u16 = 34;
+const DEMO_HEIGHT: u16 = 7;
+const CONTENT_PADDING: Margin = Margin::new(2, 1);
 
 const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
 const CADENCES: [&str; 4] = ["Live", "Every minute", "Hourly", "Off"];
@@ -47,7 +57,7 @@ impl App {
             state: AppState::default(),
             ratcn: Ratcn::new()
                 .focus(|s: &AppState| &s.focus, Msg::Focus)
-                .tab_wrap(ratcn::runtime::TabWrap::Wrap),
+                .tab_wrap(TabWrap::Wrap),
         }
     }
 
@@ -81,39 +91,40 @@ impl demo_shared::Demo for App {
 
         let state = &self.state;
         self.ratcn.render(frame, state, theme, |ctx| {
-            // One column per row, split into label on the left and cycle on
-            // the right, with the widest option reserved so every value has
-            // the same hit target.
-            let span = SIZES
-                .iter()
-                .chain(&CADENCES)
-                .chain(&KEYMAPS)
-                .map(|option| option.len() as u16)
-                .max()
-                .unwrap_or(0);
-            let [rows_area] = Layout::vertical([Constraint::Length(3)])
-                .flex(Flex::Center)
-                .areas(area);
+            let demo = area.centered(
+                Constraint::Length(DEMO_WIDTH),
+                Constraint::Length(DEMO_HEIGHT),
+            );
+            ctx.paint(move |ctx| {
+                let surface = ctx.theme.surface;
+                ctx.with_buffer(|buf| {
+                    buf.set_style(demo, Style::default().bg(surface));
+                });
+            });
 
-            for (row, (name, id)) in [
-                ("Text size", "size"),
-                ("Refresh cadence", "cadence"),
-                ("Key map", "keymap"),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let row_area = Rect::new(rows_area.x, rows_area.y + row as u16, rows_area.width, 1);
+            let inner = demo.inner(CONTENT_PADDING);
+            let [row_a, row_b, row_c] = Layout::vertical([Constraint::Length(1); 3])
+                .spacing(1)
+                .areas(inner);
+
+            // Each row: the setting's name at the left edge, and the cycle
+            // right-aligned, hugging its current value.
+            let settings = [
+                ("Text size", "size", SIZES[state.size], row_a),
+                ("Refresh", "cadence", CADENCES[state.cadence], row_b),
+                ("Key map", "keymap", KEYMAPS[state.keymap], row_c),
+            ];
+
+            for (name, id, value, row_area) in settings {
+                let value_width = text_width::display_width_u16(value);
                 let [label_area, value_area] =
-                    Layout::horizontal([Constraint::Min(1), Constraint::Length(span + 2)])
+                    Layout::horizontal([Constraint::Min(1), Constraint::Length(value_width)])
                         .areas(row_area);
 
                 ctx.paint_widget(
-                    ratatui::text::Line::from(format!("{name}:"))
-                        .style(Style::default().fg(theme.foreground)),
+                    Line::from(format!("{name}:")).style(Style::default().fg(theme.foreground)),
                     label_area,
                 );
-
                 let cycle = match id {
                     "size" => Cycle::new(SIZES).selection(|s: &AppState| s.size, Msg::Size),
                     "cadence" => {

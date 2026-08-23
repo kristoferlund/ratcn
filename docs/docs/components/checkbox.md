@@ -31,9 +31,10 @@ ctx.component(
 );
 ```
 
-Enter or Space toggles while focused. Nothing paints a background, hover
-changes nothing, and focus recolors the label — a checkbox reads as text on the
-surface it sits on, with the one visible state keyboard users need.
+Enter or Space toggles while focused. At rest a checkbox reads as text on the
+surface it sits on — no chrome — and hover or focus lay the same quiet fill
+over the row that every other control uses, so both kinds of users can always
+see what they are about to flip.
 
 ## The markers are yours
 

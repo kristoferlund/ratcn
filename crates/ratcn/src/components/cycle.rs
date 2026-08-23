@@ -165,17 +165,6 @@ impl<'a> CycleWidget<'a> {
         self
     }
 
-    /// Columns of the widest option — the width that fits every value this
-    /// cycle can ever show.
-    #[must_use]
-    pub fn span(&self) -> u16 {
-        self.options
-            .iter()
-            .map(|option| text_width::display_width_u16(option))
-            .max()
-            .unwrap_or(0)
-    }
-
     fn resolved_style(&self) -> CycleStyle {
         match (self.style, self.theme) {
             (Some(style), _) => style,
@@ -224,6 +213,9 @@ pub struct Cycle<S, M> {
     style: Option<StyleFn>,
     /// The bound selection, resolved and clamped once per declaration.
     resolved_selected: usize,
+    /// The columns the current option paints — the Cycle is as wide as the
+    /// value it shows, no wider.
+    resolved_width: u16,
 }
 
 impl<S, M> fmt::Debug for Cycle<S, M> {
@@ -250,6 +242,7 @@ impl<S, M> Cycle<S, M> {
             disabled: false,
             style: None,
             resolved_selected: 0,
+            resolved_width: 0,
         }
     }
 
@@ -285,6 +278,15 @@ impl<S, M> Cycle<S, M> {
 
     fn can_act(&self) -> bool {
         !self.disabled && !self.options.is_empty() && self.selection.is_some()
+    }
+
+    /// The rect the current value paints in and answers events in: the Cycle
+    /// is exactly as wide as the text it shows.
+    fn value_area(&self, area: Rect) -> Rect {
+        Rect {
+            width: self.resolved_width.min(area.width),
+            ..area
+        }
     }
 
     /// Advance one option. Forward past the end wraps to the first; backward
@@ -325,6 +327,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
             .as_ref()
             .map_or(0, |(read, _)| read(state))
             .min(self.options.len().saturating_sub(1));
+        self.resolved_width = self
+            .options
+            .get(self.resolved_selected)
+            .map(|option| text_width::display_width_u16(option))
+            .unwrap_or(0);
     }
 
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {
@@ -344,7 +351,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
             .hovered(ctx.hovered())
             .disabled(self.disabled)
             .style(style);
-        ctx.widget(widget, ctx.area());
+        ctx.widget(widget, self.value_area(ctx.area()));
     }
 
     fn handle_event(
@@ -368,6 +375,10 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
 
     fn scope_options(&self) -> ScopeOptions {
         ScopeOptions::default().focusable(self.can_act())
+    }
+
+    fn interaction_area(&self, area: Rect) -> Rect {
+        self.value_area(area)
     }
 }
 

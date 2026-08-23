@@ -66,11 +66,11 @@ frame.render_widget(
 );
 ```
 
-`.span()` measures the widest option — the width that fits every value this
-cycle can ever show, which is what keeps a column of cycles from shifting as
-values change. Replace `.themed(...)` with `.style(...)` to supply exact
-colors.
-
+The interactive component paints and answers events in exactly the columns its
+current value occupies — a Cycle is as wide as the text it shows, so rows of
+different settings end at different columns, and a fill on hover or focus
+hugs the value instead of stretching across the row. Replace `.themed(...)`
+with `.style(...)` to supply exact colors.
 ## Full API
 
 Every method, with binding requirements and edge-case detail:
