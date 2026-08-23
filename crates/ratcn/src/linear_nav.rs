@@ -14,7 +14,7 @@
 //! focused, what is selected, and where the view is scrolled all stay in app
 //! state, stored however the app prefers.
 
-use crate::runtime::{KeyCode, KeyEvent, Step};
+use crate::runtime::{KeyCode, KeyEvent, ScrollDirection, Step};
 
 /// The next *enabled* index after moving one step from `from` toward
 /// `direction`, skipping indices for which `disabled` holds. Clamps at the last
@@ -120,76 +120,77 @@ enum NavMove {
     HalfPage(Step),
 }
 
-/// The movement a key asks for, or `None` if it is not a navigation key.
+/// Which way a control's items run, and so which keys move along them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    /// Items stacked in a column: Up/Down, `k`/`j`, and the page keys.
+    Vertical,
+    /// Items in a row: Left/Right and `h`/`l`. A row has no pages.
+    Horizontal,
+}
+
+/// The movement a key asks for along `axis`, or `None` if it is not a
+/// navigation key there.
 ///
-/// This is the whole vertical key map in one place, and the reason it takes a
+/// This is the whole key map in one place, and the reason it takes a
 /// [`KeyEvent`] rather than a [`KeyCode`]: a third of it is modifier chords.
 ///
 /// Alt never navigates — it belongs to the app. Neither does Shift: `J` and `K`
 /// are not `j` and `k`, and leaving Shift free keeps range-selection available
 /// later without changing what any key means today.
-fn nav_move(key: KeyEvent) -> Option<NavMove> {
+fn nav_move(key: KeyEvent, axis: Axis) -> Option<NavMove> {
     if key.modifiers.alt || key.modifiers.shift {
         return None;
     }
     if key.modifiers.ctrl {
         // The readline and `vi` chords. They are here rather than left to the
         // app because every control with a cursor wants the same four.
-        return match key.code {
-            KeyCode::Char('n') => Some(NavMove::Step(Step::Forward)),
-            KeyCode::Char('p') => Some(NavMove::Step(Step::Backward)),
-            KeyCode::Char('d') => Some(NavMove::HalfPage(Step::Forward)),
-            KeyCode::Char('u') => Some(NavMove::HalfPage(Step::Backward)),
+        return match (key.code, axis) {
+            (KeyCode::Char('n'), _) => Some(NavMove::Step(Step::Forward)),
+            (KeyCode::Char('p'), _) => Some(NavMove::Step(Step::Backward)),
+            (KeyCode::Char('d'), Axis::Vertical) => Some(NavMove::HalfPage(Step::Forward)),
+            (KeyCode::Char('u'), Axis::Vertical) => Some(NavMove::HalfPage(Step::Backward)),
             _ => None,
         };
     }
-    match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(NavMove::Step(Step::Backward)),
-        KeyCode::Down | KeyCode::Char('j') => Some(NavMove::Step(Step::Forward)),
-        KeyCode::Home => Some(NavMove::Edge(Step::Backward)),
-        KeyCode::End => Some(NavMove::Edge(Step::Forward)),
-        KeyCode::PageUp => Some(NavMove::Page(Step::Backward)),
-        KeyCode::PageDown => Some(NavMove::Page(Step::Forward)),
+    match (key.code, axis) {
+        (KeyCode::Up | KeyCode::Char('k'), Axis::Vertical)
+        | (KeyCode::Left | KeyCode::Char('h'), Axis::Horizontal) => {
+            Some(NavMove::Step(Step::Backward))
+        }
+        (KeyCode::Down | KeyCode::Char('j'), Axis::Vertical)
+        | (KeyCode::Right | KeyCode::Char('l'), Axis::Horizontal) => {
+            Some(NavMove::Step(Step::Forward))
+        }
+        (KeyCode::Home, _) => Some(NavMove::Edge(Step::Backward)),
+        (KeyCode::End, _) => Some(NavMove::Edge(Step::Forward)),
+        (KeyCode::PageUp, Axis::Vertical) => Some(NavMove::Page(Step::Backward)),
+        (KeyCode::PageDown, Axis::Vertical) => Some(NavMove::Page(Step::Forward)),
         _ => None,
     }
 }
 
-/// Does this key step a cursor by exactly one item — an arrow, `j`/`k`, or
-/// Ctrl+N/Ctrl+P?
+/// Does this key step a cursor by exactly one item along `axis` — an arrow,
+/// its `vi` letter, or Ctrl+N/Ctrl+P?
 ///
 /// A collapsed control asks this to decide whether a key should open it: what
-/// would move a cursor should first reveal the cursor. [`Select`](crate::Select)
-/// uses it for its closed state.
+/// would move a cursor should first reveal the cursor.
 #[must_use]
-pub fn is_step_key(key: KeyEvent) -> bool {
-    matches!(nav_move(key), Some(NavMove::Step(_)))
+pub fn is_step_key(key: KeyEvent, axis: Axis) -> bool {
+    matches!(nav_move(key, axis), Some(NavMove::Step(_)))
 }
 
-/// Does a held modifier rule this key out of a control's own handling?
+/// Resolve one navigation key against a cursor over `len` items along `axis`,
+/// skipping disabled indices.
 ///
-/// Modified keys belong to the app: a control claims only unmodified presses,
-/// so `Ctrl+S` reaches the save handler even while a list has focus.
-///
-/// The navigation chords are the one exception, and they are why this must be
-/// checked *after* [`nav_key_target`] rather than before — `Ctrl+N` is a
-/// control's own key, and asking this first would reject it.
-#[must_use]
-pub fn has_reserved_modifier(key: KeyEvent) -> bool {
-    key.modifiers.any()
-}
-
-/// Resolve one navigation key against a cursor over `len` items, skipping
-/// disabled indices.
-///
-/// This is the key map the vertically-navigated list controls share —
-/// [`List`](crate::List) and [`Select`](crate::Select)'s option list:
+/// This is the key map every item control shares:
 ///
 /// | Keys | Moves |
 /// |---|---|
-/// | Up / Down, `k` / `j`, Ctrl+P / Ctrl+N | one item |
+/// | Up / Down, `k` / `j` (vertical); Left / Right, `h` / `l` (horizontal); Ctrl+P / Ctrl+N | one item |
 /// | Home / End | to the first / last enabled item |
-/// | `PageUp` / `PageDown` | one viewport (`page_size` items) |
-/// | Ctrl+U / Ctrl+D | half a viewport |
+/// | `PageUp` / `PageDown` (vertical only) | one viewport (`page_size` items) |
+/// | Ctrl+U / Ctrl+D (vertical only) | half a viewport |
 ///
 /// Three sets of names for the same movements: arrows for everyone, `hjkl` for
 /// `vi`, and the Ctrl chords readline put in every shell and text field. None
@@ -197,9 +198,7 @@ pub fn has_reserved_modifier(key: KeyEvent) -> bool {
 /// whichever they already know.
 ///
 /// Commit keys (Enter, Space) are not navigation and stay with the calling
-/// control, which decides what a commit means. A horizontally-navigated
-/// control does not use this: [`Tabs`](crate::Tabs) maps Left/Right, `h`/`l`,
-/// and the Ctrl chords itself, and reaches for the index helpers here directly.
+/// control, which decides what a commit means.
 ///
 /// - `None` — not a navigation key, or no enabled item exists to land on;
 ///   ignore the key.
@@ -212,12 +211,13 @@ pub fn has_reserved_modifier(key: KeyEvent) -> bool {
 #[must_use]
 pub fn nav_key_target(
     key: KeyEvent,
+    axis: Axis,
     len: usize,
     cursor: Option<usize>,
     page_size: usize,
     disabled: impl Fn(usize) -> bool,
 ) -> Option<NavOutcome> {
-    let movement = nav_move(key)?;
+    let movement = nav_move(key, axis)?;
     // A list with nothing enabled does not navigate, cursor or no cursor. This
     // is asked before any movement because the index helpers below answer in
     // plain indices: with everything disabled they hand back `from`, which
@@ -284,30 +284,22 @@ fn clamp_scroll_offset(len: usize, viewport_height: usize, offset: usize) -> usi
 }
 
 /// The scroll offset after moving one wheel notch by `step` rows from
-/// `current`, clamped to the last full page.
+/// `current`, clamped to the last full page. `None` for a horizontal notch,
+/// which a column of rows does not answer.
 #[must_use]
 pub fn wheel_offset(
     len: usize,
     viewport_height: usize,
     current: usize,
-    direction: ScrollStep,
+    direction: ScrollDirection,
     step: usize,
-) -> usize {
-    match direction {
-        ScrollStep::Up => clamp_scroll_offset(len, viewport_height, current.saturating_sub(step)),
-        ScrollStep::Down => clamp_scroll_offset(len, viewport_height, current.saturating_add(step)),
-    }
-}
-
-/// The vertical direction of a wheel-driven scroll-offset change (as opposed
-/// to [`crate::runtime::ScrollDirection`], which also carries the horizontal
-/// notches a row-oriented control ignores).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScrollStep {
-    /// Scroll toward the start of the list, decreasing the offset.
-    Up,
-    /// Scroll toward the end of the list, increasing the offset.
-    Down,
+) -> Option<usize> {
+    let next = match direction {
+        ScrollDirection::Up => current.saturating_sub(step),
+        ScrollDirection::Down => current.saturating_add(step),
+        ScrollDirection::Left | ScrollDirection::Right => return None,
+    };
+    Some(clamp_scroll_offset(len, viewport_height, next))
 }
 
 /// The item index for a `local_row` (a row already known to be inside the
@@ -394,25 +386,34 @@ mod tests {
     #[test]
     fn wheel_offset_clamps_at_zero_and_the_viewport_aware_maximum() {
         // 10 items, 4-row viewport: max offset is 6.
-        assert_eq!(wheel_offset(10, 4, 0, ScrollStep::Up, 3), 0);
-        assert_eq!(wheel_offset(10, 4, 5, ScrollStep::Down, 3), 6);
-        assert_eq!(wheel_offset(10, 4, 2, ScrollStep::Down, 3), 5);
-        assert_eq!(wheel_offset(10, 4, 2, ScrollStep::Up, 3), 0);
+        assert_eq!(wheel_offset(10, 4, 0, ScrollDirection::Up, 3), Some(0));
+        assert_eq!(wheel_offset(10, 4, 5, ScrollDirection::Down, 3), Some(6));
+        assert_eq!(wheel_offset(10, 4, 2, ScrollDirection::Down, 3), Some(5));
+        assert_eq!(wheel_offset(10, 4, 2, ScrollDirection::Up, 3), Some(0));
     }
 
     #[test]
     fn wheel_offset_with_no_viewport_height_clamps_to_the_last_item() {
-        assert_eq!(wheel_offset(10, 0, 0, ScrollStep::Down, 100), 10);
+        assert_eq!(wheel_offset(10, 0, 0, ScrollDirection::Down, 100), Some(10));
     }
 
     #[test]
     fn wheel_offset_saturates_before_clamping() {
-        assert_eq!(wheel_offset(10, 4, usize::MAX, ScrollStep::Down, 1), 6);
+        assert_eq!(
+            wheel_offset(10, 4, usize::MAX, ScrollDirection::Down, 1),
+            Some(6)
+        );
     }
 
     #[test]
     fn wheel_offset_clamps_an_out_of_range_current_offset() {
-        assert_eq!(wheel_offset(10, 4, 99, ScrollStep::Up, 1), 6);
+        assert_eq!(wheel_offset(10, 4, 99, ScrollDirection::Up, 1), Some(6));
+    }
+
+    #[test]
+    fn wheel_offset_declines_horizontal_notches() {
+        assert_eq!(wheel_offset(10, 4, 2, ScrollDirection::Left, 1), None);
+        assert_eq!(wheel_offset(10, 4, 2, ScrollDirection::Right, 1), None);
     }
 
     #[test]
@@ -434,40 +435,115 @@ mod tests {
     fn nav_key_target_maps_each_navigation_key() {
         let none = |_: usize| false;
         assert_eq!(
-            nav_key_target(KeyCode::Down.into(), 5, Some(1), 2, none),
+            nav_key_target(KeyCode::Down.into(), Axis::Vertical, 5, Some(1), 2, none),
             Some(NavOutcome::Move(2))
         );
         assert_eq!(
-            nav_key_target(KeyCode::Up.into(), 5, Some(1), 2, none),
+            nav_key_target(KeyCode::Up.into(), Axis::Vertical, 5, Some(1), 2, none),
             Some(NavOutcome::Move(0))
         );
         assert_eq!(
-            nav_key_target(KeyCode::Home.into(), 5, Some(3), 2, none),
+            nav_key_target(KeyCode::Home.into(), Axis::Vertical, 5, Some(3), 2, none),
             Some(NavOutcome::Move(0))
         );
         assert_eq!(
-            nav_key_target(KeyCode::End.into(), 5, Some(3), 2, none),
+            nav_key_target(KeyCode::End.into(), Axis::Vertical, 5, Some(3), 2, none),
             Some(NavOutcome::Move(4))
         );
         assert_eq!(
-            nav_key_target(KeyCode::PageDown.into(), 5, Some(0), 2, none),
+            nav_key_target(
+                KeyCode::PageDown.into(),
+                Axis::Vertical,
+                5,
+                Some(0),
+                2,
+                none
+            ),
             Some(NavOutcome::Move(2))
         );
         assert_eq!(
-            nav_key_target(KeyCode::PageUp.into(), 5, Some(4), 2, none),
+            nav_key_target(KeyCode::PageUp.into(), Axis::Vertical, 5, Some(4), 2, none),
             Some(NavOutcome::Move(2))
         );
+    }
+
+    /// A row answers Left/Right and `h`/`l` where a column answers Up/Down and
+    /// `j`/`k`; the chords and Home/End are shared, and a row has no pages.
+    #[test]
+    fn the_horizontal_axis_swaps_the_arrows_and_drops_the_page_keys() {
+        let none = |_: usize| false;
+        let ctrl = |code: char| KeyEvent {
+            code: KeyCode::Char(code),
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+        };
+        for (key, vertical, horizontal) in [
+            (
+                KeyEvent::new(KeyCode::Right),
+                None,
+                Some(NavOutcome::Move(2)),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('l')),
+                None,
+                Some(NavOutcome::Move(2)),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('h')),
+                None,
+                Some(NavOutcome::Move(0)),
+            ),
+            (
+                KeyEvent::new(KeyCode::Down),
+                Some(NavOutcome::Move(2)),
+                None,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('j')),
+                Some(NavOutcome::Move(2)),
+                None,
+            ),
+            (
+                KeyEvent::new(KeyCode::PageDown),
+                Some(NavOutcome::Move(3)),
+                None,
+            ),
+            (ctrl('d'), Some(NavOutcome::Move(2)), None),
+            (
+                ctrl('n'),
+                Some(NavOutcome::Move(2)),
+                Some(NavOutcome::Move(2)),
+            ),
+            (
+                KeyEvent::new(KeyCode::End),
+                Some(NavOutcome::Move(4)),
+                Some(NavOutcome::Move(4)),
+            ),
+        ] {
+            assert_eq!(
+                nav_key_target(key, Axis::Vertical, 5, Some(1), 2, none),
+                vertical,
+                "{key:?} on a column"
+            );
+            assert_eq!(
+                nav_key_target(key, Axis::Horizontal, 5, Some(1), 2, none),
+                horizontal,
+                "{key:?} on a row"
+            );
+        }
     }
 
     #[test]
     fn nav_key_target_with_nowhere_new_to_go_stays() {
         let none = |_: usize| false;
         assert_eq!(
-            nav_key_target(KeyCode::Up.into(), 3, Some(0), 1, none),
+            nav_key_target(KeyCode::Up.into(), Axis::Vertical, 3, Some(0), 1, none),
             Some(NavOutcome::Stay)
         );
         assert_eq!(
-            nav_key_target(KeyCode::Home.into(), 3, Some(0), 1, none),
+            nav_key_target(KeyCode::Home.into(), Axis::Vertical, 3, Some(0), 1, none),
             Some(NavOutcome::Stay)
         );
     }
@@ -476,11 +552,11 @@ mod tests {
     fn nav_key_target_without_a_cursor_lands_on_the_first_enabled_item() {
         let disabled = |i: usize| i == 0;
         assert_eq!(
-            nav_key_target(KeyCode::Down.into(), 3, None, 1, disabled),
+            nav_key_target(KeyCode::Down.into(), Axis::Vertical, 3, None, 1, disabled),
             Some(NavOutcome::Move(1))
         );
         assert_eq!(
-            nav_key_target(KeyCode::End.into(), 3, None, 1, disabled),
+            nav_key_target(KeyCode::End.into(), Axis::Vertical, 3, None, 1, disabled),
             Some(NavOutcome::Move(1))
         );
     }
@@ -488,15 +564,19 @@ mod tests {
     #[test]
     fn nav_key_target_ignores_commit_keys_and_all_disabled_lists() {
         assert_eq!(
-            nav_key_target(KeyCode::Enter.into(), 3, Some(0), 1, |_| false),
+            nav_key_target(KeyCode::Enter.into(), Axis::Vertical, 3, Some(0), 1, |_| {
+                false
+            }),
             None
         );
         assert_eq!(
-            nav_key_target(KeyCode::Down.into(), 3, None, 1, |_| true),
+            nav_key_target(KeyCode::Down.into(), Axis::Vertical, 3, None, 1, |_| true),
             None
         );
         assert_eq!(
-            nav_key_target(KeyCode::Home.into(), 3, Some(1), 1, |_| true),
+            nav_key_target(KeyCode::Home.into(), Axis::Vertical, 3, Some(1), 1, |_| {
+                true
+            }),
             None
         );
     }
@@ -516,7 +596,7 @@ mod tests {
             KeyCode::End,
         ] {
             assert_eq!(
-                nav_key_target(key.into(), 3, Some(1), 2, |_| true),
+                nav_key_target(key.into(), Axis::Vertical, 3, Some(1), 2, |_| true),
                 None,
                 "{key:?} in an all-disabled list"
             );
@@ -530,7 +610,7 @@ mod tests {
                 },
             };
             assert_eq!(
-                nav_key_target(key, 3, Some(1), 2, |_| true),
+                nav_key_target(key, Axis::Vertical, 3, Some(1), 2, |_| true),
                 None,
                 "Ctrl+{code} in an all-disabled list"
             );

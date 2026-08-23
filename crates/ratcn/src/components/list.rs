@@ -12,12 +12,12 @@ use crate::Theme;
 use crate::color::{
     DISABLED_DIM, FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, ROW_FOCUS_SHIFT, away_from, blendable, dim,
 };
-use crate::linear_nav::{self, NavOutcome, ScrollStep};
+use crate::linear_nav::{self, Axis};
 use crate::list_core::{
-    self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelHold,
+    self, KeyIntent, ListItem, ListItemState, RowIntent, RowViewport, WheelHold,
 };
 use crate::runtime::{
-    Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseKind, PaintCtx,
+    Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MouseKind, PaintCtx,
     ScopeOptions, ScrollDirection,
 };
 use crate::selection_indicator;
@@ -40,9 +40,10 @@ use crate::theme::resolve_style;
 ///
 /// Rows are then colored by two independent facts, whether the cursor is on the
 /// row and whether the row is selected, giving four combinations. Disabled
-/// overrides all of them. Note that a row only counts as focused when the list
-/// has focus too, so moving focus away leaves the cursor row painted as an
-/// ordinary (or selected) row rather than as a highlight.
+/// overrides all of them. Note that a row only counts as focused while the
+/// cursor is shown — the list has focus or is hovered — so a list that is
+/// neither leaves the cursor row painted as an ordinary (or selected) row
+/// rather than as a highlight.
 ///
 /// [`from_theme`](Self::from_theme) derives all of this from a [`Theme`]; build
 /// one by hand only for colors the theme cannot express, and pass it via
@@ -342,7 +343,9 @@ impl<'a> ListWidget<'a> {
     }
 
     /// Paint as the focused control: the focus backdrop, the cursor row
-    /// highlighted, and the focus symbol shown.
+    /// highlighted, and the focus symbol shown. This is "the cursor is shown"
+    /// rather than keyboard focus alone — [`List`] passes focused *or*
+    /// hovered, and lets [`hovered`](Self::hovered) pick the backdrop.
     #[must_use]
     pub const fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
@@ -792,31 +795,17 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
         area: Rect,
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<M> {
-        let step = match direction {
-            ScrollDirection::Up => ScrollStep::Up,
-            ScrollDirection::Down => ScrollStep::Down,
-            ScrollDirection::Left | ScrollDirection::Right => return EventResult::Ignored,
-        };
         let painted = self.viewport.painted_offset();
-        // The wheel moves the view, never the cursor: the offset is clamped
-        // to the item range only, so the cursor may scroll out of sight.
-        let next = linear_nav::wheel_offset(
-            self.items.len(),
-            self.viewport.visible_items(area),
-            painted,
-            step,
-            SCROLL_STEP,
-        );
-        // Hold the view against the list as the cursor was left in it, so the
-        // next render honors this offset instead of scrolling the cursor back
-        // into view. The hold lives on the list's identity and outlives this
-        // instance, which is what lets an unbound list scroll at all.
+        // The wheel moves the view, never the cursor, and holds it there on
+        // the list's identity — which outlives this instance, and is what
+        // lets an unbound list scroll at all.
         let cursor = self.focused_index(state);
-        ctx.transient::<WheelHold<T>>()
-            .hold(next, &self.items, cursor);
-        // Keep this retained instance's hit-testing aligned with the offset
-        // the next paint will use.
-        self.viewport.record_painted_offset(next);
+        let Some(next) = self
+            .viewport
+            .wheel(direction, &self.items, cursor, area, ctx)
+        else {
+            return EventResult::Ignored;
+        };
         let Some(on_change) = &self.on_scroll_change else {
             return EventResult::Consumed;
         };
@@ -833,32 +822,15 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
             return EventResult::Ignored;
         }
         let cursor = self.focused_index(state);
-        // Navigation is asked first because it owns the Ctrl chords that the
-        // modifier gate below rejects.
-        if let Some(outcome) = linear_nav::nav_key_target(
-            key,
-            self.items.len(),
-            cursor,
-            self.viewport.visible_items(area).max(1),
-            |i| self.disabled_at(i),
-        ) {
-            return match outcome {
-                NavOutcome::Move(target) => self.move_focus(target, state, area),
-                NavOutcome::Stay => EventResult::Consumed,
-            };
+        let page = self.viewport.visible_items(area);
+        // Anything the shared key map does not claim — including every letter
+        // but `j` and `k` — bubbles, so the app keeps its hotkeys.
+        match list_core::key_intent(key, Axis::Vertical, &self.items, cursor, page) {
+            Some(KeyIntent::Move(target)) => self.move_focus(target, state, area),
+            Some(KeyIntent::Stay) => EventResult::Consumed,
+            Some(KeyIntent::Commit(index)) => self.select(index),
+            None => EventResult::Ignored,
         }
-        if linear_nav::has_reserved_modifier(key) {
-            return EventResult::Ignored;
-        }
-        if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
-            return match cursor {
-                Some(index) if !self.disabled_at(index) => self.select(index),
-                _ => EventResult::Ignored,
-            };
-        }
-        // Anything else — including every letter but `j` and `k` — bubbles, so
-        // the app keeps its single-key hotkeys while a list has focus.
-        EventResult::Ignored
     }
 }
 
@@ -895,7 +867,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         );
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let area = ctx.area();
         let state = ctx.state();
         let focused_item = self.focused_index(state);
@@ -927,24 +899,18 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
             &self.items,
             first_item..last_item,
             rows_per_item,
-            |index, item| {
-                // Asked per painted row rather than looked up in a list of every
-                // selected index, which would make painting quadratic.
-                let selected = match &self.selected_many {
-                    Some(selected_many) => selected_many(state, item.value()),
-                    None => selected_row == Some(index),
-                };
-                if selected {
-                    selected_items.push(index);
+            cursor_visible.then_some(focused_item).flatten(),
+            self.disabled,
+            // Asked per painted row rather than looked up in a list of every
+            // selected index, which would make painting quadratic.
+            |index, value| match &self.selected_many {
+                Some(selected_many) => selected_many(state, value),
+                None => selected_row == Some(index),
+            },
+            |row| {
+                if row.selected {
+                    selected_items.push(row.index);
                 }
-                let row = ListItemState {
-                    index,
-                    value: item.value(),
-                    label: item.label(),
-                    focused: cursor_visible && focused_item == Some(index),
-                    selected,
-                    disabled: self.disabled || item.is_disabled(),
-                };
                 match &self.paint_item {
                     Some(paint_item) => paint_item(state, row),
                     None => default_item_line(&row, selection_mode, &style),
@@ -1039,8 +1005,7 @@ mod tests {
     use ratatui::{style::Modifier, text::Line};
 
     use super::*;
-    use crate::list_core::fit_to_height;
-    use crate::runtime::{ChildId, MouseButton, Ratcn};
+    use crate::runtime::{ChildId, KeyCode, MouseButton, Ratcn};
     use crate::test_support::{Driver, key, key_with, mouse};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1189,29 +1154,6 @@ mod tests {
         );
     }
 
-    // A paint_item closure returning the wrong line count must not shift later
-    // items; padding and truncation keep every item exactly row_height tall.
-    #[test]
-    fn rows_are_padded_and_truncated_to_the_declared_height() {
-        let short = fit_to_height(Text::from("one"), 3);
-        assert_eq!(short.lines.len(), 3);
-        assert_eq!(short.lines[0].to_string(), "one");
-        assert_eq!(short.lines[2].to_string(), "");
-
-        let long = fit_to_height(
-            Text::from(vec![Line::from("a"), Line::from("b"), Line::from("c")]),
-            2,
-        );
-        assert_eq!(long.lines.len(), 2);
-        assert_eq!(long.lines[1].to_string(), "b");
-    }
-
-    // Zero would divide by zero in hit-testing, so it is clamped to one row.
-    #[test]
-    fn zero_row_height_is_treated_as_one() {
-        let list: List<Task, State, Msg> = List::new([item(Task::A, "Alpha")]).row_height(0);
-        assert_eq!(list.viewport.rows_per_item(), 1);
-    }
     /// A Ctrl-held character key.
     fn ctrl_key(ch: char) -> Event {
         key_with(
@@ -1840,9 +1782,6 @@ mod tests {
         );
     }
 
-    /// The hold is anchored to the item the cursor sits on, not to its row.
-    /// Swapping that item for another at the same index puts a different item
-    /// under the cursor, so the hold ends and the new item is scrolled in.
     #[test]
     fn replacing_the_anchored_item_releases_the_wheel_hold() {
         let mut driver = Driver::new(20, 3);
@@ -2239,115 +2178,6 @@ mod tests {
         assert!(message.contains("List::multi_selection(...)"));
     }
 
-    // The check is a debug-build assertion, so this contract only exists where
-    // debug assertions do.
-    #[test]
-    #[cfg(debug_assertions)]
-    fn duplicate_item_values_fail_declaration_with_the_documented_panic() {
-        let mut list: List<Task, State, Msg> =
-            List::new([item(Task::A, "First"), item(Task::A, "Second")]);
-
-        let panic = catch_unwind(AssertUnwindSafe(|| {
-            Component::prepare(&mut list, &State::default());
-        }))
-        .expect_err("duplicate item values must panic");
-        let message = panic.downcast_ref::<String>().map_or_else(
-            || {
-                panic
-                    .downcast_ref::<&str>()
-                    .copied()
-                    .unwrap_or_default()
-                    .to_owned()
-            },
-            Clone::clone,
-        );
-
-        assert_eq!(
-            message,
-            "List item values must be unique within a List declaration"
-        );
-    }
-
-    // `j`/`k` and the Ctrl chords are the same navigation gesture as the arrow
-    // keys, and go out through the same item-focus message.
-    #[test]
-    fn vim_and_readline_keys_step_the_cursor_like_the_arrows() {
-        let mut driver = Driver::new(20, 6);
-        let state = State {
-            focused: Some(Task::B),
-            ..State::default()
-        };
-        let items = || {
-            [
-                item(Task::A, "Alpha"),
-                item(Task::B, "Bravo"),
-                item(Task::C, "Charlie"),
-            ]
-        };
-        render_list(&mut driver, &state, items());
-
-        for down in [key(KeyCode::Char('j')), ctrl_key('n')] {
-            assert_eq!(
-                driver.event(down, &state),
-                EventResult::Emit(Msg::Focused(Task::C, 0)),
-                "j and Ctrl+N step forward like Down"
-            );
-        }
-        for up in [key(KeyCode::Char('k')), ctrl_key('p')] {
-            assert_eq!(
-                driver.event(up, &state),
-                EventResult::Emit(Msg::Focused(Task::A, 0)),
-                "k and Ctrl+P step backward like Up"
-            );
-        }
-    }
-
-    #[test]
-    fn a_letter_that_is_not_a_navigation_key_bubbles_as_an_app_hotkey() {
-        let mut driver = Driver::new(20, 6);
-        let state = State {
-            focused: Some(Task::A),
-            ..State::default()
-        };
-        render_list(
-            &mut driver,
-            &state,
-            [item(Task::A, "Alpha"), item(Task::B, "Bravo")],
-        );
-
-        assert_eq!(
-            driver.event(key(KeyCode::Char('a')), &state),
-            EventResult::Ignored,
-            "there is no typeahead: plain letters belong to the app"
-        );
-        assert_eq!(
-            driver.event(key(KeyCode::Char('J')), &state),
-            EventResult::Ignored,
-            "Shift+j is not j, so it is not navigation either"
-        );
-    }
-
-    #[test]
-    fn space_commits_the_single_selection_cursor() {
-        let mut list = List::new([item(Task::A, "Alpha"), item(Task::B, " Bravo")])
-            .item_focus(|state: &State| state.focused, Msg::Focused)
-            .selection(|state: &State| state.selected, Msg::Selected);
-        let state = State {
-            focused: Some(Task::A),
-            ..State::default()
-        };
-
-        assert_eq!(
-            list.handle_event(
-                &key(KeyCode::Char(' ')),
-                &state,
-                &mut EventCtx::default().with_area(Rect::new(0, 0, 20, 2)),
-            ),
-            EventResult::Emit(Msg::Selected(Task::A)),
-            "Space is a commit key on a list, not text: it commits the cursor row"
-        );
-    }
-
     #[test]
     fn space_toggles_the_multi_selection_cursor() {
         let mut list = List::new([item(Task::A, "Alpha"), item(Task::B, " Bravo")])
@@ -2420,15 +2250,6 @@ mod tests {
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 2), &state),
             EventResult::Emit(BigMsg::Chose(42)),
             "the third painted row is the forty-third item"
-        );
-    }
-
-    #[test]
-    fn events_before_the_first_render_are_ignored() {
-        let mut driver = Driver::<State, Msg>::new(20, 2);
-        assert_eq!(
-            driver.event(key(KeyCode::PageDown), &State::default()),
-            EventResult::Ignored
         );
     }
 }

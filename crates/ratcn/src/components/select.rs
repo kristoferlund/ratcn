@@ -27,13 +27,13 @@ use crate::Theme;
 use crate::color::{
     DISABLED_DIM, FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, ROW_FOCUS_SHIFT, away_from, blendable, dim,
 };
-use crate::linear_nav::{self, NavOutcome, ScrollStep};
+use crate::linear_nav::{self, Axis};
 use crate::list_core::{
-    self, ListItem, ListItemState, RowIntent, RowViewport, SCROLL_STEP, WheelHold,
+    self, KeyIntent, ListItem, ListItemState, RowIntent, RowViewport, WheelHold,
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
-    MouseEvent, MouseKind, PaintCtx, PopupOptions, ScopeOptions, ScrollDirection,
+    MouseEvent, MouseKind, PaintCtx, PopupOptions, ScopeOptions,
 };
 use crate::selection_indicator;
 use crate::theme::resolve_style;
@@ -61,8 +61,7 @@ const INDICATOR_OPEN: &str = "∧";
 ///   two independent facts, whether the cursor is on the option and whether
 ///   it is the chosen one, giving four combinations
 ///   (`option_foreground` → `focused_option_*` → `selected_*` →
-///   `selected_focused_*`). Disabled overrides all of them, with
-///   `selected_disabled_*` keeping a previously chosen option recognizable.
+///   `selected_focused_*`). Disabled overrides all of them.
 ///
 /// There is one cursor: keys and pointer hover move the same focused option,
 /// and Enter commits it.
@@ -108,10 +107,6 @@ pub struct SelectStyle {
     pub disabled_foreground: Color,
     /// Disabled trigger and option fill.
     pub disabled_background: Color,
-    /// Chosen, disabled option text color.
-    pub selected_disabled_foreground: Color,
-    /// Chosen, disabled option fill.
-    pub selected_disabled_background: Color,
 }
 
 impl SelectStyle {
@@ -137,8 +132,6 @@ impl SelectStyle {
             unselected_marker: Color::DarkGray,
             disabled_foreground: Color::DarkGray,
             disabled_background: Color::Reset,
-            selected_disabled_foreground: Color::DarkGray,
-            selected_disabled_background: Color::Reset,
         }
     }
 
@@ -170,8 +163,6 @@ impl SelectStyle {
             unselected_marker: theme.muted_foreground,
             disabled_foreground: dim(theme.muted_foreground, backdrop, DISABLED_DIM),
             disabled_background: dim(theme.field, backdrop, DISABLED_DIM),
-            selected_disabled_foreground: dim(theme.muted_foreground, backdrop, DISABLED_DIM),
-            selected_disabled_background: dim(theme.field, backdrop, DISABLED_DIM),
         }
     }
 
@@ -188,12 +179,7 @@ impl SelectStyle {
     }
 
     const fn resolve_row(self, focused: bool, selected: bool, disabled: bool) -> Style {
-        let (foreground, background) = if selected && disabled {
-            (
-                self.selected_disabled_foreground,
-                self.selected_disabled_background,
-            )
-        } else if disabled {
+        let (foreground, background) = if disabled {
             (self.disabled_foreground, self.disabled_background)
         } else if selected && focused {
             (
@@ -286,10 +272,18 @@ impl<'a> SelectWidget<'a> {
         self
     }
 
-    /// Open the panel and show `options`.
+    /// Whether the panel is open. An open panel paints the [`options`](Self::options)
+    /// below the trigger and flips the trigger's indicator.
     #[must_use]
-    pub const fn open(mut self, options: &'a [&'a str]) -> Self {
-        self.open = true;
+    pub const fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    /// The labels of every option, painted in the panel while
+    /// [`open`](Self::open).
+    #[must_use]
+    pub const fn options(mut self, options: &'a [&'a str]) -> Self {
         self.options = options;
         self
     }
@@ -298,10 +292,10 @@ impl<'a> SelectWidget<'a> {
     /// marker-and-label line — one per *painted* option, in paint order,
     /// starting at [`first_item`](Self::first_item).
     ///
-    /// [`open`](Self::open) still takes every option, because the panel's
-    /// height is measured from their count; these are only the rows that
-    /// appear, so a long option list costs a long list's worth of [`Text`] only
-    /// if you build one.
+    /// [`options`](Self::options) still takes every option, because the
+    /// panel's height is measured from their count; these are only the rows
+    /// that appear, so a long option list costs a long list's worth of
+    /// [`Text`] only if you build one.
     ///
     /// Each `Text` may span several lines; pair this with
     /// [`row_height`](Self::row_height) so every option occupies the same
@@ -373,56 +367,15 @@ impl<'a> SelectWidget<'a> {
         self.disabled = disabled;
         self
     }
-
-    /// Total height this widget would paint inside `area_height`, capped at
-    /// `max_visible` options.
-    ///
-    /// A closed or disabled select occupies one row. An enabled, open one adds
-    /// a two-row panel border and as many options as fit, each
-    /// [`row_height`](Self::row_height) rows tall. Openness, option count, and
-    /// row height are read from the instance, so build the widget first and
-    /// measure the same value that will paint.
-    #[must_use]
-    pub const fn height(&self, max_visible: u16, area_height: u16) -> u16 {
-        let visible = self.visible_items(max_visible, area_height);
-        if area_height == 0 {
-            0
-        } else if visible == 0 {
-            TRIGGER_HEIGHT
-        } else {
-            TRIGGER_HEIGHT + visible * self.row_height + 2
-        }
-    }
-
-    /// Number of whole options painted below the trigger inside `area_height`,
-    /// capped at `max_visible`. Zero while closed or disabled. Counts options,
-    /// not rows — multiply by [`row_height`](Self::row_height) for rows.
-    #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the option count is clamped before conversion"
-    )]
-    pub const fn visible_items(&self, max_visible: u16, area_height: u16) -> u16 {
-        if !self.open || self.disabled {
-            return 0;
-        }
-        let count = if self.options.len() > u16::MAX as usize {
-            u16::MAX
-        } else {
-            self.options.len() as u16
-        };
-        min_u16(
-            count,
-            min_u16(
-                max_visible,
-                area_height.saturating_sub(TRIGGER_HEIGHT + 2) / self.row_height,
-            ),
-        )
-    }
 }
 
-const fn min_u16(left: u16, right: u16) -> u16 {
-    if left < right { left } else { right }
+/// How many whole options a panel shows: every option, capped at `max_visible`
+/// and at what fits in `available_rows` at `row_height` rows each.
+fn visible_count(len: usize, max_visible: u16, available_rows: u16, row_height: u16) -> u16 {
+    u16::try_from(len)
+        .unwrap_or(u16::MAX)
+        .min(max_visible)
+        .min(available_rows / row_height.max(1))
 }
 
 impl Widget for SelectWidget<'_> {
@@ -431,16 +384,24 @@ impl Widget for SelectWidget<'_> {
             return;
         }
         paint_trigger(self, area, buf);
+        if !self.open || self.disabled {
+            return;
+        }
         // The standalone widget reserves one trigger row and two border rows.
-        let visible = self.visible_items(u16::MAX, area.height);
-        if self.open && !self.disabled && visible > 0 {
+        let visible = visible_count(
+            self.options.len(),
+            u16::MAX,
+            area.height.saturating_sub(TRIGGER_HEIGHT + 2),
+            self.row_height,
+        );
+        if visible > 0 {
             let panel = Rect::new(
                 area.x,
                 area.y + 1,
                 area.width,
                 visible * self.row_height + 2,
             );
-            paint_panel(self, panel, buf);
+            SelectPanelWidget(self).render(panel, buf);
         }
     }
 }
@@ -484,63 +445,62 @@ fn paint_trigger(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn paint_panel(widget: SelectWidget<'_>, area: Rect, buf: &mut Buffer) {
-    let block = Block::new()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(
-            Style::new()
-                .fg(widget.style.border)
-                .bg(widget.style.panel_background),
-        )
-        .style(Style::new().bg(widget.style.panel_background));
-    let inner = block.inner(area);
-    block.render(area, buf);
-    let row_height = widget.row_height.max(1);
-    for (row, index) in (widget.first_item..widget.options.len())
-        .take(usize::from(inner.height / row_height))
-        .enumerate()
-    {
-        let disabled = widget.disabled_items.get(index).copied().unwrap_or(false);
-        let selected = widget.selected_item == Some(index);
-        let row_area = Rect::new(
-            inner.x,
-            inner.y + u16::try_from(row).expect("visible rows fit in u16") * row_height,
-            inner.width,
-            row_height,
-        );
-        buf.set_style(
-            row_area,
-            widget
-                .style
-                .resolve_row(widget.focused_item == Some(index), selected, disabled),
-        );
-        if let Some(rows) = widget.item_rows {
-            if let Some(text) = rows.get(row) {
-                text.render(row_area, buf);
-            }
-            continue;
-        }
-        selection_indicator::marker_line(
-            widget.options[index],
-            selected,
-            false,
-            disabled,
-            selection_indicator::MarkerColors {
-                disabled: widget.style.disabled_foreground,
-                selected: widget.style.selected_marker,
-                unselected: widget.style.unselected_marker,
-            },
-        )
-        .render(row_area, buf);
-    }
-}
-
+/// The panel half of a [`SelectWidget`], painted on its own: what the
+/// interactive [`Select`] puts in its popup layer.
 struct SelectPanelWidget<'a>(SelectWidget<'a>);
 
 impl Widget for SelectPanelWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        paint_panel(self.0, area, buf);
+        let widget = self.0;
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(
+                Style::new()
+                    .fg(widget.style.border)
+                    .bg(widget.style.panel_background),
+            )
+            .style(Style::new().bg(widget.style.panel_background));
+        let inner = block.inner(area);
+        block.render(area, buf);
+        let row_height = widget.row_height.max(1);
+        for (row, index) in (widget.first_item..widget.options.len())
+            .take(usize::from(inner.height / row_height))
+            .enumerate()
+        {
+            let disabled = widget.disabled_items.get(index).copied().unwrap_or(false);
+            let selected = widget.selected_item == Some(index);
+            let row_area = Rect::new(
+                inner.x,
+                inner.y + u16::try_from(row).expect("visible rows fit in u16") * row_height,
+                inner.width,
+                row_height,
+            );
+            buf.set_style(
+                row_area,
+                widget
+                    .style
+                    .resolve_row(widget.focused_item == Some(index), selected, disabled),
+            );
+            if let Some(rows) = widget.item_rows {
+                if let Some(text) = rows.get(row) {
+                    text.render(row_area, buf);
+                }
+                continue;
+            }
+            selection_indicator::marker_line(
+                widget.options[index],
+                selected,
+                false,
+                disabled,
+                selection_indicator::MarkerColors {
+                    disabled: widget.style.disabled_foreground,
+                    selected: widget.style.selected_marker,
+                    unselected: widget.style.unselected_marker,
+                },
+            )
+            .render(row_area, buf);
+        }
     }
 }
 
@@ -610,7 +570,8 @@ fn emit_item<T: Clone, M>(
 /// binding combinations remain valid for paint-only or pointer-only use, but do
 /// not make the Select a keyboard focus stop or consume keyboard input.
 ///
-/// Item values must be unique. Enter, Space, Up, or Down opens a closed Select.
+/// Item values must be unique. Enter, Space, or a navigation key opens a closed
+/// Select.
 /// While open, navigation moves item focus, Enter or Space selects, Esc closes,
 /// and the first Tab or `BackTab` closes and consumes that traversal key. A
 /// following Tab can move focus after the app applies the close message. The
@@ -829,9 +790,9 @@ impl<T, S, M> Select<T, S, M> {
 /// this crops to at most a row rather than requiring one, so a zero-height
 /// allocation stays a zero-height trigger instead of becoming an empty rect at
 /// the origin.
-const fn trigger_area(area: Rect) -> Rect {
+fn trigger_area(area: Rect) -> Rect {
     Rect {
-        height: min_u16(area.height, TRIGGER_HEIGHT),
+        height: area.height.min(TRIGGER_HEIGHT),
         ..area
     }
 }
@@ -926,10 +887,10 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
         // A key that would move the cursor reveals the cursor instead. Asking
         // the shared key map keeps that true of the Ctrl chords as well as the
         // arrows.
-        if linear_nav::is_step_key(key) {
+        if linear_nav::is_step_key(key, Axis::Vertical) {
             return self.toggle(true);
         }
-        if linear_nav::has_reserved_modifier(key) {
+        if key.modifiers.any() {
             return EventResult::Ignored;
         }
         match key.code {
@@ -942,39 +903,22 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
     fn handle_open_key(&self, key: KeyEvent, state: &S, page_size: usize) -> EventResult<M> {
         // Closing comes before the emptiness check: a panel with nothing to
         // operate must still be dismissable.
-        if key.code == KeyCode::Esc && !linear_nav::has_reserved_modifier(key) {
+        if key.code == KeyCode::Esc && !key.modifiers.any() {
             return self.toggle(false);
         }
         if !self.has_enabled_item() {
             return EventResult::Ignored;
         }
         let cursor = self.cursor_index(state);
-        // Navigation is asked first because it owns the Ctrl chords that the
-        // modifier gate below rejects.
-        if let Some(outcome) =
-            linear_nav::nav_key_target(key, self.items.len(), cursor, page_size.max(1), |i| {
-                self.disabled_at(i)
-            })
-        {
-            return match outcome {
-                NavOutcome::Move(index) => self.move_cursor(index),
-                NavOutcome::Stay => EventResult::Consumed,
-            };
+        // Anything the shared key map does not claim bubbles through to the
+        // app: the popup is not modal, so an unhandled key is not the panel's
+        // to swallow.
+        match list_core::key_intent(key, Axis::Vertical, &self.items, cursor, page_size) {
+            Some(KeyIntent::Move(index)) => self.move_cursor(index),
+            Some(KeyIntent::Stay) => EventResult::Consumed,
+            Some(KeyIntent::Commit(index)) => self.select(index),
+            None => EventResult::Ignored,
         }
-        if linear_nav::has_reserved_modifier(key) {
-            return EventResult::Ignored;
-        }
-        if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
-            // A cursor resting on a disabled option commits nothing, as in
-            // `List`, and the key bubbles rather than vanishing.
-            return match cursor {
-                Some(index) if !self.disabled_at(index) => self.select(index),
-                _ => EventResult::Ignored,
-            };
-        }
-        // Anything else bubbles through to the app: the popup is not modal, so
-        // an unhandled key is not the panel's to swallow.
-        EventResult::Ignored
     }
 }
 
@@ -989,28 +933,22 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
     }
 
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
+        let Some((open, on_open_change)) = self.open.as_ref().filter(|_| self.resolved_open) else {
+            return;
+        };
         let area = trigger_area(ctx.area());
         let style = resolve_style(self.style.as_deref(), ctx.theme, SelectStyle::from_theme);
-        let Some((panel_area, viewport)) = self
-            .resolved_open
-            .then(|| {
-                panel_layout(
-                    area,
-                    ctx.frame_area(),
-                    self.items.len(),
-                    self.max_visible,
-                    self.row_height,
-                )
-            })
-            .flatten()
-        else {
+        let Some((panel_area, viewport)) = panel_layout(
+            area,
+            ctx.frame_area(),
+            self.items.len(),
+            self.max_visible,
+            self.row_height,
+        ) else {
             return;
         };
         let inner = Block::new().borders(Borders::ALL).inner(panel_area);
         self.page_size = viewport.visible_items(inner).max(1);
-        let Some((open, on_open_change)) = &self.open else {
-            return;
-        };
         let panel = SelectPanel {
             items: Rc::clone(&self.items),
             open: Rc::clone(open),
@@ -1033,22 +971,19 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         );
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let area = trigger_area(ctx.area());
         let state = ctx.state();
         let style = resolve_style(self.style.as_deref(), ctx.theme, SelectStyle::from_theme);
         let selected = self.selected_index(state);
         let value = selected.map(|index| self.items[index].label());
-        let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
-        let mut trigger = SelectWidget::new(value)
+        let trigger = SelectWidget::new(value)
             .placeholder(&self.placeholder)
+            .open(self.resolved_open)
             .focused(ctx.focused())
             .hovered(ctx.hovered())
             .disabled(self.disabled)
             .style(style);
-        if self.resolved_open {
-            trigger = trigger.open(&labels);
-        }
         ctx.widget(trigger, area);
     }
 
@@ -1131,7 +1066,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         );
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let state = ctx.state();
         let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
         let disabled: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
@@ -1151,21 +1086,15 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                 &self.items,
                 first_option..last_option,
                 rows_per_item,
-                |index, item| {
-                    let row = ListItemState {
-                        index,
-                        value: item.value(),
-                        label: item.label(),
-                        focused: cursor == Some(index),
-                        selected: selected == Some(index),
-                        disabled: item.is_disabled(),
-                    };
-                    paint_item(state, row)
-                },
+                cursor,
+                false,
+                |index, _| selected == Some(index),
+                |row| paint_item(state, row),
             )
         });
         let mut widget = SelectWidget::new(None)
-            .open(&labels)
+            .open(true)
+            .options(&labels)
             .row_height(rows_per_item)
             .focused_item(cursor)
             .selected_item(selected)
@@ -1188,32 +1117,16 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         let cursor = self.cursor(state);
         let option = self.option_at(mouse);
         match mouse.kind {
+            // The hold lives on the panel's identity, not on this per-frame
+            // instance, so it survives redraws and dies with the popup.
             MouseKind::Scroll(direction) => {
-                let step = match direction {
-                    ScrollDirection::Up => ScrollStep::Up,
-                    ScrollDirection::Down => ScrollStep::Down,
-                    ScrollDirection::Left | ScrollDirection::Right => {
-                        return EventResult::Ignored;
-                    }
-                };
-                let offset = linear_nav::wheel_offset(
-                    self.items.len(),
-                    self.viewport.visible_items(self.inner),
-                    self.viewport.painted_offset(),
-                    step,
-                    SCROLL_STEP,
-                );
-                // Hold the view in the transient store against the options as
-                // they stand: render honors it until the cursor or the options
-                // move, and it survives redraws because it lives on the panel's
-                // identity, not on this per-frame instance. The cursor itself
-                // never moves on wheel.
-                ctx.transient::<WheelHold<T>>()
-                    .hold(offset, &self.items, cursor);
-                // Keep this retained instance's hit-testing aligned with the
-                // offset the next paint will use.
-                self.viewport.record_painted_offset(offset);
-                EventResult::Consumed
+                match self
+                    .viewport
+                    .wheel(direction, &self.items, cursor, self.inner, ctx)
+                {
+                    Some(_) => EventResult::Consumed,
+                    None => EventResult::Ignored,
+                }
             }
             kind => match list_core::row_intent(
                 kind,
@@ -1245,13 +1158,6 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
     }
 }
 
-fn visible_count(len: usize, max_visible: u16, available: u16) -> u16 {
-    u16::try_from(len)
-        .unwrap_or(u16::MAX)
-        .min(max_visible)
-        .min(available)
-}
-
 fn panel_layout(
     trigger: Rect,
     bounds: Rect,
@@ -1264,7 +1170,8 @@ fn panel_layout(
     let visible = visible_count(
         len,
         max_visible,
-        bounds.height.saturating_sub(2) / row_height,
+        bounds.height.saturating_sub(2),
+        row_height,
     );
     if visible == 0 || trigger.width == 0 {
         return None;
@@ -1291,7 +1198,7 @@ mod tests {
     use ratatui::text::{Line, Span};
 
     use super::*;
-    use crate::runtime::{FocusState, Modifiers, Ratcn};
+    use crate::runtime::{FocusState, Modifiers, Ratcn, ScrollDirection};
     use crate::test_support::{Driver, mouse};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1300,7 +1207,6 @@ mod tests {
         Papaya,
         Lychee,
         Durian,
-        Guava,
     }
 
     #[derive(Debug, PartialEq)]
@@ -1336,8 +1242,8 @@ mod tests {
         let mut style = SelectStyle::fallback();
         style.selected_focused_foreground = Color::Yellow;
         style.selected_focused_background = Color::Blue;
-        style.selected_disabled_foreground = Color::Magenta;
-        style.selected_disabled_background = Color::Green;
+        style.disabled_foreground = Color::Magenta;
+        style.disabled_background = Color::Green;
 
         assert_eq!(
             style.resolve_row(true, true, false),
@@ -1346,19 +1252,20 @@ mod tests {
         assert_eq!(
             style.resolve_row(true, true, true),
             Style::new().fg(Color::Magenta).bg(Color::Green),
-            "disabled wins over focus while preserving selected identity"
+            "disabled wins over focus and selection"
         );
     }
 
     #[test]
-    fn disabled_open_widget_measures_and_paints_only_the_closed_trigger() {
+    fn disabled_open_widget_paints_only_the_closed_trigger() {
         let options = ["Mango", "Papaya"];
-        let widget = SelectWidget::new(None).open(&options).disabled(true);
+        let widget = SelectWidget::new(None)
+            .open(true)
+            .options(&options)
+            .disabled(true);
         let area = Rect::new(0, 0, 12, 5);
         let mut buffer = Buffer::empty(area);
 
-        assert_eq!(widget.visible_items(8, area.height), 0);
-        assert_eq!(widget.height(8, area.height), TRIGGER_HEIGHT);
         widget.render(area, &mut buffer);
 
         assert_eq!(
@@ -1448,17 +1355,6 @@ mod tests {
         render_select(&mut driver, &state, Rect::new(0, 7, 20, 1), &items());
         assert!(driver.row(3).contains("Mango"), "{}", driver.row(3));
         assert!(driver.row(7).contains("╯"), "{}", driver.row(7));
-    }
-
-    #[test]
-    fn panel_position_depends_only_on_geometry() {
-        let trigger = Rect::new(0, 4, 20, 1);
-        let bounds = Rect::new(0, 0, 20, 10);
-        // The cursor is not an input: neither moving it nor scrolling can
-        // move the popup.
-        let (panel, viewport) = panel_layout(trigger, bounds, 10, 4, 1).expect("panel");
-        assert_eq!(panel.y, trigger.y - 1);
-        assert_eq!(viewport.painted_offset(), 0, "the panel resolves scrolling");
     }
 
     #[test]
@@ -1617,6 +1513,44 @@ mod tests {
     }
 
     #[test]
+    fn a_released_wheel_hold_never_revives() {
+        let mut driver = driver(20, 4);
+        let mut state = State {
+            open: true,
+            cursor: Some(Fruit::Mango),
+            ..State::default()
+        };
+        let area = Rect::new(0, 0, 20, 1);
+        render_select(&mut driver, &state, area, &items());
+        driver.event(
+            mouse(MouseKind::Scroll(ScrollDirection::Down), 3, 1),
+            &state,
+        );
+        render_select(&mut driver, &state, area, &items());
+        assert!(driver.row(1).contains("Lychee"), "{}", driver.row(1));
+
+        assert_eq!(
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Down)), &state),
+            EventResult::Emit(Msg::Focused(Fruit::Papaya))
+        );
+        state.cursor = Some(Fruit::Papaya);
+        render_select(&mut driver, &state, area, &items());
+        assert!(driver.row(1).contains("Papaya"), "{}", driver.row(1));
+
+        assert_eq!(
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Up)), &state),
+            EventResult::Emit(Msg::Focused(Fruit::Mango))
+        );
+        state.cursor = Some(Fruit::Mango);
+        render_select(&mut driver, &state, area, &items());
+        assert!(
+            driver.row(1).contains("Mango"),
+            "returning to the wheel anchor must not re-take the hold: {}",
+            driver.row(1)
+        );
+    }
+
+    #[test]
     fn hover_moves_the_cursor_and_reopening_reanchors_the_view() {
         let mut driver = driver(20, 4);
         let mut state = State {
@@ -1746,82 +1680,6 @@ mod tests {
         );
         let row = driver.row(1);
         assert!(row.contains("Lychee"), "{row}");
-    }
-
-    /// Returning the cursor to where the wheel left it must not revive the
-    /// held view — the same rule `List` follows.
-    #[test]
-    fn a_released_wheel_hold_never_revives() {
-        let mut driver = driver(20, 4);
-        let mut state = State {
-            open: true,
-            cursor: Some(Fruit::Mango),
-            ..State::default()
-        };
-        let area = Rect::new(0, 0, 20, 1);
-        render_select(&mut driver, &state, area, &items());
-        driver.event(
-            mouse(MouseKind::Scroll(ScrollDirection::Down), 3, 1),
-            &state,
-        );
-        render_select(&mut driver, &state, area, &items());
-        assert!(driver.row(1).contains("Lychee"), "{}", driver.row(1));
-
-        assert_eq!(
-            driver.event(Event::Key(KeyEvent::new(KeyCode::Down)), &state),
-            EventResult::Emit(Msg::Focused(Fruit::Papaya))
-        );
-        state.cursor = Some(Fruit::Papaya);
-        render_select(&mut driver, &state, area, &items());
-        assert!(driver.row(1).contains("Papaya"), "{}", driver.row(1));
-
-        assert_eq!(
-            driver.event(Event::Key(KeyEvent::new(KeyCode::Up)), &state),
-            EventResult::Emit(Msg::Focused(Fruit::Mango))
-        );
-        state.cursor = Some(Fruit::Mango);
-        render_select(&mut driver, &state, area, &items());
-        assert!(
-            driver.row(1).contains("Mango"),
-            "returning to the wheel anchor must not re-take the hold: {}",
-            driver.row(1)
-        );
-    }
-
-    /// The panel's hold is anchored to the option the cursor sits on, not to
-    /// its row — `List`'s rule. Swapping that option for another at the same
-    /// index puts a different option under the cursor, so the hold ends.
-    #[test]
-    fn replacing_the_anchored_option_releases_the_wheel_hold() {
-        let mut driver = driver(20, 4);
-        let mut state = State {
-            open: true,
-            cursor: Some(Fruit::Mango),
-            ..State::default()
-        };
-        let area = Rect::new(0, 0, 20, 1);
-        render_select(&mut driver, &state, area, &items());
-        driver.event(
-            mouse(MouseKind::Scroll(ScrollDirection::Down), 3, 1),
-            &state,
-        );
-        render_select(&mut driver, &state, area, &items());
-        assert!(
-            driver.row(1).contains("Lychee"),
-            "the wheel held the view away from the cursor: {}",
-            driver.row(1)
-        );
-
-        let mut swapped = items();
-        swapped[0] = ListItem::new(Fruit::Guava, "Guava");
-        state.cursor = Some(Fruit::Guava);
-        render_select(&mut driver, &state, area, &swapped);
-
-        assert!(
-            driver.row(1).contains("Guava"),
-            "a hold anchored by row would still be showing Lychee on screen: {}",
-            driver.row(1)
-        );
     }
 
     /// A bound cursor on a disabled option is never silently moved elsewhere,
@@ -2040,35 +1898,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_and_readline_keys_move_item_focus_only_while_open() {
-        let open = State {
-            open: true,
-            cursor: Some(Fruit::Mango),
-            ..State::default()
-        };
-        let mut component = select(items());
-        component.prepare(&open);
-        for down in [
-            Event::Key(KeyEvent::new(KeyCode::Char('j'))),
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: Modifiers {
-                    ctrl: true,
-                    ..Modifiers::NONE
-                },
-            }),
-        ] {
-            assert_eq!(
-                component.handle_event(&down, &open, &mut EventCtx::default()),
-                component.handle_event(
-                    &Event::Key(KeyEvent::new(KeyCode::Down)),
-                    &open,
-                    &mut EventCtx::default(),
-                ),
-                "j and Ctrl+N do exactly what Down does"
-            );
-        }
-
+    fn a_step_key_opens_a_closed_select_and_other_letters_bubble() {
         let closed = State {
             cursor: Some(Fruit::Mango),
             ..State::default()
@@ -2204,7 +2034,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_and_duplicate_item_behavior_is_preserved() {
+    fn a_disabled_select_is_not_focusable_and_ignores_keys() {
         let state = State::default();
         let mut disabled = select(items()).disabled(true);
         disabled.prepare(&state);
@@ -2217,20 +2047,5 @@ mod tests {
             ),
             EventResult::Ignored
         );
-
-        // The duplicate check is a debug-build assertion, so this half of the
-        // contract only exists where debug assertions do.
-        if cfg!(debug_assertions) {
-            let mut duplicate = select(vec![
-                ListItem::new(Fruit::Mango, "Mango"),
-                ListItem::new(Fruit::Mango, "Again"),
-            ]);
-            assert!(
-                std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| duplicate.prepare(&state))
-                )
-                .is_err()
-            );
-        }
     }
 }

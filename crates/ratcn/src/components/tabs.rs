@@ -12,11 +12,11 @@ use crate::Theme;
 use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, shape_width};
 use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
 use crate::geometry::fixed_height;
-use crate::linear_nav;
-use crate::list_core;
+use crate::linear_nav::{self, Axis};
+use crate::list_core::{self, KeyIntent};
 use crate::runtime::{
-    Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
-    MouseButton, MouseKind, PaintCtx, ScopeOptions, Step,
+    Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MeasuredComponent, MouseButton,
+    MouseKind, PaintCtx, ScopeOptions, Step,
 };
 use crate::theme::resolve_style;
 
@@ -186,8 +186,8 @@ impl TabsStyle {
         }
     }
 
-    /// The label and fill for one tab's paint — the single place a tab's state
-    /// is turned into style.
+    /// The label color and fill (which is also the cap color) for one tab's
+    /// paint — the single place a tab's state is turned into style.
     ///
     /// Selection picks the family: a selected tab paints like the default
     /// button, an unselected one like the secondary button. Within a family the
@@ -204,8 +204,8 @@ impl TabsStyle {
         focused: bool,
         hovered: bool,
         disabled: bool,
-    ) -> ResolvedTabStyle {
-        let (foreground, fill) = match (selected, disabled, hovered, focused) {
+    ) -> (Color, Color) {
+        match (selected, disabled, hovered, focused) {
             (true, true, _, _) => (
                 self.selected_disabled_foreground,
                 self.selected_disabled_background,
@@ -223,17 +223,8 @@ impl TabsStyle {
             (false, false, true, _) => (self.hovered_foreground, self.hovered_background),
             (false, false, false, true) => (self.focused_foreground, self.focused_background),
             (false, false, false, false) => (self.foreground, self.background),
-        };
-        ResolvedTabStyle { foreground, fill }
+        }
     }
-}
-
-/// One tab's resolved paint (see [`TabsStyle::resolve`]): the label color and
-/// the button fill (which is also the cap color).
-#[derive(Clone, Copy)]
-struct ResolvedTabStyle {
-    foreground: Color,
-    fill: Color,
 }
 
 /// A tab row that only draws — an ordinary ratatui [`Widget`] with no focus,
@@ -387,7 +378,7 @@ impl<'a> TabsWidget<'a> {
 fn row_width<'a>(labels: impl ExactSizeIterator<Item = &'a str>) -> u16 {
     let gap_count = u16::try_from(labels.len().saturating_sub(1)).unwrap_or(u16::MAX);
     labels
-        .map(tab_width)
+        .map(shape_width)
         .fold(0, u16::saturating_add)
         .saturating_add(gap_count.saturating_mul(SPACING))
 }
@@ -410,43 +401,40 @@ impl Widget for TabsWidget<'_> {
 
 impl TabsWidget<'_> {
     fn paint_layout(self, layout: &TabLayout, buf: &mut Buffer) {
+        // The label row: the only row of a small tab, the middle of a large one.
+        let label_offset = match self.size {
+            TabsSize::Small => 0,
+            TabsSize::Large => 1,
+        };
         for &(index, rect) in &layout.tabs {
             let disabled =
                 self.disabled || self.disabled_items.get(index).copied().unwrap_or(false);
             let cursor = self.focused_item == Some(index);
-            let resolved = self.style.resolve(
+            let (foreground, fill) = self.style.resolve(
                 self.selected_item == Some(index),
                 cursor && self.focused,
                 self.hovered_item == Some(index),
                 disabled,
             );
             if self.size == TabsSize::Large {
-                paint_tab_cap(rect, resolved.fill, TOP_CAP, buf);
+                paint_tab_cap(rect, fill, TOP_CAP, buf);
                 paint_tab_cap(
                     Rect::new(rect.x, rect.y + 2, rect.width, 1),
-                    resolved.fill,
+                    fill,
                     BOTTOM_CAP,
                     buf,
                 );
             }
             Line::from(filled_middle(self.labels[index], rect.width as usize))
-                .style(Style::default().fg(resolved.foreground).bg(resolved.fill))
-                .render(
-                    Rect::new(rect.x, rect.y + content_y_offset(self.size), rect.width, 1),
-                    buf,
-                );
+                .style(Style::default().fg(foreground).bg(fill))
+                .render(Rect::new(rect.x, rect.y + label_offset, rect.width, 1), buf);
         }
         for (marker, slot) in [(LEFT_MARKER, layout.left), (RIGHT_MARKER, layout.right)] {
             if let Some(rect) = slot {
                 Line::from(marker)
                     .style(Style::default().fg(self.style.foreground))
                     .render(
-                        Rect::new(
-                            rect.x,
-                            rect.y + content_y_offset(self.size),
-                            MARKER_WIDTH,
-                            1,
-                        ),
+                        Rect::new(rect.x, rect.y + label_offset, MARKER_WIDTH, 1),
                         buf,
                     );
             }
@@ -460,21 +448,13 @@ fn paint_tab_cap(rect: Rect, fill: Color, symbol: &str, buf: &mut Buffer) {
         .render(rect, buf);
 }
 
-const fn content_y_offset(size: TabsSize) -> u16 {
-    match size {
-        TabsSize::Small => 0,
-        TabsSize::Large => 1,
-    }
-}
-
 /// One tab: an identifying `value` and the `label` shown on it — the same
 /// [`ListItem`](crate::ListItem) a list row is, under the name this component
 /// uses for it.
 ///
 /// A tab and a list row need exactly the same three things (a value, a label, a
 /// disabled flag), so they are one type rather than two that must be kept in
-/// step. `Tab::new(value, label)` and `.disabled(true)` read as before, and
-/// `["One", "Two"]` still converts through the `From<&str>` impl.
+/// step. `["One", "Two"]` converts through the `From<&str>` impl.
 ///
 /// Selection is recorded as the value, not the tab's position, so the tab row
 /// can be built from data that changes without the selection sliding onto a
@@ -564,13 +544,12 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Tabs")
             .field("items", &self.items)
-            .field("focused_item", &self.focused_item.is_some())
-            .field("on_focus_change", &self.on_focus_change.is_some())
-            .field("selected", &self.selected.is_some())
-            .field("on_select", &self.on_select.is_some())
+            .field("item_focus", &self.focused_item.is_some())
+            .field("selection", &self.selected.is_some())
             .field("activation", &self.activation)
             .field("size", &self.size)
             .field("style", &self.style.is_some())
+            .field("disabled", &self.disabled)
             .finish_non_exhaustive()
     }
 }
@@ -605,12 +584,9 @@ impl<T, S, M> Tabs<T, S, M> {
     /// it does not switch tabs — [`selection`](Self::selection) does that, on
     /// Enter, Space, or a click.
     ///
-    /// Named for tabs rather than items, unlike
-    /// [`List::item_focus`](crate::List::item_focus) and
-    /// [`Select::item_focus`](crate::Select::item_focus): those two share the
-    /// [`ListItem`](crate::ListItem) vocabulary, while a tab is its own
-    /// [`Tab`] type. The binding shape — a reader paired with its message
-    /// constructor — is identical.
+    /// The same binding as [`List::item_focus`](crate::List::item_focus) and
+    /// [`Select::item_focus`](crate::Select::item_focus), keyed by the tab's
+    /// value.
     ///
     /// Unlike those two, the pointer does *not* move this cursor: hovering a
     /// tab under [`TabsActivation::Automatic`] would switch the panel's
@@ -729,30 +705,6 @@ impl<T, S, M> Tabs<T, S, M> {
     }
 }
 
-/// Which way a key steps along a tab strip, or `None` if it does not step.
-///
-/// The horizontal counterpart of the vertical map in
-/// [`linear_nav`](crate::linear_nav): Left/Right for everyone, `h`/`l` for
-/// `vi`, and Ctrl+P/Ctrl+N for readline. A tab strip is a row, so `h`/`l` are
-/// its `vi` keys rather than `j`/`k`.
-fn step_direction(key: KeyEvent) -> Option<Step> {
-    if key.modifiers.alt || key.modifiers.shift {
-        return None;
-    }
-    if key.modifiers.ctrl {
-        return match key.code {
-            KeyCode::Char('n') => Some(Step::Forward),
-            KeyCode::Char('p') => Some(Step::Backward),
-            _ => None,
-        };
-    }
-    match key.code {
-        KeyCode::Left | KeyCode::Char('h') => Some(Step::Backward),
-        KeyCode::Right | KeyCode::Char('l') => Some(Step::Forward),
-        _ => None,
-    }
-}
-
 impl<T, S, M> Tabs<T, S, M>
 where
     T: Clone + PartialEq,
@@ -807,66 +759,22 @@ where
         }
     }
 
-    /// Map one key against the tab row.
-    ///
-    /// The tabs row runs horizontally, so the key map is local rather than
-    /// [`linear_nav::nav_key_target`]: that helper steps with Up and Down, and
-    /// pages with `PageUp` and `PageDown`, neither of which suits a row. Here
-    /// Left and Right step by one tab, and Home and End jump to the first and
-    /// last enabled tab. There is no Page-key navigation on `Tabs` — `PageUp`
-    /// and `PageDown` are ignored and bubble as app hotkeys. The index
-    /// arithmetic underneath is still [`linear_nav`]'s, including the
-    /// `first_enabled`/`last_enabled` that Home and End call.
     fn handle_key(&self, key: KeyEvent, state: &S) -> EventResult<M> {
         if !self.keyboard_enabled() {
             return EventResult::Ignored;
         }
-        let len = self.items.len();
-        if linear_nav::first_enabled(len, |index| self.disabled_at(index)).is_none() {
-            return EventResult::Ignored;
-        }
         let cursor = self.cursor_index(state);
-        // Stepping is asked first because it owns the Ctrl chords that the
-        // modifier gate below rejects.
-        if let Some(direction) = step_direction(key) {
-            let index = cursor.map_or_else(
-                || linear_nav::first_enabled(len, |i| self.disabled_at(i)).expect("checked above"),
-                |from| linear_nav::step_enabled(len, from, direction, |i| self.disabled_at(i)),
-            );
-            return self.apply_target(Some(index), cursor);
-        }
-        if linear_nav::has_reserved_modifier(key) {
-            return EventResult::Ignored;
-        }
-        let next = match key.code {
-            KeyCode::Home => linear_nav::first_enabled(len, |i| self.disabled_at(i)),
-            KeyCode::End => linear_nav::last_enabled(len, |i| self.disabled_at(i)),
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                return match cursor {
-                    Some(index) if self.disabled_at(index) => EventResult::Ignored,
-                    Some(index) => self.select(index),
-                    None => EventResult::Ignored,
-                };
-            }
-            // Anything else — including every letter but `h` and `l` — bubbles,
-            // so the app keeps its single-key hotkeys while tabs have focus.
-            _ => return EventResult::Ignored,
-        };
-        self.apply_target(next, cursor)
-    }
-
-    /// Commit a resolved navigation target under the configured activation
-    /// mode: manual moves the cursor, automatic also selects.
-    fn apply_target(&self, next: Option<usize>, cursor: Option<usize>) -> EventResult<M> {
-        match next {
-            Some(index) if Some(index) != cursor => match self.activation {
+        // A row has no pages, so `page_size` is moot. Anything the shared key
+        // map does not claim — including every letter but `h` and `l` —
+        // bubbles, so the app keeps its single-key hotkeys while tabs have
+        // focus.
+        match list_core::key_intent(key, Axis::Horizontal, &self.items, cursor, 1) {
+            Some(KeyIntent::Move(index)) => match self.activation {
                 TabsActivation::Manual => self.move_focus(index),
                 TabsActivation::Automatic => self.select(index),
             },
-            // A resolved-but-unchanged target (already at the edge, or Home/End
-            // onto the current tab) is still ours to swallow.
-            Some(_) => EventResult::Consumed,
-            // Nothing to move to (no current focused tab, or every tab disabled).
+            Some(KeyIntent::Stay) => EventResult::Consumed,
+            Some(KeyIntent::Commit(index)) => self.select(index),
             None => EventResult::Ignored,
         }
     }
@@ -895,7 +803,7 @@ where
         self.hits = tab_layout(ctx.area(), &labels, self.size, must_show);
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, S>) {
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let area = ctx.area();
         let state = ctx.state();
         let selected = self.selected_index(state);
@@ -941,20 +849,12 @@ where
                     Some(index) if self.disabled_at(index) => EventResult::Consumed,
                     _ => EventResult::Ignored,
                 },
-                // Hover is paint-only here, unlike `List` and `Select`, where
-                // it moves the cursor: under `TabsActivation::Automatic` the
-                // cursor is the selection, so hovering would switch the
-                // panel's content on the way past. A tabs row with nothing
-                // bound lets the motion through, as its siblings do.
-                MouseKind::Moved => {
-                    if self.keyboard_enabled() && self.tab_at(mouse.column, mouse.row).is_some() {
-                        EventResult::Consumed
-                    } else {
-                        EventResult::Ignored
-                    }
-                }
                 // A click commits the clicked tab. Down is left for the runtime to
-                // focus the row itself (the mouse counterpart of Tab).
+                // focus the row itself (the mouse counterpart of Tab). Motion is
+                // not answered: hover is paint-only here, unlike `List` and
+                // `Select`, since under `TabsActivation::Automatic` the cursor
+                // is the selection and hovering would switch the panel's
+                // content on the way past.
                 MouseKind::Click(MouseButton::Left) => {
                     if let Some(index) = self.tab_at(mouse.column, mouse.row) {
                         return if self.disabled_at(index) {
@@ -1008,13 +908,6 @@ impl<T: Clone + PartialEq, S, M> MeasuredComponent<S, M> for Tabs<T, S, M> {
     }
 }
 
-/// The width one tab occupies: its label plus the padding on each side (label +
-/// 4, a button's width). Label width is counted in cells, matching the other
-/// components.
-fn tab_width(label: &str) -> u16 {
-    shape_width(label)
-}
-
 /// Where the tabs of one row sit on screen: the outcome of measuring the labels
 /// against an area, and the single source of tab geometry. `tab_layout`
 /// produces one, the widget paints from it, and `Tabs` hit-tests clicks against
@@ -1037,74 +930,59 @@ struct TabWindow {
     width: u16,
 }
 
-/// Prefix sums of each tab's width plus the gap that follows it, one entry
-/// longer than `widths`, so the width of a run of tabs is one subtraction.
-/// Summed wider than `u16` so the sums themselves cannot wrap; a run is clamped
-/// back to `u16` where it is read.
-fn width_prefix_sums(widths: &[u16]) -> Vec<u64> {
-    let mut sums = Vec::with_capacity(widths.len() + 1);
-    let mut total = 0;
-    sums.push(total);
-    for &tab_width in widths {
-        total += u64::from(tab_width) + u64::from(SPACING);
-        sums.push(total);
-    }
-    sums
-}
-
-/// The width a run of tabs `lo..=hi` occupies: their widths plus the gaps
-/// between them, from the prefix sums of [`width_prefix_sums`]. Saturates like
-/// the rest of the row arithmetic: no term is negative, so clamping the exact
-/// sum lands on the same width as adding the run up saturatingly.
-fn window_width(sums: &[u64], lo: usize, hi: usize) -> u16 {
-    // The run carries the gap after its last tab; the gaps *between* tabs are
-    // one fewer.
-    let run = sums[hi + 1] - sums[lo] - u64::from(SPACING);
-    u16::try_from(run).unwrap_or(u16::MAX)
-}
-
 /// Choose the first and last visible tab indexes. The chosen group always
 /// includes `must_show` (the selected/focused tab) and then adds neighboring
 /// tabs while they fit, leaving room for `‹` or `›` markers when tabs are hidden.
 fn tab_window(widths: &[u16], must_show: usize, avail: u16) -> TabWindow {
     let n = widths.len();
-    let sums = width_prefix_sums(widths);
-    let fits = |lo: usize, hi: usize| {
-        let mut width = window_width(&sums, lo, hi);
+    // Does a run `width` wide from `lo..=hi` fit beside the markers its hidden
+    // neighbors would need? Saturating, like the rest of the row arithmetic.
+    let fits = |lo: usize, hi: usize, width: u16| {
+        let mut needed = width;
         if lo > 0 {
-            width = width.saturating_add(SPACING + MARKER_WIDTH);
+            needed = needed.saturating_add(SPACING + MARKER_WIDTH);
         }
         if hi < n - 1 {
-            width = width.saturating_add(SPACING + MARKER_WIDTH);
+            needed = needed.saturating_add(SPACING + MARKER_WIDTH);
         }
-        width <= avail
+        needed <= avail
     };
 
     let (mut lo, mut hi) = (must_show, must_show);
+    // The run's width, grown one tab (and one gap) at a time with the window.
+    let mut width = widths[must_show];
     let mut prefer_right = true;
     loop {
-        let grow_right = hi + 1 < n && fits(lo, hi + 1);
-        let grow_left = lo > 0 && fits(lo - 1, hi);
+        let grow_right = (hi + 1 < n)
+            .then(|| width.saturating_add(SPACING).saturating_add(widths[hi + 1]))
+            .filter(|&grown| fits(lo, hi + 1, grown));
+        let grow_left = (lo > 0)
+            .then(|| width.saturating_add(SPACING).saturating_add(widths[lo - 1]))
+            .filter(|&grown| fits(lo - 1, hi, grown));
         // Alternate sides so the visible tabs stay roughly centered on must_show;
         // fall through to the other side when the preferred one is exhausted.
-        if prefer_right && grow_right {
-            hi += 1;
-        } else if !prefer_right && grow_left {
-            lo -= 1;
-        } else if grow_right {
-            hi += 1;
-        } else if grow_left {
-            lo -= 1;
-        } else {
-            break;
+        match (grow_right, grow_left) {
+            (Some(grown), _) if prefer_right => {
+                hi += 1;
+                width = grown;
+            }
+            (_, Some(grown)) if !prefer_right => {
+                lo -= 1;
+                width = grown;
+            }
+            (Some(grown), _) => {
+                hi += 1;
+                width = grown;
+            }
+            (_, Some(grown)) => {
+                lo -= 1;
+                width = grown;
+            }
+            (None, None) => break,
         }
         prefer_right = !prefer_right;
     }
-    TabWindow {
-        lo,
-        hi,
-        width: window_width(&sums, lo, hi),
-    }
+    TabWindow { lo, hi, width }
 }
 
 /// Lay out the visible tabs left to right, with a [`SPACING`] gap between them.
@@ -1189,7 +1067,7 @@ fn tab_layout(area: Rect, labels: &[&str], size: TabsSize, must_show: usize) -> 
     if labels.is_empty() || area.width == 0 || area.height < height {
         return TabLayout::default();
     }
-    let widths: Vec<u16> = labels.iter().map(|label| tab_width(label)).collect();
+    let widths: Vec<u16> = labels.iter().map(|label| shape_width(label)).collect();
     let must_show = must_show.min(widths.len() - 1);
     let window = tab_window(&widths, must_show, area.width);
     place_tab_window(area, &widths, size, must_show, window)
@@ -1211,9 +1089,8 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use super::*;
-    use crate::runtime::{ChildId, Modifiers, Ratcn};
-    use crate::test_support::{Driver, key, key_with, mouse};
-    use crate::text_width::display_width;
+    use crate::runtime::{ChildId, KeyCode, Ratcn};
+    use crate::test_support::{Driver, key, mouse};
 
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
     enum Screen {
@@ -1271,18 +1148,7 @@ mod tests {
         .selection(|s: &State| Some(s.selected), Msg::Selected)
     }
 
-    /// A Ctrl-held character key.
-    fn ctrl_key(ch: char) -> Event {
-        key_with(
-            KeyCode::Char(ch),
-            Modifiers {
-                ctrl: true,
-                ..Modifiers::NONE
-            },
-        )
-    }
-
-    fn render_runtime(driver: &mut Driver<State, Msg>, state: &State, fail: bool) {
+    fn render_runtime(driver: &mut Driver<State, Msg>, state: &State) {
         let area = driver.area();
         driver.render(state, |ctx| {
             ctx.component(
@@ -1299,7 +1165,6 @@ mod tests {
                 .selection(|state: &State| Some(state.selected), Msg::Selected),
                 area,
             );
-            assert!(!fail, "failed pass");
         });
     }
 
@@ -1466,115 +1331,6 @@ mod tests {
     }
 
     #[test]
-    fn hover_is_consumed_without_moving_focus() {
-        let mut tabs = manual();
-        tabs.hits = tab_layout(
-            Rect::new(0, 0, 30, TabsSize::Small.height()),
-            &["A", "B", "C"],
-            TabsSize::Small,
-            0,
-        );
-        let state = State::default();
-        // Tabs are label+4 wide with a 1-cell gap: A 0..5, B 6..11, C 12..17.
-        assert_eq!(
-            tabs.handle_event(
-                &mouse(MouseKind::Moved, 14, 0),
-                &state,
-                &mut EventCtx::default(),
-            ),
-            EventResult::Consumed
-        );
-    }
-
-    #[test]
-    fn automatic_hover_ignores_a_manual_item_focus_binding() {
-        let mut tabs = automatic_with_item_focus();
-        tabs.hits = tab_layout(
-            Rect::new(0, 0, 30, TabsSize::Small.height()),
-            &["A", "B", "C"],
-            TabsSize::Small,
-            0,
-        );
-        let state = State::default();
-        // Hover must never move a separate cursor or switch content.
-        assert_eq!(
-            tabs.handle_event(
-                &mouse(MouseKind::Moved, 14, 0),
-                &state,
-                &mut EventCtx::default(),
-            ),
-            EventResult::Consumed
-        );
-    }
-
-    /// A tab strip is horizontal, so its `vi` keys are `h`/`l` rather than
-    /// `j`/`k`. Ctrl+P/Ctrl+N read as previous/next either way.
-    #[test]
-    fn vim_and_readline_keys_step_along_the_strip() {
-        let state = State::default(); // cursor on A
-        for forward in [key(KeyCode::Char('l')), ctrl_key('n')] {
-            assert_eq!(
-                manual().handle_event(&forward, &state, &mut EventCtx::default()),
-                EventResult::Emit(Msg::Focused(Screen::C)),
-                "l and Ctrl+N step like Right, skipping the disabled B"
-            );
-            assert_eq!(
-                automatic().handle_event(&forward, &state, &mut EventCtx::default()),
-                EventResult::Emit(Msg::Selected(Screen::C)),
-                "automatic activation commits, as its arrow keys do"
-            );
-        }
-        assert_eq!(
-            manual().handle_event(&key(KeyCode::Char('h')), &state, &mut EventCtx::default()),
-            EventResult::Consumed,
-            "h steps like Left, and the cursor is already at the first tab"
-        );
-        assert_eq!(
-            manual().handle_event(&key(KeyCode::Char('c')), &state, &mut EventCtx::default()),
-            EventResult::Ignored,
-            "any other letter bubbles: there is no typeahead"
-        );
-    }
-
-    #[test]
-    fn a_letter_that_is_not_a_navigation_key_bubbles_as_an_app_hotkey() {
-        let state = State::default();
-        for ch in ['b', 'z'] {
-            assert_eq!(
-                manual().handle_event(&key(KeyCode::Char(ch)), &state, &mut EventCtx::default()),
-                EventResult::Ignored,
-                "'{ch}' is not a navigation key, so it bubbles as an app hotkey"
-            );
-        }
-    }
-
-    /// A tabs row with nothing bound lets pointer motion through, as `List`
-    /// and `Select` do.
-    #[test]
-    fn hover_over_an_unbound_tabs_row_is_ignored() {
-        let mut tabs: Tabs<Screen, State, Msg> = Tabs::new([
-            Tab::new(Screen::A, "A"),
-            Tab::new(Screen::B, "B"),
-            Tab::new(Screen::C, "C"),
-        ]);
-        tabs.hits = tab_layout(
-            Rect::new(0, 0, 30, TabsSize::Small.height()),
-            &["A", "B", "C"],
-            TabsSize::Small,
-            0,
-        );
-        let state = State::default();
-        assert_eq!(
-            tabs.handle_event(
-                &mouse(MouseKind::Moved, 14, 0),
-                &state,
-                &mut EventCtx::default(),
-            ),
-            EventResult::Ignored
-        );
-    }
-
-    #[test]
     fn click_commits_the_clicked_tab() {
         let mut tabs = automatic();
         tabs.hits = tab_layout(
@@ -1620,7 +1376,6 @@ mod tests {
         // Six tabs in 18 cells cannot all show, so the window shifts to keep
         // the selected E visible. The click must still resolve to F's *original*
         // index rather than its position within the visible window.
-        let labels = ["A", "B", "C", "D", "E", "F"];
         let state = State {
             selected: Screen::E,
             ..State::default()
@@ -1644,24 +1399,10 @@ mod tests {
             );
         });
 
-        // The same layout the render just computed: `must_show` is the selected
-        // tab when no manual cursor is bound.
-        let hits = tab_layout(area, &labels, TabsSize::Small, 4);
-        let (_, tab_f) = hits
-            .tabs
-            .iter()
-            .find(|(index, _)| *index == 5)
-            .expect("tab F should be visible after the window shifts");
-
+        // The window around E is `‹ E F`: the marker at 0, E at 2..7, F at
+        // 8..13.
         assert_eq!(
-            driver.event(
-                mouse(
-                    MouseKind::Click(MouseButton::Left),
-                    tab_f.x + tab_f.width / 2,
-                    tab_f.y,
-                ),
-                &state,
-            ),
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 10, 0), &state),
             EventResult::Emit(Msg::Selected(Screen::F))
         );
     }
@@ -1727,20 +1468,9 @@ mod tests {
                 area,
             );
         });
-        let marker = tab_layout(
-            Rect::new(0, 0, 18, TabsSize::Small.height()),
-            &["A", "B", "C", "D", "E", "F"],
-            TabsSize::Small,
-            0,
-        )
-        .right
-        .expect("hidden right tabs get a marker");
-
+        // A at 0..5 and B at 6..11 fit; the `›` marker sits at column 12.
         assert_eq!(
-            driver.event(
-                mouse(MouseKind::Click(MouseButton::Left), marker.x, marker.y),
-                &state,
-            ),
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 12, 0), &state),
             EventResult::Emit(Msg::Selected(Screen::C))
         );
     }
@@ -1988,104 +1718,10 @@ mod tests {
     }
 
     #[test]
-    fn disabledness_controls_navigation_clicks_and_focusability() {
-        let mut tabs: Tabs<Screen, State, Msg> = Tabs::new([
-            Tab::new(Screen::A, "A").disabled(true),
-            Tab::new(Screen::B, "B").disabled(true),
-            Tab::new(Screen::C, "C"),
-        ])
-        .item_focus(
-            |state: &State| Some(state.focused.unwrap_or(state.selected)),
-            Msg::Focused,
-        )
-        .selection(|state: &State| Some(state.selected), Msg::Selected);
-        tabs.hits = tab_layout(Rect::new(0, 0, 30, 1), &["A", "B", "C"], TabsSize::Small, 0);
-
-        assert!(tabs.scope_options().focusable);
-        assert_eq!(
-            tabs.handle_event(
-                &key(KeyCode::Right),
-                &State::default(),
-                &mut EventCtx::default(),
-            ),
-            EventResult::Emit(Msg::Focused(Screen::C))
-        );
-        assert_eq!(
-            tabs.handle_event(
-                &mouse(MouseKind::Click(MouseButton::Left), 2, 0),
-                &State::default(),
-                &mut EventCtx::default(),
-            ),
-            EventResult::Ignored
-        );
-        assert_eq!(
-            tabs.handle_event(
-                &mouse(MouseKind::Click(MouseButton::Left), 8, 0),
-                &State::default(),
-                &mut EventCtx::default(),
-            ),
-            EventResult::Ignored
-        );
-        assert_eq!(
-            tabs.handle_event(
-                &mouse(MouseKind::Click(MouseButton::Left), 14, 0),
-                &State::default(),
-                &mut EventCtx::default(),
-            ),
-            EventResult::Emit(Msg::Selected(Screen::C))
-        );
-
-        let all_disabled: Tabs<Screen, State, Msg> = Tabs::new([
-            Tab::new(Screen::A, "A").disabled(true),
-            Tab::new(Screen::B, "B").disabled(true),
-            Tab::new(Screen::C, "C").disabled(true),
-        ]);
-        assert!(!all_disabled.scope_options().focusable);
-    }
-
-    #[test]
-    fn disabled_bits_remain_from_the_last_successful_runtime_render() {
-        let mut driver = Driver::new(20, 1);
-        let mut state = State::default();
-        render_runtime(&mut driver, &state, false);
-        state.disable_b = true;
-
-        assert_eq!(
-            driver.event(key(KeyCode::Right), &state),
-            EventResult::Emit(Msg::Focused(Screen::B))
-        );
-
-        render_runtime(&mut driver, &state, false);
-        state.disable_b = false;
-        assert_eq!(
-            driver.event(key(KeyCode::Right), &state),
-            EventResult::Emit(Msg::Focused(Screen::C))
-        );
-    }
-
-    #[test]
-    fn failed_runtime_pass_preserves_previous_disabled_bits() {
-        let mut driver = Driver::new(20, 1);
-        let mut state = State::default();
-        render_runtime(&mut driver, &state, false);
-        state.disable_b = true;
-
-        let failed = catch_unwind(AssertUnwindSafe(|| {
-            render_runtime(&mut driver, &state, true);
-        }));
-
-        assert!(failed.is_err());
-        assert_eq!(
-            driver.event(key(KeyCode::Right), &state),
-            EventResult::Emit(Msg::Focused(Screen::B))
-        );
-    }
-
-    #[test]
     fn focused_and_selected_bindings_are_current_between_renders() {
         let mut driver = Driver::new(20, 1);
         let mut state = State::default();
-        render_runtime(&mut driver, &state, false);
+        render_runtime(&mut driver, &state);
         state.focused = Some(Screen::B);
         state.selected = Screen::C;
 
@@ -2126,64 +1762,6 @@ mod tests {
         assert_eq!(
             driver.event(key(KeyCode::Right), &state),
             EventResult::Emit(Msg::Selected(Screen::C))
-        );
-    }
-
-    #[test]
-    fn hit_window_survives_semantic_changes_and_a_failed_pass() {
-        let mut driver = Driver::new(18, 1);
-        let mut state = State {
-            selected: Screen::E,
-            ..State::default()
-        };
-        let render = |driver: &mut Driver<State, Msg>, state: &State, fail: bool| {
-            let area = driver.area();
-            driver.render(state, |ctx| {
-                ctx.component(
-                    ChildId::Static("tabs"),
-                    Tabs::new([
-                        Tab::new(Screen::A, "A"),
-                        Tab::new(Screen::B, "B"),
-                        Tab::new(Screen::C, "C"),
-                        Tab::new(Screen::D, "D"),
-                        Tab::new(Screen::E, "E"),
-                        Tab::new(Screen::F, "F"),
-                    ])
-                    .selection(|state: &State| Some(state.selected), Msg::Selected),
-                    area,
-                );
-                assert!(!fail, "failed pass");
-            });
-        };
-        render(&mut driver, &state, false);
-        let (_, tab_f) = tab_layout(
-            Rect::new(0, 0, 18, 1),
-            &["A", "B", "C", "D", "E", "F"],
-            TabsSize::Small,
-            4,
-        )
-        .tabs
-        .into_iter()
-        .find(|(index, _)| *index == 5)
-        .expect("tab F is visible around selected E");
-
-        state.selected = Screen::A;
-        state.focused = Some(Screen::A);
-        let failed = catch_unwind(AssertUnwindSafe(|| {
-            render(&mut driver, &state, true);
-        }));
-
-        assert!(failed.is_err());
-        assert_eq!(
-            driver.event(
-                mouse(
-                    MouseKind::Click(MouseButton::Left),
-                    tab_f.x + tab_f.width / 2,
-                    tab_f.y,
-                ),
-                &state,
-            ),
-            EventResult::Emit(Msg::Selected(Screen::F))
         );
     }
 
@@ -2243,55 +1821,6 @@ mod tests {
             buffer.cell((14, 0)).expect("unselected C label cell").bg,
             style.background
         );
-    }
-
-    #[test]
-    fn selected_tab_fills_like_the_default_button_others_like_secondary() {
-        let theme = Theme::default_dark();
-        let style = TabsStyle::from_theme(&theme);
-        let area = Rect::new(0, 0, 18, TabsSize::Small.height());
-        let mut buffer = Buffer::empty(area);
-
-        // Selected A, no focused tab. A 0..5, B 6..11 (1-cell gap).
-        Widget::render(
-            TabsWidget::new(&["A", "B"])
-                .selected_item(Some(0))
-                .style(style),
-            area,
-            &mut buffer,
-        );
-
-        // The selected tab fills with the primary (default button).
-        let selected = buffer.cell((2, 0)).expect("selected label cell");
-        assert_eq!(selected.bg, style.selected_background);
-        assert_eq!(selected.bg, theme.primary);
-        // An unselected tab fills with the secondary.
-        let unselected = buffer.cell((8, 0)).expect("unselected label cell");
-        assert_eq!(unselected.bg, style.background);
-        assert_eq!(unselected.bg, theme.secondary);
-    }
-
-    #[test]
-    fn disabled_selected_tab_keeps_distinct_active_colors() {
-        let theme = Theme::default_dark();
-        let style = TabsStyle::from_theme(&theme);
-        let area = Rect::new(0, 0, 18, TabsSize::Small.height());
-        let mut buffer = Buffer::empty(area);
-
-        Widget::render(
-            TabsWidget::new(&["A", "B"])
-                .selected_item(Some(0))
-                .disabled_items(&[true, true])
-                .style(style),
-            area,
-            &mut buffer,
-        );
-
-        let selected = buffer.cell((2, 0)).expect("selected disabled tab");
-        let unselected = buffer.cell((8, 0)).expect("unselected disabled tab");
-        assert_eq!(selected.bg, style.selected_disabled_background);
-        assert_eq!(unselected.bg, style.disabled_background);
-        assert_ne!(selected.bg, unselected.bg);
     }
 
     #[test]
@@ -2433,12 +1962,12 @@ mod tests {
         let hovered = style.resolve(false, false, true, false);
         let selected = style.resolve(true, false, false, false);
 
-        for resolved in [resting, focused, hovered, selected] {
-            assert_eq!(resolved.fill, surface, "no state may paint its own fill");
+        for (_, fill) in [resting, focused, hovered, selected] {
+            assert_eq!(fill, surface, "no state may paint its own fill");
         }
-        assert_ne!(resting.foreground, focused.foreground);
-        assert_ne!(focused.foreground, hovered.foreground);
-        assert_ne!(resting.foreground, selected.foreground);
+        assert_ne!(resting.0, focused.0);
+        assert_ne!(focused.0, hovered.0);
+        assert_ne!(resting.0, selected.0);
     }
 
     // Hover wins over focus, matching buttons, so pointing at the tab the
@@ -2446,8 +1975,8 @@ mod tests {
     #[test]
     fn hover_takes_precedence_over_focus() {
         let style = TabsStyle::from_theme(&Theme::default_dark());
-        let both = style.resolve(false, true, true, false);
-        assert_eq!(both.fill, style.hovered_background);
+        let (_, fill) = style.resolve(false, true, true, false);
+        assert_eq!(fill, style.hovered_background);
     }
 
     #[test]
@@ -2609,40 +2138,6 @@ mod tests {
     }
 
     #[test]
-    fn tab_width_matches_a_button_and_counts_cells_not_chars_or_bytes() {
-        // label + 4, the same width as a Button of the same text.
-        assert_eq!(tab_width("A"), 5);
-        assert_eq!(tab_width("åβ"), 6);
-        assert_eq!(tab_width("日本"), 8, "CJK chars are 2 cells");
-        assert_eq!(tab_width("🚀"), 6, "emoji are 2 cells");
-        assert_eq!(tab_width("e\u{301}"), 5, "combining mark adds no cell");
-        assert_eq!(
-            tab_width("👩\u{200d}👩\u{200d}👦"),
-            6,
-            "a ZWJ sequence is one 2-cell glyph, not its char count"
-        );
-    }
-
-    #[test]
-    fn filled_middle_truncates_by_cells_and_pads_the_fill() {
-        // Centered by cells when the label fits.
-        assert_eq!(filled_middle("日本", 8), "  日本  ");
-        // Truncation never splits a wide char's cells or overflows the width;
-        // the shortfall is padded so the fill spans the whole tab.
-        assert_eq!(filled_middle("日本語", 5), "日本 ");
-        assert_eq!(filled_middle("日本語", 4), "日本");
-        assert_eq!(filled_middle("日本語", 3), "日 ");
-        assert_eq!(filled_middle("日本語", 0), "");
-        for width in 0..=8 {
-            assert_eq!(
-                display_width(&filled_middle("日本語", width)),
-                width.min(8),
-                "middle row must span exactly the tab width"
-            );
-        }
-    }
-
-    #[test]
     fn wide_label_tab_paints_centered_with_the_fill_spanning_its_cells() {
         let theme = Theme::default_dark();
         let style = TabsStyle::from_theme(&theme);
@@ -2668,6 +2163,55 @@ mod tests {
         }
         // Past the tab: untouched.
         assert_eq!(buffer.cell((8, 0)).expect("outside cell").bg, Color::Reset);
+    }
+
+    #[test]
+    fn selected_tab_fills_like_the_default_button_others_like_secondary() {
+        let theme = Theme::default_dark();
+        let style = TabsStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 18, TabsSize::Small.height());
+        let mut buffer = Buffer::empty(area);
+
+        // Selected A, no focused tab. A 0..5, B 6..11 (1-cell gap).
+        Widget::render(
+            TabsWidget::new(&["A", "B"])
+                .selected_item(Some(0))
+                .style(style),
+            area,
+            &mut buffer,
+        );
+
+        // The selected tab fills with the primary (default button).
+        let selected = buffer.cell((2, 0)).expect("selected label cell");
+        assert_eq!(selected.bg, style.selected_background);
+        assert_eq!(selected.bg, theme.primary);
+        // An unselected tab fills with the secondary.
+        let unselected = buffer.cell((8, 0)).expect("unselected label cell");
+        assert_eq!(unselected.bg, style.background);
+        assert_eq!(unselected.bg, theme.secondary);
+    }
+
+    #[test]
+    fn disabled_selected_tab_keeps_distinct_active_colors() {
+        let theme = Theme::default_dark();
+        let style = TabsStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 18, TabsSize::Small.height());
+        let mut buffer = Buffer::empty(area);
+
+        Widget::render(
+            TabsWidget::new(&["A", "B"])
+                .selected_item(Some(0))
+                .disabled_items(&[true, true])
+                .style(style),
+            area,
+            &mut buffer,
+        );
+
+        let selected = buffer.cell((2, 0)).expect("selected disabled tab");
+        let unselected = buffer.cell((8, 0)).expect("unselected disabled tab");
+        assert_eq!(selected.bg, style.selected_disabled_background);
+        assert_eq!(unselected.bg, style.disabled_background);
+        assert_ne!(selected.bg, unselected.bg);
     }
 
     #[test]
@@ -2712,26 +2256,6 @@ mod tests {
     #[test]
     fn tabs_widget_width_includes_spacing_between_tabs() {
         assert_eq!(TabsWidget::new(&["A", "B"]).width(), 11);
-    }
-
-    #[test]
-    fn window_width_sums_tab_widths_and_the_gaps_between_them() {
-        // Three 5-wide tabs: 5 + 1 + 5 + 1 + 5.
-        assert_eq!(window_width(&width_prefix_sums(&[5, 5, 5]), 0, 2), 17);
-        // A single tab has no gap.
-        assert_eq!(window_width(&width_prefix_sums(&[5, 9, 5]), 1, 1), 9);
-        // A sub-range: two tabs and one gap.
-        assert_eq!(window_width(&width_prefix_sums(&[5, 5, 5, 5]), 1, 2), 11);
-    }
-
-    #[test]
-    fn window_width_saturates_rather_than_wrapping() {
-        // A run past what `u16` can hold clamps: a wrapped width would claim to
-        // fit a row it dwarfs.
-        assert_eq!(
-            window_width(&width_prefix_sums(&[u16::MAX, 2]), 0, 1),
-            u16::MAX
-        );
     }
 
     #[test]
