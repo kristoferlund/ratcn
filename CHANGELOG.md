@@ -10,6 +10,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `list_core::key_intent` and `linear_nav::Axis`: the one key map `List`,
+  `Select`, and `Tabs` answer from, with the axis naming which arrows step.
+  `RowViewport::wheel` is the same for the wheel.
+- `SelectWidget::options`, the panel's labels as their own call.
+- `BarChartWidget::span`, the length of the grouping axis.
+- `ModalState` implements `Eq`.
 - `ratcn::geometry`, the crate-root module holding the rect helpers components
   share: `is_border`, `wrapped_height`, and `fixed_height` — an area cropped to
   exactly the rows a fixed-height shape occupies, or empty when it cannot hold
@@ -100,6 +106,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking:** `ButtonFill` and `ButtonStyle::mode`. A border color is
+  `Option<Color>` per state; `Some` paints bordered.
+- **Breaking:** `Button::height`, `ButtonWidget::height`, `SelectWidget::height`,
+  `SelectWidget::visible_items`, `BarChartWidget::vertical`,
+  `BarChartWidget::width`/`height` (see `span`), `SelectStyle::selected_disabled_*`
+  (never distinct from `disabled_*`), `color::darken` (`dim` toward black),
+  `linear_nav::ScrollStep` and `has_reserved_modifier`.
 - **Breaking:** public items nothing reaches: `color::lighten`,
   `DialogStyle::fallback`, `ToasterState::clear`, `ToasterWidget::visible`,
   `Select::height`, `Select::DEFAULT_MAX_VISIBLE_OPTIONS`,
@@ -168,6 +181,30 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `PaintCtx<'a, State>` has one lifetime. Every `paint`
+  signature loses a `'_`.
+- **Breaking:** `SelectWidget::open` takes a `bool`; the labels go to
+  `options`.
+- **Breaking:** `ToastKind` is no longer `#[non_exhaustive]`; a new kind is a
+  breaking change anyway, since `ToasterStyle` needs a color for it.
+- **Breaking:** `terminal::Session::next` returns the I/O error its doc
+  promised when a re-query cannot be written, instead of swallowing it.
+- **Breaking:** `linear_nav::nav_key_target` and `is_step_key` take an
+  `axis: Axis` naming which arrows step.
+- **Breaking:** `linear_nav::wheel_offset` takes `runtime::ScrollDirection`
+  and returns `Option<usize>`, `None` when the wheel moves nothing.
+- **Breaking:** `list_core::windowed_rows` takes `(cursor, disabled, selected,
+  row)`, building each `ListItemState` itself.
+- **Breaking:** `terminal::Session::theme` and `theme_with_fallback` are no
+  longer `const`.
+- A panicking `Component::paint` is no longer caught and re-raised by the
+  runtime's own guard; the unwind leaves `render` before commit, so the pass
+  still never commits and the observable outcome is the same.
+- Outline and Ghost buttons paint with `Color::Reset` at rest, so the surface
+  beneath them shows through.
+- A layer is one record in the retained surface; a popup or hint declared
+  after a modal, outside it, paints beneath the modal and dims with it.
+- The crate holds no lock: the sRGB table behind a `LazyLock` is a function.
 - **Breaking:** the paint-only widgets address items by one noun.
   `ListWidget`'s `focused_row`/`selected_rows`/`disabled_rows`, `SelectWidget`'s
   `focused_option`/`selected_option`/`disabled_options`, and `TabsWidget`'s
@@ -422,6 +459,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Outline and Ghost buttons painted `theme.background` under their label,
+  a dark stripe on any surface that is not the background, and a resting
+  Ghost button grew caps it was documented not to have.
+- A popup or hint declared after a modal, outside it, composited above the
+  modal undimmed while every press on it was consumed.
+- A press with no motion before it routed to the pressed node while hover
+  stayed on the previous one, and the gesture froze it there.
+- A drag transient outlived a gesture the runtime abandoned (pointer left
+  the terminal, a modal opened), so the next drag reaching the component by
+  hit-test moved it and its release was swallowed.
 - A duplicate modal id panics wherever the modal is declared, nested inside
   another modal included.
 
