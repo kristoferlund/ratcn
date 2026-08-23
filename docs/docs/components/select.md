@@ -169,12 +169,9 @@ frame.render_widget(
 );
 ```
 
-Call `.height(...)` and `.visible_items(...)` on the built widget when the
-surrounding layout needs to reserve exactly the rows it will paint — they read
-openness, disabled state, option count, and row height from the instance.
 `.visible_item_rows(...)` accepts screen rows you build for the options
 actually painted — the ones from `first_item` on, in paint order — while
-`.open(...)` still takes every option, because the panel's height is measured
+`.options(...)` takes every option, because the panel's height is measured
 from their count. Pair it with `.row_height(...)` for multi-line rows. Together
 they are the paint-only counterpart of the component's `.paint_item(...)`.
 Replace `.themed(...)` with `.style(...)` to supply exact widget colors.
