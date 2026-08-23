@@ -39,8 +39,8 @@ use crate::{
 ///
 /// At rest only [`foreground`](Self::foreground) paints, on nothing: the
 /// surface shows through. Hover and focus each lay their background over the
-/// declared area, disabled mutes the text, and each earlier state wins over
-/// the later ones.
+/// declared area — hover beating focus, so pointing at the cycle you are on
+/// stays visible — disabled mutes the text and paints nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CycleStyle {
     /// Value color at rest; also the text color under hover and focus.
@@ -80,18 +80,18 @@ impl CycleStyle {
     }
 
     /// One paint pass's colors (see [`Self::from_theme`]). Disabled wins over
-    /// focus, which wins over hover, which wins over rest.
+    /// hover, which wins over focus, which wins over rest.
     fn resolve(self, focused: bool, hovered: bool, disabled: bool) -> Style {
         if disabled {
             Style::default().fg(self.disabled_foreground)
-        } else if focused {
-            Style::default()
-                .fg(self.foreground)
-                .bg(self.focused_background)
         } else if hovered {
             Style::default()
                 .fg(self.foreground)
                 .bg(self.hovered_background)
+        } else if focused {
+            Style::default()
+                .fg(self.foreground)
+                .bg(self.focused_background)
         } else {
             Style::default().fg(self.foreground)
         }
@@ -197,7 +197,8 @@ type StyleFn = Rc<dyn Fn(&Theme) -> CycleStyle>;
 /// all it shows, and every click, <kbd>Enter</kbd>, <kbd>Space</kbd>,
 /// <kbd>Right</kbd>/<kbd>l</kbd>, or <kbd>Ctrl+N</kbd> advances to the next,
 /// wrapping at the end. <kbd>Left</kbd>/<kbd>h</kbd> walks backward, as does
-/// <kbd>Ctrl+P</kbd>.
+/// <kbd>Ctrl+P</kbd>. Home and End step nothing: a ring has no ends.
+/// Shift belongs to the app, so Shift+Space passes through untouched.
 ///
 /// The row paints like a small ghost button — plain text at rest, a quiet
 /// fill on hover or focus — so a column of cycles reads as values, not as a
@@ -536,6 +537,35 @@ mod tests {
             Color::Reset,
             "a focused cycle must be findable by its fill"
         );
+    }
+
+    /// Disabled is the loudest state: no events, no traversal, no fill.
+    #[test]
+    fn a_disabled_cycle_is_inert() {
+        let mut driver = driver();
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("size"),
+                Cycle::new(SIZES)
+                    .disabled(true)
+                    .selection(|s: &State| s.size, Msg::Size),
+                Rect::new(2, 2, 10, 1),
+            );
+        });
+
+        assert!(matches!(
+            driver.event(key(KeyCode::Char(' ')), &state),
+            EventResult::Ignored
+        ));
+        assert!(matches!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 5, 2), &state),
+            EventResult::Ignored
+        ));
+        assert!(matches!(
+            driver.event(key(KeyCode::Tab), &state),
+            EventResult::Ignored
+        ));
     }
 
     #[test]

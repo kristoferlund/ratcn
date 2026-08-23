@@ -102,10 +102,13 @@ impl CheckboxStyle {
     }
 
     /// One paint pass's colors (see [`Self::from_theme`]). Disabled wins over
-    /// focus, which wins over hover, which wins over rest.
+    /// hover, which wins over focus, which wins over rest — hover beating
+    /// focus is what keeps pointing at the box you are on visible.
     fn resolve(self, checked: bool, shown: Presentation) -> ResolvedCheckboxStyle {
         let foreground = if shown.disabled {
             self.disabled_foreground
+        } else if shown.hovered {
+            self.foreground
         } else if shown.focused {
             self.focused_foreground
         } else {
@@ -120,10 +123,10 @@ impl CheckboxStyle {
         };
         let background = if shown.disabled {
             None
-        } else if shown.focused {
-            Some(self.focused_background)
         } else if shown.hovered {
             Some(self.hovered_background)
+        } else if shown.focused {
+            Some(self.focused_background)
         } else {
             None
         };
@@ -309,15 +312,19 @@ type StyleFn = Rc<dyn Fn(&Theme) -> CheckboxStyle>;
 /// A boolean control: marker left, label right, the whole row one hit target.
 ///
 /// A click anywhere on the row toggles, as do <kbd>Enter</kbd> and
-/// <kbd>Space</kbd> while focused. Hover paints nothing and nothing looks like
-/// a button; focus recolors the label, which is the one state a keyboard user
-/// needs to see.
+/// <kbd>Space</kbd> while focused. Hover and focus raise the row the way a
+/// small ghost button raises, so pointer and keyboard users both always see
+/// what they are on.
 ///
 /// The checked state lives in app state and arrives through
 /// [`checked`](Self::checked); without that binding the checkbox paints but is
 /// not focusable and answers no events. With the markers chosen freely, the
 /// same component serves as a switch (`[ON]`/`[off]`) or an ASCII toggle
 /// (`[x]`/`[ ]`) — see the [checkbox demo](https://github.com/kristoferlund/ratcn/tree/main/demos/checkbox).
+///
+/// Its markers answer to `checked`/`unchecked` where the selection controls
+/// say `selected`/`unselected`: a checkbox holds one row whose two states are
+/// its content, not a choice among many.
 pub struct Checkbox<S, M> {
     label: String,
     checked_marker: String,
@@ -640,6 +647,52 @@ mod tests {
             .map(|column| buffer.cell((column, 0)).expect("cell").symbol())
             .collect();
         assert!(row.starts_with("[x] Vim bindings"), "{row:?}");
+    }
+
+    /// Disabled is the loudest state: no events, no traversal, and no fill
+    /// even while hovered or focused.
+    #[test]
+    fn a_disabled_checkbox_is_inert_and_paints_muted() {
+        let mut driver = driver();
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("off"),
+                Checkbox::new("Off")
+                    .disabled(true)
+                    .checked(|s: &State| s.vim, Msg::Vim),
+                Rect::new(2, 2, 20, 1),
+            );
+        });
+
+        // Inert to the pointer and the keyboard, and invisible to Tab.
+        assert!(matches!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 8, 2), &state),
+            EventResult::Ignored
+        ));
+        assert!(matches!(
+            driver.event(key(KeyCode::Char(' ')), &state),
+            EventResult::Ignored
+        ));
+        assert!(matches!(
+            driver.event(key(KeyCode::Tab), &state),
+            EventResult::Ignored
+        ));
+
+        // Muted beats hover and focus in paint.
+        let area = Rect::new(0, 0, 20, 1);
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(area);
+        CheckboxWidget::new("Off", true)
+            .hovered(true)
+            .focused(true)
+            .disabled(true)
+            .themed(&theme)
+            .render(area, &mut buffer);
+        for column in 0..20u16 {
+            let cell = buffer.cell((column, 0)).expect("cell");
+            assert_eq!(cell.bg, Color::Reset, "column {column} filled while muted");
+        }
     }
 
     #[test]

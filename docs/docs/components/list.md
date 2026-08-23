@@ -121,8 +121,18 @@ List::new(people)
 ```
 
 Every item is the same height, which keeps clicking and paging exact. The
-default markers are `■`/`□` and `●`/`○`; this demo paints ASCII `[x]`/`[ ]`
-instead. The row's state colors are painted underneath what `paint_item`
+default markers are `■`/`□` and `●`/`○`. To change only the markers — ASCII
+`[x]`/`[ ]`, say — use `.selected_marker(...)` and `.unselected_marker(...)`
+instead of repainting the whole row:
+
+```rust
+List::new(todos)
+    .multi_selection(|s: &AppState, item| s.done.contains(item), Msg::Toggled)
+    .selected_marker("[x]")
+    .unselected_marker("[ ]")
+```
+
+The row's state colors are painted underneath what `paint_item`
 returns, so unstyled text picks up the focused, selected, or disabled colors,
 and any color you set explicitly on a `Text`, `Line`, or `Span` is kept.
 

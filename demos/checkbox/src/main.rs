@@ -25,6 +25,17 @@ const DEMO_WIDTH: u16 = 26;
 const DEMO_HEIGHT: u16 = 7;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
 
+/// The three skins: id, checked marker, unchecked marker, label.
+const ROWS: [(&str, &str, &str, &str); 3] = [
+    ("default", "☑", "☐", "Vim bindings"),
+    ("ascii", "[x]", "[ ]", "ASCII checklist"),
+    ("switch", "[ON]", "[off]", "Terminal bell"),
+];
+
+fn columns(marker: &str, label: &str) -> u16 {
+    ratcn::text_width::display_width_u16(marker) + 1 + ratcn::text_width::display_width_u16(label)
+}
+
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
@@ -97,27 +108,30 @@ impl demo_shared::Demo for App {
                 });
             });
 
-            // One row per checkbox, each exactly as wide as its content.
+            // One row per checkbox, each exactly as wide as its content —
+            // measured from the same strings the checkbox paints.
             let inner = demo.inner(CONTENT_PADDING);
             let [row_a, row_b, row_c] = Layout::vertical([Constraint::Length(1); 3])
                 .spacing(1)
                 .areas(inner);
-            let rows = [
-                ("vim", Rect { width: 17, ..row_a }),
-                ("mouse", Rect { width: 22, ..row_b }),
-                ("bell", Rect { width: 21, ..row_c }),
-            ];
+            let areas = [row_a, row_b, row_c];
 
-            for (id, row_area) in rows {
+            for ((id, checked_marker, unchecked_marker, label), row_area) in
+                ROWS.into_iter().zip(areas)
+            {
+                let row_area = Rect {
+                    width: columns(checked_marker, label),
+                    ..row_area
+                };
                 let checkbox = match id {
-                    "vim" => Checkbox::new("Vim bindings").checked(|s: &AppState| s.vim, Msg::Vim),
-                    "mouse" => Checkbox::new("ASCII checklist")
-                        .checked_marker("[x]")
-                        .unchecked_marker("[ ]")
+                    "default" => Checkbox::new(label).checked(|s: &AppState| s.vim, Msg::Vim),
+                    "ascii" => Checkbox::new(label)
+                        .checked_marker(checked_marker)
+                        .unchecked_marker(unchecked_marker)
                         .checked(|s: &AppState| s.mouse, Msg::Mouse),
-                    _ => Checkbox::new("Terminal bell")
-                        .checked_marker("[ON]")
-                        .unchecked_marker("[off]")
+                    _ => Checkbox::new(label)
+                        .checked_marker(checked_marker)
+                        .unchecked_marker(unchecked_marker)
                         .checked(|s: &AppState| s.bell, Msg::Bell),
                 };
                 ctx.component(id, checkbox, row_area);

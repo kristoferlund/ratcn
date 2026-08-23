@@ -71,6 +71,7 @@ current value occupies — a Cycle is as wide as the text it shows, so rows of
 different settings end at different columns, and a fill on hover or focus
 hugs the value instead of stretching across the row. Replace `.themed(...)`
 with `.style(...)` to supply exact colors.
+
 ## Full API
 
 Every method, with binding requirements and edge-case detail:
