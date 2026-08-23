@@ -32,7 +32,7 @@ impl Component<AppState, Msg> for MyComponent {
 
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, AppState, Msg>) { ... }
 
-    fn paint(&mut self, ctx: &mut PaintCtx<'_, '_, AppState>) { ... }
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, AppState>) { ... }
 
     fn handle_event(
         &mut self,
@@ -63,30 +63,31 @@ whether the pointer is inside this declaration, for the rare component whose
 `handle_event` reads back must be recorded in `declare`, and must therefore not
 depend on those flags.
 
-Every method except `declare` has a default. `paint` defaults to painting
-nothing, which is right for a composite that is only a container.
-`scope_options` carries the focus claim:
-`ScopeOptions::default().focusable(true)` is how anything that should take part
-in Tab traversal says so, and it defaults to `false`. It answers from the props
-the component was declared with, so resolve anything state-dependent in
-`prepare` first. The same options shape a composite's scope (below).
-`interaction_area` defaults to returning the supplied paint area unchanged.
-Override it when interactive pixels occupy only part of the allocation. The
-runtime still paints with the supplied area, but retains the returned area for
-focus, hit-testing, pointer capture, and event routing. A non-empty result must
-be fully contained in the supplied paint area; otherwise rendering panics and
-the previous retained surface remains active. Returning an area with zero width
-or height keeps the component's identity and paint but excludes it and its
-descendants from interaction for that surface. `prepare` runs once per
-declaration, before any of those answers are read, so all of them may be
-computed from what it pins: `Select` resolves its open flag there, and `List`,
-`Select`, and `Tabs` use it to fail loud when two items carry the same value.
-`reveal_in_viewport` is called on the component that declared a viewport when
-focus lands on a descendant the viewport clips, so it can scroll that descendant
-into view; [Layers and modals](./layers-and-modals) covers when the call
-arrives, including the focus changes it answers on the frame after.
-`MeasuredComponent` adds a `measure` method so containers such as the Dialog
-action row can size a component before declaring it.
+Every method except `declare` has a default:
+
+- [`prepare`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.prepare)
+  runs once per declaration, before `scope_options` and `interaction_area`
+  are read, so both can answer from state it pins.
+- [`scope_options`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.scope_options)
+  carries the focus claim: `ScopeOptions::default().focusable(true)` is how a
+  component takes part in Tab traversal. The same options shape a composite's
+  scope (below).
+- [`interaction_area`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.interaction_area)
+  returns the supplied paint area; override it when the interactive pixels
+  occupy only part of it. The result must sit inside the paint area, and an
+  empty one excludes the component and its descendants from interaction.
+- [`paint`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.paint)
+  paints nothing, which is right for a composite that is only a container.
+- [`handle_event`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.handle_event)
+  ignores the event, letting it bubble to the parent.
+- [`reveal_in_viewport`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.reveal_in_viewport)
+  does nothing; a component that declared a viewport overrides it to scroll a
+  clipped descendant into view. [Layers and modals](./layers-and-modals)
+  covers when the call arrives.
+
+[`MeasuredComponent`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.MeasuredComponent.html)
+adds a `measure` method so containers such as the Dialog action row can size a
+component before declaring it.
 
 A reusable component is worth splitting into the library's two halves: a
 stateless paint widget that only paints, and the `Component` that owns behavior

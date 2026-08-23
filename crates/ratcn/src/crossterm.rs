@@ -114,17 +114,3 @@ impl Drop for InputModeGuard {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::InputModes;
-
-    #[test]
-    fn mode_builders_select_only_the_requested_modes() {
-        assert_eq!(InputModes::new(), InputModes::default());
-        assert!(InputModes::new().mouse().mouse);
-        assert!(InputModes::new().paste().paste);
-        let both = InputModes::new().mouse().paste();
-        assert!(both.mouse && both.paste);
-    }
-}

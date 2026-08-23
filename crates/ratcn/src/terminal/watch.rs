@@ -17,22 +17,14 @@ use termina::{
     escape::csi::{self, Csi},
 };
 
-use super::query::{BACKSTOP, Replies, TerminalColors};
-
-/// The re-query a notification triggers: the two colors, and no fence.
-///
-/// Nothing is left for a fence to decide. The terminal answered these once
-/// already — that is what got the subscription switched on — so what bounds
-/// this exchange is [`Watch`]'s own deadline, not a reply that says the
-/// rest will never come.
-const REQUERY: &str = "\x1b]10;?\x07\x1b]11;?\x07";
+use super::query::{BACKSTOP, COLOR_QUERIES, Replies, TerminalColors};
 
 /// How long notifications are collected before the colors are asked for.
 ///
 /// Terminals send these in bursts — one per palette slot on some, one per
 /// transition step on others — and the wait collapses a burst into one query
 /// and one repaint.
-const DEBOUNCE: Duration = Duration::from_millis(100);
+pub(super) const DEBOUNCE: Duration = Duration::from_millis(100);
 
 /// The re-asks a trigger schedules after its own, measured from the trigger.
 ///
@@ -56,7 +48,7 @@ pub(super) struct Watch {
     state: Watching,
     /// What the terminal last said its colors were. A re-query that lands back
     /// on these is not a change and is not reported.
-    last: Option<TerminalColors>,
+    last: TerminalColors,
     /// The settle sequence the current trigger opened, while it still owes a
     /// re-ask.
     settle: Option<Settle>,
@@ -92,7 +84,7 @@ impl Watch {
     /// A watch with nothing pending, opened at `opened`.
     /// `known` is what the startup query answered, so a re-query that repeats
     /// it reports nothing.
-    pub(super) const fn new(known: Option<TerminalColors>, opened: Instant) -> Self {
+    pub(super) const fn new(known: TerminalColors, opened: Instant) -> Self {
         Self {
             state: Watching::Idle,
             last: known,
@@ -195,8 +187,11 @@ impl Watch {
     }
 
     /// Write the re-query, and start waiting out its answer.
+    ///
+    /// The two colors go out without a fence: the terminal answered them once
+    /// already, so what bounds this exchange is the watch's own deadline.
     fn ask<W: io::Write>(&mut self, out: &mut W, now: Instant) -> io::Result<()> {
-        out.write_all(REQUERY.as_bytes())?;
+        out.write_all(COLOR_QUERIES.as_bytes())?;
         out.flush()?;
         self.state = Watching::Awaiting {
             deadline: deadline(now, BACKSTOP),
@@ -250,7 +245,9 @@ impl Watch {
             Watching::Awaiting { deadline, replies } => {
                 if let Some(colors) = replies.resolve() {
                     self.rest();
-                    return Ok((self.last.replace(colors) != Some(colors)).then_some(colors));
+                    let changed = self.last != colors;
+                    self.last = colors;
+                    return Ok(changed.then_some(colors));
                 }
                 if now >= deadline {
                     self.rest();
@@ -270,15 +267,9 @@ pub(super) fn deadline(now: Instant, span: Duration) -> Instant {
 /// The watch, driven at instants the test names rather than at the clock's.
 #[cfg(test)]
 mod tests {
-    use super::{DEBOUNCE, Duration, IDLE, Instant, REQUERY, SETTLE, TerminalColors, Watch};
+    use super::{COLOR_QUERIES, DEBOUNCE, Duration, IDLE, Instant, SETTLE, TerminalColors, Watch};
     use ratatui::style::Color;
-    use termina::{
-        Event, Parser,
-        escape::{
-            csi::{self, Csi},
-            osc::{ColorOrQuery, DynamicColorNumber, Osc},
-        },
-    };
+    use termina::Parser;
 
     /// Everything the watch is told, at a time the test names. No clock is read
     /// anywhere in here: `t0` is a fixed origin and every deadline is an offset
@@ -298,18 +289,17 @@ mod tests {
             while let Some(event) = parser.pop() {
                 let _fence = replies.absorb(&event);
             }
-            let mut watched = Self::new();
-            watched.watch = Watch::new(replies.resolve(), watched.t0);
-            watched
-        }
-
-        fn new() -> Self {
             let t0 = Instant::now();
             Self {
-                watch: Watch::new(None, t0),
+                watch: Watch::new(replies.resolve().expect("the script names both colors"), t0),
                 written: Vec::new(),
                 t0,
             }
+        }
+
+        /// A watch on a dark terminal, so [`RETHEMED`] is a change.
+        fn new() -> Self {
+            Self::started_from(DARK)
         }
 
         fn at(&self, millis: u64) -> Instant {
@@ -339,7 +329,7 @@ mod tests {
         /// How many re-queries have gone out.
         fn requeries(&self) -> usize {
             String::from_utf8_lossy(&self.written)
-                .matches(REQUERY)
+                .matches(COLOR_QUERIES)
                 .count()
         }
     }
@@ -358,6 +348,10 @@ mod tests {
     const FOCUSED: &str = "\x1b[I";
     const UNFOCUSED: &str = "\x1b[O";
 
+    /// The two triggers the terminal sends. The third, input after a long
+    /// quiet, needs a quiet first and has tests of its own.
+    const TRIGGERS: [&str; 2] = [NOTIFIED, FOCUSED];
+
     #[test]
     fn a_watch_with_nothing_pending_asks_for_no_wait_and_writes_nothing() {
         let mut watched = Watched::new();
@@ -368,121 +362,83 @@ mod tests {
     }
 
     #[test]
-    fn a_notification_is_re_queried_once_the_window_closes() {
-        let mut watched = Watched::new();
+    fn a_trigger_is_re_queried_once_the_window_closes() {
+        // Focus matters as much as the notification: the terminals recoloured
+        // from outside report no change of their own, or have no mode 2031.
+        for trigger in TRIGGERS {
+            let mut watched = Watched::new();
 
-        watched.feed(0, NOTIFIED);
-        assert_eq!(
-            watched.wake(0),
-            Some(Duration::from_millis(100)),
-            "the host is asked to come back when the window closes"
-        );
-        assert_eq!(watched.step(50), None, "still settling");
-        assert_eq!(watched.requeries(), 0, "and nothing has gone out");
+            watched.feed(0, trigger);
+            assert_eq!(
+                watched.wake(0),
+                Some(Duration::from_millis(100)),
+                "the host is asked to come back when the window closes: {trigger:?}"
+            );
+            assert_eq!(watched.step(50), None, "still settling: {trigger:?}");
+            assert_eq!(watched.requeries(), 0, "and nothing has gone out");
 
-        assert_eq!(watched.step(100), None, "the re-query goes out, unanswered");
-        assert_eq!(watched.requeries(), 1);
-        assert_eq!(
-            String::from_utf8_lossy(&watched.written),
-            REQUERY,
-            "what goes out is the re-query and nothing else"
-        );
-    }
-
-    #[test]
-    fn the_re_query_asks_for_the_two_colors_and_fences_nothing() {
-        // Read back through the parser the replies come through, so the OSC
-        // numbers and the `?` payload are checked as values. Pinned
-        // independently of `REQUERY` itself: an assertion written against the
-        // constant would agree with whatever the constant said.
-        let mut parser = Parser::default();
-        parser.parse(REQUERY.as_bytes(), false);
-        let mut asked_for = Vec::new();
-        while let Some(event) = parser.pop() {
-            asked_for.push(event);
+            assert_eq!(watched.step(100), None, "the re-query goes out, unanswered");
+            assert_eq!(
+                String::from_utf8_lossy(&watched.written),
+                COLOR_QUERIES,
+                "what goes out is the re-query and nothing else: {trigger:?}"
+            );
+            watched.feed(110, RETHEMED);
+            assert!(
+                watched.step(110).is_some(),
+                "and the answer is a theme: {trigger:?}"
+            );
         }
-
-        assert_eq!(
-            asked_for,
-            vec![
-                Event::Osc(Osc::ChangeDynamicColors(
-                    DynamicColorNumber::TextForegroundColor,
-                    vec![ColorOrQuery::Query]
-                )),
-                Event::Osc(Osc::ChangeDynamicColors(
-                    DynamicColorNumber::TextBackgroundColor,
-                    vec![ColorOrQuery::Query]
-                )),
-            ]
-        );
-        assert_eq!(
-            REQUERY.matches('\x07').count(),
-            2,
-            "both go out BEL-terminated, as at startup: {REQUERY:?}"
-        );
-
-        let fence = Csi::Device(csi::Device::RequestPrimaryDeviceAttributes).to_string();
-        assert!(
-            !REQUERY.contains(&fence),
-            "nothing is left for a fence to decide — the terminal answered these \
-             once already — and its reply would only arrive as an event no one \
-             is waiting for: {REQUERY:?}"
-        );
     }
 
     #[test]
     fn a_re_query_that_lands_on_the_colours_already_showing_is_not_a_change() {
-        // The late verdict case: a `?997` that was really the startup query's
-        // answer costs a round trip, and the terminal says what it said before.
-        let mut watched = Watched::started_from(RETHEMED);
+        // Alt-tabbing back to a terminal nobody touched, or a late startup
+        // verdict read as a notification, costs the round trips and no frame.
+        for trigger in TRIGGERS {
+            let mut watched = Watched::started_from(DARK);
 
+            watched.feed(0, trigger);
+            for (asked, answered) in [(100, 110), (1_000, 1_010), (3_000, 3_010)] {
+                watched.step(asked);
+                watched.feed(answered, DARK);
+                assert_eq!(
+                    watched.step(answered),
+                    None,
+                    "nothing moved at {answered} ms, so nothing is news: {trigger:?}"
+                );
+            }
+            assert_eq!(
+                watched.requeries(),
+                3,
+                "and each round trip happened: silence is the answer being the \
+                 same, not the asking being skipped"
+            );
+        }
+
+        // Either color changing alone is a change: comparing backgrounds alone
+        // would drop a foreground the user changed on its own.
+        let mut watched = Watched::started_from(RETHEMED);
         watched.feed(0, NOTIFIED);
         watched.step(100);
-        watched.feed(110, RETHEMED);
-
-        assert_eq!(watched.step(110), None, "nothing moved, so nothing is news");
-        assert_eq!(watched.requeries(), 1, "the round trip still happened");
-
-        // A foreground the user changed without touching the background is a
-        // change: comparing backgrounds alone would drop it.
-        watched.feed(200, NOTIFIED);
-        watched.step(300);
         watched.feed(
-            310,
+            110,
             "\x1b]10;rgb:2d2d/3737/3b3b\x07\x1b]11;rgb:fdfd/f6f6/e3e3\x07",
         );
         assert!(
-            watched.step(310).is_some(),
+            watched.step(110).is_some(),
             "the background stood still and the foreground did not"
         );
-
-        // And so is a background the user changed on its own.
-        watched.feed(400, NOTIFIED);
-        watched.step(500);
+        watched.feed(4_000, NOTIFIED);
+        watched.step(4_100);
         watched.feed(
-            510,
+            4_110,
             "\x1b]10;rgb:2d2d/3737/3b3b\x07\x1b]11;rgb:1a1a/1b1b/2626\x07",
         );
-        assert!(watched.step(510).is_some());
-    }
-
-    #[test]
-    fn focus_returning_to_the_window_asks_the_terminal_again() {
-        // The terminals that matter here report no change of their own: a
-        // desktop recoloured them from outside, or they have no mode 2031.
-        let mut watched = Watched::new();
-
-        watched.feed(0, FOCUSED);
-        assert_eq!(
-            watched.wake(0),
-            Some(Duration::from_millis(100)),
-            "the window opens, as it does for a notification"
+        assert!(
+            watched.step(4_110).is_some(),
+            "the foreground stood still and the background did not"
         );
-        watched.step(100);
-        assert_eq!(watched.requeries(), 1);
-
-        watched.feed(110, RETHEMED);
-        assert!(watched.step(110).is_some(), "and the answer is a theme");
     }
 
     #[test]
@@ -497,74 +453,32 @@ mod tests {
     }
 
     #[test]
-    fn alt_tabbing_costs_one_re_query() {
-        // Focus arrives once per switch, and a user switching windows produces
-        // a burst of them.
-        let mut watched = Watched::new();
+    fn a_burst_of_triggers_inside_one_window_costs_one_re_query() {
+        // Terminals send one notification per palette slot or per transition
+        // step, a user switching windows produces a burst of focus events, and
+        // the two arrive together. Extending the window on each would let a
+        // terminal that keeps sending hold the re-query off for as long as it
+        // liked, so the window closes a hundred milliseconds after it opened.
+        for burst in [
+            [NOTIFIED; 5],
+            [FOCUSED; 5],
+            [NOTIFIED, FOCUSED, NOTIFIED, FOCUSED, NOTIFIED],
+        ] {
+            let mut watched = Watched::new();
 
-        for arrival in [0, 5, 40, 80, 99] {
-            watched.feed(arrival, FOCUSED);
+            for (arrival, trigger) in [0, 5, 40, 80, 99].into_iter().zip(burst) {
+                watched.feed(arrival, trigger);
+            }
+            watched.step(99);
+            assert_eq!(watched.requeries(), 0, "still inside the window: {burst:?}");
+            watched.step(100);
+
+            assert_eq!(
+                watched.requeries(),
+                1,
+                "the window collapsed all five: {burst:?}"
+            );
         }
-        watched.step(100);
-
-        assert_eq!(watched.requeries(), 1, "the window collapsed all five");
-    }
-
-    #[test]
-    fn a_notification_and_a_focus_in_the_same_window_cost_one_re_query() {
-        let mut watched = Watched::new();
-
-        watched.feed(0, NOTIFIED);
-        watched.feed(20, FOCUSED);
-        watched.feed(60, NOTIFIED);
-        watched.step(100);
-
-        assert_eq!(watched.requeries(), 1);
-    }
-
-    #[test]
-    fn focus_on_a_terminal_that_did_not_change_costs_nothing_but_the_round_trip() {
-        // Alt-tabbing back and forth is free: the colors answer for themselves.
-        let mut watched = Watched::started_from(RETHEMED);
-
-        watched.feed(0, FOCUSED);
-        watched.step(100);
-        watched.feed(110, RETHEMED);
-
-        assert_eq!(watched.step(110), None, "nothing moved, so nothing is news");
-        assert_eq!(watched.requeries(), 1);
-    }
-
-    #[test]
-    fn a_burst_of_notifications_costs_exactly_one_re_query() {
-        // Terminals send one per palette slot, or one per transition step.
-        let mut watched = Watched::new();
-
-        for arrival in [0, 5, 12, 30, 99] {
-            watched.feed(arrival, NOTIFIED);
-        }
-        watched.step(100);
-
-        assert_eq!(watched.requeries(), 1, "the window collapsed all five");
-    }
-
-    #[test]
-    fn a_window_already_open_is_not_pushed_back_by_more_notifications() {
-        // Extending on every notification would let a terminal that keeps
-        // sending hold the re-query off for as long as it liked.
-        let mut watched = Watched::new();
-
-        watched.feed(0, NOTIFIED);
-        for arrival in [40, 80, 95] {
-            watched.feed(arrival, NOTIFIED);
-        }
-        watched.step(100);
-
-        assert_eq!(
-            watched.requeries(),
-            1,
-            "the window still closed a hundred milliseconds after it opened"
-        );
     }
 
     #[test]
@@ -676,53 +590,31 @@ mod tests {
     }
 
     #[test]
-    fn a_second_change_mid_exchange_starts_over_rather_than_mixing_answers() {
-        let mut watched = Watched::new();
+    fn a_trigger_mid_exchange_starts_over_rather_than_mixing_answers() {
+        for trigger in TRIGGERS {
+            let mut watched = Watched::new();
 
-        watched.feed(0, NOTIFIED);
-        watched.step(100);
-        // Half the answer to the first re-query, and then the user flips again.
-        watched.feed(110, "\x1b]11;rgb:1a1a/1b1b/2626\x07");
-        watched.feed(120, NOTIFIED);
+            watched.feed(0, NOTIFIED);
+            watched.step(100);
+            // Half the answer to the first re-query, and then the user flips
+            // again, or the window comes back.
+            watched.feed(110, "\x1b]11;rgb:1a1a/1b1b/2626\x07");
+            watched.feed(120, trigger);
 
-        assert_eq!(watched.step(120), None, "the window is open again");
-        assert_eq!(watched.step(220), None, "and a second re-query goes out");
-        assert_eq!(watched.requeries(), 2);
+            assert_eq!(watched.step(120), None, "the window is open again");
+            assert_eq!(watched.step(220), None, "and a second re-query goes out");
+            assert_eq!(watched.requeries(), 2, "{trigger:?}");
 
-        // Only one color arrives this time. If the discarded half had been kept
-        // it would complete a theme out of two different terminals.
-        watched.feed(230, "\x1b]10;rgb:6565/7b7b/8383\x07");
-        assert_eq!(
-            watched.step(230),
-            None,
-            "the pre-flip half was dropped with the state it described"
-        );
-    }
-
-    #[test]
-    fn a_focus_mid_exchange_starts_over_rather_than_mixing_answers() {
-        // Focus and a notification share one arm, so what a second notification
-        // does to a half-collected answer, focus does too.
-        let mut watched = Watched::new();
-
-        watched.feed(0, NOTIFIED);
-        watched.step(100);
-        // Half the answer to the first re-query, and then the window comes back.
-        watched.feed(110, "\x1b]11;rgb:1a1a/1b1b/2626\x07");
-        watched.feed(120, FOCUSED);
-
-        assert_eq!(watched.step(120), None, "the window is open again");
-        assert_eq!(watched.step(220), None, "and a second re-query goes out");
-        assert_eq!(watched.requeries(), 2);
-
-        // Only one color arrives this time. If the discarded half had been kept
-        // it would complete a theme out of two different terminals.
-        watched.feed(230, "\x1b]10;rgb:6565/7b7b/8383\x07");
-        assert_eq!(
-            watched.step(230),
-            None,
-            "the pre-focus half was dropped with the state it described"
-        );
+            // Only one color arrives this time. If the discarded half had been
+            // kept it would complete a theme out of two different terminals.
+            watched.feed(230, "\x1b]10;rgb:6565/7b7b/8383\x07");
+            assert_eq!(
+                watched.step(230),
+                None,
+                "the half collected before the trigger was dropped with the \
+                 state it described: {trigger:?}"
+            );
+        }
     }
 
     #[test]
@@ -773,31 +665,6 @@ mod tests {
         );
         watched.step(60_000);
         assert_eq!(watched.requeries(), 3, "nothing goes out after it rests");
-    }
-
-    #[test]
-    fn a_settle_re_ask_that_lands_on_the_colours_already_showing_says_nothing() {
-        // Alt-tabbing back to a terminal nobody touched costs three round trips
-        // and no frame.
-        let mut watched = Watched::started_from(DARK);
-
-        watched.feed(0, FOCUSED);
-        for (asked, answered) in [(100, 110), (1_000, 1_010), (3_000, 3_010)] {
-            watched.step(asked);
-            watched.feed(answered, DARK);
-            assert_eq!(
-                watched.step(answered),
-                None,
-                "nothing moved at {answered} ms, so nothing is news"
-            );
-        }
-
-        assert_eq!(
-            watched.requeries(),
-            3,
-            "and each of the three round trips happened: silence here is the \
-             answer being the same, not the asking being skipped"
-        );
     }
 
     #[test]

@@ -110,14 +110,12 @@ impl demo_shared::Demo for App {
     }
 
     fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
-        // Copied: the paint closures below outlive this borrow.
-        let theme = *theme;
         let area = frame.area();
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, state, &theme, |ctx| {
+        self.ratcn.render(frame, state, theme, |ctx| {
             let tabs = Tabs::new([
                 Tab::new(Screen::Overview, "Overview"),
                 Tab::new(Screen::Analytics, "Analytics"),
@@ -138,8 +136,9 @@ impl demo_shared::Demo for App {
 
             let content = state.selected.content();
             ctx.paint(move |ctx| {
+                let surface = ctx.theme.surface;
                 ctx.with_buffer(|buf| {
-                    buf.set_style(content_area, Style::default().bg(theme.surface));
+                    buf.set_style(content_area, Style::default().bg(surface));
                 });
                 ctx.widget(
                     Paragraph::new(content).wrap(Wrap { trim: true }),
