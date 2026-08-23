@@ -81,9 +81,10 @@ Every method except `declare` has a default:
 - [`handle_event`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.handle_event)
   ignores the event, letting it bubble to the parent.
 - [`reveal_in_viewport`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.reveal_in_viewport)
-  does nothing; a component that declared a viewport overrides it to scroll a
-  clipped descendant into view. [Layers and modals](./layers-and-modals)
-  covers when the call arrives.
+  is called on the component that declared a viewport when focus lands on a
+  descendant the viewport clips, so it can scroll that descendant into view.
+  [Layers and modals](./layers-and-modals) covers when the call arrives,
+  including the focus changes it answers on the frame after.
 
 [`MeasuredComponent`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.MeasuredComponent.html)
 adds a `measure` method so containers such as the Dialog action row can size a
