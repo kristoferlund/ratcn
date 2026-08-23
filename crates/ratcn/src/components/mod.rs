@@ -13,6 +13,8 @@
 // shape their `handle_event` implementations share.
 pub(crate) mod barchart;
 pub(crate) mod button;
+pub(crate) mod checkbox;
+pub(crate) mod cycle;
 pub(crate) mod dialog;
 pub(crate) mod list;
 pub(crate) mod scroll_area;

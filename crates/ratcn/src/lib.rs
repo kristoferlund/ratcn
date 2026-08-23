@@ -155,6 +155,8 @@ pub mod toast;
 pub use components::{
     barchart::{BarChartGroup, BarChartStyle, BarChartWidget},
     button::{Button, ButtonSize, ButtonStyle, ButtonVariant, ButtonWidget},
+    checkbox::{Checkbox, CheckboxStyle, CheckboxWidget},
+    cycle::{Cycle, CycleStyle, CycleWidget},
     dialog::{Dialog, DialogStyle},
     list::{List, ListStyle, ListWidget},
     scroll_area::{ScrollArea, ScrollAreaStyle},
