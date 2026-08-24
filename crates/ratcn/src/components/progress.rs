@@ -143,7 +143,8 @@ impl<'a> ProgressWidget<'a> {
     /// nearest whole percent, `0%` through `100%`. The percentage and the
     /// fill round independently — ratatui's gauge rounds its last cell in
     /// eighths — so at a width's rounding edge the number can briefly sit one
-    /// eighth of a cell away from the bar it describes.
+    /// eighth of a cell away from the bar it describes. On a row too narrow
+    /// for the number, what fits of it prints, digits first.
     #[must_use]
     pub const fn show_value(mut self, show_value: bool) -> Self {
         self.show_value = show_value;
@@ -224,7 +225,7 @@ impl Widget for ProgressWidget<'_> {
                 .use_unicode(true)
                 .gauge_style(Style::default().fg(self.style.fill).bg(self.style.track))
                 .render(bar_area, buf);
-            self.restore_the_label_slot(bar_area, buf);
+            self.restore_label_slot(bar_area, buf);
         }
     }
 }
@@ -242,7 +243,7 @@ impl ProgressWidget<'_> {
         clippy::cast_sign_loss,
         reason = "the ratio is clamped into 0.0..=1.0, so the fill never exceeds the area's width and always fits a u16"
     )]
-    fn restore_the_label_slot(&self, bar_area: Rect, buf: &mut Buffer) {
+    fn restore_label_slot(&self, bar_area: Rect, buf: &mut Buffer) {
         let filled_end = bar_area.x + (f64::from(bar_area.width) * self.ratio).floor() as u16;
         let label_slot = bar_area.x + bar_area.width / 2;
         if filled_end > label_slot {
@@ -281,7 +282,10 @@ impl ProgressWidget<'_> {
         }
 
         if let Some(label) = self.label {
-            let room = value_x - area.x;
+            // With a percentage showing, the label stops one cell short of it,
+            // so a truncated label cannot read as one string with the number.
+            let gap = u16::from(self.show_value);
+            let room = (value_x - area.x).saturating_sub(gap);
             if room > 0 {
                 Span::raw(text_width::truncate_to_width(label, usize::from(room)))
                     .style(Style::default().fg(self.style.label))
@@ -483,8 +487,8 @@ mod tests {
         }
     }
 
-    /// A label too long for the row truncates before it would push the
-    /// percentage off its right edge.
+    /// A label too long for the row truncates a cell short of the
+    /// percentage: the gap keeps the two from reading as one string.
     #[test]
     fn a_long_label_yields_room_for_the_value() {
         let mut buffer = Buffer::empty(AREA);
@@ -496,8 +500,7 @@ mod tests {
         let header: String = (0..AREA.width)
             .map(|x| buffer.cell((x, 0)).expect("cell").symbol())
             .collect();
-        assert!(header.starts_with("Uploadi"), "{header:?}");
-        assert!(header.ends_with("56%"), "{header:?}");
+        assert_eq!(header, "Upload 56%", "{header:?}");
     }
 
     /// A label alone gets the whole row: no columns may sit empty for a

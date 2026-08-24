@@ -61,11 +61,10 @@ from the bar it describes.
 
 ## Colors
 
-Themed, the fill takes the theme's primary on the inset well the other
-control surfaces use, and the label reads as secondary text. `.style(...)`
-supplies exact colors instead — one per role: `fill` takes the theme's
-primary, `track` the inset well, `label` the muted foreground, and `value`
-the ordinary foreground.
+Themed, the four roles derive from the theme: `fill` takes the primary,
+`track` the inset well the other control surfaces use, `label` the muted
+foreground, and `value` the ordinary foreground. `.style(...)` supplies exact
+colors for the same four roles instead.
 
 ## Full API
 
