@@ -56,32 +56,20 @@ impl demo_shared::Demo for Progress {
         .spacing(1)
         .areas(inner);
 
-        frame.render_widget(
-            ProgressWidget::new(0.33).themed(theme),
-            Rect {
-                width: inner.width,
-                ..bare
-            },
-        );
+        frame.render_widget(ProgressWidget::new(0.33).themed(theme), bare);
         frame.render_widget(
             ProgressWidget::new(downloading)
                 .label("Downloading assets.tar.gz")
                 .show_value(true)
                 .themed(theme),
-            Rect {
-                width: inner.width,
-                ..active
-            },
+            active,
         );
         frame.render_widget(
             ProgressWidget::new(1.0)
                 .label("Extracted")
                 .show_value(true)
                 .themed(theme),
-            Rect {
-                width: inner.width,
-                ..finished
-            },
+            finished,
         );
     }
 }
