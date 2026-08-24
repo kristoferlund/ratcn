@@ -21,7 +21,7 @@ use std::{fmt, rc::Rc};
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Rect, Size},
     style::{Color, Style},
     text::{Line, Span},
     widgets::Widget,
@@ -31,8 +31,8 @@ use crate::{
     Theme,
     color::ghost_fills,
     runtime::{
-        Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
-        MouseKind, PaintCtx, ScopeOptions,
+        Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
+        MouseButton, MouseKind, PaintCtx, ScopeOptions,
     },
     selection_indicator::MarkerGlyphs,
     text_width,
@@ -452,6 +452,17 @@ impl<S, M> Checkbox<S, M> {
         !self.disabled && self.is_bound()
     }
 
+    /// Columns this checkbox paints: the marker column (the wider of the two
+    /// markers), one space, the label — the same in both states, so a row
+    /// sized from this holds its label still. See [`CheckboxWidget::width`].
+    #[must_use]
+    pub fn width(&self) -> u16 {
+        CheckboxWidget::new(&self.label, false)
+            .checked_marker(&self.checked_marker)
+            .unchecked_marker(&self.unchecked_marker)
+            .width()
+    }
+
     /// The message that flips the bound state.
     fn toggle(&self) -> EventResult<M> {
         let Some((_, on_change)) = &self.checked else {
@@ -522,6 +533,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
         // A checkbox is one row tall; a taller declaration must not leave a
         // strip of itself clickable.
         crate::geometry::fixed_height(area, 1)
+    }
+}
+
+impl<S: 'static, M: 'static> MeasuredComponent<S, M> for Checkbox<S, M> {
+    fn measure(&self) -> Size {
+        Size::new(self.width(), 1)
     }
 }
 
@@ -737,6 +754,18 @@ mod tests {
         }
         assert!(rows[0].starts_with("[ON]  Terminal bell"), "{:?}", rows[0]);
         assert!(rows[1].starts_with("[off] Terminal bell"), "{:?}", rows[1]);
+    }
+
+    /// The component measures the row it paints — one row tall, the marker
+    /// column as wide as the wider marker — so a layout can hug it without
+    /// building the widget itself.
+    #[test]
+    fn the_component_measures_the_row_it_paints() {
+        let checkbox: Checkbox<State, Msg> = Checkbox::new("Terminal bell")
+            .checked_marker("[ON]")
+            .unchecked_marker("[off]");
+        assert_eq!(checkbox.width(), 19);
+        assert_eq!(checkbox.measure(), Size::new(19, 1));
     }
 
     #[test]

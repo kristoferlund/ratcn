@@ -55,7 +55,9 @@ Checkbox::new("Terminal bell")
 ```
 
 The marker column takes the wider of the pair, so an uneven pair like
-`[ON]`/`[off]` never moves the label as it flips.
+`[ON]`/`[off]` never moves the label as it flips. `Checkbox::width()` measures
+the whole row — the same in both states — for layouts that hug it, as the
+demo's rows do.
 
 Two options are a Checkbox wearing its states as labels; three or more are a
 [Cycle](./cycle).
