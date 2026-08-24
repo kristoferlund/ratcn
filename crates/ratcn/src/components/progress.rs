@@ -116,9 +116,9 @@ pub struct ProgressWidget<'a> {
 impl<'a> ProgressWidget<'a> {
     /// A bare bar filled by `ratio`, where `0.0` is empty and `1.0` is full.
     ///
-    /// Values outside `0.0..=1.0` are clamped, and a non-finite ratio counts
-    /// as empty — a NaN that slipped out of a division must not print itself
-    /// as a percentage.
+    /// Values outside `0.0..=1.0` are clamped: infinities pin to the nearer
+    /// end, and a NaN that slipped out of a division counts as empty rather
+    /// than printing itself as a percentage.
     #[must_use]
     pub fn new(ratio: f64) -> Self {
         Self {
@@ -161,7 +161,8 @@ impl<'a> ProgressWidget<'a> {
     }
 
     /// Rows the bar asks a layout for: two when a label or the percentage
-    /// shows, one otherwise. Given less, the bar keeps the rows there are and
+    /// shows, one otherwise — an empty label still shows, since you asked
+    /// for the row. Given less, the bar keeps the rows there are and
     /// the header is the first thing dropped; given more, the extra rows are
     /// left alone — a progress bar is one row of track, not a block meter.
     #[must_use]
@@ -260,7 +261,13 @@ impl ProgressWidget<'_> {
             reason = "the ratio is clamped into 0.0..=1.0, so the percentage rounds into 0..=100 and always fits a u16"
         )]
         let value_text = format!("{}%", (self.ratio * 100.0).round() as u16);
-        let value_width = text_width::display_width_u16(&value_text).min(area.width);
+        // Only a shown percentage may hold room at the right edge; a
+        // label-only header gets the whole row.
+        let value_width = if self.show_value {
+            text_width::display_width_u16(&value_text).min(area.width)
+        } else {
+            0
+        };
         let value_x = area.right() - value_width;
 
         if self.show_value {
@@ -294,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fill_takes_the_its_share_of_the_track() {
+    fn the_fill_takes_its_share_of_the_track() {
         let mut buffer = Buffer::empty(AREA);
         ProgressWidget::new(0.5).render(AREA, &mut buffer);
 
@@ -487,6 +494,21 @@ mod tests {
             .collect();
         assert!(header.starts_with("Uploadi"), "{header:?}");
         assert!(header.ends_with("56%"), "{header:?}");
+    }
+
+    /// A label alone gets the whole row: no columns may sit empty for a
+    /// percentage nobody asked to show.
+    #[test]
+    fn a_label_without_a_value_spans_the_whole_row() {
+        let mut buffer = Buffer::empty(AREA);
+        ProgressWidget::new(0.56)
+            .label("ABCDEFGHIJKLMNOP")
+            .render(AREA, &mut buffer);
+
+        let header: String = (0..AREA.width)
+            .map(|x| buffer.cell((x, 0)).expect("cell").symbol())
+            .collect();
+        assert_eq!(header, "ABCDEFGHIJ", "{header:?}");
     }
 
     /// The themed style lands where the docs say: primary fill on the field
