@@ -38,7 +38,8 @@ see what they are about to flip.
 
 ## The markers are yours
 
-The default pair is `☑` / `☐`. Because both markers are strings you choose,
+The default pair is `■` / `□` — the boxes a multi-select [List](./list) ticks
+its rows with. Because both markers are strings you choose,
 the same component covers every binary control:
 
 ```rust

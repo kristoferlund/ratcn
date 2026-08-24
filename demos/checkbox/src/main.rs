@@ -1,6 +1,6 @@
 //! One checkbox, three skins.
 //!
-//! The default ballot-box pair, an ASCII checklist pair, and a switch that
+//! The default boxes, an ASCII checklist pair, and a switch that
 //! wears its state as words. All three are the same [`Checkbox`] component —
 //! the markers are the only thing that differs, which is also how a checkbox
 //! becomes a toggle: give the two states labels instead of glyphs.
@@ -27,7 +27,7 @@ const CONTENT_PADDING: Margin = Margin::new(2, 1);
 
 /// The three skins: id, checked marker, unchecked marker, label.
 const ROWS: [(&str, &str, &str, &str); 3] = [
-    ("default", "☑", "☐", "Vim bindings"),
+    ("default", "■", "□", "Vim bindings"),
     ("ascii", "[x]", "[ ]", "ASCII checklist"),
     ("switch", "[ON]", "[off]", "Terminal bell"),
 ];
