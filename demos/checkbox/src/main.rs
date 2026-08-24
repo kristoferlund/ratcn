@@ -25,20 +25,14 @@ const DEMO_WIDTH: u16 = 26;
 const DEMO_HEIGHT: u16 = 7;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
 
-/// The three skins: id, checked marker, unchecked marker, label.
-const ROWS: [(&str, &str, &str, &str); 3] = [
-    ("default", "■", "□", "Vim bindings"),
-    ("ascii", "[x]", "[ ]", "ASCII checklist"),
-    ("switch", "[ON]", "[off]", "Terminal bell"),
-];
-
-/// The columns one row needs, measured by the widget that paints it — the
-/// same in both states, so `[ON]`/`[off]` never truncates.
-fn columns(checked_marker: &str, unchecked_marker: &str, label: &str) -> u16 {
-    CheckboxWidget::new(label, false)
+/// A row exactly as wide as its checkbox, measured by the widget that paints
+/// it — the same in both states, so `[ON]`/`[off]` never truncates.
+fn sized(row: Rect, checked_marker: &str, unchecked_marker: &str, label: &str) -> Rect {
+    let width = CheckboxWidget::new(label, false)
         .checked_marker(checked_marker)
         .unchecked_marker(unchecked_marker)
-        .width()
+        .width();
+    Rect { width, ..row }
 }
 
 #[derive(Default)]
@@ -118,28 +112,28 @@ impl demo_shared::Demo for App {
             let [row_a, row_b, row_c] = Layout::vertical([Constraint::Length(1); 3])
                 .spacing(1)
                 .areas(inner);
-            let areas = [row_a, row_b, row_c];
 
-            for ((id, checked_marker, unchecked_marker, label), row_area) in
-                ROWS.into_iter().zip(areas)
-            {
-                let row_area = Rect {
-                    width: columns(checked_marker, unchecked_marker, label),
-                    ..row_area
-                };
-                let checkbox = match id {
-                    "default" => Checkbox::new(label).checked(|s: &AppState| s.vim, Msg::Vim),
-                    "ascii" => Checkbox::new(label)
-                        .checked_marker(checked_marker)
-                        .unchecked_marker(unchecked_marker)
-                        .checked(|s: &AppState| s.mouse, Msg::Mouse),
-                    _ => Checkbox::new(label)
-                        .checked_marker(checked_marker)
-                        .unchecked_marker(unchecked_marker)
-                        .checked(|s: &AppState| s.bell, Msg::Bell),
-                };
-                ctx.component(id, checkbox, row_area);
-            }
+            ctx.component(
+                "default",
+                Checkbox::new("Vim bindings").checked(|s: &AppState| s.vim, Msg::Vim),
+                sized(row_a, "■", "□", "Vim bindings"),
+            );
+            ctx.component(
+                "ascii",
+                Checkbox::new("ASCII checklist")
+                    .checked_marker("[x]")
+                    .unchecked_marker("[ ]")
+                    .checked(|s: &AppState| s.mouse, Msg::Mouse),
+                sized(row_b, "[x]", "[ ]", "ASCII checklist"),
+            );
+            ctx.component(
+                "switch",
+                Checkbox::new("Terminal bell")
+                    .checked_marker("[ON]")
+                    .unchecked_marker("[off]")
+                    .checked(|s: &AppState| s.bell, Msg::Bell),
+                sized(row_c, "[ON]", "[off]", "Terminal bell"),
+            );
         });
     }
 }
