@@ -36,7 +36,7 @@ pub struct MarkerGlyphs<'a> {
     pub unselected: &'a str,
 }
 
-impl MarkerGlyphs<'_> {
+impl<'a> MarkerGlyphs<'a> {
     /// The circles a pick-one control paints by default.
     #[must_use]
     pub const fn radio() -> Self {
@@ -54,15 +54,15 @@ impl MarkerGlyphs<'_> {
             unselected: "□",
         }
     }
-}
 
-/// Marker glyph for a selected or unselected item.
-#[must_use]
-pub const fn marker(selected: bool, glyphs: MarkerGlyphs<'_>) -> &str {
-    if selected {
-        glyphs.selected
-    } else {
-        glyphs.unselected
+    /// The half of the pair one item shows.
+    #[must_use]
+    pub const fn marker(self, selected: bool) -> &'a str {
+        if selected {
+            self.selected
+        } else {
+            self.unselected
+        }
     }
 }
 
@@ -78,7 +78,7 @@ pub const fn color(disabled: bool, selected: bool, colors: MarkerColors) -> Colo
     }
 }
 
-/// The default row of a selection control: a leading space, the [`marker`], a
+/// The default row of a selection control: a leading space, the marker, a
 /// space, then `label`.
 ///
 /// One line, built here rather than in each control, so a list row and a select
@@ -98,7 +98,7 @@ pub fn marker_line(
     colors: MarkerColors,
     glyphs: MarkerGlyphs<'_>,
 ) -> Line<'static> {
-    let marker = marker(selected, glyphs);
+    let marker = glyphs.marker(selected);
     Line::from(vec![
         Span::styled(
             format!(" {marker}"),

@@ -170,6 +170,23 @@ fn nav_move(key: KeyEvent, axis: Axis) -> Option<NavMove> {
     }
 }
 
+/// The single step a key asks for along `axis` — an arrow, its `vi` letter,
+/// or Ctrl+N/Ctrl+P — or `None` for every other key, including the edge and
+/// page keys.
+///
+/// This is the step subset of the one navigation key map, for controls that
+/// move one item at a time and answer nothing else: a wrapping ring has no
+/// ends for Home and End to reach, so it matches on this rather than on
+/// [`nav_key_target`]. Ask it before any modifier gate — it owns the Ctrl
+/// chords.
+#[must_use]
+pub fn step_key(key: KeyEvent, axis: Axis) -> Option<Step> {
+    match nav_move(key, axis) {
+        Some(NavMove::Step(step)) => Some(step),
+        _ => None,
+    }
+}
+
 /// Does this key step a cursor by exactly one item along `axis` — an arrow,
 /// its `vi` letter, or Ctrl+N/Ctrl+P?
 ///
@@ -177,7 +194,7 @@ fn nav_move(key: KeyEvent, axis: Axis) -> Option<NavMove> {
 /// would move a cursor should first reveal the cursor.
 #[must_use]
 pub fn is_step_key(key: KeyEvent, axis: Axis) -> bool {
-    matches!(nav_move(key, axis), Some(NavMove::Step(_)))
+    step_key(key, axis).is_some()
 }
 
 /// Resolve one navigation key against a cursor over `len` items along `axis`,

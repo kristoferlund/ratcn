@@ -211,6 +211,23 @@ pub const fn dim(color: Color, toward: Color, amount: u16) -> Color {
     }
 }
 
+/// The fills a ghost control raises on, as `(focused, hovered)`: `secondary`
+/// climbing away from `background`, one [`FOCUS_SHIFT`] and one [`HOVER_SHIFT`]
+/// step out.
+///
+/// At rest a ghost control paints no background at all; these two are what
+/// appears when it gains focus or the pointer. Both climb [`away_from`] the
+/// screen color so the state reads as raised rather than pressed — the shared
+/// rule behind the ghost `Button`, `Checkbox`, and `Cycle`.
+#[must_use]
+pub fn ghost_fills(secondary: Color, background: Color) -> (Color, Color) {
+    let raised = away_from(background);
+    (
+        dim(secondary, raised, FOCUS_SHIFT),
+        dim(secondary, raised, HOVER_SHIFT),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
