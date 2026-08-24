@@ -26,10 +26,11 @@ use ratatui::{
 use crate::{
     Theme,
     button_shape::filled_middle,
-    color::{FOCUS_SHIFT, HOVER_SHIFT, away_from, dim},
+    color::ghost_fills,
+    linear_nav::{Axis, step_key},
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
-        MouseKind, PaintCtx, ScopeOptions,
+        MouseKind, PaintCtx, ScopeOptions, Step,
     },
     text_width,
     theme::resolve_style,
@@ -39,14 +40,20 @@ use crate::{
 ///
 /// At rest only [`foreground`](Self::foreground) paints, on nothing: the
 /// surface shows through. Hover and focus each lay their background over the
-/// declared area — hover beating focus, so pointing at the cycle you are on
-/// stays visible — disabled mutes the text and paints nothing.
+/// value, with their own text color on it the way
+/// [`ButtonStyle`](crate::ButtonStyle) carries one per state — hover beating
+/// focus, so pointing at the cycle you are on stays visible. Disabled mutes
+/// the text and paints nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CycleStyle {
-    /// Value color at rest; also the text color under hover and focus.
+    /// Value color at rest.
     pub foreground: Color,
+    /// Value color while focused.
+    pub focused_foreground: Color,
     /// Background while focused.
     pub focused_background: Color,
+    /// Value color while hovered.
+    pub hovered_foreground: Color,
     /// Background while hovered.
     pub hovered_background: Color,
     /// Value color while disabled.
@@ -55,26 +62,31 @@ pub struct CycleStyle {
 
 impl CycleStyle {
     /// The no-theme starting point: plain ANSI colors that render on any
-    /// terminal.
+    /// terminal — the ghost button's fills, with its text colors on them.
     #[must_use]
     pub const fn fallback() -> Self {
         Self {
             foreground: Color::Gray,
+            focused_foreground: Color::Black,
             focused_background: Color::Cyan,
+            hovered_foreground: Color::Black,
             hovered_background: Color::LightCyan,
             disabled_foreground: Color::DarkGray,
         }
     }
 
-    /// Colors derived from a theme, solving the same fills the ghost button
-    /// solves: both climb away from the screen color, so they read as raised.
+    /// Colors derived from a theme: the ghost button's raised fills with the
+    /// value keeping the theme's foreground on them.
     #[must_use]
     pub fn from_theme(theme: &Theme) -> Self {
-        let raised = away_from(theme.background);
+        let (focused_background, hovered_background) =
+            ghost_fills(theme.secondary, theme.background);
         Self {
             foreground: theme.foreground,
-            focused_background: dim(theme.secondary, raised, FOCUS_SHIFT),
-            hovered_background: dim(theme.secondary, raised, HOVER_SHIFT),
+            focused_foreground: theme.foreground,
+            focused_background,
+            hovered_foreground: theme.foreground,
+            hovered_background,
             disabled_foreground: theme.muted_foreground,
         }
     }
@@ -86,11 +98,11 @@ impl CycleStyle {
             Style::default().fg(self.disabled_foreground)
         } else if hovered {
             Style::default()
-                .fg(self.foreground)
+                .fg(self.hovered_foreground)
                 .bg(self.hovered_background)
         } else if focused {
             Style::default()
-                .fg(self.foreground)
+                .fg(self.focused_foreground)
                 .bg(self.focused_background)
         } else {
             Style::default().fg(self.foreground)
@@ -99,11 +111,13 @@ impl CycleStyle {
 }
 
 /// A cycle that only draws — an ordinary ratatui [`Widget`] with no focus,
-/// events, or state. It paints the current option across `area`.
+/// events, or state. It paints the current option across `area`, the way the
+/// closed [`SelectWidget`](crate::SelectWidget) paints its value: the widget
+/// takes the one string it shows, and which option that is stays the caller's
+/// business.
 #[derive(Debug)]
 pub struct CycleWidget<'a> {
-    options: &'a [&'a str],
-    selected: usize,
+    value: &'a str,
     focused: bool,
     hovered: bool,
     disabled: bool,
@@ -112,16 +126,11 @@ pub struct CycleWidget<'a> {
 }
 
 impl<'a> CycleWidget<'a> {
-    /// A cycle over `options`, showing `options[selected]`.
-    ///
-    /// An out-of-range `selected` paints the first option rather than
-    /// panicking: the widget half has no contract to enforce, and a caller
-    /// that clamps nowhere else still gets a whole frame.
+    /// A cycle showing `value`, its current option.
     #[must_use]
-    pub fn new(options: &'a [&'a str], selected: usize) -> Self {
+    pub const fn new(value: &'a str) -> Self {
         Self {
-            options,
-            selected,
+            value,
             focused: false,
             hovered: false,
             disabled: false,
@@ -176,14 +185,13 @@ impl<'a> CycleWidget<'a> {
 
 impl Widget for CycleWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.width == 0 || area.height == 0 || self.options.is_empty() {
+        if area.width == 0 || area.height == 0 {
             return;
         }
-        let selected = self.selected.min(self.options.len() - 1);
         let style = self
             .resolved_style()
             .resolve(self.focused, self.hovered, self.disabled);
-        Line::from(filled_middle(self.options[selected], area.width as usize))
+        Line::from(filled_middle(self.value, area.width as usize))
             .style(style)
             .render(area, buf);
     }
@@ -208,7 +216,7 @@ type StyleFn = Rc<dyn Fn(&Theme) -> CycleStyle>;
 /// [`selection`](Self::selection) as an index; without that binding the Cycle
 /// paints but is not focusable and answers no events.
 pub struct Cycle<S, M> {
-    options: Rc<[Box<str>]>,
+    options: Vec<String>,
     selection: Option<(ReadSelectedFn<S>, OnChangeFn<M>)>,
     disabled: bool,
     style: Option<StyleFn>,
@@ -235,10 +243,7 @@ impl<S, M> Cycle<S, M> {
     #[must_use]
     pub fn new(options: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
-            options: options
-                .into_iter()
-                .map(|option| option.into().into_boxed_str())
-                .collect(),
+            options: options.into_iter().map(Into::into).collect(),
             selection: None,
             disabled: false,
             style: None,
@@ -308,17 +313,20 @@ impl<S, M> Cycle<S, M> {
         EventResult::Emit(on_change(next))
     }
 
-    /// The key map, horizontal like the tab strip's: Left/Right and their vi
-    /// letters step, the readline chords step too, commit keys advance. Shift
-    /// belongs to the app, so Shift+Space passes through untouched.
+    /// The key map: the one horizontal step map every item control shares —
+    /// Left/Right, their vi letters, and the readline chords, asked first
+    /// because it owns Ctrl+N/Ctrl+P — then the commit keys, which advance.
+    /// Home and End step nothing: a ring has no ends. Shift belongs to the
+    /// app, so Shift+Space passes through untouched.
     fn handle_key(&self, key: KeyEvent) -> EventResult<M> {
-        let plain = !key.modifiers.any();
-        let ctrl_only = key.modifiers.ctrl && !key.modifiers.alt && !key.modifiers.shift;
+        if let Some(step) = step_key(key, Axis::Horizontal) {
+            return self.step(matches!(step, Step::Backward));
+        }
+        if key.modifiers.any() {
+            return EventResult::Ignored;
+        }
         match key.code {
-            KeyCode::Right | KeyCode::Enter | KeyCode::Char('l' | ' ') if plain => self.step(false),
-            KeyCode::Left | KeyCode::Char('h') if plain => self.step(true),
-            KeyCode::Char('n') if ctrl_only => self.step(false),
-            KeyCode::Char('p') if ctrl_only => self.step(true),
+            KeyCode::Enter | KeyCode::Char(' ') => self.step(false),
             _ => EventResult::Ignored,
         }
     }
@@ -343,13 +351,13 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
+        // `prepare` clamped the selection, so this is `None` only with no
+        // options at all — nothing to show, nothing to paint.
+        let Some(value) = self.options.get(self.resolved_selected) else {
+            return;
+        };
         let style = resolve_style(self.style.as_deref(), ctx.theme, CycleStyle::from_theme);
-        let labels: Vec<&str> = self
-            .options
-            .iter()
-            .map(std::convert::AsRef::as_ref)
-            .collect();
-        let widget = CycleWidget::new(&labels, self.resolved_selected)
+        let widget = CycleWidget::new(value)
             .focused(ctx.focused())
             .hovered(ctx.hovered())
             .disabled(self.disabled)
@@ -517,14 +525,15 @@ mod tests {
         );
     }
 
-    /// The ghost styling is the contract: bare text at rest, a fill when
-    /// focused. Pinned on the widget, where focus is a plain argument.
+    /// The ghost styling is the contract: bare text at rest, a fill with
+    /// readable text when focused. Pinned on the widget, where focus is a
+    /// plain argument.
     #[test]
     fn focus_lays_a_background_over_the_value_and_rest_does_not() {
         let area = Rect::new(0, 0, 12, 1);
 
         let mut rest = Buffer::empty(area);
-        CycleWidget::new(&SIZES, 1).render(area, &mut rest);
+        CycleWidget::new("Medium").render(area, &mut rest);
         assert_eq!(
             rest.cell((3, 0)).expect("cell").bg,
             Color::Reset,
@@ -532,14 +541,16 @@ mod tests {
         );
 
         let mut focused = Buffer::empty(area);
-        CycleWidget::new(&SIZES, 1)
+        CycleWidget::new("Medium")
             .focused(true)
             .render(area, &mut focused);
+        let cell = focused.cell((3, 0)).expect("cell");
         assert_ne!(
-            focused.cell((3, 0)).expect("cell").bg,
+            cell.bg,
             Color::Reset,
             "a focused cycle must be findable by its fill"
         );
+        assert_ne!(cell.fg, cell.bg, "the value must read on the fill");
     }
 
     /// Disabled is the loudest state: no events, no traversal, no fill.
@@ -593,17 +604,45 @@ mod tests {
         ));
     }
 
-    /// A stored index that outlived its options list clamps instead of
-    /// panicking or painting nothing.
+    /// A stored index that outlived its options list clamps to the last
+    /// option instead of panicking: stepping forward from it wraps to the
+    /// first, which only the clamped position gives.
     #[test]
     fn an_out_of_range_selection_clamps_to_the_last_option() {
-        let area = Rect::new(0, 0, 12, 1);
-        let mut buffer = Buffer::empty(area);
-        CycleWidget::new(&SIZES, 9).render(area, &mut buffer);
+        let mut driver = driver();
+        let state = State {
+            size: 9,
+            ..State::default()
+        };
+        render(&mut driver, &state);
 
-        let row: String = (0..12u16)
-            .map(|column| buffer.cell((column, 0)).expect("cell").symbol())
-            .collect();
-        assert!(row.contains("Large"), "{row:?}");
+        assert_eq!(
+            driver.event(key(KeyCode::Right), &state),
+            EventResult::Emit(Msg::Size(0))
+        );
+    }
+
+    /// A Cycle with no options declares, paints nothing, and answers nothing —
+    /// there is no index to show and nothing to advance.
+    #[test]
+    fn a_cycle_with_no_options_is_inert() {
+        let mut driver = driver();
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("size"),
+                Cycle::new(Vec::<String>::new()).selection(|s: &State| s.size, Msg::Size),
+                Rect::new(2, 2, 10, 1),
+            );
+        });
+
+        assert!(matches!(
+            driver.event(key(KeyCode::Tab), &state),
+            EventResult::Ignored
+        ));
+        assert!(matches!(
+            driver.event(key(KeyCode::Char(' ')), &state),
+            EventResult::Ignored
+        ));
     }
 }
