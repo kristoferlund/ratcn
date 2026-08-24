@@ -35,8 +35,25 @@ ctx.component(
 
 The row paints like a small ghost button: plain text at rest, a quiet fill
 while hovered or focused. A column of cycles reads as values, not as a wall of
-chrome — which is what makes the settings-row layout work: the setting's name
-on the left, the Cycle right-aligned on the same row.
+chrome — which is what makes the settings-row layout work: paint the setting's
+name at the left edge and declare the Cycle on the same row with
+`.align(Alignment::Right)` — the value hugs the right edge, paint and hit
+target together, and nothing needs measuring:
+
+```rust
+ctx.paint_widget(Line::from("Text size").style(name), row);
+ctx.component(
+    "size",
+    Cycle::new(["Small", "Medium", "Large"])
+        .selection(|state| state.size, Msg::SetSize)
+        .align(Alignment::Right),
+    row,
+);
+```
+
+For layouts that reserve space instead, `Cycle::width()` (and
+`MeasuredComponent`) answer with the widest option — the columns no value ever
+outgrows.
 
 ## Where a Checkbox ends
 
