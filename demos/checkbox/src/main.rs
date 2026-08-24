@@ -17,7 +17,7 @@ use ratatui::{
     style::Style,
 };
 use ratcn::{
-    Checkbox, Theme,
+    Checkbox, CheckboxWidget, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
 
@@ -32,8 +32,13 @@ const ROWS: [(&str, &str, &str, &str); 3] = [
     ("switch", "[ON]", "[off]", "Terminal bell"),
 ];
 
-fn columns(marker: &str, label: &str) -> u16 {
-    ratcn::text_width::display_width_u16(marker) + 1 + ratcn::text_width::display_width_u16(label)
+/// The columns one row needs, measured by the widget that paints it — the
+/// same in both states, so `[ON]`/`[off]` never truncates.
+fn columns(checked_marker: &str, unchecked_marker: &str, label: &str) -> u16 {
+    CheckboxWidget::new(label, false)
+        .checked_marker(checked_marker)
+        .unchecked_marker(unchecked_marker)
+        .width()
 }
 
 #[derive(Default)]
@@ -108,8 +113,7 @@ impl demo_shared::Demo for App {
                 });
             });
 
-            // One row per checkbox, each exactly as wide as its content —
-            // measured from the same strings the checkbox paints.
+            // One row per checkbox, each exactly as wide as its content.
             let inner = demo.inner(CONTENT_PADDING);
             let [row_a, row_b, row_c] = Layout::vertical([Constraint::Length(1); 3])
                 .spacing(1)
@@ -120,7 +124,7 @@ impl demo_shared::Demo for App {
                 ROWS.into_iter().zip(areas)
             {
                 let row_area = Rect {
-                    width: columns(checked_marker, label),
+                    width: columns(checked_marker, unchecked_marker, label),
                     ..row_area
                 };
                 let checkbox = match id {
