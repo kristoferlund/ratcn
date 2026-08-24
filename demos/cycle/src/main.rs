@@ -122,7 +122,7 @@ impl demo_shared::Demo for App {
                         .areas(row_area);
 
                 ctx.paint_widget(
-                    Line::from(format!("{name}:")).style(Style::default().fg(theme.foreground)),
+                    Line::from(name).style(Style::default().fg(theme.foreground)),
                     label_area,
                 );
                 let cycle = match id {
