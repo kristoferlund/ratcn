@@ -10,7 +10,9 @@ use ratatui::{
 
 use crate::Theme;
 use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, shape_width};
-use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
+use crate::color::{
+    DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, ghost_fills, nearest_to,
+};
 use crate::geometry::fixed_height;
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton,
@@ -191,20 +193,24 @@ impl ButtonStyle {
                 disabled_background: Color::Reset,
                 disabled_border: Some(theme.border),
             },
-            ButtonVariant::Ghost => Self {
-                foreground: theme.foreground,
-                background: Color::Reset,
-                border: None,
-                focused_foreground: theme.foreground,
-                focused_background: dim(theme.secondary, raised, FOCUS_SHIFT),
-                focused_border: None,
-                hovered_foreground: theme.foreground,
-                hovered_background: dim(theme.secondary, raised, HOVER_SHIFT),
-                hovered_border: None,
-                disabled_foreground: theme.muted_foreground,
-                disabled_background: Color::Reset,
-                disabled_border: None,
-            },
+            ButtonVariant::Ghost => {
+                let (focused_background, hovered_background) =
+                    ghost_fills(theme.secondary, theme.background);
+                Self {
+                    foreground: theme.foreground,
+                    background: Color::Reset,
+                    border: None,
+                    focused_foreground: theme.foreground,
+                    focused_background,
+                    focused_border: None,
+                    hovered_foreground: theme.foreground,
+                    hovered_background,
+                    hovered_border: None,
+                    disabled_foreground: theme.muted_foreground,
+                    disabled_background: Color::Reset,
+                    disabled_border: None,
+                }
+            }
         }
     }
 

@@ -911,22 +911,22 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
             None
         };
         // The pair selection rows show: the shape selection picks, with any
-        // marker overrides the app supplied taking each half.
-        let default_glyphs = if selection_mode == Some(true) {
-            selection_indicator::MarkerGlyphs::checkbox()
-        } else {
-            selection_indicator::MarkerGlyphs::radio()
-        };
-        let glyphs = selection_indicator::MarkerGlyphs {
-            selected: self
-                .selected_marker
-                .as_deref()
-                .unwrap_or(default_glyphs.selected),
-            unselected: self
-                .unselected_marker
-                .as_deref()
-                .unwrap_or(default_glyphs.unselected),
-        };
+        // marker overrides the app supplied taking each half. No selection, no
+        // markers.
+        let glyphs = selection_mode.map(|multiple| {
+            let defaults = if multiple {
+                selection_indicator::MarkerGlyphs::checkbox()
+            } else {
+                selection_indicator::MarkerGlyphs::radio()
+            };
+            selection_indicator::MarkerGlyphs {
+                selected: self.selected_marker.as_deref().unwrap_or(defaults.selected),
+                unselected: self
+                    .unselected_marker
+                    .as_deref()
+                    .unwrap_or(defaults.unselected),
+            }
+        });
         let rows_per_item = self.viewport.rows_per_item();
         // Only the rows on screen are built, however long the list is. The
         // count rounds up because the area's trailing rows still paint the item
@@ -956,7 +956,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                 }
                 match &self.paint_item {
                     Some(paint_item) => paint_item(state, row),
-                    None => default_item_line(&row, selection_mode.is_some(), glyphs, &style),
+                    None => default_item_line(&row, glyphs, &style),
                 }
             },
         );
@@ -1022,13 +1022,12 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
 
 fn default_item_line<T>(
     row: &ListItemState<'_, T>,
-    has_markers: bool,
-    glyphs: selection_indicator::MarkerGlyphs<'_>,
+    glyphs: Option<selection_indicator::MarkerGlyphs<'_>>,
     style: &ListStyle,
 ) -> Text<'static> {
-    if !has_markers {
+    let Some(glyphs) = glyphs else {
         return Text::from(row.label.to_string());
-    }
+    };
     Text::from(selection_indicator::marker_line(
         row.label,
         row.selected,
