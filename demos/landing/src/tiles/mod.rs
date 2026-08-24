@@ -1,7 +1,9 @@
 pub mod button_variants;
 pub mod contributions;
 pub mod notifications;
+pub mod payout;
 pub mod release;
+pub mod release_pulse;
 pub mod shared;
 pub mod themes;
 pub mod tooltip;
@@ -21,7 +23,7 @@ pub struct Tile {
 
 /// The one place that fixes tile order: grid position, alt+N focus keys, and
 /// scope identity all derive from this table.
-pub const TILES: [Tile; 6] = [
+pub const TILES: [Tile; 8] = [
     Tile {
         id: themes::ID,
         has_controls: true,
@@ -43,14 +45,24 @@ pub const TILES: [Tile; 6] = [
         declare: notifications::declare,
     },
     Tile {
+        id: tooltip::ID,
+        has_controls: true,
+        declare: tooltip::declare,
+    },
+    Tile {
         id: contributions::ID,
         has_controls: false,
         declare: contributions::declare,
     },
     Tile {
-        id: tooltip::ID,
+        id: payout::ID,
         has_controls: true,
-        declare: tooltip::declare,
+        declare: payout::declare,
+    },
+    Tile {
+        id: release_pulse::ID,
+        has_controls: true,
+        declare: release_pulse::declare,
     },
 ];
 

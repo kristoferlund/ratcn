@@ -1,15 +1,15 @@
 //! Theme picker tile and its focused/selected rows.
 
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    widgets::{Paragraph, Wrap},
+    widgets::{Padding, Paragraph},
 };
 use ratcn::{List, ListItem, Theme, runtime::DeclareCtx};
 
 use crate::{AppMsg, AppState};
 
-use super::shared::declare_tile_panel;
+use super::shared::declare_tile_panel_with_padding;
 
 pub const ID: &str = "themes";
 
@@ -89,6 +89,20 @@ fn selected_theme(selected: Option<&str>, resolved: Theme) -> Theme {
         .unwrap_or(resolved)
 }
 
+/// The roles that communicate a theme's interactive and feedback vocabulary.
+fn palette(theme: &Theme) -> [ratatui::style::Color; 8] {
+    [
+        theme.primary,
+        theme.secondary,
+        theme.accent,
+        theme.destructive,
+        theme.warning,
+        theme.ring,
+        theme.cursor,
+        theme.border,
+    ]
+}
+
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let controls_disabled = ctx.state().controls_disabled;
@@ -120,15 +134,25 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     )
     .disabled(controls_disabled);
 
-    let inner = declare_tile_panel(ctx, area, " alt+1 ");
-    let [header_area, intro_area, list_area] = Layout::vertical([
+    let inner = declare_tile_panel_with_padding(ctx, area, " alt+1 ", Padding::new(2, 2, 1, 1));
+    let [
+        header_area,
+        list_area,
+        _gap_one,
+        first_palette_row,
+        _gap_two,
+        second_palette_row,
+    ] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(3),
         Constraint::Length(themes.len() as u16),
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(2),
     ])
-    .spacing(1)
     .areas(inner);
     let theme = ctx.theme;
+    let palette = palette(theme);
     ctx.paint_widget(
         Paragraph::new("Themes").style(
             Style::default()
@@ -137,16 +161,24 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         ),
         header_area,
     );
-    ctx.paint_widget(
-        Paragraph::new(
-            "Seven preset themes, custom themes, and one solved from your \
-             terminal's colors when it answers.",
-        )
-        .style(Style::default().fg(theme.muted_foreground))
-        .wrap(Wrap { trim: true }),
-        intro_area,
-    );
     ctx.component("themes", picker, list_area);
+    ctx.paint(move |ctx| {
+        for (row, colors) in [first_palette_row, second_palette_row]
+            .into_iter()
+            .zip(palette.chunks(4))
+        {
+            let columns: [Rect; 4] = Layout::horizontal([Constraint::Fill(1); 4]).areas(row);
+            for (column, color) in columns.into_iter().zip(colors) {
+                let width = column.width.min(4);
+                let square = Rect {
+                    x: column.x + column.width.saturating_sub(width) / 2,
+                    width,
+                    ..column
+                };
+                ctx.with_buffer(|buf| buf.set_style(square, Style::default().bg(*color)));
+            }
+        }
+    });
 }
 
 #[cfg(test)]

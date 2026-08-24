@@ -9,9 +9,9 @@
 //! are a [`Checkbox`](crate::Checkbox) wearing the words as its markers; three
 //! or more, or an ordered scale (Small/Medium/Large), are a Cycle.
 //!
-//! The value paints as plain text in the style of a small ghost button: bare
-//! at rest, tinted while hovered or focused, muted while disabled. Nothing
-//! about it reads as chrome, and focus stays findable for keyboard users.
+//! The value sits in a subtle field at rest, then brightens while hovered or
+//! focused; it mutes while disabled. That resting field hints that the value
+//! is clickable without competing with the setting label.
 
 use std::{fmt, rc::Rc};
 
@@ -24,9 +24,8 @@ use ratatui::{
 };
 
 use crate::{
-    Theme,
+    ListStyle, Theme,
     button_shape::filled_middle,
-    color::ghost_fills,
     linear_nav::{Axis, step_key},
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
@@ -36,18 +35,17 @@ use crate::{
     theme::resolve_style,
 };
 
-/// A cycle's colors — the small ghost button's palette, one role per state.
+/// A cycle's colors, sharing the List's three background states.
 ///
-/// At rest only [`foreground`](Self::foreground) paints, on nothing: the
-/// surface shows through. Hover and focus each lay their background over the
-/// value, with their own text color on it the way
-/// [`ButtonStyle`](crate::ButtonStyle) carries one per state — hover beating
-/// focus, so pointing at the cycle you are on stays visible. Disabled mutes
-/// the text and paints nothing.
+/// At rest [`foreground`](Self::foreground) sits on
+/// [`background`](Self::background). Hover and focus use the corresponding
+/// List backgrounds, with hover beating focus. Disabled mutes the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CycleStyle {
     /// Value color at rest.
     pub foreground: Color,
+    /// Background at rest.
+    pub background: Color,
     /// Value color while focused.
     pub focused_foreground: Color,
     /// Background while focused.
@@ -62,31 +60,32 @@ pub struct CycleStyle {
 
 impl CycleStyle {
     /// The no-theme starting point: plain ANSI colors that render on any
-    /// terminal — the ghost button's fills, with its text colors on them.
+    /// terminal, with the List's three fallback backgrounds and readable text.
     #[must_use]
     pub const fn fallback() -> Self {
         Self {
             foreground: Color::Gray,
+            background: Color::Reset,
             focused_foreground: Color::Black,
-            focused_background: Color::Cyan,
+            focused_background: Color::Reset,
             hovered_foreground: Color::Black,
-            hovered_background: Color::LightCyan,
+            hovered_background: Color::DarkGray,
             disabled_foreground: Color::DarkGray,
         }
     }
 
-    /// Colors derived from a theme: the ghost button's raised fills with the
-    /// value keeping the theme's foreground on them.
+    /// Colors derived from a theme: the List's three backdrops, with the value
+    /// keeping the theme's foreground on them.
     #[must_use]
     pub fn from_theme(theme: &Theme) -> Self {
-        let (focused_background, hovered_background) =
-            ghost_fills(theme.secondary, theme.background);
+        let list = ListStyle::from_theme(theme);
         Self {
-            foreground: theme.foreground,
+            foreground: list.foreground,
+            background: list.background,
             focused_foreground: theme.foreground,
-            focused_background,
+            focused_background: list.focused_background,
             hovered_foreground: theme.foreground,
-            hovered_background,
+            hovered_background: list.hovered_background,
             disabled_foreground: theme.muted_foreground,
         }
     }
@@ -105,7 +104,7 @@ impl CycleStyle {
                 .fg(self.focused_foreground)
                 .bg(self.focused_background)
         } else {
-            Style::default().fg(self.foreground)
+            Style::default().fg(self.foreground).bg(self.background)
         }
     }
 }
@@ -208,9 +207,9 @@ type StyleFn = Rc<dyn Fn(&Theme) -> CycleStyle>;
 /// <kbd>Ctrl+P</kbd>. Home and End step nothing: a ring has no ends.
 /// Shift belongs to the app, so Shift+Space passes through untouched.
 ///
-/// The row paints like a small ghost button — plain text at rest, a quiet
-/// fill on hover or focus — so a column of cycles reads as values, not as a
-/// wall of chrome.
+/// The row paints in a subtle field at rest, then brightens on hover or
+/// focus, so a column of cycles reads as values without hiding that each one
+/// is actionable.
 ///
 /// The selection lives in app state and arrives through
 /// [`selection`](Self::selection) as an index; without that binding the Cycle
@@ -314,17 +313,21 @@ impl<S, M> Cycle<S, M> {
         !self.disabled && !self.options.is_empty() && self.selection.is_some()
     }
 
-    /// The rect the current value paints in and answers events in: the Cycle
-    /// is exactly as wide as the text it shows, one row tall, hugging the
-    /// [`align`](Self::align) edge of the declared area.
+    /// The rect the current value paints in and answers events in: one column
+    /// of the List-derived field surrounds either side of the value, hugging
+    /// the [`align`](Self::align) edge of the declared area.
     fn value_area(&self, area: Rect) -> Rect {
-        let width = self.resolved_width.min(area.width);
-        let x = match self.align {
+        let width = self.resolved_width.saturating_add(2).min(area.width);
+        let x = self.aligned_x(area, width);
+        crate::geometry::fixed_height(Rect { x, width, ..area }, 1)
+    }
+
+    fn aligned_x(&self, area: Rect, width: u16) -> u16 {
+        match self.align {
             Alignment::Left => area.x,
             Alignment::Center => area.x + (area.width - width) / 2,
             Alignment::Right => area.x + (area.width - width),
-        };
-        crate::geometry::fixed_height(Rect { x, width, ..area }, 1)
+        }
     }
 
     /// Advance one option. Forward past the end wraps to the first; backward
@@ -560,32 +563,59 @@ mod tests {
         );
     }
 
-    /// The ghost styling is the contract: bare text at rest, a fill with
-    /// readable text when focused. Pinned on the widget, where focus is a
-    /// plain argument.
+    /// A themed Cycle paints the List's ordinary and focused backgrounds. Pinned
+    /// on the widget, where focus is a plain argument.
     #[test]
-    fn focus_lays_a_background_over_the_value_and_rest_does_not() {
+    fn focus_lays_the_lists_focused_background_over_the_resting_field() {
         let area = Rect::new(0, 0, 12, 1);
+        let theme = Theme::default_dark();
+        let list = ListStyle::from_theme(&theme);
 
         let mut rest = Buffer::empty(area);
-        CycleWidget::new("Medium").render(area, &mut rest);
+        CycleWidget::new("Medium")
+            .themed(&theme)
+            .render(area, &mut rest);
         assert_eq!(
             rest.cell((3, 0)).expect("cell").bg,
-            Color::Reset,
-            "rest painted a background"
+            list.background,
+            "rest must use the List's ordinary field"
         );
 
         let mut focused = Buffer::empty(area);
         CycleWidget::new("Medium")
+            .themed(&theme)
             .focused(true)
             .render(area, &mut focused);
         let cell = focused.cell((3, 0)).expect("cell");
-        assert_ne!(
-            cell.bg,
-            Color::Reset,
-            "a focused cycle must be findable by its fill"
+        assert_eq!(
+            cell.bg, list.focused_background,
+            "focus must use the List's focused field"
         );
         assert_ne!(cell.fg, cell.bg, "the value must read on the fill");
+    }
+
+    #[test]
+    fn a_themed_cycle_uses_the_lists_backgrounds_in_every_focus_state() {
+        let theme = Theme::default_dark();
+        let cycle = CycleStyle::from_theme(&theme);
+        let list = ListStyle::from_theme(&theme);
+
+        assert_eq!(
+            cycle.background, list.background,
+            "an idle cycle should have the same well as an idle list"
+        );
+        assert_eq!(
+            cycle.foreground, list.foreground,
+            "an idle cycle should dim its value like an ordinary list row"
+        );
+        assert_eq!(
+            cycle.focused_background, list.focused_background,
+            "focused cycles and lists should use the same emphasis"
+        );
+        assert_eq!(
+            cycle.hovered_background, list.hovered_background,
+            "hovered cycles and lists should use the same emphasis"
+        );
     }
 
     /// Disabled is the loudest state: no events, no traversal, no fill.
@@ -646,7 +676,8 @@ mod tests {
     fn a_right_aligned_cycle_answers_at_the_right_edge() {
         let mut driver = driver();
         let state = State::default();
-        // Declared 20 wide at x=2; "Small" is 5 wide, so it occupies x 17..22.
+        // Declared 20 wide at x=2; "Small" has one padded column on each side,
+        // so its control occupies x 15..22.
         driver.render(&state, |ctx| {
             ctx.component(
                 ChildId::Static("size"),
@@ -678,6 +709,23 @@ mod tests {
         let cycle: Cycle<State, Msg> = Cycle::new(SIZES);
         assert_eq!(cycle.width(), 6, "\"Medium\" is the widest option");
         assert_eq!(cycle.measure(), Size::new(6, 1));
+    }
+
+    #[test]
+    fn a_cycle_pads_its_current_value_by_one_column_on_each_side() {
+        let mut cycle: Cycle<State, Msg> = Cycle::new(SIZES)
+            .selection(|state: &State| state.size, Msg::Size)
+            .align(Alignment::Right);
+        cycle.prepare(&State {
+            size: 1,
+            ..State::default()
+        });
+
+        assert_eq!(
+            cycle.value_area(Rect::new(2, 2, 20, 1)),
+            Rect::new(14, 2, 8, 1),
+            "a six-column value receives one visible field column on either side"
+        );
     }
 
     /// A stored index that outlived its options list clamps to the last

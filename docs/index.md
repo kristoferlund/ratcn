@@ -70,9 +70,9 @@ onMounted(async () => {
   <section class="ratcn-preview" aria-labelledby="ratcn-preview-title">
     <h2 id="ratcn-preview-title" class="ratcn-sr-only">Live component preview</h2>
     <!-- Matches preview-resize.ts heightFor(3), the wide three-column layout,
-         so a hard reload on a wide screen boots the wasm at its final height
-         and needs no corrective reload. -->
-    <div class="ratcn-preview-window" style="--ratcn-preview-height: 909px">
+          so a hard reload on a wide screen boots the wasm at its final height
+          and needs no corrective reload. -->
+    <div class="ratcn-preview-window" style="--ratcn-preview-height: 1373px">
       <div class="ratcn-preview-chrome" aria-hidden="true">
         <span class="ratcn-dot"></span>
         <span class="ratcn-dot"></span>

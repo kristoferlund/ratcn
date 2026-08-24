@@ -4,9 +4,9 @@
 // which picks its tile column count from the iframe's rendered width using the
 // `column_count` math in demos/landing/src/main.rs:
 //
-//   wide screen   -> 3 columns x 2 rows
-//   medium screen -> 2 columns x 3 rows
-//   narrow screen -> 1 column  x 6 rows
+//   wide screen   -> 3 columns x 3 rows
+//   medium screen -> 2 columns x 4 rows
+//   narrow screen -> 1 column  x 8 rows
 //
 // We mirror that math here to choose the matching iframe HEIGHT, so every tile
 // fits at full height with no centering gap and no clipping. The demo sizes its
@@ -16,7 +16,7 @@
 // the right height differs from the height the demo booted at, the iframe must
 // be reloaded to re-render the WebAssembly at the new size.
 
-const TILE_COUNT = 6 // main.rs: TILE_COUNT
+const TILE_COUNT = 8 // main.rs: TILE_COUNT
 const TILE_WIDTH = 42 // main.rs: TILE_WIDTH (cells)
 const TILE_HEIGHT = 20 // main.rs: TILE_HEIGHT (cells)
 const TILE_GAP = 2 // main.rs: TILE_GAP (cells)
@@ -36,7 +36,7 @@ function columnCount(cols: number): number {
   return Math.min(Math.max(columns, 1), 4)
 }
 
-// Fixed iframe height (px) for a grid `columns` wide: enough rows to show all six
+// Fixed iframe height (px) for a grid `columns` wide: enough rows to show every
 // tiles at full height, plus one cell of slack so rounding never clips a tile.
 // The landing page gives the preview 20% extra vertical room around the padded
 // grid so it breathes in the surrounding page layout; the 2- and 3-column

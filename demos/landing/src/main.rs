@@ -33,6 +33,7 @@ const GRID_PADDING_Y: u16 = 3;
 /// cadence shows every step a flake takes — asking for more frames would repaint
 /// the same one.
 const SCREENSAVER_FRAME: Duration = Duration::from_millis(50);
+const QUAKE_DOWNLOAD_FRAME: Duration = Duration::from_millis(100);
 
 struct App {
     state: AppState,
@@ -47,6 +48,9 @@ struct AppState {
     /// What the terminal says it looks like, refreshed each frame.
     resolved_theme: Theme,
     notifications_state: tiles::notifications::State,
+    agent_settings_state: tiles::tooltip::State,
+    payout_state: tiles::payout::State,
+    quake_state: tiles::release_pulse::State,
     release_state: tiles::release::State,
     modals_state: ModalState,
     screensaver: screensaver::State,
@@ -68,6 +72,9 @@ enum AppMsg {
     Toast(Toast<'static>),
     Themes(tiles::themes::Msg),
     Notifications(tiles::notifications::Msg),
+    AgentSettings(tiles::tooltip::Msg),
+    Payout(tiles::payout::Msg),
+    Quake(tiles::release_pulse::Msg),
     Release(tiles::release::Msg),
 }
 
@@ -116,6 +123,9 @@ impl App {
             AppMsg::Toast(toast) => self.toast(toast),
             AppMsg::Themes(msg) => self.state.themes_state.update(msg),
             AppMsg::Notifications(msg) => self.state.notifications_state.update(msg),
+            AppMsg::AgentSettings(msg) => self.state.agent_settings_state.update(msg),
+            AppMsg::Payout(msg) => self.state.payout_state.update(msg),
+            AppMsg::Quake(msg) => self.state.quake_state.update(msg),
             AppMsg::Release(msg) => {
                 let next_msg = self.state.release_state.update(
                     msg,
@@ -183,18 +193,19 @@ impl demo_shared::Demo for App {
         }
     }
 
-    /// The next toast expiry, or — while the screensaver runs — its own frame
-    /// cadence, since its snow moves with the clock alone.
+    /// The next toast expiry, bounded by the cadence the animated tile needs;
+    /// the screensaver runs at its tighter cadence while its snow is visible.
     fn wake(&self) -> Option<Duration> {
         let expiry = self
             .state
             .toasts
             .time_until_next_expiry(demo_shared::monotonic_time());
-        if self.state.modals_state.is_open(screensaver::ID) {
-            Some(expiry.map_or(SCREENSAVER_FRAME, |expiry| expiry.min(SCREENSAVER_FRAME)))
+        let frame = if self.state.modals_state.is_open(screensaver::ID) {
+            SCREENSAVER_FRAME
         } else {
-            expiry
-        }
+            QUAKE_DOWNLOAD_FRAME
+        };
+        Some(expiry.map_or(frame, |expiry| expiry.min(frame)))
     }
 
     fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
