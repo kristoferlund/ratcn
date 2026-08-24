@@ -17,23 +17,13 @@ use ratatui::{
     style::Style,
 };
 use ratcn::{
-    Checkbox, CheckboxWidget, Theme,
+    Checkbox, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
 };
 
 const DEMO_WIDTH: u16 = 26;
 const DEMO_HEIGHT: u16 = 7;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
-
-/// A row exactly as wide as its checkbox, measured by the widget that paints
-/// it — the same in both states, so `[ON]`/`[off]` never truncates.
-fn sized(row: Rect, checked_marker: &str, unchecked_marker: &str, label: &str) -> Rect {
-    let width = CheckboxWidget::new(label, false)
-        .checked_marker(checked_marker)
-        .unchecked_marker(unchecked_marker)
-        .width();
-    Rect { width, ..row }
-}
 
 #[derive(Default)]
 struct AppState {
@@ -113,27 +103,32 @@ impl demo_shared::Demo for App {
                 .spacing(1)
                 .areas(inner);
 
-            ctx.component(
-                "default",
-                Checkbox::new("Vim bindings").checked(|s: &AppState| s.vim, Msg::Vim),
-                sized(row_a, "■", "□", "Vim bindings"),
-            );
-            ctx.component(
-                "ascii",
-                Checkbox::new("ASCII checklist")
-                    .checked_marker("[x]")
-                    .unchecked_marker("[ ]")
-                    .checked(|s: &AppState| s.mouse, Msg::Mouse),
-                sized(row_b, "[x]", "[ ]", "ASCII checklist"),
-            );
-            ctx.component(
-                "switch",
-                Checkbox::new("Terminal bell")
-                    .checked_marker("[ON]")
-                    .unchecked_marker("[off]")
-                    .checked(|s: &AppState| s.bell, Msg::Bell),
-                sized(row_c, "[ON]", "[off]", "Terminal bell"),
-            );
+            let vim = Checkbox::new("Vim bindings").checked(|s: &AppState| s.vim, Msg::Vim);
+            let row_a = Rect {
+                width: vim.width(),
+                ..row_a
+            };
+            ctx.component("default", vim, row_a);
+
+            let ascii = Checkbox::new("ASCII checklist")
+                .checked_marker("[x]")
+                .unchecked_marker("[ ]")
+                .checked(|s: &AppState| s.mouse, Msg::Mouse);
+            let row_b = Rect {
+                width: ascii.width(),
+                ..row_b
+            };
+            ctx.component("ascii", ascii, row_b);
+
+            let bell = Checkbox::new("Terminal bell")
+                .checked_marker("[ON]")
+                .unchecked_marker("[off]")
+                .checked(|s: &AppState| s.bell, Msg::Bell);
+            let row_c = Rect {
+                width: bell.width(),
+                ..row_c
+            };
+            ctx.component("switch", bell, row_c);
         });
     }
 }

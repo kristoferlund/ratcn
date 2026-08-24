@@ -11,9 +11,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `Checkbox`, with `CheckboxStyle` and `CheckboxWidget`: a labeled boolean
-  control — marker left, label right, the whole row one hit target. The
-  checked and unchecked markers are strings the app chooses (`[x]`/`[ ]`,
-  `[ON]`/`[off]`), so the same component is also the switch and toggle.
+  control — marker left, label right, the whole row one hit target, measured
+  by `width()` and `MeasuredComponent`. The markers are strings the app
+  chooses (`[x]`/`[ ]`, `[ON]`/`[off]`), so the same component is the switch.
 - `Cycle`, with `CycleStyle` and `CycleWidget`: shows the current option and
   advances on every act — Enter, Space, arrows, their vi letters, or a click —
   wrapping at both ends. It paints and hit-tests exactly the columns its
