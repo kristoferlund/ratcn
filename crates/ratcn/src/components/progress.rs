@@ -86,7 +86,8 @@ impl ProgressStyle {
     }
 
     /// Derive bar colors from `theme`: the primary as the fill, on the inset
-    /// well the chart backdrop uses, with the label read as secondary text.
+    /// well the chart backdrop uses, with the label read as secondary text
+    /// and the percentage as ordinary text.
     #[must_use]
     pub const fn from_theme(theme: &Theme) -> Self {
         Self {
@@ -139,7 +140,10 @@ impl<'a> ProgressWidget<'a> {
     }
 
     /// Print the percentage right-aligned above the bar. Rounded to the
-    /// nearest whole percent, `0%` through `100%`.
+    /// nearest whole percent, `0%` through `100%`. The percentage and the
+    /// fill round independently — ratatui's gauge rounds its last cell in
+    /// eighths — so at a width's rounding edge the number can briefly sit one
+    /// eighth of a cell away from the bar it describes.
     #[must_use]
     pub const fn show_value(mut self, show_value: bool) -> Self {
         self.show_value = show_value;

@@ -54,14 +54,18 @@ frame.render_widget(
 The composition costs one extra row: `.height()` answers `2` when either
 option shows and `1` when neither does. Given a single row anyway, the bar
 keeps it and the header is dropped; given taller rows than it needs, the bar
-stays one row of track and leaves the rest alone.
+stays one row of track and leaves the rest alone. The percentage and the fill
+round independently — the gauge rounds its last cell in eighths — so at a
+width's rounding edge the number can briefly sit one eighth of a cell away
+from the bar it describes.
 
 ## Colors
 
 Themed, the fill takes the theme's primary on the inset well the other
 control surfaces use, and the label reads as secondary text. `.style(...)`
-supplies exact colors instead — one per role (`fill`, `track`, `label`,
-`value`), since a bar has no interaction states.
+supplies exact colors instead — one per role: `fill` takes the theme's
+primary, `track` the inset well, `label` the muted foreground, and `value`
+the ordinary foreground.
 
 ## Full API
 
