@@ -238,6 +238,10 @@ impl ProgressWidget<'_> {
     /// restored to the full block its neighbors carry. The exact slot and
     /// fill math are pinned by the tests — an upstream change breaks loudly
     /// here rather than punching silent holes in every app's bars.
+    ///
+    /// Fixed upstream in ratatui#2579 (issue #2547), unreleased as of
+    /// ratatui 0.30.2. Once a release carrying it is pinned, this restore
+    /// overwrites the cell with the identical content — delete it then.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
