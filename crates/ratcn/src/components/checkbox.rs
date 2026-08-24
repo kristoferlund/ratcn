@@ -1,7 +1,7 @@
 //! A labeled boolean control: the marker on the left, the label on the right.
 //!
 //! ```text
-//! ☑ Vim bindings
+//! ■ Vim bindings
 //! ```
 //!
 //! The whole row is one hit target — a click on the label checks the box just
@@ -34,13 +34,14 @@ use crate::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
         MouseKind, PaintCtx, ScopeOptions,
     },
+    selection_indicator::MarkerGlyphs,
     text_width,
     theme::resolve_style,
 };
 
-// The default markers: the ballot-box pair most terminal fonts carry.
-const CHECKED_MARKER: &str = "☑";
-const UNCHECKED_MARKER: &str = "☐";
+/// The default markers: the boxes a multi-select list ticks its rows with, so
+/// a checked box and a selected row speak the same language.
+const DEFAULT_MARKERS: MarkerGlyphs<'static> = MarkerGlyphs::checkbox();
 
 /// A checkbox's colors.
 ///
@@ -194,8 +195,8 @@ impl<'a> CheckboxWidget<'a> {
         Self {
             label,
             checked,
-            checked_marker: CHECKED_MARKER,
-            unchecked_marker: UNCHECKED_MARKER,
+            checked_marker: DEFAULT_MARKERS.selected,
+            unchecked_marker: DEFAULT_MARKERS.unselected,
             focused: false,
             hovered: false,
             disabled: false,
@@ -384,8 +385,8 @@ impl<S, M> Checkbox<S, M> {
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
-            checked_marker: CHECKED_MARKER.to_owned(),
-            unchecked_marker: UNCHECKED_MARKER.to_owned(),
+            checked_marker: DEFAULT_MARKERS.selected.to_owned(),
+            unchecked_marker: DEFAULT_MARKERS.unselected.to_owned(),
             checked: None,
             disabled: false,
             style: None,
