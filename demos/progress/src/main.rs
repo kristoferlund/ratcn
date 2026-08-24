@@ -8,7 +8,7 @@ use std::{io, time::Duration};
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Margin},
     style::Style,
 };
 use ratcn::{ProgressWidget, Theme};
