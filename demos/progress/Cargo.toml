@@ -1,0 +1,15 @@
+[package]
+name = "progress"
+publish = false
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+demo-shared.workspace = true
+ratatui.workspace = true
+ratcn.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ratcn = { workspace = true, features = ["ratzilla"] }
+ratzilla.workspace = true

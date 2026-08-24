@@ -1154,6 +1154,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "progress"
+version = "0.0.1"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
