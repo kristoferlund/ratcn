@@ -60,10 +60,9 @@ or state:
 ```rust
 use ratcn::CycleWidget;
 
-frame.render_widget(
-    CycleWidget::new(&["Small", "Medium", "Large"], state.size).themed(&theme),
-    area,
-);
+const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
+
+frame.render_widget(CycleWidget::new(SIZES[state.size]).themed(&theme), area);
 ```
 
 The interactive component paints and answers events in exactly the columns its
