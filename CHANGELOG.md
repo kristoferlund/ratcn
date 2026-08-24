@@ -16,15 +16,17 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `[ON]`/`[off]`), so the same component is also the switch and toggle.
 - `Cycle`, with `CycleStyle` and `CycleWidget`: shows the current option and
   advances on every act — Enter, Space, arrows, their vi letters, or a click —
-  wrapping at both ends. Built for settings rows: setting name left, cycle
-  right. The component paints and hit-tests exactly the columns its current
-  value occupies, so a row is as wide as the text it shows.
+  wrapping at both ends. It paints and hit-tests exactly the columns its
+  current value occupies: a settings row as wide as the text it shows.
 - `selection_indicator::MarkerGlyphs`: the glyph pair a selection control
   paints. `List::selected_marker`/`unselected_marker`,
   `Select::selected_marker`/`unselected_marker`, and the same methods on
   `SelectWidget` override the defaults per control.
+- `color::ghost_fills`: the focused and hovered fills a ghost control raises
+  on, shared by the ghost `Button`, `Checkbox`, and `Cycle`.
 - `list_core::key_intent` and `linear_nav::Axis`: the one key map `List`,
   `Select`, and `Tabs` answer from, with the axis naming which arrows step.
+  `linear_nav::step_key` is its one-step subset, which `Cycle` answers.
   `RowViewport::wheel` is the same for the wheel.
 - `SelectWidget::options`, the panel's labels as their own call.
 - `BarChartWidget::span`, the length of the grouping axis.
@@ -119,9 +121,6 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
-- **Breaking:** `selection_indicator::marker` takes a `MarkerGlyphs` pair
-  instead of a `multiple` flag, and `marker_line` follows it — the glyph pair
-  is now the app's to choose.
 - **Breaking:** `ButtonFill` and `ButtonStyle::mode`. A border color is
   `Option<Color>` per state; `Some` paints bordered.
 - **Breaking:** `Button::height`, `ButtonWidget::height`, `SelectWidget::height`,
@@ -197,6 +196,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `selection_indicator::marker(selected, multiple)` is now
+  `MarkerGlyphs::marker(selected)` — the glyph pair is a value the app
+  chooses, not a flag.
 - **Breaking:** `PaintCtx<'a, State>` has one lifetime. Every `paint`
   signature loses a `'_`.
 - **Breaking:** `SelectWidget::open` takes a `bool`; the labels go to

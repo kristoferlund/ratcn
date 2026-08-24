@@ -53,6 +53,9 @@ Checkbox::new("Terminal bell")
     .unchecked_marker("[off]")
 ```
 
+The marker column takes the wider of the pair, so an uneven pair like
+`[ON]`/`[off]` never moves the label as it flips.
+
 Two options are a Checkbox wearing its states as labels; three or more are a
 [Cycle](./cycle).
 
@@ -76,9 +79,9 @@ frame.render_widget(
 );
 ```
 
-`.width()` measures the columns it wants — marker, space, label — for layouts
-that reserve exactly that. Replace `.themed(...)` with `.style(...)` to supply
-exact colors.
+`.width()` measures the columns it wants — marker column, space, label — the
+same in both states, for layouts that reserve exactly that. Replace
+`.themed(...)` with `.style(...)` to supply exact colors.
 
 ## Full API
 
