@@ -1,9 +1,9 @@
 //! Settings rows: the setting's name on the left, a [`Cycle`] on the right.
 //!
-//! The pattern most settings screens want — each row reads "name: value",
+//! The pattern most settings screens want — each row reads "name value",
 //! and the value cycles in place through its options. A Cycle is exactly as
-//! wide as the value it currently shows, so each row hugs its text; here they
-//! are right-aligned against the panel's edge.
+//! wide as the value it currently shows; `.align(Alignment::Right)` hugs it
+//! against the panel's edge, so a row is one declaration, unmeasured.
 //!
 //! Tab moves between rows. Enter, Space, an arrow, or a click advances the
 //! focused one, wrapping at both ends.
@@ -12,11 +12,10 @@ use std::io;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin},
+    layout::{Alignment, Constraint, Layout, Margin},
     style::Style,
     text::Line,
 };
-use ratcn::text_width;
 use ratcn::{
     Cycle, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
@@ -107,33 +106,37 @@ impl demo_shared::Demo for App {
                 .spacing(1)
                 .areas(inner);
 
-            // Each row: the setting's name at the left edge, and the cycle
-            // right-aligned, hugging its current value.
-            let settings = [
-                ("Text size", "size", SIZES[state.size], row_a),
-                ("Refresh", "cadence", CADENCES[state.cadence], row_b),
-                ("Key map", "keymap", KEYMAPS[state.keymap], row_c),
-            ];
+            // Each row is one declaration: the setting's name painted at the
+            // left edge, and the cycle hugging the right edge of the same
+            // row — only the value's own columns respond.
+            let name = Style::default().fg(theme.foreground);
 
-            for (name, id, value, row_area) in settings {
-                let value_width = text_width::display_width_u16(value);
-                let [label_area, value_area] =
-                    Layout::horizontal([Constraint::Min(1), Constraint::Length(value_width)])
-                        .areas(row_area);
+            ctx.paint_widget(Line::from("Text size").style(name), row_a);
+            ctx.component(
+                "size",
+                Cycle::new(SIZES)
+                    .selection(|s: &AppState| s.size, Msg::Size)
+                    .align(Alignment::Right),
+                row_a,
+            );
 
-                ctx.paint_widget(
-                    Line::from(name).style(Style::default().fg(theme.foreground)),
-                    label_area,
-                );
-                let cycle = match id {
-                    "size" => Cycle::new(SIZES).selection(|s: &AppState| s.size, Msg::Size),
-                    "cadence" => {
-                        Cycle::new(CADENCES).selection(|s: &AppState| s.cadence, Msg::Cadence)
-                    }
-                    _ => Cycle::new(KEYMAPS).selection(|s: &AppState| s.keymap, Msg::Keymap),
-                };
-                ctx.component(id, cycle, value_area);
-            }
+            ctx.paint_widget(Line::from("Refresh").style(name), row_b);
+            ctx.component(
+                "cadence",
+                Cycle::new(CADENCES)
+                    .selection(|s: &AppState| s.cadence, Msg::Cadence)
+                    .align(Alignment::Right),
+                row_b,
+            );
+
+            ctx.paint_widget(Line::from("Key map").style(name), row_c);
+            ctx.component(
+                "keymap",
+                Cycle::new(KEYMAPS)
+                    .selection(|s: &AppState| s.keymap, Msg::Keymap)
+                    .align(Alignment::Right),
+                row_c,
+            );
         });
     }
 }

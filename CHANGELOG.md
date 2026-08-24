@@ -16,8 +16,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chooses (`[x]`/`[ ]`, `[ON]`/`[off]`), so the same component is the switch.
 - `Cycle`, with `CycleStyle` and `CycleWidget`: shows the current option and
   advances on every act — Enter, Space, arrows, their vi letters, or a click —
-  wrapping at both ends. It paints and hit-tests exactly the columns its
-  current value occupies: a settings row as wide as the text it shows.
+  wrapping at both ends. It paints and hit-tests exactly the columns its value
+  occupies, hugging the edge `align` names; `width()` and `MeasuredComponent`
+  answer with the widest option.
 - `selection_indicator::MarkerGlyphs`: the glyph pair a selection control
   paints. `List::selected_marker`/`unselected_marker`,
   `Select::selected_marker`/`unselected_marker`, and the same methods on

@@ -17,7 +17,7 @@ use std::{fmt, rc::Rc};
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Alignment, Rect, Size},
     style::{Color, Style},
     text::Line,
     widgets::Widget,
@@ -29,8 +29,8 @@ use crate::{
     color::ghost_fills,
     linear_nav::{Axis, step_key},
     runtime::{
-        Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
-        MouseKind, PaintCtx, ScopeOptions, Step,
+        Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
+        MouseButton, MouseKind, PaintCtx, ScopeOptions, Step,
     },
     text_width,
     theme::resolve_style,
@@ -220,6 +220,8 @@ pub struct Cycle<S, M> {
     selection: Option<(ReadSelectedFn<S>, OnChangeFn<M>)>,
     disabled: bool,
     style: Option<StyleFn>,
+    /// Which edge of the declared area the value hugs.
+    align: Alignment,
     /// The bound selection, resolved and clamped once per declaration.
     resolved_selected: usize,
     /// The columns the current option paints — the Cycle is as wide as the
@@ -247,9 +249,35 @@ impl<S, M> Cycle<S, M> {
             selection: None,
             disabled: false,
             style: None,
+            align: Alignment::Left,
             resolved_selected: 0,
             resolved_width: 0,
         }
+    }
+
+    /// Which edge of the declared area the value hugs; left by default.
+    ///
+    /// The Cycle stays exactly as wide as its value — this moves that value,
+    /// paint and hit target together, within the area the app declares. With
+    /// `Alignment::Right` a settings row is one declaration: the name painted
+    /// at the left edge, the Cycle hugging the right.
+    #[must_use]
+    pub const fn align(mut self, align: Alignment) -> Self {
+        self.align = align;
+        self
+    }
+
+    /// The columns that fit every option — the widest value, so an area
+    /// reserved from this never truncates and never shifts as the value
+    /// cycles. What the Cycle paints each frame is narrower: exactly its
+    /// current value.
+    #[must_use]
+    pub fn width(&self) -> u16 {
+        self.options
+            .iter()
+            .map(|option| text_width::display_width_u16(option))
+            .max()
+            .unwrap_or(0)
     }
 
     /// Bind the selection and the message that moves it.
@@ -287,15 +315,16 @@ impl<S, M> Cycle<S, M> {
     }
 
     /// The rect the current value paints in and answers events in: the Cycle
-    /// is exactly as wide as the text it shows, and one row tall.
+    /// is exactly as wide as the text it shows, one row tall, hugging the
+    /// [`align`](Self::align) edge of the declared area.
     fn value_area(&self, area: Rect) -> Rect {
-        crate::geometry::fixed_height(
-            Rect {
-                width: self.resolved_width.min(area.width),
-                ..area
-            },
-            1,
-        )
+        let width = self.resolved_width.min(area.width);
+        let x = match self.align {
+            Alignment::Left => area.x,
+            Alignment::Center => area.x + (area.width - width) / 2,
+            Alignment::Right => area.x + (area.width - width),
+        };
+        crate::geometry::fixed_height(Rect { x, width, ..area }, 1)
     }
 
     /// Advance one option. Forward past the end wraps to the first; backward
@@ -390,6 +419,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
 
     fn interaction_area(&self, area: Rect) -> Rect {
         self.value_area(area)
+    }
+}
+
+impl<S: 'static, M: 'static> MeasuredComponent<S, M> for Cycle<S, M> {
+    fn measure(&self) -> Size {
+        Size::new(self.width(), 1)
     }
 }
 
@@ -602,6 +637,47 @@ mod tests {
             driver.event(key(KeyCode::Char(' ')), &state),
             EventResult::Ignored
         ));
+    }
+
+    /// A right-aligned Cycle hugs the right edge of the area it is declared
+    /// on — paint and hit target together: the value's columns answer, the
+    /// empty columns to their left do not.
+    #[test]
+    fn a_right_aligned_cycle_answers_at_the_right_edge() {
+        let mut driver = driver();
+        let state = State::default();
+        // Declared 20 wide at x=2; "Small" is 5 wide, so it occupies x 17..22.
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("size"),
+                Cycle::new(SIZES)
+                    .selection(|s: &State| s.size, Msg::Size)
+                    .align(Alignment::Right),
+                Rect::new(2, 2, 20, 1),
+            );
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 21, 2), &state),
+            EventResult::Emit(Msg::Size(1)),
+            "the value's own columns must answer"
+        );
+        assert!(
+            matches!(
+                driver.event(mouse(MouseKind::Click(MouseButton::Left), 5, 2), &state),
+                EventResult::Ignored
+            ),
+            "the empty columns left of the value must not"
+        );
+    }
+
+    /// The component measures the columns that fit every option, so a layout
+    /// reserved from it never truncates and never shifts as the value cycles.
+    #[test]
+    fn the_component_measures_its_widest_option() {
+        let cycle: Cycle<State, Msg> = Cycle::new(SIZES);
+        assert_eq!(cycle.width(), 6, "\"Medium\" is the widest option");
+        assert_eq!(cycle.measure(), Size::new(6, 1));
     }
 
     /// A stored index that outlived its options list clamps to the last
