@@ -29,7 +29,7 @@ use ratatui::{
 
 use crate::{
     Theme,
-    color::{FOCUS_SHIFT, HOVER_SHIFT, away_from, dim},
+    color::ghost_fills,
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
         MouseKind, PaintCtx, ScopeOptions,
@@ -48,8 +48,10 @@ const UNCHECKED_MARKER: &str = "☐";
 /// marker [`checked_marker_color`](Self::checked_marker_color), and the
 /// unchecked marker [`unchecked_marker_color`](Self::unchecked_marker_color),
 /// all on nothing — the surface shows through. Hover and focus lay their
-/// background over the row, the way a small ghost button raises; disabled
-/// mutes everything and wins over both.
+/// background over the row, the way a small ghost button raises, each with its
+/// own label color the way [`ButtonStyle`](crate::ButtonStyle) carries one per
+/// state; the markers keep their colors on the fills, the way a list's markers
+/// do on its cursor row. Disabled mutes everything and wins over both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckboxStyle {
     /// Label color at rest.
@@ -58,6 +60,8 @@ pub struct CheckboxStyle {
     pub focused_foreground: Color,
     /// Background while focused.
     pub focused_background: Color,
+    /// Label color while hovered.
+    pub hovered_foreground: Color,
     /// Background while hovered.
     pub hovered_background: Color,
     /// Label and marker color while disabled.
@@ -70,31 +74,36 @@ pub struct CheckboxStyle {
 
 impl CheckboxStyle {
     /// The no-theme starting point: plain ANSI colors that render on any
-    /// terminal, with the same raised fills the ghost button falls back to.
+    /// terminal. The fills and the label colors under them are the ghost
+    /// button's; the marker colors are the list's, chosen to read on the fills
+    /// as well as at rest.
     #[must_use]
     pub const fn fallback() -> Self {
         Self {
             foreground: Color::Gray,
-            focused_foreground: Color::Cyan,
+            focused_foreground: Color::Black,
             focused_background: Color::Cyan,
+            hovered_foreground: Color::Black,
             hovered_background: Color::LightCyan,
             disabled_foreground: Color::DarkGray,
-            checked_marker_color: Color::Cyan,
-            unchecked_marker_color: Color::Gray,
+            checked_marker_color: Color::LightGreen,
+            unchecked_marker_color: Color::DarkGray,
         }
     }
 
-    /// Colors derived from a theme, solving the ghost button's fills: both
-    /// climb away from the screen color, so they read as raised rather than
-    /// pressed.
+    /// Colors derived from a theme: the ghost button's raised fills with the
+    /// label keeping the theme's foreground on them, and the theme's primary
+    /// marking the checked box.
     #[must_use]
     pub fn from_theme(theme: &Theme) -> Self {
-        let raised = away_from(theme.background);
+        let (focused_background, hovered_background) =
+            ghost_fills(theme.secondary, theme.background);
         Self {
             foreground: theme.foreground,
-            focused_foreground: theme.primary,
-            focused_background: dim(theme.secondary, raised, FOCUS_SHIFT),
-            hovered_background: dim(theme.secondary, raised, HOVER_SHIFT),
+            focused_foreground: theme.foreground,
+            focused_background,
+            hovered_foreground: theme.foreground,
+            hovered_background,
             disabled_foreground: theme.muted_foreground,
             checked_marker_color: theme.primary,
             unchecked_marker_color: theme.muted_foreground,
@@ -104,28 +113,38 @@ impl CheckboxStyle {
     /// One paint pass's colors (see [`Self::from_theme`]). Disabled wins over
     /// hover, which wins over focus, which wins over rest — hover beating
     /// focus is what keeps pointing at the box you are on visible.
-    fn resolve(self, checked: bool, shown: Presentation) -> ResolvedCheckboxStyle {
-        let foreground = if shown.disabled {
+    #[allow(
+        clippy::fn_params_excessive_bools,
+        reason = "checked is the content and the other three are the independent interaction states every control carries; none combine into an enum"
+    )]
+    fn resolve(
+        self,
+        checked: bool,
+        focused: bool,
+        hovered: bool,
+        disabled: bool,
+    ) -> ResolvedCheckboxStyle {
+        let foreground = if disabled {
             self.disabled_foreground
-        } else if shown.hovered {
-            self.foreground
-        } else if shown.focused {
+        } else if hovered {
+            self.hovered_foreground
+        } else if focused {
             self.focused_foreground
         } else {
             self.foreground
         };
-        let marker = if shown.disabled {
+        let marker = if disabled {
             self.disabled_foreground
         } else if checked {
             self.checked_marker_color
         } else {
             self.unchecked_marker_color
         };
-        let background = if shown.disabled {
+        let background = if disabled {
             None
-        } else if shown.hovered {
+        } else if hovered {
             Some(self.hovered_background)
-        } else if shown.focused {
+        } else if focused {
             Some(self.focused_background)
         } else {
             None
@@ -136,15 +155,6 @@ impl CheckboxStyle {
             background,
         }
     }
-}
-
-/// How a checkbox is presented this paint pass, beneath what it shows:
-/// the three interaction states every control carries.
-#[derive(Debug, Clone, Copy)]
-struct Presentation {
-    focused: bool,
-    hovered: bool,
-    disabled: bool,
 }
 
 /// One paint pass's resolved colors (see [`CheckboxStyle::resolve`]). A `None`
@@ -160,13 +170,19 @@ struct ResolvedCheckboxStyle {
 ///
 /// At rest nothing paints a background; hover and focus fill the row they are
 /// given.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "checked is the content and the other three are the independent interaction states every control carries; none combine into an enum"
+)]
 #[derive(Debug)]
 pub struct CheckboxWidget<'a> {
     label: &'a str,
     checked: bool,
     checked_marker: &'a str,
     unchecked_marker: &'a str,
-    shown: Presentation,
+    focused: bool,
+    hovered: bool,
+    disabled: bool,
     theme: Option<Theme>,
     style: Option<CheckboxStyle>,
 }
@@ -180,11 +196,9 @@ impl<'a> CheckboxWidget<'a> {
             checked,
             checked_marker: CHECKED_MARKER,
             unchecked_marker: UNCHECKED_MARKER,
-            shown: Presentation {
-                focused: false,
-                hovered: false,
-                disabled: false,
-            },
+            focused: false,
+            hovered: false,
+            disabled: false,
             theme: None,
             style: None,
         }
@@ -206,8 +220,9 @@ impl<'a> CheckboxWidget<'a> {
 
     /// The marker shown while checked.
     ///
-    /// Any string works, including multi-character pairs like `[x]`; the
-    /// layout measures what you pass.
+    /// Any string works, including multi-character pairs like `[x]`. The
+    /// marker column takes the wider of the two markers, so the label holds
+    /// still as the state flips.
     #[must_use]
     pub const fn checked_marker(mut self, marker: &'a str) -> Self {
         self.checked_marker = marker;
@@ -224,32 +239,36 @@ impl<'a> CheckboxWidget<'a> {
     /// Paint the focused label color and fill.
     #[must_use]
     pub const fn focused(mut self, focused: bool) -> Self {
-        self.shown.focused = focused;
+        self.focused = focused;
         self
     }
 
-    /// Paint the hovered fill.
+    /// Paint the hovered label color and fill.
     #[must_use]
     pub const fn hovered(mut self, hovered: bool) -> Self {
-        self.shown.hovered = hovered;
+        self.hovered = hovered;
         self
     }
 
     /// Paint muted.
     #[must_use]
     pub const fn disabled(mut self, disabled: bool) -> Self {
-        self.shown.disabled = disabled;
+        self.disabled = disabled;
         self
     }
 
-    /// Columns this checkbox paints: marker, one space, label.
+    /// Columns this checkbox paints: the marker column, one space, the label.
+    ///
+    /// The same in both states — the marker column is the wider of the two
+    /// markers — so a layout sized from this never truncates and the label
+    /// holds still as the state flips.
     #[must_use]
     pub fn width(&self) -> u16 {
-        let marker = text_width::display_width_u16(self.marker());
+        let column = self.marker_column();
         if self.label.is_empty() {
-            return marker;
+            return column;
         }
-        marker
+        column
             .saturating_add(1)
             .saturating_add(text_width::display_width_u16(self.label))
     }
@@ -260,6 +279,13 @@ impl<'a> CheckboxWidget<'a> {
         } else {
             self.unchecked_marker
         }
+    }
+
+    /// The columns the marker occupies, whichever state shows: the wider of
+    /// the pair, so the label starts in the same column checked or not.
+    fn marker_column(&self) -> u16 {
+        text_width::display_width_u16(self.checked_marker)
+            .max(text_width::display_width_u16(self.unchecked_marker))
     }
 
     fn resolved_style(&self) -> CheckboxStyle {
@@ -273,10 +299,15 @@ impl<'a> CheckboxWidget<'a> {
 
 impl Widget for CheckboxWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.width == 0 || area.height == 0 {
+        // A checkbox is one row tall: the fill covers exactly the row the
+        // component answers events on, and an area too short holds nothing.
+        let area = crate::geometry::fixed_height(area, 1);
+        if area.width == 0 {
             return;
         }
-        let style = self.resolved_style().resolve(self.checked, self.shown);
+        let style =
+            self.resolved_style()
+                .resolve(self.checked, self.focused, self.hovered, self.disabled);
         let mut marker_style = Style::default().fg(style.marker);
         let mut label_style = Style::default().fg(style.foreground);
         if let Some(background) = style.background {
@@ -285,26 +316,22 @@ impl Widget for CheckboxWidget<'_> {
             buf.set_style(area, Style::default().bg(background));
         }
 
-        // Marker column, then one space, then as much label as fits.
-        let marker = self.marker();
-        let marker_width = text_width::display_width_u16(marker);
-        let mut cursor = area.x;
-        if area.width >= marker_width {
+        // The marker column — as wide as the wider marker, so the label holds
+        // still as the state flips — one space, then as much label as fits.
+        let column = self.marker_column().min(area.width);
+        if column > 0 {
+            let marker = text_width::truncate_to_width(self.marker(), usize::from(column));
             Line::from(marker)
                 .style(marker_style)
-                .render(Rect::new(cursor, area.y, marker_width.max(1), 1), buf);
-            cursor = cursor.saturating_add(marker_width);
+                .render(Rect::new(area.x, area.y, column, 1), buf);
         }
-        let painted = cursor - area.x;
-        if !self.label.is_empty() && area.width > painted {
-            Span::raw(" ")
-                .style(label_style)
-                .render(Rect::new(cursor, area.y, 1, 1), buf);
-            let available = area.width - painted - 1;
+        let after = column.saturating_add(1);
+        if !self.label.is_empty() && area.width > after {
+            let available = area.width - after;
             let label = text_width::truncate_to_width(self.label, usize::from(available));
-            Span::raw(label.to_owned())
+            Span::raw(label)
                 .style(label_style)
-                .render(Rect::new(cursor + 1, area.y, available, 1), buf);
+                .render(Rect::new(area.x + after, area.y, available, 1), buf);
         }
     }
 }
@@ -369,7 +396,8 @@ impl<S, M> Checkbox<S, M> {
     /// The marker shown while checked.
     ///
     /// Any string works, including multi-character pairs like `[x]`; the
-    /// layout measures what you pass. Pair it with
+    /// marker column takes the wider of the pair, so the label holds still as
+    /// the state flips. Pair it with
     /// [`unchecked_marker`](Self::unchecked_marker) so both states read as one
     /// control — `[ON]`/`[off]` is a switch, `[x]`/`[ ]` an ASCII checkbox.
     #[must_use]
@@ -430,6 +458,18 @@ impl<S, M> Checkbox<S, M> {
         };
         EventResult::Emit(on_change(!self.resolved_checked))
     }
+
+    /// The keys a checkbox answers: its commit keys, and nothing else.
+    /// Modified keys belong to the app, so Shift+Enter passes through.
+    fn handle_key(&self, key: KeyEvent) -> EventResult<M> {
+        if key.modifiers.any() {
+            return EventResult::Ignored;
+        }
+        match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') => self.toggle(),
+            _ => EventResult::Ignored,
+        }
+    }
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
@@ -481,20 +521,6 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
         // A checkbox is one row tall; a taller declaration must not leave a
         // strip of itself clickable.
         crate::geometry::fixed_height(area, 1)
-    }
-}
-
-impl<S, M> Checkbox<S, M> {
-    /// The keys a checkbox answers: its commit keys, and nothing else.
-    /// Modified keys belong to the app, so Shift+Enter passes through.
-    fn handle_key(&self, key: KeyEvent) -> EventResult<M> {
-        if key.modifiers.any() {
-            return EventResult::Ignored;
-        }
-        match key.code {
-            KeyCode::Enter | KeyCode::Char(' ') => self.toggle(),
-            _ => EventResult::Ignored,
-        }
     }
 }
 
@@ -639,6 +665,77 @@ mod tests {
                 "column {column} painted a background"
             );
         }
+    }
+
+    /// The fill covers exactly the row the component answers events on: a
+    /// taller declaration must not show a raised strip that nothing answers.
+    #[test]
+    fn the_fill_covers_only_the_row_the_checkbox_answers_on() {
+        let area = Rect::new(0, 0, 20, 3);
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(area);
+        CheckboxWidget::new("Vim bindings", true)
+            .hovered(true)
+            .themed(&theme)
+            .render(area, &mut buffer);
+
+        assert_ne!(buffer.cell((3, 0)).expect("cell").bg, Color::Reset);
+        for row in 1..3u16 {
+            assert_eq!(
+                buffer.cell((3, row)).expect("cell").bg,
+                Color::Reset,
+                "row {row} filled beyond the checkbox's one row"
+            );
+        }
+    }
+
+    /// The no-theme fallback keeps every state legible: under the focus and
+    /// hover fills, neither the label nor the marker may vanish into the
+    /// background.
+    #[test]
+    fn the_fallback_states_stay_legible() {
+        let area = Rect::new(0, 0, 20, 1);
+        for (name, widget) in [
+            (
+                "focused",
+                CheckboxWidget::new("Vim bindings", true).focused(true),
+            ),
+            (
+                "hovered",
+                CheckboxWidget::new("Vim bindings", true).hovered(true),
+            ),
+        ] {
+            let mut buffer = Buffer::empty(area);
+            widget.render(area, &mut buffer);
+            let marker = buffer.cell((0, 0)).expect("cell");
+            let label = buffer.cell((3, 0)).expect("cell");
+            assert_ne!(marker.fg, marker.bg, "{name}: the marker vanished");
+            assert_ne!(label.fg, label.bg, "{name}: the label vanished");
+        }
+    }
+
+    /// The marker column is the wider of the pair, so an uneven pair like
+    /// `[ON]`/`[off]` neither moves the label nor changes the row's width as
+    /// the state flips.
+    #[test]
+    fn an_uneven_marker_pair_holds_the_label_still() {
+        let theme = Theme::default_dark();
+        let area = Rect::new(0, 0, 24, 1);
+        let mut rows = [String::new(), String::new()];
+        for (row, checked) in rows.iter_mut().zip([true, false]) {
+            let widget = CheckboxWidget::new("Terminal bell", checked)
+                .checked_marker("[ON]")
+                .unchecked_marker("[off]")
+                .themed(&theme);
+            assert_eq!(widget.width(), 19, "checked={checked}");
+            let mut buffer = Buffer::empty(area);
+            widget.render(area, &mut buffer);
+            *row = (0..24u16)
+                .map(|column| buffer.cell((column, 0)).expect("cell").symbol())
+                .collect();
+        }
+        assert!(rows[0].starts_with("[ON]  Terminal bell"), "{:?}", rows[0]);
+        assert!(rows[1].starts_with("[off] Terminal bell"), "{:?}", rows[1]);
     }
 
     #[test]
