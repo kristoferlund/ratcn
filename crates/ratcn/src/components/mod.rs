@@ -17,6 +17,7 @@ pub(crate) mod checkbox;
 pub(crate) mod cycle;
 pub(crate) mod dialog;
 pub(crate) mod list;
+pub(crate) mod progress;
 pub(crate) mod scroll_area;
 pub(crate) mod select;
 pub(crate) mod tabs;

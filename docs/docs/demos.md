@@ -55,6 +55,7 @@ the previews embedded on the [component pages](./components/button).
 | [Tooltip](./components/tooltip) | `tooltip` — hover or Tab to a button and its bubble floats above |
 | [Checkbox](./components/checkbox) | `checkbox` — one component as checkbox, ASCII checklist, and switch |
 | [Cycle](./components/cycle) | `cycle` — settings rows with the value cycling in place |
+| [Progress](./components/progress) | `progress` — a bare bar, a downloading label-and-percentage pair, and a finished one |
 | [BarChart](./components/barchart) | `barchart`, `barchart-horizontal` — a paint-only widget, no runtime needed |
 
 ## Running them in the browser

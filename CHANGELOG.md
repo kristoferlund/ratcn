@@ -10,6 +10,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ProgressWidget`, with `ProgressStyle`: a slim progress bar — a themed,
+  opinionated take on ratatui's `Gauge`, with the fill on an inset track, an
+  optional label and percentage above it, and a clamped ratio that cannot be
+  smeared off its track by a misbehaving division. Paint-only.
 - `Checkbox`, with `CheckboxStyle` and `CheckboxWidget`: a labeled boolean
   control — marker left, label right, the whole row one hit target, measured
   by `width()` and `MeasuredComponent`. The markers are strings the app

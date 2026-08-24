@@ -159,6 +159,7 @@ pub use components::{
     cycle::{Cycle, CycleStyle, CycleWidget},
     dialog::{Dialog, DialogStyle},
     list::{List, ListStyle, ListWidget},
+    progress::{ProgressStyle, ProgressWidget},
     scroll_area::{ScrollArea, ScrollAreaStyle},
     select::{Select, SelectStyle, SelectWidget},
     tabs::{Tab, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget},
