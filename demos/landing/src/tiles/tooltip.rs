@@ -21,6 +21,7 @@ const UPDATE_CADENCES: [&str; 3] = ["Milestones", "Each action", "On request"];
 const TIP: &str = "tip";
 const TRIGGER: &str = "hover";
 
+#[derive(Default)]
 pub struct State {
     change_mode: usize,
     retry_policy: usize,
@@ -50,16 +51,6 @@ impl State {
             RETRY_POLICIES[self.retry_policy],
             UPDATE_CADENCES[self.update_cadence],
         )
-    }
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            change_mode: 0,
-            retry_policy: 0,
-            update_cadence: 0,
-        }
     }
 }
 
