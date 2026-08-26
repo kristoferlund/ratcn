@@ -6,7 +6,7 @@ members = ["crates/ratcn", "crates/copy-fixture", "demos/*"]
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"
-version = "0.0.1"
+version = "0.0.2"
 
 [profile.release]
 opt-level = 3
