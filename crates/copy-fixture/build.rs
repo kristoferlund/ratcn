@@ -26,6 +26,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "../cargo-ratcn/src/component_copy.rs"]
+mod component_copy;
+
 /// Every stub in `examples`, byte for byte. `CARGO_BIN_NAME` is what makes one
 /// text serve all of them: cargo sets it to the target being compiled, which is
 /// the component whose copy that target includes.
@@ -79,7 +82,8 @@ fn main() {
         let source_path = components_dir.join(format!("{component}.rs"));
         let source = fs::read_to_string(&source_path)
             .unwrap_or_else(|err| panic!("read {}: {err}", source_path.display()));
-        let copy = copy_of(&source, &source_path);
+        let copy = component_copy::copy_of(&source, &source_path)
+            .unwrap_or_else(|message| panic!("{message}"));
         let copy_path = out_dir.join(format!("{component}.rs"));
         fs::write(&copy_path, copy)
             .unwrap_or_else(|err| panic!("write {}: {err}", copy_path.display()));
@@ -114,67 +118,4 @@ fn module_names(dir: &Path) -> BTreeSet<String> {
                 .into_owned()
         })
         .collect()
-}
-
-/// One component module as a consumer would paste it into their own crate.
-///
-/// The test module goes: a copied module's tests reach the engine internals that
-/// `ratcn`'s own suite covers, and this crate proves the copy compiles rather
-/// than re-running behavior. Inner doc comments become ordinary comments because
-/// the copy is included into the stub that compiles it, and `include!` cannot
-/// carry an inner attribute.
-///
-/// Everything from the test module down is dropped, which is worth knowing when
-/// checking that the gate still bites: a deliberate private-API or sibling
-/// reference has to go *above* `#[cfg(test)] mod tests`, or it is truncated away
-/// and the build stays green for the wrong reason.
-fn copy_of(source: &str, source_path: &Path) -> String {
-    let mut lines: Vec<&str> = source.lines().collect();
-    if let Some(tests) = lines.iter().position(|line| line.starts_with("mod tests")) {
-        assert!(
-            tests > 0 && lines[tests - 1] == "#[cfg(test)]",
-            "{}: the tests module is not preceded by #[cfg(test)]",
-            source_path.display()
-        );
-        lines.truncate(tests - 1);
-    }
-
-    let mut copy = String::with_capacity(source.len());
-    for line in lines {
-        assert!(
-            !line.starts_with("#!["),
-            "{}: an inner attribute cannot survive the copy — this crate includes each \
-             generated module into the target that compiles it",
-            source_path.display()
-        );
-        let (prefix, body) = match line.strip_prefix("//!") {
-            Some(rest) => ("//", rest),
-            None => ("", line),
-        };
-        copy.push_str(prefix);
-        copy.push_str(&rewrite_crate_paths(body));
-        copy.push('\n');
-    }
-    copy
-}
-
-/// Point `crate::` paths at the published crate, leaving identifiers that merely
-/// end in `crate` (`some_crate::`) alone.
-fn rewrite_crate_paths(line: &str) -> String {
-    const NEEDLE: &str = "crate::";
-
-    let mut rewritten = String::with_capacity(line.len());
-    let mut cursor = 0;
-    while let Some(offset) = line[cursor..].find(NEEDLE) {
-        let start = cursor + offset;
-        rewritten.push_str(&line[cursor..start]);
-        let inside_identifier = line[..start]
-            .chars()
-            .next_back()
-            .is_some_and(|character| character.is_alphanumeric() || character == '_');
-        rewritten.push_str(if inside_identifier { NEEDLE } else { "ratcn::" });
-        cursor = start + NEEDLE.len();
-    }
-    rewritten.push_str(&line[cursor..]);
-    rewritten
 }

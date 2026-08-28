@@ -8,6 +8,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `cargo-ratcn`: a Cargo subcommand with terminal-only `cargo ratcn init`, which
+  can keep Cargo's default `main.rs`, replace it with a minimal app loop, or
+  install the Getting started demo; and `cargo ratcn add` for copying a built-in
+  component from the project's resolved `ratcn` package.
+
 ## [0.0.2] - 2026-08-26
 
 ### Summary

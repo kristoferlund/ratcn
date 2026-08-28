@@ -15,14 +15,15 @@
 //! This is a preview release.
 //!
 //! - **The API will break.** Pin an exact version.
-//! - **There is no install command.** Each component module is self-contained
-//!   and meant to be copied into your own project, but copying is a manual file
-//!   copy today. A CLI is intended and does not exist.
-//! - **The component set is small and growing.** Nine ship today: [`Button`],
+//! - **The CLI is deliberately small.** `cargo ratcn init` configures terminal
+//!   Cargo packages and can install a starter only over Cargo's untouched default
+//!   `main.rs`; `cargo ratcn add` copies a built-in component when you want to own
+//!   its source.
+//! - **The component set is small and growing.** Twelve ship today: [`Button`],
 //!   [`List`], [`Select`], [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget),
-//!   [`BarChartWidget`], [`Tooltip`], and [`ScrollArea`]. Text input and a
-//!   multi-line text area are planned next; there is no text entry component at
-//!   all right now.
+//!   [`BarChartWidget`], [`Tooltip`], [`ScrollArea`], [`Checkbox`], [`Cycle`],
+//!   and [`ProgressWidget`]. Text input and a multi-line text area are planned
+//!   next; there is no text entry component at all right now.
 //!
 //! # Up to two halves, usable alone
 //!

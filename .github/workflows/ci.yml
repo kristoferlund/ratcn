@@ -71,7 +71,8 @@ jobs:
       - name: Clippy (workspace)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Clippy (workspace, wasm)
-        run: cargo clippy --workspace --all-targets --target wasm32-unknown-unknown --locked -- -D warnings
+        # cargo-ratcn is a host-only Cargo subcommand; lint every wasm-capable workspace package.
+        run: cargo clippy --workspace --exclude cargo-ratcn --all-targets --target wasm32-unknown-unknown --locked -- -D warnings
 
       # `-p shared` too: the demos' host is documentation a reader copies, and a
       # broken link in it fails nothing else.
@@ -84,6 +85,8 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Package
         run: cargo package -p ratcn --locked
+      - name: Package CLI
+        run: cargo package -p cargo-ratcn --locked
       # `cargo package` unpacks the crate into target/package/ to verify it.
       # That directory has its own Cargo.toml, so the cache action's post-step
       # walks it as if it were a workspace member and logs ENOENT for test
