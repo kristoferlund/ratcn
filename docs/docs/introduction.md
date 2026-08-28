@@ -14,9 +14,10 @@ are worth knowing before you build on it:
 
 - **The API will break.** The public surface is still moving. Pin an exact
   version and expect to edit when you upgrade.
-- **There is no install command.** The shadcn resemblance is in how the code is
-  structured, not yet in tooling. Copying a component into your project is a
-  manual file copy today. A CLI is intended, but it does not exist.
+- **The CLI is deliberately small.** `cargo ratcn init` configures terminal
+  Cargo packages and can install a starter only over Cargo's untouched default
+  `main.rs`; `cargo ratcn add` copies a built-in component when you want to own
+  its source.
 - **The component set is small and growing.** Twelve components ship today:
   [Button](./components/button), [List](./components/list),
   [ScrollArea](./components/scroll-area), [Select](./components/select),
@@ -89,8 +90,8 @@ do:
 
 ## A first app
 
-See [Getting started](./getting-started) for installation, the feature flag to
-pick for your backend, and the smallest complete app using the runtime.
+See [Getting started](./getting-started) to initialize a terminal project and
+install the smallest complete app using the runtime.
 
 Styling comes from the theme passed to `Ratcn::render`, and that is the only
 styling most apps touch. See [Themes](./concepts/themes) for presets and

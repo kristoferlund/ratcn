@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ratcn", "crates/copy-fixture", "demos/*"]
+members = ["crates/ratcn", "crates/copy-fixture", "crates/cargo-ratcn", "demos/*"]
 
 [workspace.package]
 edition = "2024"
@@ -15,6 +15,10 @@ codegen-units = 1
 strip = "symbols"
 
 [workspace.dependencies]
+anyhow = "1.0.104"
+cargo_metadata = "0.23.1"
+clap = { version = "4.6.6", features = ["derive"] }
+cliclack = "0.5.6"
 ratatui = { version = "0.30.2", default-features = false, features = ["layout-cache", "std"] }
 ratatui-termina = "0.1.0"
 ratzilla = "0.3.1"
@@ -25,6 +29,8 @@ futures-util = "0.3.32"
 gloo-timers = { version = "0.3.0", features = ["futures"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+syn = { version = "3.0.4", features = ["full"] }
+toml = "1.1.4"
 ureq = "3.3.0"
 wasm-bindgen = "0.2.122"
 wasm-bindgen-futures = "0.4.72"

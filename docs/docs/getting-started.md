@@ -1,5 +1,5 @@
 ---
-description: "Install ratcn, pick the feature for your backend, and get a focusable button on screen — the smallest complete Ratatui app using the runtime."
+description: "Initialize a terminal app with cargo ratcn and get a focusable button on screen — the smallest complete Ratatui app using the runtime."
 ---
 
 # Getting started
@@ -18,19 +18,46 @@ The wizard below is itself a ratcn app — buttons, a select, and a list. Press 
   </div>
 </div>
 
-## Install
+## Initialize a terminal app
 
 ```sh
-cargo add ratcn --features crossterm
+cargo install cargo-ratcn
+cargo new my-app
+cd my-app
+cargo ratcn init
 ```
 
-`ratcn` builds on [Ratatui](https://ratatui.rs), so you need that too:
+`init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
+`ratcn.toml`, and creates `src/components/mod.rs`. It configures terminal apps
+only.
 
-```sh
-cargo add ratatui --no-default-features --features layout-cache,std,crossterm
-```
+When `src/main.rs` is Cargo's untouched default and the command runs in a
+terminal, choose one of three options: keep it unchanged, install a minimal
+terminal loop, or install the first-app demo below. Custom and non-interactive
+projects always keep their application source unchanged.
 
-### Pick a feature for your backend
+## A first app
+
+Choose **First app demo** during `init` to install this complete `src/main.rs`.
+The documentation renders the same embedded template that the CLI writes, so
+the two stay in sync. It follows the terminal's colors, centers a primary
+**Hello** button, and shows a **World** toast when pressed. `Ctrl+C` exits.
+
+<<< ../../crates/cargo-ratcn/templates/first-app.rs
+
+Two calls do the work. `render` declares what is on screen this frame and
+paints it; `handle_event` routes one input event and hands back a message if
+something happened. The generated loop opens and restores the terminal through
+`Session`; its `update` function remains the only state writer.
+
+Keeping `update` in its own function means every state change is a plain call
+you can test without a terminal, and messages from elsewhere (a timer, a
+background task) get the same single path into state.
+
+## Other backends
+
+`init` only knows terminal apps on termina. For anything else, add `ratcn`
+yourself with the feature that matches your backend:
 
 | Feature | For |
 |---|---|
@@ -39,83 +66,12 @@ cargo add ratatui --no-default-features --features layout-cache,std,crossterm
 | `ratzilla` | Running in the browser through [Ratzilla](https://github.com/orhun/ratzilla) |
 | *(none)* | Paint-only widgets, or your own backend |
 
-Enable the one that matches your backend.
-
-## A first app
-
-The smallest complete shape: state, messages, a runtime, one function that
-draws, and one that handles events.
-
-```rust
-use ratcn::{Button, Theme};
-use ratcn::runtime::{EventResult, FocusState, Ratcn, TabWrap};
-
-struct AppState {
-    focus: FocusState,
-    theme: Theme,
-    saved: bool,
-}
-
-#[derive(Clone)]
-enum Msg {
-    FocusChanged(FocusState),
-    Save,
-}
-
-impl AppState {
-    /// The only place app state changes. A plain function of state and
-    /// message: testable without a terminal, an event loop, or the runtime.
-    fn update(&mut self, msg: Msg) {
-        match msg {
-            Msg::FocusChanged(focus) => self.focus = focus,
-            Msg::Save => self.saved = true,
-        }
-    }
-}
-
-struct App {
-    state: AppState,
-    ratcn: Ratcn<AppState, Msg>,
-}
-
-impl App {
-    fn new(state: AppState) -> Self {
-        let ratcn = Ratcn::new()
-            .focus(|state: &AppState| &state.focus, Msg::FocusChanged)
-            .tab_wrap(TabWrap::Wrap);
-        Self { state, ratcn }
-    }
-
-    /// Route one event; apply whatever it produced.
-    fn handle_event(&mut self, event: impl TryInto<ratcn::runtime::Event>) {
-        if let EventResult::Emit(msg) = self.ratcn.handle_event(event, &self.state) {
-            self.state.update(msg);
-        }
-    }
-
-    fn draw(&mut self, frame: &mut ratatui::Frame) {
-        let saved = self.state.saved;
-        let area = frame.area();
-        self.ratcn.render(frame, &self.state, &self.state.theme, |ctx| {
-            let save = Button::new("Save")
-                .disabled(saved)
-                .on_press(|| Msg::Save);
-            ctx.component("save", save, area);
-        });
-    }
-}
+```sh
+cargo add ratcn --features crossterm
+cargo add ratatui --no-default-features --features layout-cache,std,crossterm
 ```
 
-Two calls do the work. `render` declares what is on screen this frame and
-paints it; `handle_event` routes one input event and hands back a message if
-something happened. Everything else — the loop, the terminal setup, `update` —
-stays yours.
-
-Keeping `update` in its own function means every state change is a plain call
-you can test without a terminal, and messages from elsewhere (a timer, a
-background task) get the same single path into state.
-
-Wiring this into a real event loop, native or browser, is covered in
+Wiring the runtime into a custom loop, native or browser, is covered in
 [Host integration](./concepts/host-integration).
 
 ## Paint-only widgets

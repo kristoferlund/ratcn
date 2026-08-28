@@ -12,9 +12,10 @@ it:
 
 - **The API will break.** The public surface is still moving. Pin an exact
   version and expect to edit when you upgrade.
-- **There is no install command.** The shadcn resemblance is in how the code is
-  structured, not yet in tooling. Copying a component into your project is a
-  manual file copy today. A CLI is intended, but it does not exist.
+- **The CLI is deliberately small.** `cargo ratcn init` configures terminal
+  Cargo packages and can install a starter only over Cargo's untouched default
+  `main.rs`; `cargo ratcn add` copies a built-in component when you want to own
+  its source.
 - **The component set is small and growing.** Twelve components ship today:
   `Button`, `List`, `Select`, `Tabs`, `Dialog`, `ToasterWidget`,
   `BarChartWidget`, `Tooltip`, `ScrollArea`, `Checkbox`, `Cycle`, and
@@ -43,7 +44,22 @@ state writer.
 
 ## Getting started
 
-Requires Rust 1.88 (1.90 for the browser build). For a native crossterm app:
+Requires Rust 1.88 (1.90 for the browser build). Install the Cargo subcommand,
+then initialize an existing package:
+
+```sh
+cargo install cargo-ratcn
+cargo new my-app
+cd my-app
+cargo ratcn init
+```
+
+`init` adds terminal dependencies, writes `ratcn.toml`, and creates
+`src/components/mod.rs`. On Cargo's default `src/main.rs`, it offers to leave
+the file alone, install a minimal app loop, or install the Getting started demo.
+Custom and non-interactive projects retain their application source.
+
+For a native crossterm app that already owns its event loop:
 
 ```sh
 cargo add ratcn --features crossterm
@@ -68,8 +84,16 @@ the app to paint in the terminal's own colors.
 
 Each component module is written as one self-contained unit, so you can copy
 the module into your project and modify it there when the built-in styling and
-behavior hooks are not enough. As noted above, this is a manual file copy
-today; there is no registry or install command.
+behavior hooks are not enough:
+
+```sh
+cargo ratcn add dialog
+```
+
+`cargo ratcn add --list` shows the built-ins available from the exact `ratcn`
+package your project resolved. The command adds the component file and module
+declarations; switch the app import to `crate::components::dialog::Dialog` to
+use the copy.
 
 A copied module still depends on:
 
