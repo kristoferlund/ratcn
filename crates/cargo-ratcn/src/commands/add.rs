@@ -18,23 +18,6 @@ use crate::{
 
 const MODULE_TEMPLATE: &str = include_str!("../../templates/components-mod.rs");
 
-/// The type a user imports first from each built-in component. Pinned to the
-/// component inventory by a test, so a new component cannot ship without a row.
-const PRIMARY_TYPES: &[(&str, &str)] = &[
-    ("barchart", "BarChartWidget"),
-    ("button", "Button"),
-    ("checkbox", "Checkbox"),
-    ("cycle", "Cycle"),
-    ("dialog", "Dialog"),
-    ("list", "List"),
-    ("progress", "ProgressWidget"),
-    ("scroll_area", "ScrollArea"),
-    ("select", "Select"),
-    ("tabs", "Tabs"),
-    ("toast", "ToasterWidget"),
-    ("tooltip", "Tooltip"),
-];
-
 pub(crate) fn execute(args: AddArgs, cwd: &Path) -> Result<()> {
     let project = find_initialized_project(cwd)?;
     validate_components_destination(&project.root)?;
@@ -237,43 +220,18 @@ fn relative_to_project(root: &Path, path: &Path) -> String {
 }
 
 fn import_example(name: &str) -> String {
-    match PRIMARY_TYPES.iter().find(|(module, _)| *module == name) {
-        Some((_, type_name)) => format!("use crate::components::{name}::{type_name};"),
-        None => format!("use crate::components::{name};"),
-    }
+    format!("use crate::components::{name};")
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::fs;
 
     use tempfile::tempdir;
 
     use super::{
-        PRIMARY_TYPES, import_example, module_names, register_modules, source_names,
-        validate_requested_names,
+        import_example, module_names, register_modules, source_names, validate_requested_names,
     };
-
-    #[test]
-    fn primary_types_cover_the_component_inventory_and_name_real_types() {
-        let components_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ratcn/src/components");
-        let inventory =
-            source_names(&components_dir).expect("the checkout's components should list");
-        let listed: Vec<&str> = PRIMARY_TYPES.iter().map(|(name, _)| *name).collect();
-        assert_eq!(
-            inventory, listed,
-            "PRIMARY_TYPES must list exactly the built-in components, sorted"
-        );
-
-        for (name, type_name) in PRIMARY_TYPES {
-            let source = fs::read_to_string(components_dir.join(format!("{name}.rs")))
-                .expect("component source should read");
-            assert!(
-                source.contains(&format!("pub struct {type_name}")),
-                "{name}.rs must define pub struct {type_name}"
-            );
-        }
-    }
 
     #[test]
     fn lists_sorted_single_file_component_names() {
@@ -353,14 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn prints_a_primary_component_type_when_one_is_known() {
-        assert_eq!(
-            import_example("dialog"),
-            "use crate::components::dialog::Dialog;"
-        );
-        assert_eq!(
-            import_example("future_component"),
-            "use crate::components::future_component;"
-        );
+    fn prints_a_component_module_import() {
+        assert_eq!(import_example("dialog"), "use crate::components::dialog;");
     }
 }

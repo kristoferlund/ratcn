@@ -243,7 +243,7 @@ fn adding_dialog_from_a_nested_directory_preserves_the_entrypoint_and_compiles()
     let output = run_cli(&nested, &["add", "dialog"]);
     assert_success(
         &output,
-        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nregistered in src/main.rs\n\nuse crate::components::dialog::Dialog;\nA copy warns as dead code until something imports it.\n",
+        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nregistered in src/main.rs\n\nuse crate::components::dialog;\nA copy warns as dead code until something imports it.\n",
     );
 
     let copied = fs::read_to_string(components.join("dialog.rs"))
@@ -402,7 +402,7 @@ fn force_replaces_an_existing_component_file() {
 
     assert_success(
         &output,
-        "added src/components/button.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nregistered in src/main.rs\n\nuse crate::components::button::Button;\nA copy warns as dead code until something imports it.\n",
+        "added src/components/button.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nregistered in src/main.rs\n\nuse crate::components::button;\nA copy warns as dead code until something imports it.\n",
     );
     let copied = fs::read_to_string(&button).expect("forced component should be readable");
     assert!(copied.starts_with("// Copied from ratcn 0.0.2: src/components/button.rs\n"));
@@ -501,18 +501,18 @@ fn adding_every_available_component_creates_a_compilable_consumer_crate() {
         .map(|component| format!("added src/components/{component}.rs (ratcn 0.0.2)\n"))
         .collect::<String>()
         + "registered in src/components/mod.rs\nregistered in src/main.rs\n\n"
-        + "use crate::components::barchart::BarChartWidget;\n\
-use crate::components::button::Button;\n\
-use crate::components::checkbox::Checkbox;\n\
-use crate::components::cycle::Cycle;\n\
-use crate::components::dialog::Dialog;\n\
-use crate::components::list::List;\n\
-use crate::components::progress::ProgressWidget;\n\
-use crate::components::scroll_area::ScrollArea;\n\
-use crate::components::select::Select;\n\
-use crate::components::tabs::Tabs;\n\
-use crate::components::toast::ToasterWidget;\n\
-use crate::components::tooltip::Tooltip;\n\
+        + "use crate::components::barchart;\n\
+use crate::components::button;\n\
+use crate::components::checkbox;\n\
+use crate::components::cycle;\n\
+use crate::components::dialog;\n\
+use crate::components::list;\n\
+use crate::components::progress;\n\
+use crate::components::scroll_area;\n\
+use crate::components::select;\n\
+use crate::components::tabs;\n\
+use crate::components::toast;\n\
+use crate::components::tooltip;\n\
 A copy warns as dead code until something imports it.\n";
     assert_success(&output, &expected_stdout);
 
@@ -732,7 +732,7 @@ fn add_with_ambiguous_standard_crate_roots_prints_the_manual_registration() {
 
     assert_success(
         &output,
-        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nadd `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)\n\nuse crate::components::dialog::Dialog;\nA copy warns as dead code until something imports it.\n",
+        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nadd `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)\n\nuse crate::components::dialog;\nA copy warns as dead code until something imports it.\n",
     );
     assert_eq!(
         fs::read_to_string(project.join("src/main.rs")).expect("binary root should remain"),
@@ -766,7 +766,7 @@ fn add_with_a_custom_crate_root_prints_manual_registration_without_touching_it()
 
     assert_success(
         &output,
-        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nadd `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)\n\nuse crate::components::dialog::Dialog;\nA copy warns as dead code until something imports it.\n",
+        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nadd `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)\n\nuse crate::components::dialog;\nA copy warns as dead code until something imports it.\n",
     );
     assert_eq!(
         fs::read_to_string(project.join("src/custom.rs")).expect("custom root should remain"),
