@@ -57,7 +57,7 @@ cargo ratcn init
 `init` adds terminal dependencies, writes `ratcn.toml`, and creates
 `src/components/mod.rs`. On Cargo's default `src/main.rs`, it offers to leave
 the file alone, install a minimal app loop, or install the Getting started demo.
-Custom and non-interactive projects retain their application source.
+Projects with custom application source retain it.
 
 For a native crossterm app that already owns its event loop:
 

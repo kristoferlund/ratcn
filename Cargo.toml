@@ -19,6 +19,7 @@ anyhow = "1.0.104"
 cargo_metadata = "0.23.1"
 clap = { version = "4.6.6", features = ["derive"] }
 cliclack = "0.5.6"
+console = "0.16.4"
 ratatui = { version = "0.30.2", default-features = false, features = ["layout-cache", "std"] }
 ratatui-termina = "0.1.0"
 ratzilla = "0.3.1"

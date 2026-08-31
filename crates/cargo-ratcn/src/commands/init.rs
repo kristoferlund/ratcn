@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    io::{self, IsTerminal},
-    path::Path,
-    process::Command,
-};
+use std::{fs, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 
@@ -28,20 +23,21 @@ pub(crate) fn execute(cwd: &Path) -> Result<()> {
         read_config(&config_path)?;
     }
 
-    let starter = choose_starter(
-        root,
-        io::stdin().is_terminal() && io::stderr().is_terminal(),
-    )?;
-    let spinner = io::stderr().is_terminal().then(cliclack::spinner);
-    if let Some(spinner) = &spinner {
-        spinner.start("Setting up...");
-    }
+    super::intro("cargo ratcn init")?;
+
+    let starter = choose_starter(root)?;
+
+    let spinner = cliclack::spinner();
+    spinner.start("Setting up project");
     let result = initialize(starter, &manifest_path, root);
-    if let Some(spinner) = &spinner {
-        match &result {
-            Ok(()) => spinner.stop("Done."),
-            Err(_) => spinner
-                .error("Setup failed; fix the reported problem and run cargo ratcn init again."),
+    match &result {
+        Ok(()) => {
+            spinner.stop("Project setup complete");
+            cliclack::outro("You're all set!").context("could not finish setup output")?;
+        }
+        Err(_) => {
+            spinner.error("Project setup failed");
+            cliclack::outro_cancel("Setup failed").context("could not finish setup output")?;
         }
     }
     result
@@ -99,10 +95,10 @@ impl Starter {
     }
 }
 
-/// Offers a starter only interactively and only over Cargo's untouched default
-/// `main.rs`; anything the user has written is never replaced.
-fn choose_starter(root: &Path, interactive: bool) -> Result<Starter> {
-    if !interactive || !has_cargo_new_main(root) {
+/// Offers a starter only over Cargo's untouched default `main.rs`; anything the
+/// user has written is never replaced.
+fn choose_starter(root: &Path) -> Result<Starter> {
+    if !has_cargo_new_main(root) {
         return Ok(Starter::KeepMain);
     }
 
@@ -124,12 +120,6 @@ fn choose_starter(root: &Path, interactive: bool) -> Result<Starter> {
         )
         .interact()
         .context("could not select a starter application")?;
-    let confirmation = match starter {
-        Starter::KeepMain => "src/main.rs will stay unchanged.",
-        Starter::MinimalApp => "A minimal terminal app will be installed.",
-        Starter::FirstApp => "The Getting started demo will be installed.",
-    };
-    cliclack::outro(confirmation).context("could not finish the starter selection")?;
     Ok(starter)
 }
 
@@ -179,9 +169,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{
-        CARGO_NEW_MAIN, Starter, choose_starter, has_cargo_new_main, ratatui_add_arguments,
-    };
+    use super::{CARGO_NEW_MAIN, has_cargo_new_main, ratatui_add_arguments};
 
     #[test]
     fn recognizes_only_cargos_untouched_entrypoint() {
@@ -198,18 +186,6 @@ mod tests {
             !has_cargo_new_main(directory.path()),
             "a custom entrypoint must not receive the scaffold prompt"
         );
-    }
-
-    #[test]
-    fn noninteractive_selection_keeps_main() {
-        let directory = tempdir().expect("temporary project directory should exist");
-        fs::create_dir(directory.path().join("src")).expect("source directory should write");
-        fs::write(directory.path().join("src/main.rs"), CARGO_NEW_MAIN)
-            .expect("Cargo default main should write");
-
-        let starter = choose_starter(directory.path(), false).expect("no prompt is needed");
-
-        assert_eq!(starter, Starter::KeepMain);
     }
 
     #[test]
