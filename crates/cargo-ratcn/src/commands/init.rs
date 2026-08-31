@@ -110,13 +110,13 @@ fn choose_starter(root: &Path) -> Result<Starter> {
         )
         .item(
             Starter::MinimalApp,
-            "Minimal app loop",
-            "Draw a terminal app and exit with Ctrl+C",
+            "Create a minimal app",
+            "Print a message, exit with ctrl+c",
         )
         .item(
             Starter::FirstApp,
-            "First app demo",
-            "Install the Getting started button example",
+            "Create a demo app",
+            "A button and a Hello World toast",
         )
         .interact()
         .context("could not select a starter application")?;
