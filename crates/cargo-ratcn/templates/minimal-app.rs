@@ -14,14 +14,12 @@ fn main() -> io::Result<()> {
 
     loop {
         let theme = session.theme();
-        session
-            .terminal_mut()
-            .draw(|frame| draw(frame, &theme))?;
+        session.terminal_mut().draw(|frame| draw(frame, &theme))?;
 
-        if let Some(SessionEvent::Input(event)) = session.next(None)? {
-            if is_quit(&event) {
-                return Ok(());
-            }
+        if let Some(SessionEvent::Input(event)) = session.next(None)?
+            && is_quit(&event)
+        {
+            return Ok(());
         }
     }
 }

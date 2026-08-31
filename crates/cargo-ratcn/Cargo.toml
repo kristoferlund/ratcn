@@ -1,6 +1,6 @@
 [package]
 name = "cargo-ratcn"
-description = "Cargo subcommand for ratcn"
+description = "Initialize Ratatui projects with ratcn and copy customizable components into your application"
 edition.workspace = true
 license.workspace = true
 readme = "../../README.md"
