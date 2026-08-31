@@ -24,7 +24,7 @@ const COMPONENTS: &[&str] = &[
 ];
 
 const MAIN_SOURCE: &str = "fn main() {\n    println!(\"existing application code\");\n}\n";
-const CARGO_NEW_MAIN: &str = "fn main() {\n    println!(\"Hello, world!\");\n}\n";
+const INIT_OUTPUT: &str = "┌   cargo ratcn init \n│\n└  You're all set!\n";
 const MINIMAL_APP_TEMPLATE: &str = include_str!("../templates/minimal-app.rs");
 const FIRST_APP_TEMPLATE: &str = include_str!("../templates/first-app.rs");
 
@@ -128,21 +128,49 @@ fn run_cargo_subcommand(project: &Path, arguments: &[&str]) -> Output {
         .expect("Cargo should run the cargo-ratcn external subcommand")
 }
 
-fn assert_success(output: &Output, expected_stdout: &str) {
+fn assert_cliclack_success<I, S>(output: &Output, title: &str, outro: &str, messages: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     assert!(
         output.status.success(),
         "command unexpectedly failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        expected_stdout,
-        "command stdout should describe exactly the requested change"
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with(&format!("┌  {title}\n│\n")),
+        "cliclack session should start with its title:\n{stderr}"
     );
+    assert!(
+        stderr.ends_with(&format!("└  {outro}\n")),
+        "cliclack session should end with its outro:\n{stderr}"
+    );
+
+    let mut cursor = 0;
+    for message in messages {
+        let message = message.as_ref();
+        let offset = stderr[cursor..]
+            .find(message)
+            .unwrap_or_else(|| panic!("missing cliclack message {message:?}:\n{stderr}"));
+        cursor += offset + message.len();
+    }
+}
+
+fn assert_init_success(output: &Output) {
+    assert!(
+        output.status.success(),
+        "init unexpectedly failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "",
-        "a successful command should not emit diagnostics"
+        INIT_OUTPUT,
+        "init should render one complete cliclack session"
     );
 }
 
@@ -216,9 +244,11 @@ fn cargo_external_subcommand_invocation_forwards_the_subcommand_name() {
     );
 
     let list = run_cargo_subcommand(project, &["add", "--list"]);
-    assert_success(
+    assert_cliclack_success(
         &list,
-        "barchart\nbutton\ncheckbox\ncycle\ndialog\nlist\nprogress\nscroll_area\nselect\ntabs\ntoast\ntooltip\n",
+        " cargo ratcn add ",
+        "Add one with `cargo ratcn add <name>`",
+        std::iter::once("Available components").chain(COMPONENTS.iter().copied()),
     );
 }
 
@@ -241,9 +271,17 @@ fn adding_dialog_from_a_nested_directory_preserves_the_entrypoint_and_compiles()
     fs::create_dir_all(&nested).expect("nested working directory should exist");
 
     let output = run_cli(&nested, &["add", "dialog"]);
-    assert_success(
+    assert_cliclack_success(
         &output,
-        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nregistered in src/main.rs\n\nuse crate::components::dialog;\nA copy warns as dead code until something imports it.\n",
+        " cargo ratcn add ",
+        "Component added!",
+        [
+            "Added src/components/dialog.rs (ratcn 0.0.2)",
+            "Registered src/components/mod.rs",
+            "Registered src/main.rs",
+            "Import",
+            "use crate::components::dialog;",
+        ],
     );
 
     let copied = fs::read_to_string(components.join("dialog.rs"))
@@ -289,9 +327,11 @@ fn listing_components_is_sorted_and_does_not_modify_the_initialized_project() {
         .expect("fixture entrypoint should be readable before listing");
 
     let output = run_cli(project, &["add", "--list"]);
-    assert_success(
+    assert_cliclack_success(
         &output,
-        "barchart\nbutton\ncheckbox\ncycle\ndialog\nlist\nprogress\nscroll_area\nselect\ntabs\ntoast\ntooltip\n",
+        " cargo ratcn add ",
+        "Add one with `cargo ratcn add <name>`",
+        std::iter::once("Available components").chain(COMPONENTS.iter().copied()),
     );
 
     assert_eq!(
@@ -400,9 +440,17 @@ fn force_replaces_an_existing_component_file() {
 
     let output = run_cli(project, &["add", "button", "--force"]);
 
-    assert_success(
+    assert_cliclack_success(
         &output,
-        "added src/components/button.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nregistered in src/main.rs\n\nuse crate::components::button;\nA copy warns as dead code until something imports it.\n",
+        " cargo ratcn add ",
+        "Component added!",
+        [
+            "Added src/components/button.rs (ratcn 0.0.2)",
+            "Registered src/components/mod.rs",
+            "Registered src/main.rs",
+            "Import",
+            "use crate::components::button;",
+        ],
     );
     let copied = fs::read_to_string(&button).expect("forced component should be readable");
     assert!(copied.starts_with("// Copied from ratcn 0.0.2: src/components/button.rs\n"));
@@ -496,25 +544,26 @@ fn adding_every_available_component_creates_a_compilable_consumer_crate() {
             "tooltip",
         ],
     );
-    let expected_stdout = COMPONENTS
+    let mut expected_messages = COMPONENTS
         .iter()
-        .map(|component| format!("added src/components/{component}.rs (ratcn 0.0.2)\n"))
-        .collect::<String>()
-        + "registered in src/components/mod.rs\nregistered in src/main.rs\n\n"
-        + "use crate::components::barchart;\n\
-use crate::components::button;\n\
-use crate::components::checkbox;\n\
-use crate::components::cycle;\n\
-use crate::components::dialog;\n\
-use crate::components::list;\n\
-use crate::components::progress;\n\
-use crate::components::scroll_area;\n\
-use crate::components::select;\n\
-use crate::components::tabs;\n\
-use crate::components::toast;\n\
-use crate::components::tooltip;\n\
-A copy warns as dead code until something imports it.\n";
-    assert_success(&output, &expected_stdout);
+        .map(|component| format!("Added src/components/{component}.rs (ratcn 0.0.2)"))
+        .collect::<Vec<_>>();
+    expected_messages.extend([
+        "Registered src/components/mod.rs".to_owned(),
+        "Registered src/main.rs".to_owned(),
+        "Imports".to_owned(),
+    ]);
+    expected_messages.extend(
+        COMPONENTS
+            .iter()
+            .map(|component| format!("use crate::components::{component};")),
+    );
+    assert_cliclack_success(
+        &output,
+        " cargo ratcn add ",
+        "Components added!",
+        &expected_messages,
+    );
 
     for component in COMPONENTS {
         assert!(
@@ -555,7 +604,7 @@ fn init_offline_keeps_terminal_dependencies_and_is_safe_to_rerun() {
         .expect("fixture entrypoint should be readable before initialization");
 
     let output = run_cli(project, &["init"]);
-    assert_success(&output, "");
+    assert_init_success(&output);
 
     let dependencies = manifest_dependencies(project);
     let ratcn = dependencies
@@ -618,7 +667,7 @@ fn init_offline_keeps_terminal_dependencies_and_is_safe_to_rerun() {
     let module_before = fs::read_to_string(project.join("src/components/mod.rs"))
         .expect("generated module should remain readable");
     let output = run_cli(project, &["init"]);
-    assert_success(&output, "");
+    assert_init_success(&output);
     assert_eq!(
         fs::read_to_string(project.join("ratcn.toml")).expect("configuration should remain"),
         config_before
@@ -632,25 +681,6 @@ fn init_offline_keeps_terminal_dependencies_and_is_safe_to_rerun() {
         main_before
     );
 
-    cargo_check(project);
-}
-
-#[test]
-fn noninteractive_init_preserves_cargo_new_main() {
-    let temporary = cargo_project(true);
-    let project = temporary.path();
-    fs::write(project.join("src/main.rs"), CARGO_NEW_MAIN)
-        .expect("fixture should use Cargo's default main source");
-    generate_lockfile(project);
-
-    let output = run_cli(project, &["init"]);
-    assert_success(&output, "");
-
-    assert_eq!(
-        fs::read_to_string(project.join("src/main.rs")).expect("entrypoint should remain"),
-        CARGO_NEW_MAIN,
-        "noninteractive initialization must never choose a starter implicitly"
-    );
     cargo_check(project);
 }
 
@@ -674,7 +704,7 @@ fn init_accepts_a_custom_crate_root_without_touching_it() {
 
     let output = run_cli(project, &["init"]);
 
-    assert_success(&output, "");
+    assert_init_success(&output);
     assert!(
         project.join("Cargo.lock").exists(),
         "existing package lockfile should remain available after initialization"
@@ -706,7 +736,7 @@ fn starter_templates_compile_after_terminal_initialization() {
         generate_lockfile(project);
 
         let output = run_cli(project, &["init"]);
-        assert_success(&output, "");
+        assert_init_success(&output);
         fs::write(project.join("src/main.rs"), template)
             .expect("starter template should replace the fixture entrypoint");
 
@@ -730,9 +760,17 @@ fn add_with_ambiguous_standard_crate_roots_prints_the_manual_registration() {
 
     let output = run_cli(project, &["add", "dialog"]);
 
-    assert_success(
+    assert_cliclack_success(
         &output,
-        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nadd `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)\n\nuse crate::components::dialog;\nA copy warns as dead code until something imports it.\n",
+        " cargo ratcn add ",
+        "Component added!",
+        [
+            "Added src/components/dialog.rs (ratcn 0.0.2)",
+            "Registered src/components/mod.rs",
+            "Add `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)",
+            "Import",
+            "use crate::components::dialog;",
+        ],
     );
     assert_eq!(
         fs::read_to_string(project.join("src/main.rs")).expect("binary root should remain"),
@@ -764,9 +802,17 @@ fn add_with_a_custom_crate_root_prints_manual_registration_without_touching_it()
 
     let output = run_cli(project, &["add", "dialog"]);
 
-    assert_success(
+    assert_cliclack_success(
         &output,
-        "added src/components/dialog.rs (ratcn 0.0.2)\nregistered in src/components/mod.rs\nadd `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)\n\nuse crate::components::dialog;\nA copy warns as dead code until something imports it.\n",
+        " cargo ratcn add ",
+        "Component added!",
+        [
+            "Added src/components/dialog.rs (ratcn 0.0.2)",
+            "Registered src/components/mod.rs",
+            "Add `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)",
+            "Import",
+            "use crate::components::dialog;",
+        ],
     );
     assert_eq!(
         fs::read_to_string(project.join("src/custom.rs")).expect("custom root should remain"),

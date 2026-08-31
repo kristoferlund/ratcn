@@ -27,9 +27,11 @@ pub(crate) fn execute(args: AddArgs, cwd: &Path) -> Result<()> {
     let available = source_names(&ratcn.components_dir)?;
 
     if args.list {
-        for name in available {
-            println!("{name}");
-        }
+        super::intro("cargo ratcn add")?;
+        cliclack::note("Available components", available.join("\n"))
+            .context("could not list available components")?;
+        cliclack::outro("Add one with `cargo ratcn add <name>`")
+            .context("could not finish add output")?;
         return Ok(());
     }
 
@@ -77,27 +79,46 @@ pub(crate) fn execute(args: AddArgs, cwd: &Path) -> Result<()> {
             .with_context(|| format!("could not write {}", change.path.display()))?;
     }
 
+    super::intro("cargo ratcn add")?;
     for change in &writes {
-        println!(
-            "added {} (ratcn {})",
+        cliclack::log::success(format!(
+            "Added {} (ratcn {})",
             relative_to_project(&project.root, &change.path),
-            ratcn.version
-        );
+            ratcn.version,
+        ))
+        .context("could not report added component")?;
     }
     for change in registrations {
-        println!(
-            "registered in {}",
-            relative_to_project(&project.root, &change.path)
-        );
+        cliclack::log::step(format!(
+            "Registered {}",
+            relative_to_project(&project.root, &change.path),
+        ))
+        .context("could not report component registration")?;
     }
     if entrypoint.is_none() {
-        println!("add `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)");
+        cliclack::log::warning(
+            "Add `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)",
+        )
+        .context("could not report manual registration")?;
     }
-    println!();
-    for name in &args.components {
-        println!("{}", import_example(name));
-    }
-    println!("A copy warns as dead code until something imports it.");
+    let imports = args
+        .components
+        .iter()
+        .map(|name| import_example(name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let note_title = if args.components.len() == 1 {
+        "Import"
+    } else {
+        "Imports"
+    };
+    cliclack::note(note_title, imports).context("could not report component imports")?;
+    let outro = if args.components.len() == 1 {
+        "Component added!"
+    } else {
+        "Components added!"
+    };
+    cliclack::outro(outro).context("could not finish add output")?;
 
     Ok(())
 }

@@ -31,10 +31,9 @@ cargo ratcn init
 `ratcn.toml`, and creates `src/components/mod.rs`. It configures terminal apps
 only.
 
-When `src/main.rs` is Cargo's untouched default and the command runs in a
-terminal, choose one of three options: keep it unchanged, install a minimal
-terminal loop, or install the first-app demo below. Custom and non-interactive
-projects always keep their application source unchanged.
+When `src/main.rs` is Cargo's untouched default, choose one of three options:
+keep it unchanged, install a minimal terminal loop, or install the first-app
+demo below. Projects with custom application source keep it unchanged.
 
 ## A first app
 
