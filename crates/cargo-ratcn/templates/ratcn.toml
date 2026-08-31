@@ -1,0 +1,3 @@
+[ratcn]
+version = "{{version}}"
+components = "src/components"
