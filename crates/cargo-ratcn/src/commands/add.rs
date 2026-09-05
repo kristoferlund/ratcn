@@ -46,6 +46,14 @@ pub(crate) fn execute(args: AddArgs, cwd: &Path) -> Result<()> {
             .with_context(|| format!("could not read {}", source_path.display()))?;
         let copied = copy_of(&source, &source_path).map_err(anyhow::Error::msg)?;
         let destination = destination_dir.join(format!("{name}.rs"));
+        let directory_module = destination_dir.join(name).join("mod.rs");
+        if directory_module.exists() {
+            bail!(
+                "{} conflicts with {}; resolve the module conflict before adding this component",
+                directory_module.display(),
+                destination.display()
+            );
+        }
         if destination.exists() && !args.force {
             bail!(
                 "component file already exists: {}; use --force to replace it",
@@ -203,8 +211,8 @@ fn register_modules(
     }))
 }
 
-/// Puts `mod components;` first in the crate root, where module declarations
-/// conventionally go, unless the file already declares it in any form.
+/// Appends the declaration so crate attributes, documentation, and shebangs
+/// remain before any items.
 fn register_entrypoint_module(path: &Path) -> Result<Option<FileChange>> {
     let content =
         fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
@@ -215,7 +223,7 @@ fn register_entrypoint_module(path: &Path) -> Result<Option<FileChange>> {
     }
     Ok(Some(FileChange {
         path: path.to_path_buf(),
-        content: format!("mod components;\n\n{content}"),
+        content: format!("{content}\nmod components;\n"),
     }))
 }
 
@@ -251,7 +259,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        import_example, module_names, register_modules, source_names, validate_requested_names,
+        import_example, module_names, register_entrypoint_module, register_modules, source_names,
+        validate_requested_names,
     };
 
     #[test]
@@ -319,6 +328,28 @@ mod tests {
         .expect("a missing file starts from the template")
         .expect("a missing file always needs writing");
         assert_eq!(fresh.content, "// header\npub mod button;\n");
+    }
+
+    #[test]
+    fn registration_preserves_crate_headers_and_trailing_comments() {
+        let directory = tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("main.rs");
+        let source = "#!/usr/bin/env rust-script\n//! Application documentation.\n#![forbid(unsafe_code)]\nfn main() {}\n// trailing comment";
+        fs::write(&path, source).expect("entrypoint should write");
+
+        let change = register_entrypoint_module(&path)
+            .expect("entrypoint should parse")
+            .expect("components should need registration");
+
+        assert_eq!(change.content, format!("{source}\nmod components;\n"));
+        syn::parse_file(&change.content).expect("registration must preserve valid Rust");
+        fs::write(&path, &change.content).expect("registration should write");
+        assert!(
+            register_entrypoint_module(&path)
+                .expect("registered entrypoint should parse")
+                .is_none(),
+            "repeated additions must not duplicate the declaration"
+        );
     }
 
     #[test]

@@ -7,26 +7,39 @@ description: "What ratcn is: a component library for Ratatui apps, with paint-on
 `ratcn` is a component library for Ratatui apps: beautifully designed terminal UI
 components that you can copy, paste, theme, and own in your application code.
 
+## Getting started
+
+The recommended way to set up a terminal project is with the `cargo-ratcn` CLI:
+
+```sh
+cargo install cargo-ratcn
+cargo new my-app
+cd my-app
+cargo ratcn init
+```
+
+See [Getting started](./getting-started) for starter apps and copying components
+into your project with `cargo ratcn add`.
+
 ## Preview status
 
 ratcn is a preview release. It works, and it is documented, but three things
 are worth knowing before you build on it:
 
-- **The API will break.** The public surface is still moving. Pin an exact
+- **The API is unstable.** The public surface is still moving. Pin an exact
   version and expect to edit when you upgrade.
-- **The CLI is deliberately small.** `cargo ratcn init` configures terminal
-  Cargo packages and can install a starter only over Cargo's untouched default
-  `main.rs`; `cargo ratcn add` copies a built-in component when you want to own
-  its source.
-- **The component set is small and growing.** Twelve components ship today:
+- **The CLI sets up terminal apps and copies components.** `cargo ratcn init`
+  configures terminal Cargo packages and can install a starter only over Cargo's
+  untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
+  you want to own its source.
+- **Twelve components are available:**
   [Button](./components/button), [List](./components/list),
   [ScrollArea](./components/scroll-area), [Select](./components/select),
   [Tabs](./components/tabs), [Dialog](./components/dialog),
   [Toast](./components/toast), [BarChart](./components/barchart),
   [Tooltip](./components/tooltip), [Checkbox](./components/checkbox),
   [Cycle](./components/cycle), and
-  [Progress](./components/progress). Notably missing and planned next are
-  **text input** and a **multi-line text area**.
+  [Progress](./components/progress).
 
 If there are specific components, patterns, or features you would like to see
 included, please [open an issue](https://github.com/kristoferlund/ratcn/issues).

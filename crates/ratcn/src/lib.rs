@@ -14,16 +14,31 @@
 //!
 //! This is a preview release.
 //!
-//! - **The API will break.** Pin an exact version.
-//! - **The CLI is deliberately small.** `cargo ratcn init` configures terminal
-//!   Cargo packages and can install a starter only over Cargo's untouched default
-//!   `main.rs`; `cargo ratcn add` copies a built-in component when you want to own
-//!   its source.
-//! - **The component set is small and growing.** Twelve ship today: [`Button`],
+//! - **The API is unstable.** Pin an exact version.
+//! - **The CLI sets up terminal apps and copies components.** `cargo ratcn init`
+//!   configures terminal Cargo packages and can install a starter only over Cargo's
+//!   untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
+//!   you want to own its source.
+//! - **Twelve components are available:** [`Button`],
 //!   [`List`], [`Select`], [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget),
 //!   [`BarChartWidget`], [`Tooltip`], [`ScrollArea`], [`Checkbox`], [`Cycle`],
-//!   and [`ProgressWidget`]. Text input and a multi-line text area are planned
-//!   next; there is no text entry component at all right now.
+//!   and [`ProgressWidget`].
+//!
+//! # Getting started
+//!
+//! The recommended way to set up a terminal project is with the `cargo-ratcn` CLI:
+//!
+//! ```sh
+//! cargo install cargo-ratcn
+//! cargo new my-app
+//! cd my-app
+//! cargo ratcn init
+//! ```
+//!
+//! `init` adds `ratcn` with its `termina` feature and a compatible `ratatui`,
+//! writes `ratcn.toml`, and creates `src/components/mod.rs`.
+//! See [Getting started](https://ratcn.kristoferlund.se/docs/getting-started)
+//! for starter apps and copying components with `cargo ratcn add`.
 //!
 //! # Up to two halves, usable alone
 //!

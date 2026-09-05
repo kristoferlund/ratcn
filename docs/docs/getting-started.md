@@ -4,6 +4,76 @@ description: "Initialize a terminal app with cargo ratcn and get a focusable but
 
 # Getting started
 
+The recommended way to set up a terminal project is with the `cargo-ratcn` CLI.
+
+## Initialize a terminal app
+
+Install the CLI, create a Cargo package, and initialize it:
+
+```sh
+cargo install cargo-ratcn
+cargo new my-app
+cd my-app
+cargo ratcn init
+```
+
+`init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
+`ratcn.toml`, and creates `src/components/mod.rs`. It configures terminal apps
+only.
+
+In an interactive terminal, when `src/main.rs` is Cargo's untouched default,
+`init` offers three options:
+
+- **Keep it unchanged**
+- **Create a minimal app**
+- **Create a demo app**
+
+Projects with custom application source keep it unchanged. Noninteractive runs
+also keep `src/main.rs` unchanged and complete project setup without a prompt.
+
+Use `cargo ratcn --help` for commands or `cargo ratcn add --help` for add options.
+Use `cargo ratcn --version` (or `-V`) to check the installed CLI version.
+
+## A first app
+
+Choose **Create a demo app** during `init`, then run `cargo run` to start it.
+The app follows the terminal's colors, centers a primary **Hello** button, and
+shows a **World** toast when pressed. `Ctrl+C` exits.
+
+The generated `src/main.rs`:
+
+<<< ../../crates/cargo-ratcn/templates/first-app.rs
+
+Two calls do the work. `render` declares what is on screen this frame and
+paints it; `handle_event` routes one input event and hands back a message if
+something happened. The generated loop opens and restores the terminal through
+`Session`; its `update` function remains the only state writer.
+
+Keeping `update` in its own function means every state change is a plain call
+you can test without a terminal, and messages from elsewhere (a timer, a
+background task) get the same single path into state.
+
+## Copy a component
+
+From your initialized project, list the available components and copy one:
+
+```sh
+cargo ratcn add --list
+cargo ratcn add dialog
+```
+
+`add` copies source from the exact `ratcn` package your project resolved into
+`src/components/` and registers the component module. It adds `mod components;`
+when there is a single conventional crate entrypoint; otherwise, it asks you to
+add that declaration yourself. Import `crate::components::dialog::Dialog` to use
+your copy.
+
+Existing component files are preserved unless you pass `--force`.
+**`cargo ratcn add dialog --force` overwrites `src/components/dialog.rs`, including
+your edits.**
+
+## Try the wizard
+
 The wizard below is itself a ratcn app — buttons, a select, and a list. Press `Enter` to move through it, or `Tab` into a step to make its choice. Its source is [`demos/wizard`](https://github.com/kristoferlund/ratcn/tree/main/demos/wizard).
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 460px">
@@ -18,45 +88,10 @@ The wizard below is itself a ratcn app — buttons, a select, and a list. Press 
   </div>
 </div>
 
-## Initialize a terminal app
-
-```sh
-cargo install cargo-ratcn
-cargo new my-app
-cd my-app
-cargo ratcn init
-```
-
-`init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
-`ratcn.toml`, and creates `src/components/mod.rs`. It configures terminal apps
-only.
-
-When `src/main.rs` is Cargo's untouched default, choose one of three options:
-keep it unchanged, install a minimal terminal loop, or install the first-app
-demo below. Projects with custom application source keep it unchanged.
-
-## A first app
-
-Choose **First app demo** during `init` to install this complete `src/main.rs`.
-The documentation renders the same embedded template that the CLI writes, so
-the two stay in sync. It follows the terminal's colors, centers a primary
-**Hello** button, and shows a **World** toast when pressed. `Ctrl+C` exits.
-
-<<< ../../crates/cargo-ratcn/templates/first-app.rs
-
-Two calls do the work. `render` declares what is on screen this frame and
-paints it; `handle_event` routes one input event and hands back a message if
-something happened. The generated loop opens and restores the terminal through
-`Session`; its `update` function remains the only state writer.
-
-Keeping `update` in its own function means every state change is a plain call
-you can test without a terminal, and messages from elsewhere (a timer, a
-background task) get the same single path into state.
-
 ## Other backends
 
-`init` only knows terminal apps on termina. For anything else, add `ratcn`
-yourself with the feature that matches your backend:
+`init` configures terminal apps using termina. For another backend, add `ratcn`
+with the matching feature:
 
 | Feature | For |
 |---|---|

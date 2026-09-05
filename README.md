@@ -10,17 +10,16 @@ over your app loop.
 This is a preview release. Three things are worth knowing before you build on
 it:
 
-- **The API will break.** The public surface is still moving. Pin an exact
+- **The API is unstable.** The public surface is still moving. Pin an exact
   version and expect to edit when you upgrade.
-- **The CLI is deliberately small.** `cargo ratcn init` configures terminal
-  Cargo packages and can install a starter only over Cargo's untouched default
-  `main.rs`; `cargo ratcn add` copies a built-in component when you want to own
-  its source.
-- **The component set is small and growing.** Twelve components ship today:
+- **The CLI sets up terminal apps and copies components.** `cargo ratcn init`
+  configures terminal Cargo packages and can install a starter only over Cargo's
+  untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
+  you want to own its source.
+- **Twelve components are available:**
   `Button`, `List`, `Select`, `Tabs`, `Dialog`, `ToasterWidget`,
   `BarChartWidget`, `Tooltip`, `ScrollArea`, `Checkbox`, `Cycle`, and
-  `ProgressWidget`. Notably missing and planned next are **text input** and a
-  **multi-line text area**.
+  `ProgressWidget`.
 
 If you want specific components, patterns, or features, please
 [open an issue](https://github.com/kristoferlund/ratcn/issues).
@@ -44,8 +43,9 @@ state writer.
 
 ## Getting started
 
-Requires Rust 1.88 (1.90 for the browser build). Install the Cargo subcommand,
-then initialize an existing package:
+Requires Rust 1.88 (1.90 for the browser build). The recommended way to set up a
+terminal project is with the `cargo-ratcn` CLI. Install it, create a Cargo
+package, and initialize it:
 
 ```sh
 cargo install cargo-ratcn
@@ -54,10 +54,15 @@ cd my-app
 cargo ratcn init
 ```
 
-`init` adds terminal dependencies, writes `ratcn.toml`, and creates
-`src/components/mod.rs`. On Cargo's default `src/main.rs`, it offers to leave
-the file alone, install a minimal app loop, or install the Getting started demo.
-Projects with custom application source retain it.
+`init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
+`ratcn.toml`, and creates `src/components/mod.rs`. In an interactive terminal,
+on Cargo's untouched default `src/main.rs`, it offers **Keep it unchanged**,
+**Create a minimal app**, or **Create a demo app**. Custom application source
+and `src/main.rs` in noninteractive runs remain unchanged.
+
+Choose **Create a demo app**, then run `cargo run` for a button and a Hello World
+toast. See [Getting started](https://ratcn.kristoferlund.se/docs/getting-started)
+for the source. Use `cargo ratcn --help` for available commands.
 
 For a native crossterm app that already owns its event loop:
 
@@ -94,6 +99,10 @@ cargo ratcn add dialog
 package your project resolved. The command adds the component file and module
 declarations; switch the app import to `crate::components::dialog::Dialog` to
 use the copy.
+
+Existing component files are preserved unless you pass `--force`.
+**`cargo ratcn add dialog --force` overwrites `src/components/dialog.rs`, including
+your edits.** Use `cargo ratcn add --help` for add options.
 
 A copied module still depends on:
 
