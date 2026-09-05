@@ -2,7 +2,7 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin},
+    layout::{Constraint, Layout, Margin, Rect},
     style::Style,
 };
 use ratcn::{
@@ -105,9 +105,8 @@ impl demo_shared::Demo for App {
     }
 
     /// The wizard paints with the palette its own picker selects.
-    fn draw(&mut self, frame: &mut Frame, _theme: &Theme) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect, _theme: &Theme) {
         let theme = self.palette();
-        let area = frame.area();
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(theme.background));
@@ -183,7 +182,7 @@ mod tests {
 
     fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) {
         terminal
-            .draw(|frame| app.draw(frame, &App::THEME))
+            .draw(|frame| app.draw(frame, frame.area(), &App::THEME))
             .expect("draw");
     }
 

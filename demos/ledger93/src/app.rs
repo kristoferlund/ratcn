@@ -2,7 +2,7 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -106,8 +106,7 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
-        let area = frame.area();
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(theme.background));
@@ -212,7 +211,7 @@ mod tests {
 
     fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) {
         terminal
-            .draw(|frame| app.draw(frame, &THEME))
+            .draw(|frame| app.draw(frame, frame.area(), &THEME))
             .expect("draw");
     }
 

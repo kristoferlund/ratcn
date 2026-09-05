@@ -20,7 +20,7 @@ use std::{io, time::Duration};
 
 #[cfg(target_arch = "wasm32")]
 use ratatui::style::Color;
-use ratatui::{Frame, Terminal, backend::Backend};
+use ratatui::{Frame, Terminal, backend::Backend, layout::Rect};
 #[cfg(not(target_arch = "wasm32"))]
 use ratcn::terminal::{Session, SessionEvent, SessionOptions, termina};
 use ratcn::{Theme, runtime::Event};
@@ -48,8 +48,12 @@ pub trait Demo {
     /// the user changes them. They reach [`draw`](Self::draw) each frame.
     const ADAPTIVE: bool = false;
 
-    /// Paint one frame with `theme`.
-    fn draw(&mut self, frame: &mut Frame, theme: &Theme);
+    /// Paint one frame with `theme`, inside `area` and nowhere else.
+    ///
+    /// The host owns the rest of the screen: staying inside `area` is what lets
+    /// a demo be hosted in a corner of a larger app rather than owning the
+    /// terminal.
+    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme);
 
     /// Route one event, returning whether the screen now needs redrawing.
     ///
@@ -224,7 +228,7 @@ where
     B: Backend<Error = io::Error>,
 {
     let drawn = terminal
-        .draw(|frame| demo.draw(frame, theme))?
+        .draw(|frame| demo.draw(frame, frame.area(), theme))?
         .area
         .as_size();
     Ok(terminal.size()? != drawn)
@@ -570,8 +574,8 @@ mod tests {
     };
 
     use super::{
-        ANIMATION_FRAME, Backend, Demo, Duration, Event, Frame, Host, SessionEvent, SessionOptions,
-        Terminal, draw_frame, drive, io,
+        ANIMATION_FRAME, Backend, Demo, Duration, Event, Frame, Host, Rect, SessionEvent,
+        SessionOptions, Terminal, draw_frame, drive, io,
     };
 
     /// A [`TestBackend`] that reports a native host's error type, and that can
@@ -672,10 +676,9 @@ mod tests {
     }
 
     impl Demo for Probe {
-        fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
+        fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
             self.frames += 1;
             self.themes.push(*theme);
-            let area = frame.area();
             frame.render_widget("probe", area);
         }
 
@@ -778,12 +781,12 @@ mod tests {
         struct Everything;
         impl Demo for Quiet {
             const INPUT: bool = false;
-            fn draw(&mut self, _frame: &mut Frame, _theme: &Theme) {}
+            fn draw(&mut self, _frame: &mut Frame, _area: Rect, _theme: &Theme) {}
         }
         impl Demo for Everything {
             const PASTE: bool = true;
             const ADAPTIVE: bool = true;
-            fn draw(&mut self, _frame: &mut Frame, _theme: &Theme) {}
+            fn draw(&mut self, _frame: &mut Frame, _area: Rect, _theme: &Theme) {}
         }
 
         assert_eq!(
