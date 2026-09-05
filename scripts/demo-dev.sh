@@ -11,7 +11,7 @@ if [ -z "$demo" ] || [ ! -f "demos/$demo/Trunk.toml" ]; then
     if [ -n "$demo" ]; then
       echo "no demo named '$demo'."
     fi
-    echo "usage: npm run demo:dev -- <demo>"
+    echo "usage: pnpm run demo:dev -- <demo>"
     echo "demos:"
     for config in demos/*/Trunk.toml; do
       echo "  $(basename "$(dirname "$config")")"

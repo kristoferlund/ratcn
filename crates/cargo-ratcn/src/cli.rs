@@ -4,6 +4,7 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "cargo-ratcn",
     bin_name = "cargo ratcn",
+    version,
     about = "Manage ratcn components",
     arg_required_else_help = true,
     subcommand_required = true

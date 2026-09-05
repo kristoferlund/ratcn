@@ -1,4 +1,9 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    io::{self, IsTerminal},
+    path::Path,
+    process::Command,
+};
 
 use anyhow::{Context, Result, bail};
 
@@ -98,7 +103,7 @@ impl Starter {
 /// Offers a starter only over Cargo's untouched default `main.rs`; anything the
 /// user has written is never replaced.
 fn choose_starter(root: &Path) -> Result<Starter> {
-    if !has_cargo_new_main(root) {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() || !has_cargo_new_main(root) {
         return Ok(Starter::KeepMain);
     }
 

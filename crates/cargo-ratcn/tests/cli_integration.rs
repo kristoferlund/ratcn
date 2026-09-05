@@ -42,7 +42,12 @@ fn toml_path(path: &Path) -> String {
 }
 
 fn cargo_project(with_dependencies: bool) -> TempDir {
-    let temporary = tempdir().expect("temporary project directory should exist");
+    let temporary = tempfile::tempdir_in(
+        env::temp_dir()
+            .canonicalize()
+            .expect("temporary directory should resolve like the CLI's working directory"),
+    )
+    .expect("temporary project directory should exist");
     let root = temporary.path();
     fs::create_dir_all(root.join("src")).expect("project source directory should exist");
 
@@ -253,11 +258,36 @@ fn cargo_external_subcommand_invocation_forwards_the_subcommand_name() {
 }
 
 #[test]
+fn version_flags_work_directly_and_through_cargo_without_a_project() {
+    let temporary = tempdir().expect("temporary directory should exist");
+    for flag in ["--version", "-V"] {
+        for output in [
+            run_cli(temporary.path(), &[flag]),
+            run_cargo_subcommand(temporary.path(), &[flag]),
+        ] {
+            assert!(
+                output.status.success(),
+                "version must not require a project"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("cargo-ratcn {}\n", env!("CARGO_PKG_VERSION"))
+            );
+            assert!(output.stderr.is_empty());
+        }
+    }
+}
+
+#[test]
 fn adding_dialog_from_a_nested_directory_preserves_the_entrypoint_and_compiles() {
     let temporary = cargo_project(true);
     let project = temporary.path();
     initialize_for_add(project);
 
+    let main_source =
+        format!("//! Application documentation.\n#![forbid(unsafe_code)]\n{MAIN_SOURCE}");
+    fs::write(project.join("src/main.rs"), &main_source)
+        .expect("documented entrypoint should write");
     let components = project.join("src/components");
     fs::create_dir_all(&components).expect("components directory should exist");
     fs::write(
@@ -306,7 +336,7 @@ fn adding_dialog_from_a_nested_directory_preserves_the_entrypoint_and_compiles()
     );
     let main = fs::read_to_string(project.join("src/main.rs"))
         .expect("entrypoint should remain readable after registration");
-    assert_eq!(main, format!("mod components;\n\n{MAIN_SOURCE}"));
+    assert_eq!(main, format!("{main_source}\nmod components;\n"));
     assert_eq!(
         main.matches("mod components;").count(),
         1,
@@ -391,6 +421,54 @@ fn a_collision_in_a_multi_component_addition_leaves_every_requested_change_absen
         fs::read_to_string(project.join("Cargo.toml")).expect("manifest should remain"),
         manifest_before
     );
+}
+
+#[test]
+fn directory_module_collisions_reject_the_entire_batch_even_with_force() {
+    let temporary = cargo_project(true);
+    let project = temporary.path();
+    initialize_for_add(project);
+    let components = project.join("src/components");
+    let directory_module = components.join("dialog/mod.rs");
+    fs::create_dir_all(components.join("dialog")).expect("component directory should exist");
+    let source = "// user-owned dialog\n";
+    fs::write(&directory_module, source).expect("directory module should write");
+
+    for arguments in [
+        vec!["add", "button", "dialog"],
+        vec!["add", "button", "dialog", "--force"],
+    ] {
+        let output = run_cli(project, &arguments);
+        assert_failure(
+            &output,
+            "",
+            &format!(
+                "error: {} conflicts with {}; resolve the module conflict before adding this component\n",
+                directory_module.display(),
+                components.join("dialog.rs").display()
+            ),
+        );
+        assert_eq!(
+            fs::read_to_string(&directory_module).expect("user-owned module should remain"),
+            source
+        );
+        assert!(
+            !components.join("button.rs").exists(),
+            "the whole batch must be rejected"
+        );
+        assert!(
+            !components.join("dialog.rs").exists(),
+            "must not create an ambiguous module"
+        );
+        assert!(
+            !components.join("mod.rs").exists(),
+            "must not register a rejected batch"
+        );
+        assert_eq!(
+            fs::read_to_string(project.join("src/main.rs")).expect("entrypoint should remain"),
+            MAIN_SOURCE
+        );
+    }
 }
 
 #[test]
@@ -682,6 +760,34 @@ fn init_offline_keeps_terminal_dependencies_and_is_safe_to_rerun() {
     );
 
     cargo_check(project);
+}
+
+#[test]
+fn noninteractive_init_preserves_cargos_default_main_and_completes_setup() {
+    let temporary = cargo_project(true);
+    let project = temporary.path();
+    let main_source = "fn main() {\n    println!(\"Hello, world!\");\n}\n";
+    fs::write(project.join("src/main.rs"), main_source).expect("Cargo default main should write");
+    generate_lockfile(project);
+
+    let output = run_cli(project, &["init"]);
+
+    assert_init_success(&output);
+    assert_eq!(
+        fs::read_to_string(project.join("src/main.rs")).expect("entrypoint should remain"),
+        main_source,
+        "noninteractive setup must not replace Cargo's default entrypoint"
+    );
+    assert!(
+        project.join("ratcn.toml").is_file(),
+        "setup must complete without a prompt"
+    );
+    assert!(project.join("src/components/mod.rs").is_file());
+    let dependencies = manifest_dependencies(project);
+    let ratcn = dependencies["ratcn"]
+        .as_table()
+        .expect("ratcn dependency should remain");
+    assert!(dependency_features(ratcn).contains(&"termina"));
 }
 
 #[test]
