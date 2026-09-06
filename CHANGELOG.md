@@ -16,6 +16,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Ratcn::render_into(buffer, area, state, theme, declare)` renders directly
+  into your own buffer for offscreen pages and previews, without a test terminal.
+  You own allocation, clearing, and windowing; no cursor metadata is returned.
 - `cargo-ratcn`: a Cargo subcommand with terminal-only `cargo ratcn init`, which
   can keep Cargo's default `main.rs`, replace it with a minimal app loop, or
   install the Getting started demo; and `cargo ratcn add` for copying a built-in

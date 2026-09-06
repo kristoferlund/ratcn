@@ -159,8 +159,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
         self.area
     }
 
-    /// The root area supplied to [`Ratcn::render`](super::Ratcn::render), in
-    /// this declaration's coordinate space.
+    /// The root area supplied to [`Ratcn::render`](super::Ratcn::render) or
+    /// [`Ratcn::render_into`](super::Ratcn::render_into), in this declaration's
+    /// coordinate space.
     ///
     /// Unlike [`area`](Self::area), this is not changed by component, scope,
     /// or popup declarations. Inside a [`viewport`](Self::viewport), it is
