@@ -1,0 +1,42 @@
+[package]
+name = "showcase"
+publish = false
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+demo-shared.workspace = true
+ratatui.workspace = true
+ratcn.workspace = true
+
+barchart = { path = "../../demos/barchart" }
+barchart-horizontal = { path = "../../demos/barchart-horizontal" }
+button-large = { path = "../../demos/button-large" }
+button-small = { path = "../../demos/button-small" }
+checkbox = { path = "../../demos/checkbox" }
+cycle = { path = "../../demos/cycle" }
+dialog = { path = "../../demos/dialog" }
+drag = { path = "../../demos/drag" }
+effects = { path = "../../demos/effects" }
+kanban = { path = "../../demos/kanban" }
+landing = { path = "../../demos/landing" }
+ledger93 = { path = "../../demos/ledger93" }
+list = { path = "../../demos/list" }
+list-multi = { path = "../../demos/list-multi" }
+list-people = { path = "../../demos/list-people" }
+panels = { path = "../../demos/panels" }
+progress = { path = "../../demos/progress" }
+scroll-area = { path = "../../demos/scroll-area" }
+select = { path = "../../demos/select" }
+tabs-automatic = { path = "../../demos/tabs-automatic" }
+tabs-basic = { path = "../../demos/tabs-basic" }
+tabs-disabled = { path = "../../demos/tabs-disabled" }
+tabs-large = { path = "../../demos/tabs-large" }
+toast = { path = "../../demos/toast" }
+tooltip = { path = "../../demos/tooltip" }
+wizard = { path = "../../demos/wizard" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ratcn = { workspace = true, features = ["ratzilla"] }
+ratzilla.workspace = true

@@ -1821,6 +1821,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "showcase"
+version = "0.0.2"
+dependencies = [
+ "barchart",
+ "barchart-horizontal",
+ "button-large",
+ "button-small",
+ "checkbox",
+ "cycle",
+ "dialog",
+ "drag",
+ "effects",
+ "kanban",
+ "landing",
+ "ledger93",
+ "list",
+ "list-multi",
+ "list-people",
+ "panels",
+ "progress",
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "scroll-area",
+ "select",
+ "shared",
+ "tabs-automatic",
+ "tabs-basic",
+ "tabs-disabled",
+ "tabs-large",
+ "toast",
+ "tooltip",
+ "wizard",
+]
+
+[[package]]
 name = "signal-hook"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
