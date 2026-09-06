@@ -90,10 +90,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    // One line: paint with the terminal's own colors, falling back to `THEME`
-    // if it will not say what they are.
-    const ADAPTIVE: bool = true;
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {

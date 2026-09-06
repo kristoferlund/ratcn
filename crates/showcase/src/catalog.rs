@@ -186,6 +186,30 @@ mod tests {
     use super::ENTRIES;
 
     #[test]
+    fn list_demos_keep_the_default_dark_background_in_a_light_terminal() {
+        let mut terminal_theme = ratcn::Theme::default_dark();
+        terminal_theme.background = ratatui::style::Color::White;
+        let background = ratcn::Theme::default_dark().background;
+        assert_ne!(terminal_theme.background, background);
+        for name in ["list", "list-multi", "list-people"] {
+            let mut demo = ENTRIES
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap()
+                .open();
+            let theme = demo.theme(&terminal_theme);
+            let area = ratatui::layout::Rect::new(0, 0, 60, 20);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            demo.draw(&mut buffer, area, &theme);
+            assert_eq!(
+                buffer[(0, 0)].bg,
+                background,
+                "{name} inherited the terminal background"
+            );
+        }
+    }
+
+    #[test]
     fn the_catalog_is_sorted_and_lists_each_demo_once() {
         let names: Vec<&str> = ENTRIES.iter().map(|entry| entry.name).collect();
         let mut sorted = names.clone();
