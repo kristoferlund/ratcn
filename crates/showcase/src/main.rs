@@ -7,6 +7,14 @@
 
 mod catalog;
 mod chrome;
+// Temporary scaffolding: the module ships ahead of the Getting started page
+// that renders its snippets. Delete this allow the moment the page calls it —
+// it is not a standing exemption.
+#[allow(
+    dead_code,
+    reason = "temporary: nothing calls this until the Getting started page lands in a later slice"
+)]
+mod code;
 mod demos;
 mod page;
 
