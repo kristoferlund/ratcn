@@ -16,6 +16,17 @@ cargo run -p ledger93
 The live previews on the component pages are these same demos, compiled to
 WebAssembly.
 
+## Browsing them all
+
+```sh
+cargo run -p showcase
+```
+
+This is the site itself, in your terminal: the landing page, and a browser that
+lists every demo below with the selected one running beside it. It is a ratcn
+app like the rest, and it embeds the demo crates rather than reimplementing
+them — `crates/showcase` is worth reading for how one app hosts another.
+
 ## Full applications
 
 Start here if you want to see how the pieces fit together at real size. All

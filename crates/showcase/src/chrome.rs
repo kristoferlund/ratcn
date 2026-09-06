@@ -143,9 +143,10 @@ pub fn separators(
     );
 }
 
-/// What the rule down the side of the demo pane is painted in, and with it
-/// every junction that meets it: the ring while the demo has the input, so the
-/// user can see which side is live, and the ordinary border otherwise.
+/// What the line around the embedded demo is painted in — the rule down the
+/// side of it in the Demos view with every junction that meets it, the preview
+/// window's frame on the landing page: the ring while the demo has the input,
+/// so the user can see what is live, and the ordinary border otherwise.
 pub fn rule_color(theme: &Theme, live: bool) -> Color {
     if live { theme.ring } else { theme.border }
 }

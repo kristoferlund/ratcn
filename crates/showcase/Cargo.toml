@@ -9,6 +9,7 @@ version.workspace = true
 demo-shared.workspace = true
 ratatui.workspace = true
 ratcn.workspace = true
+tui-big-text.workspace = true
 
 barchart = { path = "../../demos/barchart" }
 barchart-horizontal = { path = "../../demos/barchart-horizontal" }

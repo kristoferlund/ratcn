@@ -12,10 +12,8 @@ use ratcn::{List, ListItem, ListStyle, Theme, runtime::DeclareCtx};
 
 use crate::{AppState, Msg, catalog, chrome};
 
-/// Child ids, named once so declarations and retained identity cannot drift.
-mod ids {
-    pub const LIST: &str = "catalog";
-}
+/// The nav list's child id, and what focus names to put the arrows in reach.
+pub const LIST_ID: &str = "catalog";
 
 /// What the three lines under the list say, and the keys they name.
 const HINTS: [(&str, &str); 3] = [("↑ ↓", "browse"), ("enter", "interact"), ("esc", "back")];
@@ -63,7 +61,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, nav: Rect, live: bool) {
         }
     })
     .style(nav_style);
-    ctx.component(ids::LIST, list, list_area);
+    ctx.component(LIST_ID, list, list_area);
 
     let muted = Style::default().fg(ctx.theme.muted_foreground);
     let border = ctx.theme.border;
