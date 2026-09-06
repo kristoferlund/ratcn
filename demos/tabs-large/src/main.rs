@@ -116,7 +116,7 @@ impl demo_shared::Demo for App {
             .buffer_mut()
             .set_style(area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, state, &theme, |ctx| {
+        self.ratcn.render(frame, area, state, &theme, |ctx| {
             let tabs = Tabs::new([
                 Tab::new(Screen::Overview, "Overview"),
                 Tab::new(Screen::Analytics, "Analytics"),

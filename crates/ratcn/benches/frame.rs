@@ -112,7 +112,7 @@ mod frame {
         c.bench_function("render", |b| {
             b.iter(|| {
                 terminal
-                    .draw(|frame| ratcn.render(frame, &state, &theme, declare))
+                    .draw(|frame| ratcn.render(frame, frame.area(), &state, &theme, declare))
                     .expect("draw");
             });
         });
@@ -121,7 +121,7 @@ mod frame {
     fn route_click(c: &mut Criterion) {
         let (mut ratcn, mut terminal, state, theme) = surface();
         terminal
-            .draw(|frame| ratcn.render(frame, &state, &theme, declare))
+            .draw(|frame| ratcn.render(frame, frame.area(), &state, &theme, declare))
             .expect("draw");
         let press = mouse(MouseKind::Down(MouseButton::Left));
         let release = mouse(MouseKind::Up(MouseButton::Left));
@@ -146,7 +146,7 @@ mod frame {
                 terminal
                     .draw(|frame| {
                         let area = frame.area();
-                        ratcn.render(frame, &state, &theme, |ctx| {
+                        ratcn.render(frame, area, &state, &theme, |ctx| {
                             ctx.component(
                                 "list",
                                 List::new(items.clone())
@@ -168,7 +168,7 @@ mod frame {
                 terminal
                     .draw(|frame| {
                         let area = frame.area();
-                        ratcn.render(frame, &state, &theme, |ctx| {
+                        ratcn.render(frame, area, &state, &theme, |ctx| {
                             ctx.component(
                                 "dialog",
                                 Dialog::new()

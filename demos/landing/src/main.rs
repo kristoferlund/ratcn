@@ -221,7 +221,7 @@ impl demo_shared::Demo for App {
             .buffer_mut()
             .set_style(frame_area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, state, &theme, |ctx| {
+        self.ratcn.render(frame, frame_area, state, &theme, |ctx| {
             ctx.paint_widget(header_bar(ctx.theme), header_area(frame_area));
             for (index, tile_area) in tile_areas(frame_area).into_iter().enumerate() {
                 tiles::declare(index, ctx, tile_area);

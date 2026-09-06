@@ -19,7 +19,7 @@ use std::{collections::HashMap, fmt};
 
 use ratatui::{
     Frame,
-    buffer::Buffer,
+    buffer::{Buffer, CellDiffOption, CellWidth},
     layout::{Position, Rect},
 };
 
@@ -1147,12 +1147,12 @@ impl Canvas {
 /// positional parameters, and it is the only thing a [`RenderPass`] method
 /// needs besides the node's own identity and options. `area` rides along
 /// because it is the member that changes per declaration — whoever declares a
-/// child chooses where it goes — while the rest is constant for the whole
-/// pass.
+/// child chooses where it goes. Viewports also express `frame_area` in their
+/// logical coordinates; the state and theme stay constant for the pass.
 pub(crate) struct DeclarationEnv<'a, State> {
-    /// The whole terminal frame. Declaring never paints, so the frame itself
-    /// stays with [`Ratcn::render`] until the replay; its area is the only part
-    /// a declaration can act on, and it is constant for the pass.
+    /// The root area supplied to [`Ratcn::render`], expressed in the current
+    /// declaration's coordinates: screen coordinates outside a viewport,
+    /// logical coordinates inside one.
     pub(crate) frame_area: Rect,
     pub(crate) area: Rect,
     pub(crate) state: &'a State,
@@ -1162,7 +1162,7 @@ pub(crate) struct DeclarationEnv<'a, State> {
 
 impl<'a, State> DeclarationEnv<'a, State> {
     /// The environment for a root declaration: the app's own closure, covering
-    /// the whole frame.
+    /// the supplied render area.
     fn root(
         frame_area: Rect,
         state: &'a State,
@@ -1797,19 +1797,18 @@ impl<State, Msg> RenderPass<State, Msg> {
         if self.surface.policy(Some(index)).takes_over {
             dim_background(
                 frame.buffer_mut(),
-                self.canvases[index].buffer.area,
+                self.canvases[index]
+                    .buffer
+                    .area
+                    .intersection(self.frame_area),
                 theme.background,
             );
         }
         self.flush_deferred(deferred, Some(index), frame, state, theme);
-        let frame_area = frame.area();
+        let frame_area = self.frame_area;
         let canvas = &self.canvases[index];
         for &rect in &canvas.painted {
-            copy_rect(
-                &canvas.buffer,
-                frame.buffer_mut(),
-                rect.intersection(frame_area),
-            );
+            copy_rect(&canvas.buffer, frame.buffer_mut(), rect, frame_area);
         }
     }
 
@@ -2152,6 +2151,18 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// reaches the screen. Only a panic thrown by painting itself, once the
     /// pass has been accepted, can leave cells behind.
     ///
+    /// `area` is the root declaration area, in absolute frame coordinates.
+    /// Pass `frame.area()` for a whole-frame app, or a pane's rectangle for a
+    /// hosted tree. It supplies the placement bounds floating components read
+    /// through [`DeclareCtx::frame_area`]; layer copies and modal backdrop
+    /// dimming are intersected with it. Viewports retain their logical
+    /// coordinate transforms, and input events still use screen coordinates.
+    ///
+    /// This is not a paint sandbox or a root hit-test boundary. Base-layer
+    /// paint is not clipped to `area`: widgets can paint outside their rects,
+    /// and [`PaintCtx::with_buffer`] gives unprojected base paint the whole
+    /// destination buffer. The host still owns input routing between trees.
+    ///
     /// # Declaring, then drawing
     ///
     /// The closure runs once, and nothing draws while it does. Declaration
@@ -2192,6 +2203,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     pub fn render(
         &mut self,
         frame: &mut Frame,
+        area: Rect,
         state: &State,
         theme: &Theme,
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
@@ -2208,11 +2220,11 @@ impl<State, Msg> Ratcn<State, Msg> {
         // builds the tree and queues the paint it owes. Hover is the one
         // interaction fact that predates the pass, so the declaration may ask
         // for it — see [`DeclareCtx::pointer_within`].
-        let mut pass = RenderPass::new(frame.area());
+        let mut pass = RenderPass::new(area);
         pass.hover_position = self.pointer;
         pass.hover_path.clone_from(&self.hover);
         pass.with_declare_ctx(
-            DeclarationEnv::root(frame.area(), state, theme, &mut self.transients),
+            DeclarationEnv::root(area, state, theme, &mut self.transients),
             declare,
         );
         // Every reason to reject a pass is known once declaration ends, and
@@ -3034,12 +3046,19 @@ impl<State, Msg> Ratcn<State, Msg> {
     }
 }
 
-/// Copy `area` out of `source` and into `destination`, cell for cell.
-fn copy_rect(source: &Buffer, destination: &mut Buffer, area: Rect) {
+/// Copy `area` through `clip`, blanking glyphs cut by the composite boundary.
+/// A paint rect may cover only part of an otherwise intact glyph.
+fn copy_rect(source: &Buffer, destination: &mut Buffer, area: Rect, clip: Rect) {
+    let clip = clip
+        .intersection(source.area)
+        .intersection(destination.area);
+    let area = area.intersection(clip);
     for position in area.positions() {
-        if let (Some(cell), Some(target)) = (source.cell(position), destination.cell_mut(position))
-        {
-            *target = cell.clone();
+        let cell = &source[position];
+        let target = &mut destination[position];
+        *target = cell.clone();
+        if cell.cell_width() > clip.right() - position.x {
+            target.set_symbol(" ").set_diff_option(CellDiffOption::None);
         }
     }
 }

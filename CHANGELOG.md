@@ -8,6 +8,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Ratcn::render` now takes `area` second: pass your pane's rectangle, or
+  `frame.area()` for a whole-frame app. Floating placement, layer copies, and
+  modal dimming respect that area; arbitrary base paint remains unclipped.
+
 ### Added
 
 - `cargo-ratcn`: a Cargo subcommand with terminal-only `cargo ratcn init`, which

@@ -68,7 +68,7 @@ and updates; the library reads state while rendering and returns messages when
 something happens. It enters your app at exactly two call sites — remove them
 and the rest of the loop is untouched:
 
-- `Ratcn::render(frame, state, theme, declare)` — declare which components are
+- `Ratcn::render(frame, area, state, theme, declare)` — declare which components are
   on screen this frame, and paint them.
 - `Ratcn::handle_event(event, state)` — route one input event and maybe get a
   message back.

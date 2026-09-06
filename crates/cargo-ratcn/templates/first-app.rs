@@ -67,7 +67,7 @@ impl App {
             Constraint::Length(ButtonSize::Large.height()),
         );
 
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
+        self.ratcn.render(frame, area, &self.state, theme, |ctx| {
             ctx.component("hello", button, button_area);
         });
         frame.render_widget(ToasterWidget::new(&self.state.toasts, now).themed(theme), area);

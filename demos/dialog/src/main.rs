@@ -153,7 +153,7 @@ impl demo_shared::Demo for App {
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(theme.background));
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
+        self.ratcn.render(frame, area, &self.state, theme, |ctx| {
             let open_button = Button::new("Open Dialog").on_press(|| Msg::OpenDialog);
             let button_area = area.centered(
                 Constraint::Length(open_button.width()),

@@ -6,7 +6,7 @@ description: "How a frame is declared, how ratcn keeps it as the retained surfac
 
 Ratcn enters an app at two calls:
 
-- `Ratcn::render(frame, state, theme, declare)` declares and paints one frame.
+- `Ratcn::render(frame, area, state, theme, declare)` declares and paints one frame.
 - `Ratcn::handle_event(event, state)` routes one event through the last
   successful declaration.
 
@@ -16,7 +16,8 @@ split areas with Ratatui, queue decorative widgets with
 `DeclareCtx::component`:
 
 ```rust
-ratcn.render(frame, &state, &state.theme, |ctx| {
+let area = frame.area();
+ratcn.render(frame, area, &state, &state.theme, |ctx| {
     ctx.paint_widget(Paragraph::new("Account"), title_area);
     ctx.component(
         "save",
@@ -38,6 +39,14 @@ type used by nested scopes, dialog sections, and a component's own `declare`.
 `ctx.state()` is the app state for this declaration pass. Components you declare
 with `component` get an identity and can receive events; widgets you paint are
 decoration and cannot.
+
+Pass a pane's rectangle as `area` to host a tree, or `frame.area()` to use the
+whole frame. `ctx.frame_area()` reports those root bounds, translated into
+logical coordinates inside a viewport. Floating components place themselves
+within them; layer copies and modal dimming are clipped to them. This is not
+a paint sandbox: base widgets can paint outside their rects, and unprojected
+base `PaintCtx::with_buffer` exposes the whole destination buffer. Events still
+arrive in screen coordinates; routing input between hosted trees stays yours.
 
 Declaring does not paint. `ctx.paint` queues a `'static` closure at the point it
 was reached, and the runtime replays the whole queue in that order once the

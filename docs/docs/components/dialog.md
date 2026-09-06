@@ -73,7 +73,8 @@ state.modals.open("confirm", &mut state.focus)?;
 state.modals.close(&mut state.focus);
 
 // In render(), after the base layer:
-ratcn.render(frame, &state, &theme, |ctx| {
+let area = frame.area();
+ratcn.render(frame, area, &state, &theme, |ctx| {
     // ... base content first ...
     if state.modals.is_open("confirm") {
         ctx.modal("confirm", dialog, ctx.area());

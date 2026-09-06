@@ -137,7 +137,7 @@ impl demo_shared::Demo for App {
             .buffer_mut()
             .set_style(area, Style::default().bg(theme.background));
 
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
+        self.ratcn.render(frame, area, &self.state, theme, |ctx| {
             let random_button = Button::new("Make me a toast!")
                 .size(ButtonSize::Large)
                 .on_press(|| Msg::MakeToast);

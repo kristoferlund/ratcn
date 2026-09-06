@@ -116,7 +116,8 @@ impl demo_shared::Demo for App {
             )),
         };
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        let area = board_layout.area;
+        self.ratcn.render(frame, area, state, theme, |ctx| {
             let column_areas = board_layout.column_areas();
             ctx.paint(move |ctx| {
                 for (column_index, column_area) in column_areas.iter().enumerate() {

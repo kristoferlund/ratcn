@@ -118,7 +118,7 @@ impl demo_shared::Demo for App {
             )
             .inner(Margin::new(PADDING_X, PADDING_Y));
         let state = &self.state;
-        self.ratcn.render(frame, state, &theme, |ctx| {
+        self.ratcn.render(frame, area, state, &theme, |ctx| {
             let [stepper, panel, buttons] = area.layout(&shell_layout());
             let step = state.nav.step;
 

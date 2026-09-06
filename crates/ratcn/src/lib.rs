@@ -129,7 +129,7 @@
 //! // Declare the current component surface as part of every frame.
 //! terminal.draw(|frame| {
 //!     let area = frame.area();
-//!     ratcn.render(frame, &state, &theme, |ctx| {
+//!     ratcn.render(frame, area, &state, &theme, |ctx| {
 //!         ctx.component(
 //!             "save",
 //!             Button::new("Save")

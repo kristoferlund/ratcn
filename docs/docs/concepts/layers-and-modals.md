@@ -67,7 +67,8 @@ state says it is open:
 ```rust
 state.modals.open("confirm", &mut state.focus)?;
 
-ratcn.render(frame, &state, &state.theme, |ctx| {
+let area = frame.area();
+ratcn.render(frame, area, &state, &state.theme, |ctx| {
     // Base paint and declarations first.
     if state.modals.is_open("confirm") {
         let area = ctx.area();
