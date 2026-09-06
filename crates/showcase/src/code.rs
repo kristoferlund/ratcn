@@ -19,9 +19,10 @@ use ratcn::{Theme, color};
 /// What a run of source is, as far as coloring is concerned.
 ///
 /// Deliberately finer than the color mapping needs: [`Kind::Type`] and
-/// [`Kind::Function`] resolve to the same role today, and stay separate
-/// variants so that merge can be undone in [`role`] without touching the
-/// scanner.
+/// [`Kind::Function`] resolve to the same role. They stay separate variants
+/// because the scanner can tell them apart, and a kind is a fact about the
+/// source while a role is a decision about paint — merging the two here would
+/// throw away something true to save a match arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// Whitespace, and any identifier that is none of the below.
@@ -95,6 +96,12 @@ pub fn tokens(source: &str) -> Vec<(Kind, &str)> {
             b'"' => {
                 i = string_end(bytes, i + 1);
                 Kind::Str
+            }
+            // `b'a'` is a byte character; the prefix is consumed here and the
+            // quote is scanned by the same code the unprefixed form uses.
+            b'b' if char_end(source, i + 1).is_some() => {
+                i = char_end(source, i + 1).expect("the guard just checked it");
+                Kind::Char
             }
             b'\'' => match char_end(source, i) {
                 Some(end) => {
@@ -177,16 +184,33 @@ fn push<'a>(lines: &mut [Line<'a>], text: &'a str, style: Style) {
 // 2.86:1.
 
 /// How far apart two colors have to be, in the channel that separates them
-/// most, to read as two colors rather than one.
+/// most, to read as two colors rather than one — asked of the theme rather
+/// than fixed here.
 ///
-/// Contrast is the wrong measure for this: it is luminance only, and
-/// Catppuccin's blue and peach are 1.19:1 apart while being obviously different
-/// colors. Channel distance is measured, not chosen: `default_dark` and the
-/// adaptive themes put `primary` 21 channels from `foreground` — `#e5e5e5`
-/// against `#fafafa` — and Gruvbox paints `primary` and `warning` the identical
-/// yellow, 0 apart. The nearest preset above is Catppuccin at 68, so any
-/// threshold between the two behaves the same.
-const NAME_STEP: u8 = 40;
+/// Every theme already states what it considers a visible step between two text
+/// colors: how far it puts its own muted text from its body text. A candidate
+/// at least that far from the body text is, by this palette's own reckoning,
+/// a color its reader can see.
+///
+/// This replaced a constant, and the constant is not coming back. Contrast is
+/// the wrong measure to start with — it is luminance only, and Catppuccin's
+/// blue and peach are 1.19:1 apart while being obviously different colors — but
+/// a *fixed* channel distance is wrong for a second reason: it has to serve
+/// palettes that disagree about what a step is. `default_dark` holds its muted
+/// text 89 channels off its body text and Catppuccin Mocha holds its 20, so one
+/// number cannot mean the same thing to both. It showed: a flat 40 declined
+/// Mocha's `accent` at 33 — a real pink, on one of the most-used terminal
+/// themes there is — and painted nothing but literals and comments, while
+/// admitting anything at 41 elsewhere. Asked of the theme, Mocha's 33 clears its
+/// own 20 and `default_dark`'s near-white `primary` at 21 still fails its 89,
+/// which is the pair of answers any floor has to get right.
+///
+/// [`None`] when the theme will not say — [`Theme::terminal`] leaves both text
+/// colors to the terminal — and a palette that states no step is not
+/// second-guessed.
+fn visible_step(theme: &Theme) -> Option<u8> {
+    channel_distance(to_floor(theme.muted_foreground, theme), theme.foreground)
+}
 
 /// WCAG 2.1 normal text (1.4.3), the same floor ratcn holds its own text roles
 /// to.
@@ -196,8 +220,8 @@ const TEXT_FLOOR: f64 = 4.5;
 ///
 /// Five painted colors at most, and never more: the docs site's own Shiki
 /// output uses six for Rust and spends the sixth on `self` in a second blue,
-/// which nobody reads. A palette that cannot supply five gets four — see
-/// [`name_and_keyword`] for which kind gives one up.
+/// which nobody reads. A palette whose accents cannot carry five paints fewer —
+/// see [`name_and_keyword`].
 fn role(kind: Kind, theme: &Theme) -> Color {
     let (name, keyword) = name_and_keyword(theme);
     match kind {
@@ -209,44 +233,62 @@ fn role(kind: Kind, theme: &Theme) -> Color {
     }
 }
 
-/// What names and keywords paint in, decided together because on some palettes
-/// there is only one color left for the two of them.
+/// What names and keywords paint in, decided together out of the palette's two
+/// accents.
 ///
-/// Normally names take `primary` and keywords `accent`. `primary` cannot serve
-/// on every palette: Gruvbox paints `primary` and `warning` the identical
-/// yellow, so types and literals would be one color, and `default_dark` and
-/// every `Theme::adaptive` — which builds `primary` off the neutral ladder and
-/// takes `accent` from the terminal's own palette — put it a hair off
-/// `foreground`, where a name would vanish into the text.
+/// The two roles are not equal. On a page whose whole job is an API tour,
+/// `Button`, `Msg`, `EventResult`, `render` and `on_press` are the words the
+/// reader came for, and `let` and `if` are not — so **names take whichever
+/// accent stands out further from the body text**, and keywords take the other.
+/// An accent that cannot be told from the body text is not used at all, and
+/// neither is one that cannot be told from the literals beside it: those fall
+/// back to `foreground`, which is honest — this palette has fewer colors than
+/// the mapping wants, and pretending otherwise paints two kinds alike.
 ///
-/// Where it cannot serve, the palette has exactly one accent hue left to spend,
-/// and the two roles **swap** rather than one collapsing: names take `accent`
-/// and keywords take `foreground`. Such a palette paints four colors whichever
-/// of the two gives one up, so the swap costs the reader nothing — a color
-/// carries no meaning across themes, and which hue lands on which kind may
-/// differ per palette, but how many distinct things you can see must not. All
-/// that changes is which kind spends the hue, and on a page whose whole job is
-/// an API tour that has to be `Button`, `Msg`, `EventResult`, `render`,
-/// `on_press` — the words the reader came for — rather than `let` and `if`.
-/// Collapsing names instead left four of the first snippet's six lines with no
-/// color at all under the two palettes almost every reader sees.
+/// This compares rather than thresholds, and that is the point. A threshold
+/// deciding *which* accent is a name color is a cliff wherever a palette lands
+/// on it: `default_dark` and Gruvbox need the choice made one way, Catppuccin
+/// the other, and `Theme::adaptive` — which the showcase runs on, and which
+/// builds `primary` off the neutral ladder while taking `accent` from the
+/// terminal's own palette — solves to distances spread across the whole range,
+/// so no number is safe. Catppuccin Latte missing a 40-channel threshold by one
+/// is a symptom of that, not the bug. A comparison has no cliff to land on:
+/// moving an accent closer to the body text can only ever demote it behind the
+/// other one.
 ///
-/// The swap needs `accent` to be distinguishable from the literals beside it,
-/// which it is on every palette that takes this branch (56 channels apart on
-/// the closest, Gruvbox). It does not need a second guard on `accent` itself:
-/// there is no third hue to fall back to, and a palette whose `accent` is close
-/// to its `foreground` paints an indistinct keyword today for exactly the same
-/// reason.
+/// A color carries no meaning across themes, so which hue lands on which kind
+/// may differ per palette, and so does how many colors a palette can carry —
+/// three on a terminal whose accents both sit close to its body text, five on
+/// Catppuccin. What must not differ is that every color the block paints is
+/// either plainly another one or plainly not: no near-misses, which is what
+/// [`separated`] is asked, twice, above, and what
+/// `no_painted_color_is_a_near_miss_for_another` holds every palette to.
+///
+/// Comments are outside that guarantee, and deliberately: they take the
+/// theme's own `muted_foreground`, which Gruvbox, Nord and Tokyo Night hold
+/// 20–31 channels off `foreground`. How far a theme de-emphasises its muted
+/// text is the theme's decision, not this module's to overrule.
 fn name_and_keyword(theme: &Theme) -> (Color, Color) {
-    let primary = to_floor(theme.primary, theme);
-    let accent = to_floor(theme.accent, theme);
-    let distinct =
-        separated(primary, theme.foreground) && separated(primary, to_floor(theme.warning, theme));
-    if distinct {
-        (primary, accent)
-    } else {
-        (accent, theme.foreground)
-    }
+    let literals = to_floor(theme.warning, theme);
+    // Furthest from the body text first. A distance that cannot be measured —
+    // `Theme::terminal` paints in colors this cannot read — sorts as the
+    // furthest, and the stable sort then leaves `primary` where it was.
+    let mut accents = [
+        to_floor(theme.primary, theme),
+        to_floor(theme.accent, theme),
+    ];
+    accents.sort_by_key(|color| {
+        std::cmp::Reverse(channel_distance(*color, theme.foreground).unwrap_or(u8::MAX))
+    });
+    let usable = |color: Color| {
+        (separated(color, theme.foreground, theme) && separated(color, literals, theme))
+            .then_some(color)
+    };
+    let [name, keyword] = accents;
+    (
+        usable(name).unwrap_or(theme.foreground),
+        usable(keyword).unwrap_or(theme.foreground),
+    )
 }
 
 /// `color` lifted onto the text floor against the background it is painted on,
@@ -272,18 +314,29 @@ fn to_floor(color: Color, theme: &Theme) -> Color {
         .unwrap_or(theme.foreground)
 }
 
-/// Whether two colors are far enough apart to read as two colors.
+/// How far apart two colors are in the channel that separates them most, or
+/// [`None`] when one of them has no channels to read.
 ///
-/// [`Theme::terminal`] paints in `Color::Reset` and ANSI-indexed colors, whose
-/// channels nothing here can read: that palette is the user's own, and
-/// second-guessing it is out of scope. An unreadable color is taken as
-/// separated, which is what makes the guards above no-ops there.
-fn separated(a: Color, b: Color) -> bool {
-    match (color::resolve_rgb(a), color::resolve_rgb(b)) {
-        (Some(a), Some(b)) => {
-            let apart = |a: u8, b: u8| a.abs_diff(b);
-            apart(a.0, b.0).max(apart(a.1, b.1)).max(apart(a.2, b.2)) >= NAME_STEP
-        }
+/// [`Theme::terminal`] is the palette that answers [`None`]: it leaves the
+/// background and the body text as [`Color::Reset`], which is the terminal's
+/// own and carries nothing to measure. Its accents are ordinary *named* colors,
+/// which resolve fine — so a comparison against them is real arithmetic and
+/// passes on the palette's merits, not by exemption.
+fn channel_distance(a: Color, b: Color) -> Option<u8> {
+    let (a, b) = (color::resolve_rgb(a)?, color::resolve_rgb(b)?);
+    let apart = |a: u8, b: u8| a.abs_diff(b);
+    Some(apart(a.0, b.0).max(apart(a.1, b.1)).max(apart(a.2, b.2)))
+}
+
+/// Whether two colors are far enough apart, by `theme`'s own reckoning, to read
+/// as two colors. See [`visible_step`].
+///
+/// A distance nothing can measure is taken as separated, and so is a theme that
+/// states no step: the unreadable half is the user's own terminal color, and
+/// second-guessing it is out of scope.
+fn separated(a: Color, b: Color, theme: &Theme) -> bool {
+    match (channel_distance(a, b), visible_step(theme)) {
+        (Some(apart), Some(step)) => apart >= step,
         _ => true,
     }
 }
@@ -382,13 +435,23 @@ fn attribute_body(bytes: &[u8], start: usize) -> Option<usize> {
 }
 
 /// Past the `]` matching an attribute's `[`, so the whole attribute is one run.
+///
+/// Strings inside are skipped whole. A `]` in one is not a bracket —
+/// `#[cfg(feature = "]")]` is real Rust — and counting it would end the
+/// attribute early, leaving the rest of the file to scan as one unterminated
+/// string literal.
 fn attribute_end(bytes: &[u8], start: usize) -> usize {
     let Some(open) = attribute_body(bytes, start) else {
         return start + 1;
     };
     let mut depth = 0_usize;
-    for (i, byte) in bytes.iter().enumerate().skip(open) {
-        match byte {
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i = string_end(bytes, i + 1);
+                continue;
+            }
             b'[' => depth += 1,
             b']' => {
                 depth -= 1;
@@ -398,6 +461,7 @@ fn attribute_end(bytes: &[u8], start: usize) -> usize {
             }
             _ => {}
         }
+        i += 1;
     }
     bytes.len()
 }
@@ -457,6 +521,9 @@ fn prefixed_string_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// Past the closing `'` of a character literal at `start`, or `None` when the
 /// `'` opens a lifetime instead.
 ///
+/// `b'a'` is scanned by pointing this at the quote, one byte on: the prefix is
+/// the caller's to consume, exactly as it is for `b"..."`.
+///
 /// One lookahead decides it: `'a'` has a quote one character on, `'a` does not.
 fn char_end(source: &str, start: usize) -> Option<usize> {
     let rest = source.get(start + 1..)?;
@@ -494,8 +561,6 @@ fn number_end(bytes: &[u8], start: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use super::*;
 
     /// Real ratcn code, and the snapshot's subject: lifetimes, doc comments, a
@@ -514,6 +579,9 @@ mod tests {
         "r\"raw\" r#\"ra\"w\"# br#\"bytes\"# b\"bytes\" \"esc\\\"aped\"",
         "/* /* nested */ */ // line\n/// doc\n//! inner",
         "#[derive(Debug)] #![allow(dead_code)] #[cfg(all(a, b))]",
+        // A `]` inside a string is not the attribute's closing bracket.
+        "#[cfg(feature = \"]\")] fn after() {}",
+        "b'a' b'\\n' b\"bytes\" b_ident",
         "0..=100 1.0 3u32 0xff 1_000_usize 9.",
         "vec![1] a != b x!=y Some(1) String::new() é_ident",
         "let unterminated = \"oops",
@@ -613,6 +681,19 @@ mod tests {
         assert_eq!(one("/// doc"), Kind::Comment);
         assert_eq!(one("#[derive(Debug)]"), Kind::Attribute);
         assert_eq!(
+            one("#[cfg(feature = \"]\")]"),
+            Kind::Attribute,
+            "a `]` inside a string does not close the attribute — miscounting it \
+             leaves the whole rest of the file scanning as one string"
+        );
+        assert_eq!(one("b'a'"), Kind::Char, "a byte character, like b\"...\"");
+        assert_eq!(one("b'\\n'"), Kind::Char);
+        assert_eq!(
+            tokens("b_ident")[0].0,
+            Kind::Text,
+            "and a plain word starting with b is still a word"
+        );
+        assert_eq!(
             one("3u32"),
             Kind::Number,
             "the suffix is part of the number"
@@ -651,8 +732,33 @@ mod tests {
         Kind::Lifetime,
     ];
 
-    /// The themes the mapping has to hold for: the presets, plus a solved one
-    /// on either polarity, whose palette is not known until it runs.
+    /// Catppuccin Latte's sixteen ANSI colors, as a terminal reports them.
+    ///
+    /// A real palette rather than a made-up one, and this one in particular:
+    /// it is where a threshold-picked name color went wrong, and
+    /// `Theme::adaptive` is what the showcase actually runs on.
+    const LATTE: [Color; 16] = [
+        Color::Rgb(0x5c, 0x5f, 0x77),
+        Color::Rgb(0xd2, 0x0f, 0x39),
+        Color::Rgb(0x40, 0xa0, 0x2b),
+        Color::Rgb(0xdf, 0x8e, 0x1d),
+        Color::Rgb(0x1e, 0x66, 0xf5),
+        Color::Rgb(0xea, 0x76, 0xcb),
+        Color::Rgb(0x17, 0x92, 0x99),
+        Color::Rgb(0xac, 0xb0, 0xbe),
+        Color::Rgb(0x6c, 0x6f, 0x85),
+        Color::Rgb(0xd2, 0x0f, 0x39),
+        Color::Rgb(0x40, 0xa0, 0x2b),
+        Color::Rgb(0xdf, 0x8e, 0x1d),
+        Color::Rgb(0x1e, 0x66, 0xf5),
+        Color::Rgb(0xea, 0x76, 0xcb),
+        Color::Rgb(0x17, 0x92, 0x99),
+        Color::Rgb(0xba, 0xc2, 0xde),
+    ];
+
+    /// The themes the mapping has to hold for: the presets, plus solved ones —
+    /// the case the showcase itself runs, and the one the presets cannot stand
+    /// in for, since an adaptive palette is not known until it runs.
     fn themes() -> Vec<Theme> {
         let mut themes = Theme::presets().to_vec();
         themes.push(Theme::adaptive(
@@ -663,6 +769,21 @@ mod tests {
         themes.push(Theme::adaptive(
             Color::Rgb(10, 10, 10),
             Color::Rgb(250, 250, 250),
+            None,
+        ));
+        themes.push(Theme::adaptive(
+            Color::Rgb(0xef, 0xf1, 0xf5),
+            Color::Rgb(0x4c, 0x4f, 0x69),
+            Some(&LATTE),
+        ));
+        themes.push(Theme::adaptive(
+            Color::Rgb(0x1e, 0x1e, 0x2e),
+            Color::Rgb(0xcd, 0xd6, 0xf4),
+            Some(&MOCHA),
+        ));
+        themes.push(Theme::adaptive(
+            Color::Rgb(90, 90, 95),
+            Color::Rgb(200, 200, 205),
             None,
         ));
         themes
@@ -677,10 +798,9 @@ mod tests {
         assert_ne!(role(Kind::Type, &theme), role(Kind::Str, &theme));
     }
 
-    /// Where `primary` cannot be a name color, names and keywords swap rather
-    /// than one of them collapsing into the body text: the palette's one
-    /// remaining hue goes to the names, which on an API tour are the words the
-    /// reader came for.
+    /// Where a palette has one usable accent, it goes to the names — on an API
+    /// tour those are the words the reader came for — and the keywords take the
+    /// body color rather than something that would look like the literals.
     #[test]
     fn a_palette_with_one_hue_to_spare_spends_it_on_names_not_keywords() {
         for theme in [
@@ -708,33 +828,137 @@ mod tests {
         assert_eq!(role(Kind::Keyword, &theme), theme.accent);
     }
 
-    /// What the swap has to buy, stated as the property behind it: a palette
-    /// that cannot supply a name color loses exactly one of the five, whichever
-    /// kind gives it up — so spending the survivor on names is free — and names
-    /// stay distinguishable from the literals beside them on every palette.
+    /// No two colors the block paints are nearly alike: each pair is either the
+    /// same color or plainly a different one.
+    ///
+    /// This is what the mapping guarantees, and it is not "the same number of
+    /// colors everywhere" — that count runs from three to five across the
+    /// palettes below, because a palette whose accents both sit close to its
+    /// body text has fewer colors to give. Comments are excluded on purpose:
+    /// they take the theme's own `muted_foreground`, and several themes hold
+    /// that within a near-miss of `foreground` themselves.
     #[test]
-    fn a_palette_loses_at_most_one_of_the_five_colors() {
+    fn no_painted_color_is_a_near_miss_for_another() {
         for theme in themes() {
-            let painted: BTreeSet<String> = KINDS
-                .iter()
-                .map(|kind| format!("{:?}", role(*kind, &theme)))
-                .collect();
-            let (primary, warning) = (
+            let (name, keyword) = name_and_keyword(&theme);
+            let chosen = [
+                ("body text", theme.foreground),
+                ("keywords", keyword),
+                ("names", name),
+                ("literals", to_floor(theme.warning, &theme)),
+            ];
+            for (index, (role, color)) in chosen.iter().enumerate() {
+                for (other_role, other) in &chosen[index + 1..] {
+                    assert!(
+                        color == other || separated(*color, *other, &theme),
+                        "{}: {role} and {other_role} are {:?} channels apart — \
+                         near enough to look like a mistake, far enough to look deliberate",
+                        theme.name,
+                        channel_distance(*color, *other),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Catppuccin Mocha's sixteen ANSI colors, as a terminal reports them.
+    ///
+    /// The palette that made the fixed floor untenable: its `accent` sits 33
+    /// channels from its body text, which a flat 40 declined and its own
+    /// 20-channel muted step accepts.
+    const MOCHA: [Color; 16] = [
+        Color::Rgb(0x1e, 0x1e, 0x2e),
+        Color::Rgb(0xf3, 0x8b, 0xa8),
+        Color::Rgb(0xa6, 0xe3, 0xa1),
+        Color::Rgb(0xf9, 0xe2, 0xaf),
+        Color::Rgb(0x89, 0xb4, 0xfa),
+        Color::Rgb(0xf5, 0xc2, 0xe7),
+        Color::Rgb(0x94, 0xe2, 0xd5),
+        Color::Rgb(0xcd, 0xd6, 0xf4),
+        Color::Rgb(0x58, 0x5b, 0x70),
+        Color::Rgb(0xf3, 0x8b, 0xa8),
+        Color::Rgb(0xa6, 0xe3, 0xa1),
+        Color::Rgb(0xf9, 0xe2, 0xaf),
+        Color::Rgb(0x89, 0xb4, 0xfa),
+        Color::Rgb(0xf5, 0xc2, 0xe7),
+        Color::Rgb(0x94, 0xe2, 0xd5),
+        Color::Rgb(0xcd, 0xd6, 0xf4),
+    ];
+
+    /// The two cases any visibility floor has to get right, and the reason it
+    /// is asked of the theme instead of fixed here.
+    ///
+    /// They are 12 channels apart and want opposite answers, so no single
+    /// number serves both: `default_dark`'s near-white `primary` at 21 is
+    /// genuinely invisible in its body text, and Catppuccin Mocha's pink
+    /// `accent` at 33 is plainly a color. Each theme's own muted step — 89 and
+    /// 20 — separates them, because a palette that de-emphasises hard means
+    /// something different by "a step" than one that de-emphasises gently.
+    #[test]
+    fn the_floor_each_theme_sets_admits_a_real_accent_and_declines_an_invisible_one() {
+        let dark = Theme::default_dark();
+        assert_eq!(visible_step(&dark), Some(89), "default_dark's own step");
+        assert_eq!(
+            channel_distance(to_floor(dark.primary, &dark), dark.foreground),
+            Some(21),
+            "and how far its `primary` stands off the body text"
+        );
+        assert_eq!(
+            role(Kind::Keyword, &dark),
+            dark.foreground,
+            "a near-white `primary` is not a color anyone can read in the text"
+        );
+
+        let mocha = Theme::adaptive(
+            Color::Rgb(0x1e, 0x1e, 0x2e),
+            Color::Rgb(0xcd, 0xd6, 0xf4),
+            Some(&MOCHA),
+        );
+        assert_eq!(visible_step(&mocha), Some(20), "Mocha's own step");
+        assert_eq!(
+            channel_distance(to_floor(mocha.accent, &mocha), mocha.foreground),
+            Some(33),
+            "and how far its `accent` stands off the body text"
+        );
+        assert_eq!(
+            role(Kind::Type, &mocha),
+            to_floor(mocha.accent, &mocha),
+            "a pink at 33 is a color, and a fixed floor of 40 threw it away — \
+             leaving one of the most-used terminal themes with literals and \
+             comments and nothing else"
+        );
+    }
+
+    /// The comparison has no threshold to fall off.
+    ///
+    /// Catppuccin Latte is why: its `primary` sits 41 channels from its body
+    /// text, one the wrong side of a 40-channel cut, so a mapping that picked
+    /// the name color by threshold painted its names near-black while `let` and
+    /// `if` got a loud purple. Nothing about 41 is special, and no other number
+    /// is either — across a spread of `Theme::adaptive` solves the distance
+    /// takes very nearly every value there is.
+    #[test]
+    fn the_name_color_is_whichever_accent_stands_out_further() {
+        for theme in themes() {
+            let (name, _) = name_and_keyword(&theme);
+            let (primary, accent) = (
                 to_floor(theme.primary, &theme),
-                to_floor(theme.warning, &theme),
+                to_floor(theme.accent, &theme),
             );
-            let swapped = !(separated(primary, theme.foreground) && separated(primary, warning));
-            let expected = if swapped { 4 } else { 5 };
-            assert_eq!(
-                painted.len(),
-                expected,
-                "{}: the mapping paints {} colors, not the {expected} this palette owes",
-                theme.name,
-                painted.len()
-            );
+            let distance = |color| channel_distance(color, theme.foreground).unwrap_or(u8::MAX);
+            let (far, near) = if distance(accent) > distance(primary) {
+                (accent, primary)
+            } else {
+                (primary, accent)
+            };
             assert!(
-                separated(role(Kind::Type, &theme), role(Kind::Str, &theme)),
-                "{}: names and literals are not two colors",
+                name == far || name == theme.foreground,
+                "{}: the names took the accent nearer the body text",
+                theme.name
+            );
+            assert_ne!(
+                name, near,
+                "{}: the names took the accent nearer the body text",
                 theme.name
             );
         }

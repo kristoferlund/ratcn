@@ -8,7 +8,7 @@
 //! from the same arithmetic and cannot drift apart.
 
 use ratatui::{
-    layout::{Constraint, Layout, Margin, Rect, Size},
+    layout::{Constraint, Margin, Rect, Size},
     style::{Color, Modifier, Style},
     text::{Line, Text},
     widgets::{Block, Paragraph},
@@ -17,33 +17,32 @@ use ratcn::{
     Button, ButtonSize, ScrollArea,
     geometry::wrapped_height,
     runtime::{DeclareCtx, FocusState},
-    text_width::wrap_to_width,
 };
 use tui_big_text::{BigText, PixelSize};
 
-use crate::{AppState, Msg, View, chrome, scroll::Scroll};
+use crate::{
+    AppState, Msg, View, chrome,
+    page_geometry::{
+        BOTTOM_PADDING, HERO_WIDTH, Scroll, TOP_PADDING, centered, place, text_width, wrapped,
+    },
+};
 
 /// The scroll area's child id. Nothing focuses the page by name: focus landing
 /// inside it would be revealed, and a landing page that opens scrolled to its
 /// own middle reads as broken. Tab reaches it, and the wheel needs no focus.
 const ID: &str = "page";
 
-/// The hero buttons' child ids, in declaration order. [`PageLayout::reveal`]
+/// The hero buttons' child ids, in declaration order. [`Layout::reveal`]
 /// matches focus against them, so the ids and the rects stay one list.
 const BUTTON_IDS: [&str; 2] = ["getting-started", "demos"];
 
-/// The site's 880-pixel hero column, at a 12-pixel cell. The Getting started
-/// page sets its prose to the same measure.
-pub const HERO_WIDTH: u16 = 74;
-/// Its 620-pixel lede column, at the same cell.
+/// The site's 620-pixel lede column, at the hero column's 12-pixel cell.
 const LEDE_WIDTH: u16 = 52;
 
-const TOP_PADDING: u16 = 3;
 /// Between the hero's blocks.
 const GAP: u16 = 2;
 /// Between the preview window and the caption that explains it.
 const CAPTION_GAP: u16 = 1;
-const BOTTOM_PADDING: u16 = 2;
 /// Between the two hero buttons, and between them when they stack.
 const BUTTON_GAP: u16 = 2;
 
@@ -73,9 +72,9 @@ const QUADRANT_WIDTH: u16 = 60;
 const LEDE: &str = "A set of beautifully designed components that you can copy and paste into your Ratatui apps. Themeable. App-owned state. Open Source. Open Code.";
 
 /// The hero buttons are the header's two links again, under the labels the
-/// header uses: one destination, one name.
-const GET_STARTED: &str = "Getting started";
-const DEMOS: &str = "Demos";
+/// header names: one destination, one name.
+const GET_STARTED: &str = chrome::labels::GETTING_STARTED;
+const DEMOS: &str = chrome::labels::DEMOS;
 
 /// The site says WebAssembly here; in a terminal the same claim is the other
 /// way round.
@@ -102,7 +101,7 @@ pub enum Tier {
 /// Everything else is what the view needs around that: how far the page
 /// scrolls, where it is scrolled to, and where the embedded demo goes.
 #[derive(Debug, Clone, Copy)]
-pub struct PageLayout {
+pub struct Layout {
     title: Rect,
     tier: Tier,
     lede: Rect,
@@ -122,7 +121,7 @@ pub struct PageLayout {
 
 /// Measure the page for a body of `body`, scrolled to `offset`.
 #[must_use]
-pub fn layout(body: Rect, offset: u16) -> PageLayout {
+pub fn layout(body: Rect, offset: u16) -> Layout {
     // The scroll area always keeps a gutter column for its scrollbar.
     let width = body.width.saturating_sub(1);
     let hero = HERO_WIDTH.min(width);
@@ -169,7 +168,7 @@ pub fn layout(body: Rect, offset: u16) -> PageLayout {
     // Nothing scrolls horizontally, so the demo keeps the window's own columns
     // and only the rows move under it.
     let column = Rect::new(body.x + interior.x, body.y, interior.width, body.height);
-    PageLayout {
+    Layout {
         title,
         tier: tier(width),
         lede,
@@ -182,7 +181,7 @@ pub fn layout(body: Rect, offset: u16) -> PageLayout {
     }
 }
 
-impl PageLayout {
+impl Layout {
     /// The offset that brings the hero button `focus` names fully into view,
     /// or [`None`] when it names neither or the page already shows it.
     ///
@@ -211,16 +210,19 @@ impl PageLayout {
 
 /// Declare the page over `body`. `live` says the embedded demo has the input,
 /// which is what the preview window's frame tells the user.
-pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, body: Rect, page: PageLayout, live: bool) {
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, body: Rect, page: Layout, live: bool) {
     let area = ScrollArea::new(page.scroll.content)
-        .scroll(|state: &AppState| state.page_scroll, Msg::PageScrolled)
+        .scroll(
+            |state: &AppState| state.landing_scroll,
+            Msg::LandingScrolled,
+        )
         .content(move |ctx| content(ctx, page, live));
     ctx.component(ID, area, body);
 }
 
 /// Paint the blocks and declare the two buttons, inside the scroll area's
 /// logical content rect.
-fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: PageLayout, live: bool) {
+fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: Layout, live: bool) {
     let origin = ctx.area();
     let theme = *ctx.theme;
 
@@ -228,7 +230,7 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: PageLayout, live: bool
     match page.tier {
         Tier::Plain => ctx.paint_widget(
             Paragraph::new(
-                wrapped(TITLE, title.width).style(
+                hero_text(TITLE, title.width).style(
                     Style::default()
                         .fg(theme.foreground)
                         .add_modifier(Modifier::BOLD),
@@ -242,7 +244,7 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: PageLayout, live: bool
     let lede = place(page.lede, origin);
     ctx.paint_widget(
         Paragraph::new(
-            wrapped(LEDE, lede.width).style(Style::default().fg(theme.muted_foreground)),
+            hero_text(LEDE, lede.width).style(Style::default().fg(theme.muted_foreground)),
         ),
         lede,
     );
@@ -278,15 +280,18 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: PageLayout, live: bool
     let caption = place(page.caption, origin);
     // The hint is measured like the caption above it rather than assumed to be
     // one row, so a width that makes it wrap gets the row it needs.
-    let [lines, hint] = caption.layout(&Layout::vertical([
+    let [lines, hint] = caption.layout(&ratatui::layout::Layout::vertical([
         Constraint::Length(wrapped_height(CAPTION, caption.width)),
         Constraint::Fill(1),
     ]));
     ctx.paint_widget(
-        Paragraph::new(wrapped(CAPTION, lines.width).style(muted)),
+        Paragraph::new(hero_text(CAPTION, lines.width).style(muted)),
         lines,
     );
-    ctx.paint_widget(Paragraph::new(wrapped(HINT, hint.width).style(muted)), hint);
+    ctx.paint_widget(
+        Paragraph::new(hero_text(HINT, hint.width).style(muted)),
+        hint,
+    );
 }
 
 /// Where the embedded region lands on screen, and which of its own rows that
@@ -375,38 +380,10 @@ fn button_width(label: &str) -> u16 {
     Button::<Msg>::new(label).width()
 }
 
-/// `text` wrapped to `width` by the same code [`wrapped_height`] measures it
-/// with, so the paint cannot need a row the layout did not reserve.
-fn wrapped(text: &'static str, width: u16) -> Text<'static> {
-    Text::from(
-        wrap_to_width(text, usize::from(width.max(1)))
-            .into_iter()
-            .map(|line| Line::from(line).centered())
-            .collect::<Vec<_>>(),
-    )
-}
-
-/// A content-relative rect, moved onto the content rect at `origin`.
-pub fn place(rect: Rect, origin: Rect) -> Rect {
-    Rect::new(
-        origin.x + rect.x,
-        origin.y + rect.y,
-        rect.width,
-        rect.height,
-    )
-}
-
-/// The left edge that centers `width` cells in `total`.
-pub const fn centered(total: u16, width: u16) -> u16 {
-    total.saturating_sub(width) / 2
-}
-
-/// A text column at its own `maximum`, and never closer than a cell to either
-/// edge of the content — so a narrow terminal does not run the last character
-/// of a line straight into the scrollbar gutter.
-pub const fn text_width(content: u16, maximum: u16) -> u16 {
-    let fits = content.saturating_sub(2);
-    if maximum < fits { maximum } else { fits }
+/// The shared wrap, centered: every text block on this page is a centred
+/// column, and the alignment is the only thing the landing page adds.
+fn hero_text(text: &'static str, width: u16) -> Text<'static> {
+    wrapped(text, width).centered()
 }
 
 #[cfg(test)]
@@ -421,8 +398,8 @@ mod tests {
 
     /// A layout with the scrolling numbers a test wants, and the blocks a real
     /// measurement gives.
-    fn scrolling(offset: u16, viewport: u16, content: u16) -> PageLayout {
-        PageLayout {
+    fn scrolling(offset: u16, viewport: u16, content: u16) -> Layout {
+        Layout {
             scroll: Scroll {
                 content,
                 viewport,
@@ -543,7 +520,7 @@ mod tests {
         // A ten-row viewport over forty rows, with a three-row button at rows
         // 20..23.
         let button = Rect::new(0, 20, 30, 3);
-        let page = |offset| PageLayout {
+        let page = |offset| Layout {
             buttons: [button, Rect::new(0, 34, 10, 3)],
             ..scrolling(offset, 10, 40)
         };
@@ -570,7 +547,7 @@ mod tests {
             "the second button comes to the bottom edge on its own account"
         );
         assert_eq!(
-            PageLayout {
+            Layout {
                 buttons: [button, Rect::new(0, 38, 10, 3)],
                 ..scrolling(0, 10, 40)
             }

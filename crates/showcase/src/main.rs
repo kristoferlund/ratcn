@@ -11,7 +11,9 @@ mod code;
 mod demos;
 mod getting_started;
 mod page;
-mod scroll;
+mod page_geometry;
+#[cfg(test)]
+mod snapshot;
 
 use std::{io, time::Duration};
 
@@ -61,7 +63,7 @@ struct AppState {
     /// The nav list's top item.
     nav_scroll: usize,
     /// The landing page's first visible content row.
-    page_scroll: u16,
+    landing_scroll: u16,
     /// The Getting started page's first visible content row. Each scrolling
     /// view keeps its own, so leaving one and coming back finds it where it
     /// was left.
@@ -87,7 +89,7 @@ enum Msg {
     NavFocused(usize, usize),
     NavSelected(usize),
     NavScrolled(usize),
-    PageScrolled(u16),
+    LandingScrolled(u16),
     GettingStartedScrolled(u16),
 }
 
@@ -161,10 +163,13 @@ struct App {
     /// The landing page as it was last measured, which is what its page keys
     /// and its focus reveal are answered from. [`None`] whenever it is not the
     /// view on screen.
-    page: Option<page::PageLayout>,
+    landing_page: Option<page::Layout>,
     /// The Getting started page as it was last measured, for its page keys.
     /// [`None`] whenever it is not the view on screen.
     getting_started: Option<getting_started::Layout>,
+    /// Rows the nav list had on screen, which is what a commit reveals into.
+    /// [`None`] whenever the Demos view is not on screen.
+    nav_rows: Option<u16>,
 }
 
 impl App {
@@ -180,16 +185,17 @@ impl App {
                 .collect(),
             canvas: Terminal::new(TestBackend::new(1, 1)).expect("an offscreen canvas opens"),
             embed: None,
-            page: None,
+            landing_page: None,
             getting_started: None,
+            nav_rows: None,
         }
     }
 
     fn update(&mut self, msg: Msg) {
         match msg {
             Msg::FocusChanged(focus) => {
-                if let Some(offset) = self.page.and_then(|page| page.reveal(&focus)) {
-                    self.state.page_scroll = offset;
+                if let Some(offset) = self.landing_page.and_then(|page| page.reveal(&focus)) {
+                    self.state.landing_scroll = offset;
                 }
                 self.state.focus = focus;
             }
@@ -208,13 +214,19 @@ impl App {
             }
             // A click commits without a preceding move, so the cursor follows
             // the row that was committed: whatever the user does next with the
-            // arrows continues from where they clicked.
+            // arrows continues from where they clicked. And the row is scrolled
+            // into view, because the wheel can have left it off screen — see
+            // [`demos::revealed`].
             Msg::NavSelected(index) => {
                 self.state.showing = index;
                 self.state.cursor = index;
+                if let Some(rows) = self.nav_rows {
+                    self.state.nav_scroll =
+                        demos::revealed(index, self.state.nav_scroll, usize::from(rows));
+                }
             }
             Msg::NavScrolled(offset) => self.state.nav_scroll = offset,
-            Msg::PageScrolled(offset) => self.state.page_scroll = offset,
+            Msg::LandingScrolled(offset) => self.state.landing_scroll = offset,
             Msg::GettingStartedScrolled(offset) => self.state.getting_started_scroll = offset,
         }
     }
@@ -285,7 +297,10 @@ impl App {
         let Event::Key(key) = event else {
             return false;
         };
-        if self.state.view != View::Demos || key.code != KeyCode::Right {
+        // Modifiers are gated the way [`App::page_key`] gates them: a chord is
+        // the app's or the terminal's, and Ctrl+Right must not hand the demo
+        // the keyboard behind the user's back.
+        if self.state.view != View::Demos || key.modifiers.any() || key.code != KeyCode::Right {
             return false;
         }
         self.enter();
@@ -293,7 +308,7 @@ impl App {
     }
 
     /// Scroll whichever page is showing on a page key the chrome passed on.
-    /// See [`scroll::Scroll::scrolled`] — both scrolling views answer from the
+    /// See [`page_geometry::Scroll::scrolled`] — both scrolling views answer from the
     /// same arithmetic, over their own offset.
     fn page_key(&mut self, event: &Event) -> bool {
         let Event::Key(key) = event else {
@@ -304,12 +319,12 @@ impl App {
         }
         let scrolled = match self.state.view {
             View::Landing => self
-                .page
-                .and_then(|page| page.scroll.scrolled(key.code))
-                .map(Msg::PageScrolled),
+                .landing_page
+                .and_then(|landing| landing.scroll.scrolled(key.code))
+                .map(Msg::LandingScrolled),
             View::GettingStarted => self
                 .getting_started
-                .and_then(|page| page.scroll.scrolled(key.code))
+                .and_then(|guide| guide.scroll.scrolled(key.code))
                 .map(Msg::GettingStartedScrolled),
             View::Demos => None,
         };
@@ -364,6 +379,7 @@ impl App {
             source_row: 0,
         };
         self.embed = Some(embed);
+        self.nav_rows = Some(demos::visible_rows(columns.nav));
 
         chrome::header_rule(frame.buffer_mut(), bands, theme);
         demos::separators(
@@ -386,8 +402,8 @@ impl App {
     /// The landing view: the site's front page, scrolling, with the demo
     /// blitted into its preview window.
     fn draw_landing(&mut self, frame: &mut Frame, bands: &chrome::Bands, theme: &Theme) {
-        let page = page::layout(bands.body, self.state.page_scroll);
-        self.page = Some(page);
+        let page = page::layout(bands.body, self.state.landing_scroll);
+        self.landing_page = Some(page);
         self.embed = page
             .embed
             .map(|(rect, source_row)| Embed { rect, source_row });
@@ -535,8 +551,9 @@ impl demo_shared::Demo for App {
         // frame that replaces it: each view then sets only what it owns, and a
         // view that owns none of it cannot inherit another's.
         self.embed = None;
-        self.page = None;
+        self.landing_page = None;
         self.getting_started = None;
+        self.nav_rows = None;
 
         let Some(bands) = chrome::layout(area) else {
             chrome::too_small(frame, area, theme);
@@ -561,7 +578,7 @@ mod tests {
 
     use ratcn::{
         Button,
-        runtime::{KeyEvent, ScrollDirection},
+        runtime::{KeyEvent, Modifiers, ScrollDirection},
     };
 
     use super::*;
@@ -669,6 +686,11 @@ mod tests {
     #[test]
     fn the_layout_guard_is_what_keeps_a_small_window_from_painting_outside_it() {
         let min = chrome::min_size();
+        // Pinned, because it is a promise to whoever runs this over SSH rather
+        // than an incidental number: the nav column's widest demo name sets the
+        // width, and the hint lines set the height. A fifth hint costs a row of
+        // everyone's terminal, and should have to be argued for here.
+        assert_eq!((min.width, min.height), (42, 8));
         let mut app = App::new();
 
         let laid_out = text_of(&draw_at(&mut app, min.width, min.height));
@@ -781,7 +803,7 @@ mod tests {
         let Probed { mut app, .. } = probed();
         // Short enough that the hero buttons are below the viewport.
         draw_at(&mut app, 100, 20);
-        assert_eq!(app.state.page_scroll, 0, "the page opens at the top");
+        assert_eq!(app.state.landing_scroll, 0, "the page opens at the top");
 
         for _ in 0..HEADER_LINKS {
             route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
@@ -792,7 +814,7 @@ mod tests {
             "a tab past each header link reaches the page"
         );
         assert!(
-            app.state.page_scroll > 0,
+            app.state.landing_scroll > 0,
             "and the app scrolled its own offset to show the button focus landed on"
         );
     }
@@ -851,7 +873,7 @@ mod tests {
             (HEADER_LINKS + 1, View::Demos),
         ] {
             app.state.view = View::Landing;
-            app.state.page_scroll = 0;
+            app.state.landing_scroll = 0;
             app.state.focus = FocusState::default();
             draw_at(&mut app, 100, 40);
             for _ in 0..tabs {
@@ -911,6 +933,81 @@ mod tests {
 
         route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right)));
         assert!(app.state.entered(), "Right is what enters the demo pane");
+    }
+
+    /// The wheel is the one gesture that separates the cursor from the
+    /// viewport, so it is the one that can commit a row that is nowhere on
+    /// screen. A key labelled "show" has to show something.
+    #[test]
+    fn a_row_committed_after_the_wheel_is_scrolled_into_view() {
+        let mut app = App::new();
+        for slot in &mut app.opened {
+            *slot = Some(Box::new(Probe::default()));
+        }
+        app.update(Msg::Navigate(View::Demos));
+        // Short enough that the nav list holds far fewer rows than the catalog.
+        draw_at(&mut app, 100, 16);
+        let rows = usize::from(app.nav_rows.expect("the nav list is on screen"));
+        assert!(
+            rows < catalog::ENTRIES.len(),
+            "the list has to overflow its window for this to mean anything"
+        );
+
+        route(&mut app, mouse(MouseKind::Click(MouseButton::Left), 2, 2));
+        assert_eq!(app.state.showing, 0, "a row at the top is committed");
+
+        // Wheel the view down past it, which leaves the cursor behind.
+        for _ in 0..6 {
+            route(
+                &mut app,
+                mouse(MouseKind::Scroll(ScrollDirection::Down), 2, 4),
+            );
+        }
+        draw_at(&mut app, 100, 16);
+        assert!(
+            app.state.nav_scroll > 0,
+            "the wheel scrolled the list out from under the cursor"
+        );
+
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Enter)));
+        let showing = app.state.showing;
+        assert!(
+            (app.state.nav_scroll..app.state.nav_scroll + rows).contains(&showing),
+            "row {showing} was committed while the list shows \
+             {}..{}",
+            app.state.nav_scroll,
+            app.state.nav_scroll + rows
+        );
+    }
+
+    /// The two view-level key fallbacks have to agree about modifiers, or one
+    /// of them answers chords the other leaves to the app.
+    #[test]
+    fn a_chord_is_not_one_of_the_view_level_keys() {
+        let mut app = App::new();
+        for slot in &mut app.opened {
+            *slot = Some(Box::new(Probe::default()));
+        }
+        app.update(Msg::Navigate(View::Demos));
+        draw_at(&mut app, 100, 40);
+
+        let held = |ctrl, alt, shift| Modifiers { ctrl, alt, shift };
+        for modifiers in [
+            held(true, false, false),
+            held(false, true, false),
+            held(false, false, true),
+        ] {
+            let mut key = KeyEvent::new(KeyCode::Right);
+            key.modifiers = modifiers;
+            route(&mut app, Event::Key(key));
+            assert!(
+                !app.state.entered(),
+                "{modifiers:?}+Right handed the demo the keyboard"
+            );
+        }
+
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right)));
+        assert!(app.state.entered(), "while plain Right still does");
     }
 
     /// The routing rules while the demo has the input. Each of these is a
@@ -1007,12 +1104,12 @@ mod tests {
             mouse(MouseKind::Scroll(ScrollDirection::Down), column, row),
         );
         assert!(
-            app.state.page_scroll > 0,
+            app.state.landing_scroll > 0,
             "a wheel the demo ignored still scrolls the page under it"
         );
         assert_eq!(app.state.focus, parked, "without disturbing the parking");
 
-        let scrolled = app.state.page_scroll;
+        let scrolled = app.state.landing_scroll;
         route(
             &mut app,
             mouse(MouseKind::Down(MouseButton::Left), column, row),
@@ -1022,6 +1119,6 @@ mod tests {
             "a press the demo ignored must not reach the chrome: it would take \
              focus off the parked path, which is what parking is for"
         );
-        assert_eq!(app.state.page_scroll, scrolled, "and moves nothing");
+        assert_eq!(app.state.landing_scroll, scrolled, "and moves nothing");
     }
 }

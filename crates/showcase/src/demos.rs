@@ -27,12 +27,17 @@ const MIN_PANE_WIDTH: u16 = 20;
 /// What the four lines under the list say, and the keys they name.
 ///
 /// Enter is the list's own — a bound selection consumes it — so entering the
-/// demo pane is Right alone.
+/// demo pane is Right alone. The last two name the demo rather than saying
+/// "interact" and "back", which read as inert on a view that arrives with the
+/// demo not yet entered: naming it says which state the line is about.
+///
+/// The longest label is exactly the room [`nav_text_width`] leaves after the
+/// indent and the key column, so a longer one is clipped rather than wrapped.
 const HINTS: [(&str, &str); 4] = [
     ("↑ ↓", "browse"),
     ("enter", "show"),
-    ("→", "interact"),
-    ("esc", "back"),
+    ("→", "into the demo"),
+    ("esc", "leave the demo"),
 ];
 
 /// The vertical bands of the view.
@@ -135,6 +140,14 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, nav: Rect) {
     // takes the deeper one, the cursor the shallower, so a place and a choice
     // do not read as two choices. Both are padded to the full width, because a
     // `Line` colors the cells it covers and no more.
+    //
+    // The cursor's fill is read back out of an unmodified `ListStyle` because
+    // `nav_style` has just flattened the one this column would have used. That
+    // looks circular and is not: a list's ladder has exactly two row fills and
+    // three backdrops, `nav_style` spends all three backdrops on the page color
+    // so the column does not read as a control, and there is no fourth tone in
+    // the theme to reach for. Deriving one here would invent a color the theme
+    // does not own.
     let style = nav_style(ctx.theme);
     let cursor_background = ListStyle::from_theme(ctx.theme).focused_background;
     let rest = usize::from(list_area.width).saturating_sub(indent);
@@ -179,6 +192,33 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, nav: Rect) {
     );
 }
 
+/// The scroll offset that brings row `index` into a window of `rows` rows
+/// currently starting at `offset` — the smallest move that shows it, or
+/// `offset` itself when it is already there.
+///
+/// The list reveals its own cursor, but only the cursor. The wheel is the one
+/// gesture that leaves the cursor behind, so a row committed after a wheel can
+/// be nowhere on screen, and a key labelled "show" that shows nothing is worse
+/// than no key at all.
+pub const fn revealed(index: usize, offset: usize, rows: usize) -> usize {
+    if rows == 0 {
+        // Nothing is on screen, so there is nowhere to bring the row to.
+        offset
+    } else if index < offset {
+        index
+    } else if index >= offset + rows {
+        index + 1 - rows
+    } else {
+        offset
+    }
+}
+
+/// Rows the nav list has on screen in a body `height` rows tall — what a
+/// reveal has to fit its row into.
+pub fn visible_rows(nav: Rect) -> u16 {
+    rows(nav)[0].height
+}
+
 /// Cells the hints' key column takes: the widest key above, measured rather
 /// than counted, since `↑ ↓` is three cells of seven bytes.
 fn hint_key_width() -> u16 {
@@ -195,12 +235,55 @@ fn hint_key_width() -> u16 {
 /// A list is a control and fills itself with the theme's field color, which
 /// here would box the names off from the hints below them and read as
 /// something to operate rather than as navigation. Only the three backdrops
-/// move; the row fills the theme gave it are what `declare` paints the cursor
-/// and the committed row with, and are then the only fills in the column.
+/// move. The row fills are left alone, and `declare` paints the cursor and the
+/// committed row with them, so they are the only fills in the column.
 fn nav_style(theme: &Theme) -> ListStyle {
     let mut style = ListStyle::from_theme(theme);
     style.background = theme.background;
     style.focused_background = theme.background;
     style.hovered_background = theme.background;
     style
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A committed row has to be on screen, or the key labelled "show" showed
+    /// the user nothing. Minimal in both directions, like every other reveal
+    /// in this crate.
+    #[test]
+    fn a_reveal_is_the_smallest_scroll_that_puts_the_row_on_screen() {
+        // A ten-row window over the list, currently starting at row 20.
+        let reveal = |index| revealed(index, 20, 10);
+
+        assert_eq!(reveal(25), 20, "a row already in the window moves nothing");
+        assert_eq!(reveal(20), 20, "nor the first row of it");
+        assert_eq!(reveal(29), 20, "nor the last");
+        assert_eq!(reveal(4), 4, "a row above comes to the top edge");
+        assert_eq!(
+            reveal(30),
+            21,
+            "and one below to the bottom edge, no further"
+        );
+        assert_eq!(
+            revealed(7, 20, 0),
+            20,
+            "a window with no rows has nowhere to put one"
+        );
+    }
+
+    /// The hints are laid out in the nav column's own width, so a label that
+    /// outgrew it would be silently clipped rather than wrapped.
+    #[test]
+    fn every_hint_fits_the_column_it_is_painted_in() {
+        let room = nav_text_width() - NAV_PADDING - hint_key_width() - 1;
+        for (key, label) in HINTS {
+            assert!(
+                display_width_u16(label) <= room,
+                "{key} {label:?} needs {} of {room} cells",
+                display_width_u16(label)
+            );
+        }
+    }
 }

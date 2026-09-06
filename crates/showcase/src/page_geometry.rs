@@ -1,14 +1,28 @@
-//! The page-key arithmetic both scrolling views answer from.
+//! The measure and the scrolling both prose pages share.
 //!
-//! A [`ScrollArea`] answers Page keys only while focus is inside it, and both
-//! scrolling views open with focus still in the header — so the app answers
-//! them instead, out of the measurement the view just made. One type rather
-//! than one per view: the rule is the same on both pages, and two copies of it
-//! would drift.
-//!
-//! [`ScrollArea`]: ratcn::ScrollArea
+//! The landing page and the Getting started page are laid out by different
+//! code, but they are the same kind of thing on screen: one column of content
+//! in a viewport, scrolled by the same keys. Everything both of them answer
+//! from lives here, so the two cannot drift — which is the same argument the
+//! module makes for [`Scroll`] and then has to keep for the column arithmetic
+//! beside it.
 
-use ratcn::runtime::KeyCode;
+use ratatui::{
+    layout::Rect,
+    text::{Line, Text},
+};
+use ratcn::{runtime::KeyCode, text_width::wrap_to_width};
+
+/// The site's 880-pixel hero column, at a 12-pixel cell. Both pages set their
+/// text to it.
+pub const HERO_WIDTH: u16 = 74;
+
+/// Rows above the first block, on both pages: switching between them in the
+/// header must not move the content up or down a row.
+pub const TOP_PADDING: u16 = 3;
+
+/// Rows below the last block, on both pages.
+pub const BOTTOM_PADDING: u16 = 2;
 
 /// A scrolling page's vertical extent, as the frame that drew it measured it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,8 +71,7 @@ impl Scroll {
     }
 
     /// The last row the page can be scrolled to.
-    #[must_use]
-    pub const fn furthest(&self) -> u16 {
+    const fn furthest(&self) -> u16 {
         self.content.saturating_sub(self.viewport)
     }
 
@@ -68,6 +81,48 @@ impl Scroll {
         let next = next.min(self.furthest());
         (next != self.offset).then_some(next)
     }
+}
+
+/// A text column at its own `maximum`, and never closer than a cell to either
+/// edge of the content — so a narrow terminal does not run the last character
+/// of a line straight into the scrollbar gutter.
+#[must_use]
+pub const fn text_width(content: u16, maximum: u16) -> u16 {
+    let fits = content.saturating_sub(2);
+    if maximum < fits { maximum } else { fits }
+}
+
+/// The left edge that centers `width` cells in `total`.
+#[must_use]
+pub const fn centered(total: u16, width: u16) -> u16 {
+    total.saturating_sub(width) / 2
+}
+
+/// A content-relative rect, moved onto the content rect at `origin`.
+#[must_use]
+pub fn place(rect: Rect, origin: Rect) -> Rect {
+    Rect::new(
+        origin.x + rect.x,
+        origin.y + rect.y,
+        rect.width,
+        rect.height,
+    )
+}
+
+/// `text` wrapped to `width` by the same code
+/// [`wrapped_height`](ratcn::geometry::wrapped_height) measures it with, so the
+/// paint cannot need a row the layout did not reserve.
+///
+/// Lines come back with no alignment of their own; the landing page centers the
+/// result, and the Getting started page leaves it flush left.
+#[must_use]
+pub fn wrapped(text: &'static str, width: u16) -> Text<'static> {
+    Text::from(
+        wrap_to_width(text, usize::from(width.max(1)))
+            .into_iter()
+            .map(Line::from)
+            .collect::<Vec<_>>(),
+    )
 }
 
 #[cfg(test)]
@@ -134,5 +189,19 @@ mod tests {
     fn an_offset_past_the_end_is_clamped_on_the_way_in() {
         assert_eq!(Scroll::new(40, 10, 99).offset, 30);
         assert_eq!(Scroll::new(8, 20, 5).offset, 0, "a page that cannot scroll");
+    }
+
+    /// The wrap the layout measures with is the wrap the paint uses, or a
+    /// block could need a row nothing reserved for it.
+    #[test]
+    fn a_wrapped_paragraph_is_as_tall_as_the_layout_reserved() {
+        let text = "one two three four five six seven eight nine ten eleven twelve";
+        for width in [10, 20, 33, 74] {
+            assert_eq!(
+                wrapped(text, width).lines.len() as u16,
+                ratcn::geometry::wrapped_height(text, width),
+                "at width {width}"
+            );
+        }
     }
 }

@@ -20,6 +20,15 @@ mod ids {
     pub const DEMOS: &str = "demos";
 }
 
+/// What the links say, for the same reason [`ids`] exists: the landing page's
+/// hero buttons are two of these destinations again, and a destination with two
+/// names is two destinations to a reader.
+pub mod labels {
+    pub const HOME: &str = "ratcn";
+    pub const GETTING_STARTED: &str = "Getting started";
+    pub const DEMOS: &str = "Demos";
+}
+
 /// The header and the rule under it.
 const HEADER_ROWS: u16 = 2;
 
@@ -62,9 +71,9 @@ pub fn layout(area: Rect) -> Option<Bands> {
 /// The site's three links, in reading order: the logo, then the two pages the
 /// hero buttons also lead to.
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, state: &AppState, header: Rect) {
-    let home = link("ratcn", View::Landing, state.view);
-    let started = link("Getting started", View::GettingStarted, state.view);
-    let demos = link("Demos", View::Demos, state.view);
+    let home = link(labels::HOME, View::Landing, state.view);
+    let started = link(labels::GETTING_STARTED, View::GettingStarted, state.view);
+    let demos = link(labels::DEMOS, View::Demos, state.view);
 
     let [home_area, started_area, demos_area, _rest] = header.layout(&Layout::horizontal([
         Constraint::Length(home.width()),
