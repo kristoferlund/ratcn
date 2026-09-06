@@ -7,13 +7,10 @@
 
 mod catalog;
 mod chrome;
-mod code;
 mod demos;
 mod getting_started;
 mod page;
 mod page_geometry;
-#[cfg(test)]
-mod snapshot;
 
 use std::{io, time::Duration};
 

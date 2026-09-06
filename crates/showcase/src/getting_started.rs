@@ -19,7 +19,7 @@ use ratcn::{
 };
 
 use crate::{
-    AppState, Msg, code,
+    AppState, Msg,
     page_geometry::{
         BOTTOM_PADDING, HERO_WIDTH, Scroll, TOP_PADDING, centered, place, text_width, wrapped,
     },
@@ -87,17 +87,15 @@ enum Block {
     Body(&'static str),
     /// A paragraph in the muted color.
     Muted(&'static str),
-    /// A shell transcript, in the body color: code, but nothing to color.
-    Shell(&'static str),
-    /// A Rust snippet, colored by [`code::highlight`].
-    Rust(&'static str),
+    /// A snippet, shell or Rust, set as plain text in the body color.
+    Code(&'static str),
 }
 
 impl Block {
     /// Columns this block is inset from the prose column.
     const fn indent(&self) -> u16 {
         match self {
-            Self::Shell(_) | Self::Rust(_) => CODE_INDENT,
+            Self::Code(_) => CODE_INDENT,
             _ => 0,
         }
     }
@@ -121,7 +119,7 @@ impl Block {
             Self::Heading(text) | Self::Body(text) | Self::Muted(text) => {
                 wrapped_height(text, width)
             }
-            Self::Shell(source) | Self::Rust(source) => lines(source),
+            Self::Code(source) => lines(source),
         }
     }
 }
@@ -133,17 +131,17 @@ const BLOCKS: &[Block] = &[
     Block::Muted(PREVIEW),
     Block::Heading(INSTALL),
     Block::Body(INSTALL_INTRO),
-    Block::Shell(INSTALL_SHELL),
+    Block::Code(INSTALL_SHELL),
     Block::Body(INIT_DOES),
     Block::Body(INIT_RUN),
     Block::Heading(COPY),
     Block::Body(COPY_INTRO),
-    Block::Shell(COPY_SHELL),
+    Block::Code(COPY_SHELL),
     Block::Body(COPY_DOES),
     Block::Heading(CHARGE),
     Block::Body(CHARGE_INTRO),
-    Block::Rust(RENDER_SNIPPET),
-    Block::Rust(EVENT_SNIPPET),
+    Block::Code(RENDER_SNIPPET),
+    Block::Code(EVENT_SNIPPET),
     Block::Body(CHARGE_DOES),
     Block::Body(CHARGE_WIDGETS),
     Block::Heading(NEXT),
@@ -196,8 +194,7 @@ fn placed(column_x: u16, column_width: u16) -> (Vec<Rect>, u16) {
     (rects, y.saturating_sub(GAP) + BOTTOM_PADDING)
 }
 
-/// Lines a snippet paints, which is what [`code::highlight`] hands back for a
-/// Rust one: a trailing newline is not a trailing empty line.
+/// Lines a snippet paints: a trailing newline is not a trailing empty line.
 fn lines(source: &str) -> u16 {
     source.lines().count() as u16
 }
@@ -235,59 +232,33 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: Layout) {
             Block::Heading(text) => Paragraph::new(wrapped(text, rect.width)).style(heading),
             Block::Body(text) => Paragraph::new(wrapped(text, rect.width)).style(body),
             Block::Muted(text) => Paragraph::new(wrapped(text, rect.width)).style(muted),
-            Block::Shell(source) => {
-                Paragraph::new(clipped(plain(source, &theme), rect.width, &theme)).style(body)
-            }
-            Block::Rust(source) => {
-                Paragraph::new(clipped(code::highlight(source, &theme), rect.width, &theme))
-            }
+            Block::Code(source) => Paragraph::new(clipped(source, rect.width, &theme)).style(body),
         };
         ctx.paint_widget(paragraph, rect);
     }
 }
 
-/// A snippet as its own lines, uncolored.
-fn plain(source: &'static str, theme: &Theme) -> Vec<Line<'static>> {
-    source
-        .lines()
-        .map(|line| Line::styled(line, Style::default().fg(theme.foreground)))
-        .collect()
-}
-
-/// Every line cut to `width`, with a marker in the last cell of any line that
-/// lost something.
+/// A snippet as its own lines, each cut to `width`, with a marker in the last
+/// cell of any line that lost something.
 ///
 /// Without the marker a clipped snippet does not read as a cropped view of
 /// valid Rust — it reads as invalid Rust. At 47 columns the opening `{` of the
 /// first snippet falls off while the `});` two lines below still closes the
 /// block, and nothing on screen says which of the two is the lie.
-fn clipped<'a>(lines: Vec<Line<'a>>, width: u16, theme: &Theme) -> Text<'a> {
+fn clipped(source: &'static str, width: u16, theme: &Theme) -> Text<'static> {
     let marker = display_width_u16(ELLIPSIS);
     Text::from(
-        lines
-            .into_iter()
+        source
+            .lines()
             .map(|line| {
-                if line.width() as u16 <= width {
-                    return line;
+                if display_width_u16(line) <= width {
+                    return Line::raw(line);
                 }
                 let keep = usize::from(width.saturating_sub(marker));
-                let mut spans: Vec<Span<'a>> = Vec::new();
-                let mut used = 0usize;
-                for span in line.spans {
-                    let room = keep.saturating_sub(used);
-                    if room == 0 {
-                        break;
-                    }
-                    let text = truncate_to_width(&span.content, room);
-                    used += display_width_u16(text) as usize;
-                    let style = span.style;
-                    spans.push(Span::styled(text.to_owned(), style));
-                }
-                spans.push(Span::styled(
-                    ELLIPSIS,
-                    Style::default().fg(theme.muted_foreground),
-                ));
-                Line::from(spans).style(line.style)
+                Line::from(vec![
+                    Span::raw(truncate_to_width(line, keep)),
+                    Span::styled(ELLIPSIS, Style::default().fg(theme.muted_foreground)),
+                ])
             })
             .collect::<Vec<_>>(),
     )
@@ -302,7 +273,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::snapshot;
 
     /// The page's Rust, compiled.
     ///
@@ -410,16 +380,19 @@ mod tests {
     }
 
     /// A snippet's measured height is the height it paints, or the block below
-    /// it would land on top of its last line.
+    /// it would land on top of its last line. Clipping cuts lines; it never
+    /// adds or drops one.
     #[test]
-    fn a_colored_snippet_is_as_tall_as_the_layout_reserved() {
+    fn a_snippet_is_as_tall_as_the_layout_reserved() {
         let theme = Theme::default_dark();
-        for source in [RENDER_SNIPPET, EVENT_SNIPPET] {
-            assert_eq!(
-                code::highlight(source, &theme).len() as u16,
-                lines(source),
-                "the coloring and the measurement disagree on the line count"
-            );
+        for source in [INSTALL_SHELL, COPY_SHELL, RENDER_SNIPPET, EVENT_SNIPPET] {
+            for width in [8, 24, 47, 120] {
+                assert_eq!(
+                    clipped(source, width, &theme).lines.len() as u16,
+                    lines(source),
+                    "at width {width} the paint and the measurement disagree on the line count"
+                );
+            }
         }
     }
 
@@ -429,22 +402,23 @@ mod tests {
     #[test]
     fn a_line_too_wide_for_its_column_is_cut_and_marked() {
         let theme = Theme::default_dark();
-        let lines = code::highlight(RENDER_SNIPPET, &theme);
-        let widest = lines
-            .iter()
-            .map(|line| line.width() as u16)
+        let source = RENDER_SNIPPET;
+        let widest = source
+            .lines()
+            .map(display_width_u16)
             .max()
             .expect("the snippet has lines");
 
         for width in 8..=widest {
-            let text = clipped(lines.clone(), width, &theme);
+            let text = clipped(source, width, &theme);
             for (row, line) in text.lines.iter().enumerate() {
                 assert!(
                     line.width() as u16 <= width,
                     "at width {width} row {row} paints {} cells",
                     line.width()
                 );
-                let cut = lines[row].width() as u16 > width;
+                let cut =
+                    display_width_u16(source.lines().nth(row).expect("a source line")) > width;
                 assert_eq!(
                     line.spans
                         .last()
@@ -455,21 +429,14 @@ mod tests {
             }
         }
 
-        let whole = clipped(lines.clone(), widest, &theme);
+        let whole = clipped(source, widest, &theme);
         assert_eq!(
             whole.lines.iter().map(Line::width).sum::<usize>(),
-            lines.iter().map(Line::width).sum::<usize>(),
+            source
+                .lines()
+                .map(|line| display_width_u16(line) as usize)
+                .sum::<usize>(),
             "a column wide enough for every line takes nothing away"
         );
-    }
-
-    snapshot::snapshot_test! {
-        /// The snippets this page ships are the first Rust most visitors read,
-        /// so an edit that breaks their coloring has to fail here rather than
-        /// ship.
-        name: the_rust_snippets_tokenize_the_same_way_they_did,
-        fixture: "src/getting_started_snapshot.txt",
-        expected: include_str!("getting_started_snapshot.txt"),
-        actual: snapshot::of([RENDER_SNIPPET, EVENT_SNIPPET]),
     }
 }
