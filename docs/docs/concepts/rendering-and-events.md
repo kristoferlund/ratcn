@@ -69,6 +69,40 @@ focused, or contains focus, is offered to `PaintCtx`, once the tree is complete
 and focus has resolved. Hover is the exception: `DeclareCtx::pointer_within()`
 answers it while declaring.
 
+## Offscreen rendering
+
+Use `Ratcn::render_into(buffer, area, state, theme, declare)` when the destination
+is your own `ratatui::buffer::Buffer`, for example a page taller than its visible
+window. Ordinary terminal apps should keep using `render`, which delegates to
+the same lifecycle through the frame's buffer.
+
+```rust
+use ratatui::{buffer::Buffer, layout::Rect};
+
+let area = Rect::new(0, 0, 80, 200);
+let mut page = Buffer::empty(area);
+ratcn.render_into(&mut page, area, &state, &state.theme, |ctx| {
+    // Declare the full page, including content below the visible window.
+});
+```
+
+Allocate and resize the buffer yourself. Rendering does not clear it; clear a
+reused buffer first when old content should disappear. Choose an `area` within
+`buffer.area`: layout receives it unchanged, without validation or silent
+clamping. Coordinates are absolute within the buffer, including its origin;
+they do not restart at `(0, 0)` for a sub-area. Viewports still apply their
+logical-coordinate transforms.
+
+Copying a visible window to the terminal and translating pointer positions back
+into buffer coordinates before `handle_event` are the host's responsibilities.
+The bounds contract is unchanged: floating placement, layer copies, and modal
+dimming respect `area`, but arbitrary base paint is not sandboxed and raw base
+buffer access still reaches the whole destination.
+
+A buffer carries no cursor metadata, and `render_into` reports no caret
+position. Future caret-bearing components may require a caret result from this
+API. There is no cursor output machinery today.
+
 ## What an event sees
 
 A successful render does two things: it paints, and it retains what was declared — the component instances, their identities, their areas, and

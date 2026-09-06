@@ -1702,13 +1702,13 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// declaration belonged to, with the flags the finished tree resolved.
     fn replay_paint(
         &mut self,
-        frame: &mut Frame,
+        buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
         resolved: Resolved<'_>,
     ) {
         for QueuedPaint { slot, paint } in std::mem::take(&mut self.paint_queue) {
-            self.paint_op(paint, slot, frame, state, theme, resolved);
+            self.paint_op(paint, slot, buffer, state, theme, resolved);
         }
     }
 
@@ -1718,7 +1718,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         op: DeclaredPaint<State>,
         slot: PaintSlot,
-        frame: &mut Frame,
+        buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
         resolved: Resolved<'_>,
@@ -1730,7 +1730,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         });
         let hover_position = self.hover_in(slot);
         let target = match slot.layer {
-            None => PaintTarget::frame(frame.buffer_mut(), slot.projection, &mut self.scratch),
+            None => PaintTarget::frame(buffer, slot.projection, &mut self.scratch),
             Some(index) => PaintTarget::canvas(
                 &mut self.canvases[index],
                 slot.projection,
@@ -1767,20 +1767,20 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Layers composite in declaration order, except that every layer outside
     /// the one that has taken the screen over composites before it: what the
     /// takeover covers is inert, and so must not paint above it either.
-    fn finish_frame(&mut self, frame: &mut Frame, state: &State, theme: &Theme) {
+    fn finish_frame(&mut self, buffer: &mut Buffer, state: &State, theme: &Theme) {
         let mut deferred = std::mem::take(&mut self.deferred);
         let takeover = self.surface.takeover_root();
         for index in 0..self.canvases.len() {
             if self.surface.covered_by_takeover(index, takeover) {
-                self.composite_layer(index, &mut deferred, frame, state, theme);
+                self.composite_layer(index, &mut deferred, buffer, state, theme);
             }
         }
         for index in 0..self.canvases.len() {
             if !self.surface.covered_by_takeover(index, takeover) {
-                self.composite_layer(index, &mut deferred, frame, state, theme);
+                self.composite_layer(index, &mut deferred, buffer, state, theme);
             }
         }
-        self.flush_deferred(&mut deferred, None, frame, state, theme);
+        self.flush_deferred(&mut deferred, None, buffer, state, theme);
     }
 
     /// Copy one layer's canvas onto the frame — dimming beneath it first when
@@ -1790,13 +1790,13 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         index: usize,
         deferred: &mut Vec<QueuedPaint<State>>,
-        frame: &mut Frame,
+        buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
     ) {
         if self.surface.policy(Some(index)).takes_over {
             dim_background(
-                frame.buffer_mut(),
+                buffer,
                 self.canvases[index]
                     .buffer
                     .area
@@ -1804,11 +1804,11 @@ impl<State, Msg> RenderPass<State, Msg> {
                 theme.background,
             );
         }
-        self.flush_deferred(deferred, Some(index), frame, state, theme);
+        self.flush_deferred(deferred, Some(index), buffer, state, theme);
         let frame_area = self.frame_area;
         let canvas = &self.canvases[index];
         for &rect in &canvas.painted {
-            copy_rect(&canvas.buffer, frame.buffer_mut(), rect, frame_area);
+            copy_rect(&canvas.buffer, buffer, rect, frame_area);
         }
     }
 
@@ -1818,7 +1818,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         deferred: &mut Vec<QueuedPaint<State>>,
         layer: Option<usize>,
-        frame: &mut Frame,
+        buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
     ) {
@@ -1832,7 +1832,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             hover: &[],
         };
         for QueuedPaint { slot, paint } in theirs {
-            self.paint_op(paint, slot, frame, state, theme, resolved);
+            self.paint_op(paint, slot, buffer, state, theme, resolved);
         }
     }
 
@@ -2153,7 +2153,8 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// `area` is the root declaration area, in absolute frame coordinates.
     /// Pass `frame.area()` for a whole-frame app, or a pane's rectangle for a
-    /// hosted tree. It supplies the placement bounds floating components read
+    /// hosted tree. Choose an area within the frame; it is passed unchanged
+    /// for layout, not silently clamped. Floating components read its bounds
     /// through [`DeclareCtx::frame_area`]; layer copies and modal backdrop
     /// dimming are intersected with it. Viewports retain their logical
     /// coordinate transforms, and input events still use screen coordinates.
@@ -2162,6 +2163,10 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// paint is not clipped to `area`: widgets can paint outside their rects,
     /// and [`PaintCtx::with_buffer`] gives unprojected base paint the whole
     /// destination buffer. The host still owns input routing between trees.
+    ///
+    /// This delegates to [`render_into`](Self::render_into) with the frame's
+    /// buffer. Use that entry point for a caller-owned offscreen buffer rather
+    /// than constructing a terminal just to obtain a frame.
     ///
     /// # Declaring, then drawing
     ///
@@ -2208,6 +2213,49 @@ impl<State, Msg> Ratcn<State, Msg> {
         theme: &Theme,
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
+        self.render_into(frame.buffer_mut(), area, state, theme, declare);
+    }
+
+    /// Declare and paint into a caller-owned buffer, then retain the surface
+    /// for event routing, just like [`render`](Self::render).
+    ///
+    /// Use this for offscreen content, such as a page taller than its visible
+    /// window. For ordinary terminal drawing, prefer [`render`](Self::render).
+    /// Both use the same declaration, validation, focus/hover resolution,
+    /// painting, and commit lifecycle. A rejected declaration leaves the buffer
+    /// untouched; a panic during painting can leave partial writes, but never
+    /// replaces the previously retained surface.
+    ///
+    /// The caller allocates and, when needed, clears or resizes `buffer` before
+    /// the call. This method does not clear it: cells paint leaves alone keep
+    /// their previous contents. Choose `area` within `buffer.area`; it is passed
+    /// unchanged for layout, with no containment validation or silent clamping.
+    /// Areas use the buffer's absolute coordinates, including a nonzero origin,
+    /// not coordinates relative to `area`. Viewports retain their logical
+    /// transforms. The caller owns copying a visible window to the screen and
+    /// translating screen pointer positions back into buffer coordinates before
+    /// [`handle_event`](Self::handle_event).
+    ///
+    /// `area` supplies floating placement bounds and clips layer copies and
+    /// modal dimming, not arbitrary base paint or root hit-testing. Base widgets
+    /// can paint outside their rects, and unprojected [`PaintCtx::with_buffer`]
+    /// receives the whole destination buffer, as it does with `render`.
+    ///
+    /// A bare buffer carries no cursor metadata, and this method reports no
+    /// caret position. Future caret-bearing components may require a caret
+    /// result from this API; the host would decide how to display it.
+    ///
+    /// # Panics
+    ///
+    /// The same declaration and component-paint failures as [`render`](Self::render).
+    pub fn render_into(
+        &mut self,
+        buffer: &mut Buffer,
+        area: Rect,
+        state: &State,
+        theme: &Theme,
+        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+    ) {
         let focus_snapshot = self.stored_focus(state);
         // Reveal first: the surface that painted the previous focus is still
         // the one in hand, and it is the tree that can say where the focus now
@@ -2241,7 +2289,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let resolved_focus = pass.surface.resolve_focus(focus_snapshot);
         let resolved_hover = self.resolve_hover(&pass.surface);
         pass.replay_paint(
-            frame,
+            buffer,
             state,
             theme,
             Resolved {
@@ -2249,7 +2297,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                 hover: &resolved_hover,
             },
         );
-        pass.finish_frame(frame, state, theme);
+        pass.finish_frame(buffer, state, theme);
         self.commit_surface(pass.surface, resolved_hover, resolved_focus);
     }
 
