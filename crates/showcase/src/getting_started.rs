@@ -215,10 +215,8 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, body: Rect, page: Layout
 
 /// Paint the blocks inside the scroll area's logical content rect.
 ///
-/// Code paints straight on the page background — no well and no tint behind
-/// it. ratcn's accents are fill colors and miss the text floor on
-/// `theme.field`, which is exactly why [`code::highlight`] maps onto
-/// `background`.
+/// Code paints straight on the page background: a snippet is prose here, not a
+/// control, so it takes no well and no tint behind it.
 fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: Layout) {
     let origin = ctx.area();
     let theme = *ctx.theme;
