@@ -194,34 +194,59 @@ const TEXT_FLOOR: f64 = 4.5;
 
 /// The color a kind paints in.
 ///
-/// Five painted colors, no more: the docs site's own Shiki output uses six for
-/// Rust and spends the sixth on `self` in a second blue, which nobody reads.
+/// Five painted colors at most, and never more: the docs site's own Shiki
+/// output uses six for Rust and spends the sixth on `self` in a second blue,
+/// which nobody reads. A palette that cannot supply five gets four — see
+/// [`name_and_keyword`] for which kind gives one up.
 fn role(kind: Kind, theme: &Theme) -> Color {
+    let (name, keyword) = name_and_keyword(theme);
     match kind {
         Kind::Text | Kind::Punct => theme.foreground,
         Kind::Comment => to_floor(theme.muted_foreground, theme),
-        Kind::Keyword => to_floor(theme.accent, theme),
+        Kind::Keyword => keyword,
         Kind::Str | Kind::Char | Kind::Number => to_floor(theme.warning, theme),
-        Kind::Type | Kind::Function | Kind::Macro | Kind::Attribute | Kind::Lifetime => {
-            name_color(theme)
-        }
+        Kind::Type | Kind::Function | Kind::Macro | Kind::Attribute | Kind::Lifetime => name,
     }
 }
 
-/// What names paint in: `primary`, or `foreground` when this palette's
-/// `primary` would be indistinguishable from the text or the literals beside
-/// it.
+/// What names and keywords paint in, decided together because on some palettes
+/// there is only one color left for the two of them.
 ///
-/// Gruvbox is the second case in one direction — `primary` *is* `warning`, the
-/// same yellow, so types and literals would be one color — and `default_dark`
-/// and the adaptive themes are it in the other, with `primary` a hair off
-/// `foreground`. Falling back to the body color is honest there: those palettes
-/// are monochrome, so a monochrome code block is coherent.
-fn name_color(theme: &Theme) -> Color {
+/// Normally names take `primary` and keywords `accent`. `primary` cannot serve
+/// on every palette: Gruvbox paints `primary` and `warning` the identical
+/// yellow, so types and literals would be one color, and `default_dark` and
+/// every `Theme::adaptive` — which builds `primary` off the neutral ladder and
+/// takes `accent` from the terminal's own palette — put it a hair off
+/// `foreground`, where a name would vanish into the text.
+///
+/// Where it cannot serve, the palette has exactly one accent hue left to spend,
+/// and the two roles **swap** rather than one collapsing: names take `accent`
+/// and keywords take `foreground`. Such a palette paints four colors whichever
+/// of the two gives one up, so the swap costs the reader nothing — a color
+/// carries no meaning across themes, and which hue lands on which kind may
+/// differ per palette, but how many distinct things you can see must not. All
+/// that changes is which kind spends the hue, and on a page whose whole job is
+/// an API tour that has to be `Button`, `Msg`, `EventResult`, `render`,
+/// `on_press` — the words the reader came for — rather than `let` and `if`.
+/// Collapsing names instead left four of the first snippet's six lines with no
+/// color at all under the two palettes almost every reader sees.
+///
+/// The swap needs `accent` to be distinguishable from the literals beside it,
+/// which it is on every palette that takes this branch (56 channels apart on
+/// the closest, Gruvbox). It does not need a second guard on `accent` itself:
+/// there is no third hue to fall back to, and a palette whose `accent` is close
+/// to its `foreground` paints an indistinct keyword today for exactly the same
+/// reason.
+fn name_and_keyword(theme: &Theme) -> (Color, Color) {
     let primary = to_floor(theme.primary, theme);
+    let accent = to_floor(theme.accent, theme);
     let distinct =
         separated(primary, theme.foreground) && separated(primary, to_floor(theme.warning, theme));
-    if distinct { primary } else { theme.foreground }
+    if distinct {
+        (primary, accent)
+    } else {
+        (accent, theme.foreground)
+    }
 }
 
 /// `color` lifted onto the text floor against the background it is painted on,
@@ -469,6 +494,8 @@ fn number_end(bytes: &[u8], start: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     /// Real ratcn code, and the snapshot's subject: lifetimes, doc comments, a
@@ -650,26 +677,67 @@ mod tests {
         assert_ne!(role(Kind::Type, &theme), role(Kind::Str, &theme));
     }
 
-    /// `default_dark` and the adaptive themes put `primary` a hair off
-    /// `foreground`, so without the guard a name would be invisible in the
-    /// text. The fallback makes it plain text on purpose.
+    /// Where `primary` cannot be a name color, names and keywords swap rather
+    /// than one of them collapsing into the body text: the palette's one
+    /// remaining hue goes to the names, which on an API tour are the words the
+    /// reader came for.
     #[test]
-    fn a_monochrome_palette_paints_names_as_plain_text() {
+    fn a_palette_with_one_hue_to_spare_spends_it_on_names_not_keywords() {
         for theme in [
             Theme::default_dark(),
+            Theme::gruvbox(),
             Theme::adaptive(Color::Rgb(10, 10, 10), Color::Rgb(250, 250, 250), None),
         ] {
             assert_eq!(
                 role(Kind::Type, &theme),
+                to_floor(theme.accent, &theme),
+                "{}: the one hue left should paint the names",
+                theme.name
+            );
+            assert_eq!(
+                role(Kind::Keyword, &theme),
                 role(Kind::Text, &theme),
-                "{}: a name a step off the body color should fall back to it",
+                "{}: and the keywords are what give theirs up",
                 theme.name
             );
         }
-        // A palette with a real accent keeps it, or the guard would be a
+        // A palette with a usable `primary` keeps both, or the swap would be a
         // blanket rule rather than a fallback.
         let theme = Theme::catppuccin();
         assert_eq!(role(Kind::Type, &theme), theme.primary);
+        assert_eq!(role(Kind::Keyword, &theme), theme.accent);
+    }
+
+    /// What the swap has to buy, stated as the property behind it: a palette
+    /// that cannot supply a name color loses exactly one of the five, whichever
+    /// kind gives it up — so spending the survivor on names is free — and names
+    /// stay distinguishable from the literals beside them on every palette.
+    #[test]
+    fn a_palette_loses_at_most_one_of_the_five_colors() {
+        for theme in themes() {
+            let painted: BTreeSet<String> = KINDS
+                .iter()
+                .map(|kind| format!("{:?}", role(*kind, &theme)))
+                .collect();
+            let (primary, warning) = (
+                to_floor(theme.primary, &theme),
+                to_floor(theme.warning, &theme),
+            );
+            let swapped = !(separated(primary, theme.foreground) && separated(primary, warning));
+            let expected = if swapped { 4 } else { 5 };
+            assert_eq!(
+                painted.len(),
+                expected,
+                "{}: the mapping paints {} colors, not the {expected} this palette owes",
+                theme.name,
+                painted.len()
+            );
+            assert!(
+                separated(role(Kind::Type, &theme), role(Kind::Str, &theme)),
+                "{}: names and literals are not two colors",
+                theme.name
+            );
+        }
     }
 
     /// Code paints on `background`, and everything on it is text.

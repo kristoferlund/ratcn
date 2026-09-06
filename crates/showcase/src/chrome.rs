@@ -16,6 +16,7 @@ use crate::{AppState, Msg, View, demos};
 /// Child ids, named once so declarations and retained identity cannot drift.
 mod ids {
     pub const HOME: &str = "home";
+    pub const GETTING_STARTED: &str = "getting-started";
     pub const DEMOS: &str = "demos";
 }
 
@@ -58,27 +59,35 @@ pub fn layout(area: Rect) -> Option<Bands> {
     Some(Bands { header, rule, body })
 }
 
-/// The logo and the site's one nav button.
+/// The site's three links, in reading order: the logo, then the two pages the
+/// hero buttons also lead to.
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, state: &AppState, header: Rect) {
-    let home = Button::new("ratcn")
-        .ghost()
-        .on_press(|| Msg::Navigate(View::Landing));
-    // The button that is showing wears the heavier variant: the nav reads its
-    // own active state out of the theme rather than out of a hand-built style.
-    let demos = Button::new("Demos")
-        .variant(match state.view {
-            View::Demos => ButtonVariant::Secondary,
-            View::Landing => ButtonVariant::Ghost,
-        })
-        .on_press(|| Msg::Navigate(View::Demos));
+    let home = link("ratcn", View::Landing, state.view);
+    let started = link("Getting started", View::GettingStarted, state.view);
+    let demos = link("Demos", View::Demos, state.view);
 
-    let [home_area, demos_area, _rest] = header.layout(&Layout::horizontal([
+    let [home_area, started_area, demos_area, _rest] = header.layout(&Layout::horizontal([
         Constraint::Length(home.width()),
+        Constraint::Length(started.width()),
         Constraint::Length(demos.width()),
         Constraint::Fill(1),
     ]));
     ctx.component(ids::HOME, home, home_area);
+    ctx.component(ids::GETTING_STARTED, started, started_area);
     ctx.component(ids::DEMOS, demos, demos_area);
+}
+
+/// One header link. The button whose view is showing wears the heavier
+/// variant: the nav reads its own active state out of the theme rather than
+/// out of a hand-built style.
+fn link(label: &str, target: View, showing: View) -> Button<Msg> {
+    Button::new(label)
+        .variant(if target == showing {
+            ButtonVariant::Secondary
+        } else {
+            ButtonVariant::Ghost
+        })
+        .on_press(move || Msg::Navigate(target))
 }
 
 /// The rule under the header, full width. What meets it from below is the

@@ -16,12 +16,12 @@ use ratatui::{
 use ratcn::{
     Button, ButtonSize, ScrollArea,
     geometry::wrapped_height,
-    runtime::{DeclareCtx, FocusState, KeyCode},
+    runtime::{DeclareCtx, FocusState},
     text_width::wrap_to_width,
 };
 use tui_big_text::{BigText, PixelSize};
 
-use crate::{AppState, Msg, chrome};
+use crate::{AppState, Msg, View, chrome, scroll::Scroll};
 
 /// The scroll area's child id. Nothing focuses the page by name: focus landing
 /// inside it would be revealed, and a landing page that opens scrolled to its
@@ -30,10 +30,11 @@ const ID: &str = "page";
 
 /// The hero buttons' child ids, in declaration order. [`PageLayout::reveal`]
 /// matches focus against them, so the ids and the rects stay one list.
-const BUTTON_IDS: [&str; 2] = ["get-started", "github"];
+const BUTTON_IDS: [&str; 2] = ["getting-started", "demos"];
 
-/// The site's 880-pixel hero column, at a 12-pixel cell.
-const HERO_WIDTH: u16 = 74;
+/// The site's 880-pixel hero column, at a 12-pixel cell. The Getting started
+/// page sets its prose to the same measure.
+pub const HERO_WIDTH: u16 = 74;
 /// Its 620-pixel lede column, at the same cell.
 const LEDE_WIDTH: u16 = 52;
 
@@ -71,10 +72,10 @@ const QUADRANT_WIDTH: u16 = 60;
 
 const LEDE: &str = "A set of beautifully designed components that you can copy and paste into your Ratatui apps. Themeable. App-owned state. Open Source. Open Code.";
 
-const GET_STARTED: &str = "Get Started with the CLI →";
-const GET_STARTED_URL: &str = "https://ratcn.kristoferlund.se/docs/getting-started";
-const GITHUB: &str = "GitHub";
-const GITHUB_URL: &str = "https://github.com/kristoferlund/ratcn";
+/// The hero buttons are the header's two links again, under the labels the
+/// header uses: one destination, one name.
+const GET_STARTED: &str = "Getting started";
+const DEMOS: &str = "Demos";
 
 /// The site says WebAssembly here; in a terminal the same claim is the other
 /// way round.
@@ -110,15 +111,8 @@ pub struct PageLayout {
     window: Rect,
     /// The caption, with the interaction hint on the rows under it.
     caption: Rect,
-    /// Rows the page occupies: what the scroll area is told.
-    pub content: u16,
-    /// Rows the viewport shows.
-    viewport: u16,
-    /// The offset in force, clamped to the travel the content has. The area
-    /// clamps the offset it lays out from the same way, so reading the app's
-    /// raw value anywhere else would draw the page and the demo at two
-    /// different rows after a resize.
-    pub offset: u16,
+    /// How far the page scrolls and where it is scrolled to.
+    pub scroll: Scroll,
     /// The size the embedded demo's canvas has to be.
     pub canvas: Size,
     /// Where the demo's rows land on screen, and which of its own rows the
@@ -171,7 +165,7 @@ pub fn layout(body: Rect, offset: u16) -> PageLayout {
     y += caption.height + BOTTOM_PADDING;
 
     let interior = window.inner(WINDOW_MARGIN);
-    let offset = offset.min(y.saturating_sub(body.height));
+    let scroll = Scroll::new(y, body.height, offset);
     // Nothing scrolls horizontally, so the demo keeps the window's own columns
     // and only the rows move under it.
     let column = Rect::new(body.x + interior.x, body.y, interior.width, body.height);
@@ -182,34 +176,13 @@ pub fn layout(body: Rect, offset: u16) -> PageLayout {
         buttons,
         window,
         caption,
-        content: y,
-        viewport: body.height,
-        offset,
+        scroll,
         canvas: Size::new(interior.width, interior.height),
-        embed: placement(column, interior.y, interior.height, offset),
+        embed: placement(column, interior.y, interior.height, scroll.offset),
     }
 }
 
 impl PageLayout {
-    /// Where a page key leaves the scroll offset, or [`None`] when it is not
-    /// one of them or the page is already there.
-    ///
-    /// The landing page is the whole view, so these keys are the app's the way
-    /// the `landing` demo's own alt-chords are its. The scroll area answers
-    /// them first whenever focus is inside it; this is what happens when it is
-    /// not, and nothing here reaches into the area to find out.
-    #[must_use]
-    pub fn scrolled(&self, key: KeyCode) -> Option<u16> {
-        let next = match key {
-            KeyCode::PageDown => self.offset.saturating_add(self.viewport),
-            KeyCode::PageUp => self.offset.saturating_sub(self.viewport),
-            KeyCode::Home => 0,
-            KeyCode::End => self.furthest(),
-            _ => return None,
-        };
-        self.moved_to(next)
-    }
-
     /// The offset that brings the hero button `focus` names fully into view,
     /// or [`None`] when it names neither or the page already shows it.
     ///
@@ -225,32 +198,21 @@ impl PageLayout {
             .zip(self.buttons)
             .find_map(|(id, rect)| focus.contains_path([ID, id]).then_some(rect))?;
         // The area's own rule, and minimal in both directions like it.
-        let next = if button.y < self.offset {
+        let next = if button.y < self.scroll.offset {
             button.y
-        } else if button.bottom() > self.offset.saturating_add(self.viewport) {
-            button.bottom().saturating_sub(self.viewport)
+        } else if button.bottom() > self.scroll.offset.saturating_add(self.scroll.viewport) {
+            button.bottom().saturating_sub(self.scroll.viewport)
         } else {
-            self.offset
+            self.scroll.offset
         };
-        self.moved_to(next)
-    }
-
-    /// The last row the page can be scrolled to.
-    const fn furthest(&self) -> u16 {
-        self.content.saturating_sub(self.viewport)
-    }
-
-    /// `next`, clamped and reported only if it is somewhere new.
-    fn moved_to(&self, next: u16) -> Option<u16> {
-        let next = next.min(self.furthest());
-        (next != self.offset).then_some(next)
+        self.scroll.moved_to(next)
     }
 }
 
 /// Declare the page over `body`. `live` says the embedded demo has the input,
 /// which is what the preview window's frame tells the user.
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, body: Rect, page: PageLayout, live: bool) {
-    let area = ScrollArea::new(page.content)
+    let area = ScrollArea::new(page.scroll.content)
         .scroll(|state: &AppState| state.page_scroll, Msg::PageScrolled)
         .content(move |ctx| content(ctx, page, live));
     ctx.component(ID, area, body);
@@ -289,15 +251,15 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: PageLayout, live: bool
         BUTTON_IDS[0],
         Button::new(GET_STARTED)
             .size(ButtonSize::Large)
-            .on_press(|| Msg::OpenUrl(GET_STARTED_URL)),
+            .on_press(|| Msg::Navigate(View::GettingStarted)),
         place(page.buttons[0], origin),
     );
     ctx.component(
         BUTTON_IDS[1],
-        Button::new(GITHUB)
+        Button::new(DEMOS)
             .outline()
             .size(ButtonSize::Large)
-            .on_press(|| Msg::OpenUrl(GITHUB_URL)),
+            .on_press(|| Msg::Navigate(View::Demos)),
         place(page.buttons[1], origin),
     );
 
@@ -387,7 +349,7 @@ fn big_title(tier: Tier, color: Color) -> BigText<'static> {
 fn button_rects(width: u16, hero: u16, y: u16) -> ([Rect; 2], u16) {
     let row = ButtonSize::Large.height();
     let first = button_width(GET_STARTED);
-    let second = button_width(GITHUB);
+    let second = button_width(DEMOS);
     let together = first + BUTTON_GAP + second;
     if together <= hero {
         let x = centered(width, together);
@@ -425,7 +387,7 @@ fn wrapped(text: &'static str, width: u16) -> Text<'static> {
 }
 
 /// A content-relative rect, moved onto the content rect at `origin`.
-fn place(rect: Rect, origin: Rect) -> Rect {
+pub fn place(rect: Rect, origin: Rect) -> Rect {
     Rect::new(
         origin.x + rect.x,
         origin.y + rect.y,
@@ -435,14 +397,14 @@ fn place(rect: Rect, origin: Rect) -> Rect {
 }
 
 /// The left edge that centers `width` cells in `total`.
-const fn centered(total: u16, width: u16) -> u16 {
+pub const fn centered(total: u16, width: u16) -> u16 {
     total.saturating_sub(width) / 2
 }
 
 /// A text column at its own `maximum`, and never closer than a cell to either
 /// edge of the content — so a narrow terminal does not run the last character
 /// of a line straight into the scrollbar gutter.
-const fn text_width(content: u16, maximum: u16) -> u16 {
+pub const fn text_width(content: u16, maximum: u16) -> u16 {
     let fits = content.saturating_sub(2);
     if maximum < fits { maximum } else { fits }
 }
@@ -461,9 +423,11 @@ mod tests {
     /// measurement gives.
     fn scrolling(offset: u16, viewport: u16, content: u16) -> PageLayout {
         PageLayout {
-            offset,
-            viewport,
-            content,
+            scroll: Scroll {
+                content,
+                viewport,
+                offset,
+            },
             ..layout(Rect::new(0, 0, 80, viewport), offset)
         }
     }
@@ -526,10 +490,10 @@ mod tests {
             );
             assert_eq!(
                 page.caption.bottom() + BOTTOM_PADDING,
-                page.content,
+                page.scroll.content,
                 "at width {width} the last block does not end where the height says"
             );
-            let cells = u32::from(width) * u32::from(page.content);
+            let cells = u32::from(width) * u32::from(page.scroll.content);
             assert!(
                 cells <= VIEWPORT_CELLS,
                 "at width {width} the page is {cells} cells, past the viewport's cap"
@@ -569,61 +533,6 @@ mod tests {
             None,
             "a region still below the viewport is not showing either"
         );
-    }
-
-    /// The page keys are the app's on this view, so their arithmetic is the
-    /// app's to get right: neither end may be overshot, and a page that cannot
-    /// scroll must not claim it did.
-    #[test]
-    fn page_keys_step_by_a_viewport_and_stop_at_both_ends() {
-        // Forty rows of page in a ten-row viewport: thirty rows of travel.
-        let scroll = |key, offset| scrolling(offset, 10, 40).scrolled(key);
-
-        assert_eq!(
-            scroll(KeyCode::PageDown, 0),
-            Some(10),
-            "a page down from the top"
-        );
-        assert_eq!(
-            scroll(KeyCode::PageDown, 25),
-            Some(30),
-            "the last page down is a short one"
-        );
-        assert_eq!(
-            scroll(KeyCode::PageDown, 30),
-            None,
-            "a page down at the bottom moves nothing"
-        );
-        assert_eq!(
-            scroll(KeyCode::PageUp, 0),
-            None,
-            "and a page up at the top moves nothing"
-        );
-        assert_eq!(
-            scroll(KeyCode::PageUp, 25),
-            Some(15),
-            "a page up from the middle"
-        );
-        assert_eq!(scroll(KeyCode::End, 0), Some(30), "End is the furthest row");
-        assert_eq!(scroll(KeyCode::Home, 30), Some(0), "Home is the first");
-        assert_eq!(
-            scroll(KeyCode::Enter, 0),
-            None,
-            "and Enter is not a page key"
-        );
-
-        for key in [
-            KeyCode::PageDown,
-            KeyCode::PageUp,
-            KeyCode::Home,
-            KeyCode::End,
-        ] {
-            assert_eq!(
-                scrolling(0, 20, 8).scrolled(key),
-                None,
-                "{key:?} on a page shorter than its viewport"
-            );
-        }
     }
 
     /// The app reveals its own hero buttons so the scroll area never takes a

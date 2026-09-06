@@ -1,22 +1,17 @@
 //! The ratcn website as a terminal application.
 //!
-//! Two views under one header: the landing page, and a browser for every demo
-//! in the repository. Both embed a demo the way the website embeds a preview —
-//! it takes the input while the user is inside it — and both do it the same
-//! way, through [`App::blit_demo`].
+//! Three views under one header: the landing page, the Getting started page,
+//! and a browser for every demo in the repository. The two that embed a demo do
+//! it the way the website embeds a preview — it takes the input while the user
+//! is inside it — and both do it the same way, through [`App::blit_demo`].
 
 mod catalog;
 mod chrome;
-// Temporary scaffolding: the module ships ahead of the Getting started page
-// that renders its snippets. Delete this allow the moment the page calls it —
-// it is not a standing exemption.
-#[allow(
-    dead_code,
-    reason = "temporary: nothing calls this until the Getting started page lands in a later slice"
-)]
 mod code;
 mod demos;
+mod getting_started;
 mod page;
+mod scroll;
 
 use std::{io, time::Duration};
 
@@ -28,7 +23,7 @@ use ratatui::{
     style::Style,
 };
 use ratcn::{
-    Theme, Toast, ToasterState, ToasterWidget,
+    Theme,
     runtime::{
         Event, EventResult, FocusState, KeyCode, MouseButton, MouseEvent, MouseKind, Ratcn, TabWrap,
     },
@@ -41,6 +36,7 @@ use catalog::Embedded;
 enum View {
     #[default]
     Landing,
+    GettingStarted,
     Demos,
 }
 
@@ -57,15 +53,21 @@ struct AppState {
     focus: FocusState,
     view: View,
     /// The row the nav cursor is on, as an index into [`catalog::ENTRIES`].
-    /// There is no separate selection: the cursor is the choice.
-    selected: usize,
+    /// Moving it commits nothing.
+    cursor: usize,
+    /// The demo the Demos view shows, as an index into [`catalog::ENTRIES`].
+    /// Only a click or Enter moves it.
+    showing: usize,
     /// The nav list's top item.
     nav_scroll: usize,
     /// The landing page's first visible content row.
     page_scroll: u16,
+    /// The Getting started page's first visible content row. Each scrolling
+    /// view keeps its own, so leaving one and coming back finds it where it
+    /// was left.
+    getting_started_scroll: u16,
     /// The chrome's own focus, stashed while the demo has the input.
     parked: Option<FocusState>,
-    toasts: ToasterState<'static>,
 }
 
 impl AppState {
@@ -83,9 +85,10 @@ enum Msg {
     FocusChanged(FocusState),
     Navigate(View),
     NavFocused(usize, usize),
+    NavSelected(usize),
     NavScrolled(usize),
     PageScrolled(u16),
-    OpenUrl(&'static str),
+    GettingStartedScrolled(u16),
 }
 
 /// Where the embedded demo is on screen, and which of its own rows that is.
@@ -156,9 +159,12 @@ struct App {
     /// layout. [`None`] when no demo is on screen.
     embed: Option<Embed>,
     /// The landing page as it was last measured, which is what its page keys
-    /// and its focus reveal are answered from. [`None`] until it has been
-    /// drawn once.
+    /// and its focus reveal are answered from. [`None`] whenever it is not the
+    /// view on screen.
     page: Option<page::PageLayout>,
+    /// The Getting started page as it was last measured, for its page keys.
+    /// [`None`] whenever it is not the view on screen.
+    getting_started: Option<getting_started::Layout>,
 }
 
 impl App {
@@ -175,6 +181,7 @@ impl App {
             canvas: Terminal::new(TestBackend::new(1, 1)).expect("an offscreen canvas opens"),
             embed: None,
             page: None,
+            getting_started: None,
         }
     }
 
@@ -196,26 +203,24 @@ impl App {
                 }
             }
             Msg::NavFocused(index, offset) => {
-                self.state.selected = index;
+                self.state.cursor = index;
                 self.state.nav_scroll = offset;
+            }
+            // A click commits without a preceding move, so the cursor follows
+            // the row that was committed: whatever the user does next with the
+            // arrows continues from where they clicked.
+            Msg::NavSelected(index) => {
+                self.state.showing = index;
+                self.state.cursor = index;
             }
             Msg::NavScrolled(offset) => self.state.nav_scroll = offset,
             Msg::PageScrolled(offset) => self.state.page_scroll = offset,
-            Msg::OpenUrl(url) => {
-                // A browser that opens behind the terminal, and an opener that
-                // is not installed, look the same from here: nothing happens.
-                // So say what happened either way.
-                let toast = match open_url(url) {
-                    Ok(()) => Toast::success("Opened in your browser").with_description(url),
-                    Err(error) => Toast::error("Could not open a browser").with_description(error),
-                };
-                self.state.toasts.push(toast, demo_shared::monotonic_time());
-            }
+            Msg::GettingStartedScrolled(offset) => self.state.getting_started_scroll = offset,
         }
     }
 
     /// The demo the current view shows, built if this is its first appearance.
-    fn shown_mut(&mut self) -> &mut dyn Embedded {
+    fn shown_mut(&mut self) -> Option<&mut dyn Embedded> {
         let Self {
             state,
             landing,
@@ -230,7 +235,8 @@ impl App {
     fn shown(&self) -> Option<&dyn Embedded> {
         match self.state.view {
             View::Landing => Some(self.landing.as_ref()),
-            View::Demos => self.opened[self.state.selected].as_deref(),
+            View::GettingStarted => None,
+            View::Demos => self.opened[self.state.showing].as_deref(),
         }
     }
 
@@ -248,7 +254,8 @@ impl App {
             (Event::Mouse(_), None) => return false,
             (event, _) => event,
         };
-        self.shown_mut().handle_event(event)
+        self.shown_mut()
+            .is_some_and(|demo| demo.handle_event(event))
     }
 
     /// Hand the input to the embedded demo, parking the chrome's focus.
@@ -272,31 +279,44 @@ impl App {
     }
 
     /// Enter the demo region on a key the chrome passed on. Only the Demos view
-    /// has a key for it; the landing page is entered by clicking into it.
+    /// has a key for it, and only Right: the nav list's bound selection makes
+    /// Enter the list's own. The landing page is entered by clicking into it.
     fn enter_key(&mut self, event: &Event) -> bool {
         let Event::Key(key) = event else {
             return false;
         };
-        if self.state.view != View::Demos || !matches!(key.code, KeyCode::Enter | KeyCode::Right) {
+        if self.state.view != View::Demos || key.code != KeyCode::Right {
             return false;
         }
         self.enter();
         true
     }
 
-    /// Scroll the landing page on a page key the chrome passed on. See
-    /// [`page::PageLayout::scrolled`].
+    /// Scroll whichever page is showing on a page key the chrome passed on.
+    /// See [`scroll::Scroll::scrolled`] — both scrolling views answer from the
+    /// same arithmetic, over their own offset.
     fn page_key(&mut self, event: &Event) -> bool {
-        let (Event::Key(key), Some(page)) = (event, self.page) else {
+        let Event::Key(key) = event else {
             return false;
         };
-        if self.state.view != View::Landing || key.modifiers.any() {
+        if key.modifiers.any() {
             return false;
         }
-        let Some(offset) = page.scrolled(key.code) else {
+        let scrolled = match self.state.view {
+            View::Landing => self
+                .page
+                .and_then(|page| page.scroll.scrolled(key.code))
+                .map(Msg::PageScrolled),
+            View::GettingStarted => self
+                .getting_started
+                .and_then(|page| page.scroll.scrolled(key.code))
+                .map(Msg::GettingStartedScrolled),
+            View::Demos => None,
+        };
+        let Some(msg) = scrolled else {
             return false;
         };
-        self.update(Msg::PageScrolled(offset));
+        self.update(msg);
         true
     }
 
@@ -324,7 +344,9 @@ impl App {
             canvas: surface,
             ..
         } = self;
-        let demo = shown_in(state, landing, opened);
+        let Some(demo) = shown_in(state, landing, opened) else {
+            return;
+        };
         let demo_theme = demo.theme(theme);
         surface.backend_mut().resize(canvas.width, canvas.height);
         let painted = surface
@@ -342,7 +364,6 @@ impl App {
             source_row: 0,
         };
         self.embed = Some(embed);
-        self.page = None;
 
         chrome::header_rule(frame.buffer_mut(), bands, theme);
         demos::separators(
@@ -383,22 +404,40 @@ impl App {
             self.blit_demo(frame, page.canvas, embed, theme);
         }
     }
+
+    /// The Getting started view: prose and code, scrolling, and nothing else.
+    fn draw_getting_started(&mut self, frame: &mut Frame, bands: &chrome::Bands, theme: &Theme) {
+        let page = getting_started::layout(bands.body, self.state.getting_started_scroll);
+        self.getting_started = Some(page);
+
+        chrome::header_rule(frame.buffer_mut(), bands, theme);
+
+        let state = &self.state;
+        self.ratcn.render(frame, state, theme, |ctx| {
+            chrome::declare(ctx, state, bands.header);
+            getting_started::declare(ctx, bands.body, page);
+        });
+    }
 }
 
 /// The demo `state`'s view shows, out of the two places demos are kept, built
-/// if this is its first appearance.
+/// if this is its first appearance. [`None`] on a view that embeds nothing.
 ///
 /// Free rather than a method so a caller can hold the canvas at the same time.
 fn shown_in<'a>(
     state: &AppState,
     landing: &'a mut Box<dyn Embedded>,
     opened: &'a mut [Option<Box<dyn Embedded>>],
-) -> &'a mut dyn Embedded {
+) -> Option<&'a mut dyn Embedded> {
     match state.view {
-        View::Landing => landing.as_mut(),
-        View::Demos => opened[state.selected]
-            .get_or_insert_with(|| catalog::ENTRIES[state.selected].open())
-            .as_mut(),
+        View::Landing => Some(landing.as_mut()),
+        // The Getting started page is prose and code; it embeds nothing.
+        View::GettingStarted => None,
+        View::Demos => Some(
+            opened[state.showing]
+                .get_or_insert_with(|| catalog::ENTRIES[state.showing].open())
+                .as_mut(),
+        ),
     }
 }
 
@@ -413,34 +452,6 @@ fn blit(destination: &mut Buffer, source: &Buffer, target: Rect, source_y: u16) 
             destination[(target.x + column, target.y + row)] = cell.clone();
         }
     }
-}
-
-/// Open `url` in the user's browser.
-///
-/// # Errors
-///
-/// A message naming what went wrong, ready to put in a toast.
-fn open_url(url: &str) -> Result<(), String> {
-    use std::process::{Command, Stdio};
-
-    let (program, leading): (&str, &[&str]) = if cfg!(target_os = "macos") {
-        ("open", &[])
-    } else if cfg!(target_os = "windows") {
-        // `start` takes a window title first, and an empty one keeps a URL
-        // with spaces from being read as one.
-        ("cmd", &["/c", "start", ""])
-    } else {
-        ("xdg-open", &[])
-    };
-    Command::new(program)
-        .args(leading)
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(drop)
-        .map_err(|error| format!("{program}: {error}"))
 }
 
 impl demo_shared::Demo for App {
@@ -510,30 +521,24 @@ impl demo_shared::Demo for App {
         }
     }
 
-    /// Whatever the demo on screen asks of the clock, and whatever the toasts
-    /// need to expire on time.
+    /// Whatever the demo on screen asks of the clock.
     fn wake(&self) -> Option<Duration> {
-        let demo = self.shown().and_then(Embedded::wake);
-        let expiry = self
-            .state
-            .toasts
-            .time_until_next_expiry(demo_shared::monotonic_time());
-        match (demo, expiry) {
-            (Some(demo), Some(expiry)) => Some(demo.min(expiry)),
-            (demo, expiry) => demo.or(expiry),
-        }
+        self.shown().and_then(Embedded::wake)
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let now = demo_shared::monotonic_time();
-        let _ = self.state.toasts.prune_expired(now);
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(theme.background));
 
+        // Everything derived from the last frame's layout, cleared before the
+        // frame that replaces it: each view then sets only what it owns, and a
+        // view that owns none of it cannot inherit another's.
+        self.embed = None;
+        self.page = None;
+        self.getting_started = None;
+
         let Some(bands) = chrome::layout(area) else {
-            self.embed = None;
-            self.page = None;
             chrome::too_small(frame, area, theme);
             return;
         };
@@ -541,14 +546,8 @@ impl demo_shared::Demo for App {
         match self.state.view {
             View::Demos => self.draw_demos(frame, &bands, theme),
             View::Landing => self.draw_landing(frame, &bands, theme),
+            View::GettingStarted => self.draw_getting_started(frame, &bands, theme),
         }
-
-        // Last, over the blit: a toast is the app talking, and nothing the
-        // page or a demo paints belongs on top of it.
-        frame.render_widget(
-            ToasterWidget::new(&self.state.toasts, now).themed(theme),
-            area,
-        );
     }
 }
 
@@ -560,7 +559,10 @@ fn main() -> io::Result<()> {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use ratcn::runtime::{KeyEvent, ScrollDirection};
+    use ratcn::{
+        Button,
+        runtime::{KeyEvent, ScrollDirection},
+    };
 
     use super::*;
 
@@ -781,17 +783,134 @@ mod tests {
         draw_at(&mut app, 100, 20);
         assert_eq!(app.state.page_scroll, 0, "the page opens at the top");
 
-        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
-        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
+        for _ in 0..HEADER_LINKS {
+            route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
+        }
 
         assert!(
             app.state.focus.contains_path(["page"]),
-            "two tabs reach the page"
+            "a tab past each header link reaches the page"
         );
         assert!(
             app.state.page_scroll > 0,
             "and the app scrolled its own offset to show the button focus landed on"
         );
+    }
+
+    /// Header links, in declaration order — which is also Tab order, and the
+    /// number of tabs it takes to leave the header. Focus starts on the first
+    /// of them, so a tab each reaches the first thing below.
+    const HEADER_LINKS: usize = 3;
+
+    /// Where each header link sits on row 0: the labels laid out end to end,
+    /// each two cells of padding either side of its text.
+    fn header_link(label: &str) -> u16 {
+        let width = |label: &str| Button::<Msg>::new(label).width();
+        ["ratcn", "Getting started", "Demos"]
+            .iter()
+            .take_while(|candidate| **candidate != label)
+            .map(|candidate| width(candidate))
+            .sum::<u16>()
+            + width(label) / 2
+    }
+
+    /// Every link reaches every view, and the two hero buttons are the same
+    /// two navigations under the same two names — so no destination is
+    /// reachable by only one route.
+    #[test]
+    fn all_three_views_are_reachable_from_every_link_and_from_the_hero_buttons() {
+        let mut app = App::new();
+        let click = |app: &mut App, label: &str| {
+            draw_at(app, 100, 40);
+            route(
+                app,
+                mouse(MouseKind::Click(MouseButton::Left), header_link(label), 0),
+            );
+        };
+
+        for from in [View::Landing, View::GettingStarted, View::Demos] {
+            for (label, to) in [
+                ("ratcn", View::Landing),
+                ("Getting started", View::GettingStarted),
+                ("Demos", View::Demos),
+            ] {
+                app.state.view = from;
+                click(&mut app, label);
+                assert!(
+                    app.state.view == to,
+                    "{label:?} did not reach its view from the one before it"
+                );
+            }
+        }
+
+        // The hero buttons, reached by tabbing past the header rather than by
+        // arithmetic: they are inside a scroll area, and where they sit
+        // depends on where the page is scrolled to.
+        for (tabs, expected) in [
+            (HEADER_LINKS, View::GettingStarted),
+            (HEADER_LINKS + 1, View::Demos),
+        ] {
+            app.state.view = View::Landing;
+            app.state.page_scroll = 0;
+            app.state.focus = FocusState::default();
+            draw_at(&mut app, 100, 40);
+            for _ in 0..tabs {
+                route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
+                draw_at(&mut app, 100, 40);
+            }
+            route(&mut app, Event::Key(KeyEvent::new(KeyCode::Enter)));
+            assert!(
+                app.state.view == expected,
+                "the hero button {tabs} tabs in did not navigate"
+            );
+        }
+    }
+
+    /// Browsing and choosing are two different things in the nav list: the
+    /// cursor moves freely, and only a click or Enter changes the demo the
+    /// pane is showing.
+    #[test]
+    fn the_demo_list_shows_a_demo_on_a_click_or_enter_and_never_on_a_hover() {
+        let mut app = App::new();
+        // Every demo pre-built as a probe: `effects::App::new` starts a
+        // network request, and this test is about the list, not the demos.
+        for slot in &mut app.opened {
+            *slot = Some(Box::new(Probe::default()));
+        }
+        app.update(Msg::Navigate(View::Demos));
+        draw_at(&mut app, 100, 40);
+        // The nav list starts at the first body row, one item to a row.
+        let row = |index: u16| 2 + index;
+
+        route(&mut app, mouse(MouseKind::Moved, 2, row(3)));
+        assert_eq!(app.state.cursor, 3, "a hover moves the cursor");
+        assert_eq!(
+            app.state.showing, 0,
+            "and moves nothing else: hovering a name must not swap the demo"
+        );
+
+        route(
+            &mut app,
+            mouse(MouseKind::Click(MouseButton::Left), 2, row(3)),
+        );
+        assert_eq!(app.state.showing, 3, "a click is the choice");
+
+        route(&mut app, mouse(MouseKind::Moved, 2, row(5)));
+        assert_eq!(app.state.cursor, 5, "the cursor browses on");
+        assert_eq!(app.state.showing, 3, "with the demo where it was left");
+
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Enter)));
+        assert_eq!(
+            app.state.showing, 5,
+            "and Enter commits the row the cursor reached"
+        );
+        assert!(
+            !app.state.entered(),
+            "the list consumed Enter, so it never reached the app's own fallback"
+        );
+
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right)));
+        assert!(app.state.entered(), "Right is what enters the demo pane");
     }
 
     /// The routing rules while the demo has the input. Each of these is a

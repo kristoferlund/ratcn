@@ -1,5 +1,5 @@
-//! The Demos view: every demo by name on the left, the one under the cursor on
-//! the right, and the rules between them.
+//! The Demos view: every demo by name on the left, the one committed on the
+//! right, and the rules between them.
 
 use ratatui::{
     buffer::Buffer,
@@ -24,8 +24,16 @@ const NAV_PADDING: u16 = 1;
 /// a stripe, and the browser is showing nothing anyone can read.
 const MIN_PANE_WIDTH: u16 = 20;
 
-/// What the three lines under the list say, and the keys they name.
-const HINTS: [(&str, &str); 3] = [("↑ ↓", "browse"), ("enter", "interact"), ("esc", "back")];
+/// What the four lines under the list say, and the keys they name.
+///
+/// Enter is the list's own — a bound selection consumes it — so entering the
+/// demo pane is Right alone.
+const HINTS: [(&str, &str); 4] = [
+    ("↑ ↓", "browse"),
+    ("enter", "show"),
+    ("→", "interact"),
+    ("esc", "back"),
+];
 
 /// The vertical bands of the view.
 pub struct Columns {
@@ -33,7 +41,7 @@ pub struct Columns {
     pub nav: Rect,
     /// The one-cell rule between them and the demo.
     pub rule: Rect,
-    /// Where the selected demo paints.
+    /// Where the demo that is showing paints.
     pub pane: Rect,
 }
 
@@ -111,18 +119,24 @@ pub fn separators(
 
 /// The nav column and the key hints below it.
 ///
-/// The cursor *is* the selection here — moving it swaps the demo on the right —
-/// so the list binds `item_focus` and nothing else, which is also what keeps
-/// the selection markers a bound `selection` would bring off the rows.
+/// Both halves of the list are bound, because browsing and choosing are two
+/// different things here: `item_focus` moves the cursor and shows nothing new,
+/// and only `selection` — Enter, or a click — changes the demo on the right.
+///
+/// Rows draw themselves, which is what keeps the selection markers a bound
+/// `selection` would otherwise bring off them, and what lets the committed row
+/// stay readable once focus has moved into the demo pane: a list paints its own
+/// cursor row only while it has focus or hover.
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, nav: Rect) {
     let [list_area, _, hints_area] = rows(nav);
     let indent = usize::from(NAV_PADDING);
 
-    // A list paints its cursor row only while it has focus or hover, and the
-    // selected demo has to stay readable once focus is in the demo pane. So the
-    // row draws itself, in the fill the theme would have given it, padded to the
-    // full width because a `Line` colors the cells it covers and no more.
+    // Two fills, one step apart on the theme's own ladder: the committed row
+    // takes the deeper one, the cursor the shallower, so a place and a choice
+    // do not read as two choices. Both are padded to the full width, because a
+    // `Line` colors the cells it covers and no more.
     let style = nav_style(ctx.theme);
+    let cursor_background = ListStyle::from_theme(ctx.theme).focused_background;
     let rest = usize::from(list_area.width).saturating_sub(indent);
     let list = List::new(
         catalog::ENTRIES
@@ -130,19 +144,24 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, nav: Rect) {
             .enumerate()
             .map(|(index, entry)| ListItem::new(index, entry.name)),
     )
-    .item_focus(|state: &AppState| Some(state.selected), Msg::NavFocused)
+    .item_focus(|state: &AppState| Some(state.cursor), Msg::NavFocused)
+    .selection(|state: &AppState| Some(state.showing), Msg::NavSelected)
     .scroll(|state: &AppState| state.nav_scroll, Msg::NavScrolled)
     .paint_item(move |state: &AppState, row| {
         let label = format!("{:indent$}{:<rest$}", "", row.label);
-        if row.index == state.selected {
-            Line::styled(
-                label,
-                Style::default()
-                    .fg(style.focused_foreground)
-                    .bg(style.focused_row_background),
-            )
+        let fill = if row.index == state.showing {
+            Some(style.focused_row_background)
+        } else if row.focused {
+            Some(cursor_background)
         } else {
-            Line::from(label)
+            None
+        };
+        match fill {
+            Some(background) => Line::styled(
+                label,
+                Style::default().fg(style.focused_foreground).bg(background),
+            ),
+            None => Line::from(label),
         }
     })
     .style(nav_style);
@@ -176,8 +195,8 @@ fn hint_key_width() -> u16 {
 /// A list is a control and fills itself with the theme's field color, which
 /// here would box the names off from the hints below them and read as
 /// something to operate rather than as navigation. Only the three backdrops
-/// move; the cursor row keeps the fill the theme gave it, and is then the one
-/// fill in the column.
+/// move; the row fills the theme gave it are what `declare` paints the cursor
+/// and the committed row with, and are then the only fills in the column.
 fn nav_style(theme: &Theme) -> ListStyle {
     let mut style = ListStyle::from_theme(theme);
     style.background = theme.background;
