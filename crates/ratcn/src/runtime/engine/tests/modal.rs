@@ -3,6 +3,74 @@
 
 use super::*;
 
+#[test]
+fn a_modal_opened_over_no_focus_takes_focus_and_restores_none_on_close() {
+    let mut state = ModalTestState {
+        focus: FocusState::none(),
+        ..ModalTestState::default()
+    };
+    let mut driver = Driver::with(
+        Ratcn::new()
+            .focus(|state: &ModalTestState| &state.focus, ModalTestMsg::Focus)
+            .modals(|state: &ModalTestState| &state.modals),
+        10,
+        1,
+    );
+    let render = |driver: &mut Driver<ModalTestState, ModalTestMsg>, state: &ModalTestState| {
+        let area = driver.area();
+        driver.render(state, |ctx| {
+            ctx.component(
+                "base",
+                Button::new("Base").on_press(|| ModalTestMsg::Routed("base")),
+                area,
+            );
+            if state.modals.is_open("dialog") {
+                ctx.modal(
+                    "dialog",
+                    Button::new("OK").on_press(|| ModalTestMsg::Routed("dialog")),
+                    area,
+                );
+            }
+        });
+    };
+
+    state.modals.open("dialog", &mut state.focus).expect("open");
+    assert_eq!(state.focus, FocusState::default());
+    render(&mut driver, &state);
+    assert_eq!(driver.ratcn.resolved_focus, FocusState::intent(["dialog"]));
+    assert_eq!(
+        driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+        EventResult::Emit(ModalTestMsg::Routed("dialog"))
+    );
+
+    state.focus = FocusState::none();
+    render(&mut driver, &state);
+    assert!(
+        driver.ratcn.resolved_focus.is_none(),
+        "explicit none wins over modal takeover"
+    );
+    let EventResult::Emit(ModalTestMsg::Focus(focus)) =
+        driver.event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state)
+    else {
+        panic!("Tab must re-enter the modal from none");
+    };
+    state.focus = focus;
+    assert_eq!(state.focus, FocusState::intent(["dialog"]));
+
+    assert_eq!(
+        state.modals.close(&mut state.focus),
+        Some(ChildId::Static("dialog"))
+    );
+    assert_eq!(state.focus, FocusState::none());
+    render(&mut driver, &state);
+    assert!(driver.ratcn.resolved_focus.is_none());
+    assert_eq!(
+        driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+        EventResult::Ignored,
+        "closing the modal must not silently focus the first base control"
+    );
+}
+
 struct ModalRoute(&'static str);
 
 impl Component<ModalTestState, ModalTestMsg> for ModalRoute {

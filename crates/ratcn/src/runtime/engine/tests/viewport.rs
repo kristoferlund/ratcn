@@ -742,6 +742,49 @@ fn render_reveal(
     });
 }
 
+#[test]
+fn explicit_no_focus_cancels_a_pending_reveal_without_scrolling_to_a_late_target() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::none(),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        !driver.ratcn.reveal_pending,
+        "starting blurred owes no reveal"
+    );
+
+    state.focus = FocusState::intent(["area", "late"]);
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        driver.ratcn.reveal_pending,
+        "an absent explicit target still waits"
+    );
+
+    state.focus = FocusState::none();
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        !driver.ratcn.reveal_pending,
+        "explicit none completes the pending reveal"
+    );
+    state.late = true;
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(!driver.ratcn.reveal_pending);
+    assert!(
+        log.borrow().is_empty(),
+        "the cancelled target must not scroll the viewport"
+    );
+
+    state.focus = FocusState::intent(["area", "late"]);
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
+    assert!(!driver.ratcn.reveal_pending);
+}
+
 /// Focus the runtime moves itself reveals its destination: the app stores the
 /// path the focus message carried, and the frame that reads it back asks the
 /// viewport for it.

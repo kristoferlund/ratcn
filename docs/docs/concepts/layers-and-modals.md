@@ -53,8 +53,8 @@ message, in the same update that opens the popup. Keys bubble *through* the
 popup root to the component that declared it. See [Select](../components/select).
 
 A **modal** is the strongest: it becomes the **active layer**. While it is open
-the area behind is dimmed, keyboard and mouse routing are confined to it, focus
-resolves into it, and input that nothing inside handles is absorbed rather than
+the area behind is dimmed, keyboard and mouse routing are confined to it,
+and input that nothing inside handles is absorbed rather than
 reaching the UI underneath. Declare stacked modals bottom to top.
 
 ## Modal state in your app
@@ -104,8 +104,12 @@ state says are open — a mismatch is a declaration bug and fails the render.
 The binding also covers the brief gap between opening or closing a modal in
 `update` and the redraw that reflects it: events arriving in that gap are
 consumed instead of landing on a layer your state considers closed. Focus
-needs no help from it — any open modal resolves focus into itself, bound or
-not.
+takeover does not require this binding: the topmost eligible modal takes over
+default focus and declared paths it covers, when it has a focusable target.
+Explicit `FocusState::none()` stays unfocused; an intent naming an absent path
+stays parked. Merely declaring a modal does not reset app-held focus.
+Opening a new modal through `ModalState::open` saves that focus and resets it
+to `default()`, allowing the modal to take focus; closing restores the snapshot.
 
 Only modals have semantic state to validate this way. Popups and hints are
 opened by whatever app state your own component reads, and the runtime holds

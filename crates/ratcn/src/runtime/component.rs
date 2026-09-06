@@ -416,10 +416,18 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// and is dimmed with everything else the modal covers.
     ///
     /// Modal policy: the area behind the modal is dimmed, events outside it
-    /// are consumed rather than routed, focus resolves into it, and Tab wraps
+    /// are consumed rather than routed, and Tab wraps
     /// at its boundary. A key nothing inside handles still bubbles to the
     /// modal root rather than escaping beneath, so Esc-to-close works even
     /// when no descendant is focused.
+    ///
+    /// The topmost eligible modal takes over default focus and declared paths
+    /// it covers, when it has a focusable target. Explicit
+    /// [`FocusState::none`](super::FocusState::none) stays unfocused; an intent
+    /// naming an absent path stays parked. Declaring a modal does not reset
+    /// app-held focus. Opening a new modal through
+    /// [`ModalState::open`](super::ModalState::open) saves that focus and resets
+    /// it to default, allowing the modal to take focus; closing restores it.
     ///
     /// An empty interaction area retains the modal path but excludes the modal
     /// and its descendants from focus, hit-testing, and event routing.

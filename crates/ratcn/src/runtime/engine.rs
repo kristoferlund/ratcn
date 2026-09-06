@@ -820,7 +820,8 @@ impl<State, Msg> Surface<State, Msg> {
     /// the same tree is what guarantees render and routing agree — there is no
     /// second resolution to drift from.
     ///
-    /// - An empty path resolves to the first participating focus candidate,
+    /// - Explicit no-focus stays unfocused, even with a takeover layer.
+    /// - An otherwise empty path resolves to the first participating candidate,
     ///   descended to its first focusable leaf (startup focus).
     /// - A path naming a container descends to the container's first focusable
     ///   leaf.
@@ -830,6 +831,9 @@ impl<State, Msg> Surface<State, Msg> {
     ///   into that layer; an absent path stays parked even then, so render and
     ///   routing agree on it.
     fn resolve_focus(&self, stored: &FocusState) -> FocusState {
+        if stored.is_none() {
+            return FocusState::none();
+        }
         if let Some(root) = self.takeover_root()
             && !self.path_is_prefix_of(root, stored.path())
         {
@@ -3036,7 +3040,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// geometry to answer with, and whatever prefix of the path it does
     /// declare belongs to a different node. Focus sits on a whole path or
     /// nowhere, and so does the reveal.
+    /// Explicit no-focus completes immediately: there is no target to wait for.
     fn reveal_focus(&mut self, focus: &FocusState, state: &State) -> bool {
+        if focus.is_none() {
+            return true;
+        }
         let Some(target) = self.surface.leaf_of(focus.path()) else {
             return false;
         };
