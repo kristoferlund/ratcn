@@ -5,8 +5,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect, Size},
     style::{Color, Style},
-    symbols::line,
-    widgets::{Paragraph, Widget},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 use ratcn::{Button, ButtonVariant, Theme, runtime::DeclareCtx};
 
@@ -50,10 +49,7 @@ pub fn min_size() -> Size {
     Size::new(demos::min_width(), HEADER_ROWS + demos::min_body_height())
 }
 
-/// Split `area` into its bands, or [`None`] when it is too small to hold them.
-///
-/// Refusing is not politeness: the rules are painted straight into the buffer,
-/// where a row outside it is a panic rather than a clip.
+/// Split `area` into its bands only when every view has usable space.
 pub fn layout(area: Rect) -> Option<Bands> {
     let min = min_size();
     if area.width < min.width || area.height < min.height {
@@ -112,18 +108,18 @@ pub fn rule_color(theme: &Theme, live: bool) -> Color {
 
 /// A one-row rule filling `area`'s width.
 pub fn horizontal_rule(buffer: &mut Buffer, area: Rect, color: Color) {
-    for x in area.left()..area.right() {
-        buffer[(x, area.y)]
-            .set_symbol(line::HORIZONTAL)
-            .set_fg(color);
-    }
+    Block::new()
+        .borders(Borders::TOP)
+        .border_style(color)
+        .render(area, buffer);
 }
 
 /// A one-column rule filling `area`'s height.
 pub fn vertical_rule(buffer: &mut Buffer, area: Rect, color: Color) {
-    for y in area.top()..area.bottom() {
-        buffer[(area.x, y)].set_symbol(line::VERTICAL).set_fg(color);
-    }
+    Block::new()
+        .borders(Borders::LEFT)
+        .border_style(color)
+        .render(area, buffer);
 }
 
 /// What a window too small for the chrome gets instead of a layout.

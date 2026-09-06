@@ -25,7 +25,7 @@ use ratcn::{
     Theme,
     runtime::{
         CellOffset, ChildId, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx,
-        EventResult, PaintCtx, Ratcn, offset_rect,
+        EventResult, MouseKind, PaintCtx, Ratcn, offset_rect,
     },
 };
 
@@ -87,14 +87,26 @@ impl App {
 
 impl demo_shared::Demo for App {
     fn handle_event(&mut self, event: Event) -> bool {
-        match self.ratcn.handle_event(event, &self.state) {
+        // Exited cancels runtime capture without routing to the card component.
+        let cancelled = matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseKind::Exited)
+            && self.state.active_drag.is_some();
+        if cancelled {
+            update(
+                &mut self.state,
+                Msg::CardDropped {
+                    target_column_index: None,
+                },
+            );
+        }
+        let routed = match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
                 update(&mut self.state, msg);
                 true
             }
             EventResult::Consumed => true,
             EventResult::Ignored => false,
-        }
+        };
+        cancelled || routed
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
@@ -334,6 +346,61 @@ mod tests {
     use ratcn::runtime::{MouseButton, MouseEvent, MouseKind};
 
     use super::*;
+
+    #[test]
+    fn pointer_exit_cancels_the_card_without_committing_and_allows_another_drag() {
+        let mut app = App::new();
+        let area = Rect::new(0, 0, 60, 20);
+        let board = BoardLayout {
+            area: area.inner(Margin::new(
+                BOARD_HORIZONTAL_PADDING,
+                BOARD_VERTICAL_PADDING,
+            )),
+        };
+        let card = board.card_area(0, 0);
+        let target = board.card_area(1, 0);
+        let mouse = |kind, column, row| {
+            Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: Default::default(),
+            })
+        };
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(area);
+        app.draw(&mut buffer, area, &theme);
+        let original = app.state.cards_by_column.clone();
+        app.handle_event(mouse(MouseKind::Down(MouseButton::Left), card.x, card.y));
+        app.handle_event(mouse(MouseKind::Moved, target.x, target.y));
+        assert!(app.state.active_drag.is_some());
+        buffer.reset();
+        app.draw(&mut buffer, area, &theme);
+        let dragging = buffer.clone();
+        assert!(
+            app.handle_event(mouse(MouseKind::Exited, target.x, target.y)),
+            "cancelling semantic drag must repaint"
+        );
+        assert!(
+            app.state.active_drag.is_none(),
+            "runtime cancellation alone cannot remove the app-owned ghost"
+        );
+        assert_eq!(
+            app.state.cards_by_column, original,
+            "exit must not commit a drop over the target column"
+        );
+        buffer.reset();
+        app.draw(&mut buffer, area, &theme);
+        assert_ne!(buffer, dragging, "the ghost and placeholder must disappear");
+        app.handle_event(mouse(MouseKind::Moved, card.x, card.y));
+        assert!(app.state.active_drag.is_none());
+        app.handle_event(mouse(MouseKind::Down(MouseButton::Left), card.x, card.y));
+        app.handle_event(mouse(MouseKind::Moved, card.x + 1, card.y));
+        assert!(
+            app.state.active_drag.is_some(),
+            "a cancelled drag must not block the next one"
+        );
+    }
 
     #[test]
     fn a_short_offset_board_keeps_card_paint_and_hits_inside_its_allocation() {

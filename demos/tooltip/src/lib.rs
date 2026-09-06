@@ -17,7 +17,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, Theme, Tooltip, TooltipSide,
-    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, KeyCode, Ratcn, TabWrap},
 };
 
 /// The child id every Tooltip gives the button inside it. Unique among its own
@@ -60,7 +60,7 @@ const EDGE: Explained = (
 #[derive(Default)]
 struct AppState {
     focus: FocusState,
-    /// Whether the last input came from the keyboard.
+    /// Whether keyboard input drives focus tooltips. Esc preserves this mode.
     ///
     /// A click focuses what it hits, so focus alone cannot say whether the
     /// user is navigating by keyboard: pairing it with this is what keeps a
@@ -128,9 +128,12 @@ impl App {
 
 impl demo_shared::Demo for App {
     fn handle_event(&mut self, event: Event) -> bool {
-        // Record which device the user is on before routing, so the tooltip
-        // reader can tell keyboard focus from the focus a click leaves behind.
-        let keyboard = !matches!(event, Event::Mouse(_));
+        // Esc preserves input mode and remains available to an enclosing host.
+        let keyboard = match &event {
+            Event::Mouse(_) => false,
+            Event::Key(key) if key.code == KeyCode::Esc => self.state.keyboard,
+            _ => true,
+        };
         // Switching device changes which bubbles are open, so it needs a frame
         // in its own right: a key the runtime ignores still reveals the bubble
         // on the focused trigger.
@@ -218,5 +221,35 @@ mod tests {
             "keyboard to mouse hides it again"
         );
         assert!(!app.state.keyboard);
+    }
+
+    #[test]
+    fn ignored_escape_preserves_the_standalone_hover_and_needs_no_repaint() {
+        let mut app = App::new();
+        let area = Rect::new(0, 0, 80, 20);
+        let theme = Theme::default_dark();
+        let mut before = Buffer::empty(area);
+        app.draw(&mut before, area, &theme);
+        assert!(app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseKind::Moved,
+            column: 40,
+            row: 0,
+            modifiers: Default::default(),
+        })));
+        before.reset();
+        app.draw(&mut before, area, &theme);
+        let text: String = before.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(
+            text.contains("This one"),
+            "hover must paint the edge tooltip before Esc"
+        );
+        assert!(!app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc))));
+        assert!(!app.state.keyboard);
+        let mut after = Buffer::empty(area);
+        app.draw(&mut after, area, &theme);
+        assert_eq!(
+            after, before,
+            "ignoring Esc must not silently change tooltip paint"
+        );
     }
 }

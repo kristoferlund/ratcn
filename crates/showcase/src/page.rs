@@ -43,7 +43,7 @@ const LEDE_WIDTH: u16 = 52;
 const GAP: u16 = 2;
 /// Between the preview window and the caption that explains it.
 const CAPTION_GAP: u16 = 1;
-/// Between the two hero buttons, and between them when they stack.
+/// Between the two hero buttons.
 const BUTTON_GAP: u16 = 2;
 
 /// What the preview window spends on itself: one row and column of border, and
@@ -124,7 +124,6 @@ pub struct Layout {
 pub fn layout(body: Rect, offset: u16) -> Layout {
     // The scroll area always keeps a gutter column for its scrollbar.
     let width = body.width.saturating_sub(1);
-    let hero = HERO_WIDTH.min(width);
     let lede_width = text_width(width, LEDE_WIDTH);
     // Wider than the lede: at the lede's measure this orphans its last word,
     // and at the hero's it wraps to two lines and reads as the figure caption
@@ -147,8 +146,8 @@ pub fn layout(body: Rect, offset: u16) -> Layout {
     );
     y += lede.height + GAP;
 
-    let (buttons, buttons_height) = button_rects(width, hero, y);
-    y += buttons_height + GAP;
+    let buttons = button_rects(width, y);
+    y += ButtonSize::Large.height() + GAP;
 
     // The window keeps the whole column: an edge beside the scrollbar reads
     // fine, and the demo inside wants every cell it can have.
@@ -182,14 +181,8 @@ pub fn layout(body: Rect, offset: u16) -> Layout {
 }
 
 impl Layout {
-    /// The offset that brings the hero button `focus` names fully into view,
-    /// or [`None`] when it names neither or the page already shows it.
-    ///
-    /// The scroll area reveals a clipped descendant by taking a hold it never
-    /// reports back, which would leave the page drawn at one offset and the
-    /// demo blitted from another. Doing the reveal here keeps the offset the
-    /// app holds the only one there is: by the next render the button is
-    /// already in view, so the area finds nothing to move and takes no hold.
+    /// Synchronize external preview windowing with ScrollArea's focus reveal,
+    /// which does not emit the effective offset to the app.
     #[must_use]
     pub fn reveal(&self, focus: &FocusState) -> Option<u16> {
         let button = BUTTON_IDS
@@ -301,13 +294,19 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: Layout, live: bool) {
 /// viewport it lives in. The region occupies content rows `top..top + height`,
 /// and `offset` is the page's scroll. [`None`] when none of it is showing.
 fn placement(column: Rect, top: u16, height: u16, offset: u16) -> Option<(Rect, u16)> {
-    let top = i32::from(top) - i32::from(offset);
-    let skipped = u16::try_from(-top).unwrap_or(0).min(height);
-    let y = column.y + u16::try_from(top.max(0)).expect("a clamped row fits");
-    let visible = height
-        .saturating_sub(skipped)
-        .min(column.bottom().saturating_sub(y.min(column.bottom())));
-    (visible > 0).then(|| (Rect::new(column.x, y, column.width, visible), skipped))
+    let visible = Rect::new(column.x, top, column.width, height).intersection(Rect {
+        y: offset,
+        ..column
+    });
+    (!visible.is_empty()).then(|| {
+        (
+            Rect {
+                y: column.y + (visible.y - offset),
+                ..visible
+            },
+            visible.y - top,
+        )
+    })
 }
 
 /// Rows the embedded demo needs inside a window `width` cells across.
@@ -349,30 +348,17 @@ fn big_title(tier: Tier, color: Color) -> BigText<'static> {
         .build()
 }
 
-/// The two buttons side by side while the hero column holds both, stacked
-/// otherwise, and the rows they take.
-fn button_rects(width: u16, hero: u16, y: u16) -> ([Rect; 2], u16) {
+/// Both hero buttons fit side by side at the minimum window width.
+fn button_rects(width: u16, y: u16) -> [Rect; 2] {
     let row = ButtonSize::Large.height();
     let first = button_width(GET_STARTED);
     let second = button_width(DEMOS);
     let together = first + BUTTON_GAP + second;
-    if together <= hero {
-        let x = centered(width, together);
-        return (
-            [
-                Rect::new(x, y, first, row),
-                Rect::new(x + first + BUTTON_GAP, y, second, row),
-            ],
-            row,
-        );
-    }
-    (
-        [
-            Rect::new(centered(width, first), y, first, row),
-            Rect::new(centered(width, second), y + row + 1, second, row),
-        ],
-        2 * row + 1,
-    )
+    let x = centered(width, together);
+    [
+        Rect::new(x, y, first, row),
+        Rect::new(x + first + BUTTON_GAP, y, second, row),
+    ]
 }
 
 /// Cells a hero button takes, from the component's own arithmetic.
@@ -391,6 +377,13 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     use super::*;
+
+    #[test]
+    fn hero_buttons_fit_side_by_side_at_the_minimum_window_width() {
+        let content_width = chrome::min_size().width - 1;
+        let together = button_width(GET_STARTED) + BUTTON_GAP + button_width(DEMOS);
+        assert!(together <= content_width.min(HERO_WIDTH));
+    }
 
     /// The cap [`DeclareCtx::viewport`] asserts on a viewport's logical
     /// content, in cells.
@@ -509,6 +502,11 @@ mod tests {
             placement(column, 20, 4, 8),
             None,
             "a region still below the viewport is not showing either"
+        );
+        assert_eq!(
+            placement(Rect::new(4, 40_000, 30, 10), 50_000, 20, 50_000),
+            Some((Rect::new(4, 40_000, 30, 10), 0)),
+            "subtract logical scroll before projecting into screen coordinates"
         );
     }
 

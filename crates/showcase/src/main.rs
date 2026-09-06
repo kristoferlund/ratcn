@@ -22,6 +22,7 @@ use ratatui::{
 };
 use ratcn::{
     Theme,
+    linear_nav::cursor_visible_offset,
     runtime::{
         Event, EventResult, FocusState, KeyCode, MouseButton, MouseEvent, MouseKind, Ratcn, TabWrap,
     },
@@ -61,11 +62,7 @@ struct AppState {
 }
 
 impl AppState {
-    /// Whether the embedded demo has the input.
-    ///
-    /// Derived rather than stored: it is true exactly while the chrome's focus
-    /// is parked, and two fields set and cleared together are one fact with
-    /// nothing to keep them honest.
+    /// A saved chrome focus means the demo owns input.
     const fn entered(&self) -> bool {
         self.parked.is_some()
     }
@@ -92,17 +89,10 @@ struct Embed {
 }
 
 impl Embed {
-    /// `mouse` in the landing preview's own coordinate space.
-    ///
-    /// The shift is a constant rather than a clip to the rect, which is what
-    /// lets a drag that strays outside the region keep reaching the cell it
-    /// means — the demo may have captured the pointer and be waiting for the
-    /// release. But a constant shift also maps cells outside the region onto
-    /// cells inside it, and for the kinds that only drive hover, landing on a
-    /// control the pointer is nowhere near is simply a lie. Those get a cell
-    /// no canvas contains.
-    fn translate(self, mouse: MouseEvent) -> MouseEvent {
-        let hover_only = matches!(mouse.kind, MouseKind::Moved | MouseKind::Scroll(_));
+    /// Preserve drag coordinates outside the preview, but never invent a hover.
+    fn translate(self, mouse: MouseEvent, primary_down: bool) -> MouseEvent {
+        let hover_only = matches!(mouse.kind, MouseKind::Scroll(_))
+            || (mouse.kind == MouseKind::Moved && !primary_down);
         if hover_only && !self.rect.contains(Position::new(mouse.column, mouse.row)) {
             return MouseEvent {
                 column: u16::MAX,
@@ -133,29 +123,16 @@ struct App {
     /// The landing page's own instance, which is not the catalog's `landing`
     /// entry: browsing to that one leaves this one as the user left it.
     landing: Box<dyn Embedded>,
-    /// Catalog demos, built on first use and kept afterwards, so a demo
-    /// returned to still has its state.
-    ///
-    /// Nothing is built up front, and that is not an optimisation:
-    /// `effects::App::new` starts a network request, so constructing all
-    /// twenty-six would fetch on launch.
+    /// Lazy, persistent instances: constructing `effects` starts a network request.
     opened: Vec<Option<Box<dyn Embedded>>>,
     /// Only the scrolling landing preview needs offscreen rows.
     canvas: Buffer,
-    /// Where the embedded demo painted last frame, and how to reach its own
-    /// cells from there — the only thing routing needs to know about the
-    /// layout. [`None`] when no demo is on screen.
+    /// Actual painted demo bounds, not a projection from a pending scroll.
     embed: Option<Embed>,
-    /// The landing page as it was last measured, which is what its page keys
-    /// and its focus reveal are answered from. [`None`] whenever it is not the
-    /// view on screen.
-    landing_page: Option<page::Layout>,
-    /// The Getting started page as it was last measured, for its page keys.
-    /// [`None`] whenever it is not the view on screen.
-    getting_started: Option<getting_started::Layout>,
-    /// Rows the nav list had on screen, which is what a commit reveals into.
-    /// [`None`] whenever the Demos view is not on screen.
-    nav_rows: Option<u16>,
+    /// Last valid body for this view. Event queries combine it with current state.
+    body: Option<Rect>,
+    /// Raw motion may become a drag only after reaching the child runtime.
+    primary_down: bool,
 }
 
 impl App {
@@ -171,25 +148,31 @@ impl App {
                 .collect(),
             canvas: Buffer::empty(Rect::default()),
             embed: None,
-            landing_page: None,
-            getting_started: None,
-            nav_rows: None,
+            body: None,
+            primary_down: false,
         }
     }
 
     fn update(&mut self, msg: Msg) {
         match msg {
             Msg::FocusChanged(focus) => {
-                if let Some(offset) = self.landing_page.and_then(|page| page.reveal(&focus)) {
+                if self.state.view == View::Landing
+                    && let Some(offset) = self.body.and_then(|body| {
+                        page::layout(body, self.state.landing_scroll).reveal(&focus)
+                    })
+                {
                     self.state.landing_scroll = offset;
                 }
                 self.state.focus = focus;
             }
             Msg::Navigate(view) => {
+                if self.state.view != view {
+                    self.leave();
+                    self.body = None;
+                    self.embed = None;
+                }
                 self.state.view = view;
-                // The nav list is what the Demos view is for, so focusing it
-                // is what makes the arrows work the moment the user arrives.
-                // The landing page is left alone; see `page::ID`.
+                // Arrows browse immediately on arrival in Demos.
                 if view == View::Demos {
                     self.state.focus = FocusState::intent([demos::NAV_ID]);
                 }
@@ -198,17 +181,21 @@ impl App {
                 self.state.cursor = index;
                 self.state.nav_scroll = offset;
             }
-            // A click commits without a preceding move, so the cursor follows
-            // the row that was committed: whatever the user does next with the
-            // arrows continues from where they clicked. And the row is scrolled
-            // into view, because the wheel can have left it off screen — see
-            // [`demos::revealed`].
+            // A click commits without moving first; reveal even after wheel scrolling.
             Msg::NavSelected(index) => {
+                if self.state.showing != index {
+                    self.leave();
+                    self.embed = None;
+                }
                 self.state.showing = index;
                 self.state.cursor = index;
-                if let Some(rows) = self.nav_rows {
-                    self.state.nav_scroll =
-                        demos::revealed(index, self.state.nav_scroll, usize::from(rows));
+                if let Some(body) = self.body {
+                    self.state.nav_scroll = cursor_visible_offset(
+                        catalog::ENTRIES.len(),
+                        usize::from(demos::visible_rows(demos::columns(body).nav)),
+                        self.state.nav_scroll,
+                        Some(index),
+                    );
                 }
             }
             Msg::NavScrolled(offset) => self.state.nav_scroll = offset,
@@ -217,16 +204,15 @@ impl App {
         }
     }
 
-    /// The demo the current view shows, built if this is its first appearance.
+    /// The current instance, if already built. Only painting constructs demos.
     fn shown_mut(&mut self) -> Option<&mut dyn Embedded> {
         match self.state.view {
             View::Landing => Some(self.landing.as_mut()),
             View::GettingStarted => None,
-            View::Demos => Some(
-                self.opened[self.state.showing]
-                    .get_or_insert_with(|| catalog::ENTRIES[self.state.showing].open())
-                    .as_mut(),
-            ),
+            View::Demos => match self.opened[self.state.showing].as_mut() {
+                Some(demo) => Some(demo.as_mut()),
+                None => None,
+            },
         }
     }
 
@@ -240,21 +226,21 @@ impl App {
         }
     }
 
-    /// Route one event to the embedded demo, in the demo's own coordinates.
-    ///
-    /// A demo with no rows on screen is not reachable by the pointer at all —
-    /// the page has scrolled its preview out of the viewport, or the window has
-    /// shrunk below the chrome's minimum — and it can still hold the input in
-    /// both states. There is no cell to name for it, so the event is dropped
-    /// rather than invented; keys still reach it, which is what lets Esc give
-    /// the input back.
+    /// Only a painted demo receives input. The host can still leave on Esc.
     fn route_to_demo(&mut self, event: Event) -> bool {
-        let event = match (event, self.embed) {
-            (Event::Mouse(mouse), Some(embed)) if self.state.view == View::Landing => {
-                Event::Mouse(embed.translate(mouse))
+        let Some(embed) = self.embed else {
+            return false;
+        };
+        let event = match event {
+            Event::Mouse(mouse) if self.state.view == View::Landing => {
+                match mouse.kind {
+                    MouseKind::Down(MouseButton::Left) => self.primary_down = true,
+                    MouseKind::Up(MouseButton::Left) => self.primary_down = false,
+                    _ => {}
+                }
+                Event::Mouse(embed.translate(mouse, self.primary_down))
             }
-            (Event::Mouse(_), None) => return false,
-            (event, _) => event,
+            event => event,
         };
         self.shown_mut()
             .is_some_and(|demo| demo.handle_event(event))
@@ -262,14 +248,34 @@ impl App {
 
     /// Hand the input to the embedded demo, parking the chrome's focus.
     fn enter(&mut self) {
+        if self.embed.is_none() || self.state.entered() {
+            return;
+        }
         let chrome_focus = std::mem::replace(&mut self.state.focus, FocusState::none());
         self.state.parked = Some(chrome_focus);
     }
 
     /// Take it back, putting the chrome's focus where it was.
     fn leave(&mut self) {
+        self.exit_demo();
         if let Some(focus) = self.state.parked.take() {
-            self.state.focus = focus;
+            self.update(Msg::FocusChanged(focus));
+        }
+    }
+
+    /// End pointer interaction before hiding or relinquishing the child.
+    /// Callers already owe a frame, so any cancelled app-owned drag is repainted.
+    fn exit_demo(&mut self) {
+        self.primary_down = false;
+        if self.embed.is_some()
+            && let Some(demo) = self.shown_mut()
+        {
+            demo.handle_event(Event::Mouse(MouseEvent {
+                kind: MouseKind::Exited,
+                column: 0,
+                row: 0,
+                modifiers: Default::default(),
+            }));
         }
     }
 
@@ -286,10 +292,11 @@ impl App {
         let Event::Key(key) = event else {
             return false;
         };
-        // Modifiers are gated the way [`App::page_key`] gates them: a chord is
-        // the app's or the terminal's, and Ctrl+Right must not hand the demo
-        // the keyboard behind the user's back.
-        if self.state.view != View::Demos || key.modifiers.any() || key.code != KeyCode::Right {
+        if self.state.view != View::Demos
+            || self.embed.is_none()
+            || key.modifiers.any()
+            || key.code != KeyCode::Right
+        {
             return false;
         }
         self.enter();
@@ -306,15 +313,20 @@ impl App {
         if key.modifiers.any() {
             return false;
         }
+        let Some(body) = self.body else {
+            return false;
+        };
         let scrolled = match self.state.view {
-            View::Landing => self
-                .landing_page
-                .and_then(|landing| landing.scroll.scrolled(key.code))
+            View::Landing => page::layout(body, self.state.landing_scroll)
+                .scroll
+                .scrolled(key.code)
                 .map(Msg::LandingScrolled),
-            View::GettingStarted => self
-                .getting_started
-                .and_then(|guide| guide.scroll.scrolled(key.code))
-                .map(Msg::GettingStartedScrolled),
+            View::GettingStarted => {
+                getting_started::layout(body, self.state.getting_started_scroll)
+                    .scroll
+                    .scrolled(key.code)
+                    .map(Msg::GettingStartedScrolled)
+            }
             View::Demos => None,
         };
         let Some(msg) = scrolled else {
@@ -338,7 +350,6 @@ impl App {
             source_row: 0,
         };
         self.embed = Some(embed);
-        self.nav_rows = Some(demos::visible_rows(columns.nav));
 
         chrome::header_rule(buffer, bands, theme);
         demos::separators(buffer, bands, &columns, theme, self.state.entered());
@@ -349,10 +360,10 @@ impl App {
             demos::declare(ctx, columns.nav);
         });
 
-        if let Some(demo) = self.shown_mut() {
-            let demo_theme = demo.theme(theme);
-            demo.draw(buffer, columns.pane, &demo_theme);
-        }
+        let demo = self.opened[self.state.showing]
+            .get_or_insert_with(|| catalog::ENTRIES[self.state.showing].open());
+        let demo_theme = demo.theme(theme);
+        demo.draw(buffer, columns.pane, &demo_theme);
     }
 
     /// The landing view: the site's front page, scrolling, with the demo
@@ -365,7 +376,9 @@ impl App {
         theme: &Theme,
     ) {
         let page = page::layout(bands.body, self.state.landing_scroll);
-        self.landing_page = Some(page);
+        if page.embed.is_none() && self.embed.is_some() {
+            self.exit_demo();
+        }
         self.embed = page
             .embed
             .map(|(rect, source_row)| Embed { rect, source_row });
@@ -398,7 +411,7 @@ impl App {
         theme: &Theme,
     ) {
         let page = getting_started::layout(bands.body, self.state.getting_started_scroll);
-        self.getting_started = Some(page);
+        self.embed = None;
 
         chrome::header_rule(buffer, bands, theme);
 
@@ -432,6 +445,18 @@ impl demo_shared::Demo for App {
     const ADAPTIVE: bool = true;
 
     fn handle_event(&mut self, event: Event) -> bool {
+        if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseKind::Exited) {
+            self.primary_down = false;
+        }
+        if self.body.is_none() {
+            if self.state.entered() && matches!(&event, Event::Key(key) if key.code == KeyCode::Esc)
+            {
+                self.leave();
+                return true;
+            }
+            return false;
+        }
+        let mut redraw = false;
         if self.state.entered() {
             match &event {
                 // Esc is the demo's first: a dialog inside it dismisses on the
@@ -443,16 +468,13 @@ impl demo_shared::Demo for App {
                     self.leave();
                     return true;
                 }
-                // A press outside the region means the user is done with the
-                // demo, and the event that says so is the chrome's. Nothing
-                // else out there is: a drag that strays past the edge still
-                // belongs to the demo, which may have captured the pointer and
-                // be waiting for the release.
+                // Outside presses leave; an ongoing drag still belongs to the demo.
                 Event::Mouse(mouse)
                     if mouse.kind == MouseKind::Down(MouseButton::Left)
                         && !self.over_demo(Position::new(mouse.column, mouse.row)) =>
                 {
                     self.leave();
+                    redraw = true;
                 }
                 _ => {
                     if self.route_to_demo(event.clone()) {
@@ -486,35 +508,46 @@ impl demo_shared::Demo for App {
             }
             EventResult::Consumed => true,
             // The two view-level fallbacks, each inert on the other's view.
-            EventResult::Ignored => self.enter_key(&event) || self.page_key(&event),
+            EventResult::Ignored => self.enter_key(&event) || self.page_key(&event) || redraw,
         }
     }
 
     /// Whatever the demo on screen asks of the clock.
     fn wake(&self) -> Option<Duration> {
+        self.embed?;
         self.shown().and_then(Embedded::wake)
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         buffer.set_style(area, Style::default().bg(theme.background));
 
-        // Everything derived from the last frame's layout, cleared before the
-        // frame that replaces it: each view then sets only what it owns, and a
-        // view that owns none of it cannot inherit another's.
-        self.embed = None;
-        self.landing_page = None;
-        self.getting_started = None;
-        self.nav_rows = None;
-
         let Some(bands) = chrome::layout(area) else {
+            if self.embed.is_some() {
+                self.exit_demo();
+            }
+            self.embed = None;
+            self.body = None;
+            self.primary_down = false;
             chrome::too_small(buffer, area, theme);
             return;
         };
+        let resized = self.body != Some(bands.body);
+        if resized && self.embed.is_some() {
+            self.exit_demo();
+            self.embed = None;
+        }
+        self.body = Some(bands.body);
+        if resized {
+            self.update(Msg::FocusChanged(self.state.focus.clone()));
+        }
 
         match self.state.view {
             View::Demos => self.draw_demos(buffer, area, &bands, theme),
             View::Landing => self.draw_landing(buffer, area, &bands, theme),
             View::GettingStarted => self.draw_getting_started(buffer, area, &bands, theme),
+        }
+        if self.embed.is_none() {
+            self.primary_down = false;
         }
     }
 }
@@ -603,6 +636,473 @@ mod tests {
         })
     }
 
+    #[test]
+    fn consecutive_header_page_keys_use_the_current_scroll_offset() {
+        for view in [View::Landing, View::GettingStarted] {
+            let mut app = App::new();
+            app.update(Msg::Navigate(view));
+            let before = draw_at(&mut app, 60, 12);
+            let offset = |app: &App| match view {
+                View::Landing => app.state.landing_scroll,
+                _ => app.state.getting_started_scroll,
+            };
+            assert!(route(
+                &mut app,
+                Event::Key(KeyEvent::new(KeyCode::PageDown))
+            ));
+            let first = offset(&app);
+            assert!(route(
+                &mut app,
+                Event::Key(KeyEvent::new(KeyCode::PageDown))
+            ));
+            assert_eq!(
+                offset(&app),
+                first * 2,
+                "both page keys must advance before any redraw"
+            );
+            assert_ne!(draw_at(&mut app, 60, 12), before);
+        }
+    }
+
+    #[test]
+    fn standard_list_marks_selection_separately_from_cursor_and_fits_every_label() {
+        let mut app = App::new();
+        app.opened[0] = Some(Box::new(Probe::default()));
+        app.update(Msg::Navigate(View::Demos));
+        let width = chrome::min_size().width;
+        draw_at(&mut app, width, 40);
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Down)));
+        let painted = draw_at(&mut app, width, 40);
+        let nav = demos::columns(app.body.unwrap()).nav;
+        let markers = ratcn::selection_indicator::MarkerGlyphs::radio();
+        assert_eq!(app.state.cursor, 1);
+        assert_eq!(app.state.showing, 0);
+        for (index, entry) in catalog::ENTRIES.iter().enumerate() {
+            let y = nav.y + index as u16;
+            assert_eq!(painted[(nav.x + 1, y)].symbol(), markers.marker(index == 0));
+            let row: String = (nav.x..nav.right())
+                .map(|x| painted[(x, y)].symbol())
+                .collect();
+            assert!(
+                row.ends_with(entry.name) || row.contains(&format!("{} ", entry.name)),
+                "{} was truncated: {row:?}",
+                entry.name
+            );
+        }
+        assert_ne!(
+            painted[(nav.x, nav.y + 1)].bg,
+            painted[(nav.x, nav.y + 2)].bg,
+            "cursor styling must distinguish browsing from other rows"
+        );
+        app.enter();
+        let entered = draw_at(&mut app, width, 40);
+        assert_eq!(
+            entered[(nav.x + 1, nav.y)].symbol(),
+            markers.selected,
+            "selection remains visible when the demo owns input"
+        );
+    }
+
+    #[test]
+    fn a_blank_outside_press_requests_the_frame_that_restores_chrome_focus() {
+        let Probed { mut app, .. } = probed();
+        app.enter();
+        let entered = draw_at(&mut app, 100, 40);
+        assert!(route(
+            &mut app,
+            mouse(MouseKind::Down(MouseButton::Left), 99, 0)
+        ));
+        assert!(!app.state.entered());
+        assert_ne!(draw_at(&mut app, 100, 40), entered);
+    }
+
+    #[test]
+    fn restoring_a_hero_focus_synchronizes_the_page_and_preview() {
+        let Probed { mut app, .. } = probed();
+        for _ in 0..HEADER_LINKS {
+            route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
+            draw_at(&mut app, 100, 40);
+        }
+        let focus = app.state.focus.clone();
+        assert!(focus.contains_path(["page", "getting-started"]));
+        app.enter();
+        app.update(Msg::LandingScrolled(40));
+        draw_at(&mut app, 100, 40);
+        let body = chrome::layout(Rect::new(0, 0, 100, 40)).unwrap().body;
+        let expected = page::layout(body, 40).reveal(&focus).unwrap();
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Esc)));
+        assert_eq!(app.state.landing_scroll, expected);
+        let painted = draw_at(&mut app, 100, 40);
+        let embed = app.embed.unwrap();
+        assert_eq!(embed.source_row, 0);
+        let title: String = (0..100)
+            .map(|x| painted[(x, embed.rect.y - 1)].symbol())
+            .collect();
+        assert!(
+            title.contains("cargo run -p landing"),
+            "the preview must align with its actual page border"
+        );
+    }
+
+    #[test]
+    fn missing_or_changed_geometry_cannot_enter_or_route_stale_controls() {
+        let mut app = App::new();
+        app.update(Msg::Navigate(View::Demos));
+        assert!(!route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right))));
+        draw_at(&mut app, 100, 40);
+        draw_at(&mut app, 10, 3);
+        assert!(!route(&mut app, Event::Key(KeyEvent::new(KeyCode::Down))));
+        assert_eq!(app.state.cursor, 0);
+        assert!(!route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right))));
+
+        draw_at(&mut app, 100, 40);
+        app.update(Msg::Navigate(View::Landing));
+        assert!(!route(&mut app, Event::Key(KeyEvent::new(KeyCode::Enter))));
+        route(
+            &mut app,
+            mouse(MouseKind::Click(MouseButton::Left), header_link("Demos"), 0),
+        );
+        assert!(
+            app.state.view == View::Landing,
+            "the previous header must not route before the new view paints"
+        );
+        assert!(app.opened[1].is_none());
+        app.update(Msg::Navigate(View::Demos));
+        draw_at(&mut app, 100, 40);
+        let old_pane = app.embed.unwrap().rect;
+        app.update(Msg::NavSelected(1));
+        route(
+            &mut app,
+            mouse(
+                MouseKind::Down(MouseButton::Left),
+                old_pane.x + 1,
+                old_pane.y + 1,
+            ),
+        );
+        assert!(!route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right))));
+        assert!(!app.state.entered());
+        assert!(
+            app.opened[1].is_none(),
+            "input must not construct a demo before its first paint"
+        );
+        draw_at(&mut app, 100, 40);
+        assert!(route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right))));
+    }
+
+    #[test]
+    fn only_a_painted_preview_can_request_clock_wakeups() {
+        struct Expired;
+        impl demo_shared::Demo for Expired {
+            fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
+            fn wake(&self) -> Option<Duration> {
+                Some(Duration::ZERO)
+            }
+        }
+        let mut app = App::new();
+        app.landing = Box::new(Expired);
+        assert_eq!(demo_shared::Demo::wake(&app), None);
+        draw_at(&mut app, 100, 20);
+        assert!(app.embed.is_none());
+        assert_eq!(demo_shared::Demo::wake(&app), None);
+        app.update(Msg::LandingScrolled(40));
+        draw_at(&mut app, 100, 20);
+        assert!(app.embed.is_some());
+        assert_eq!(demo_shared::Demo::wake(&app), Some(Duration::ZERO));
+        draw_at(&mut app, 10, 3);
+        assert_eq!(demo_shared::Demo::wake(&app), None);
+    }
+
+    #[test]
+    fn raw_pointer_motion_outside_preserves_a_real_demo_drag() {
+        for view in [View::Landing, View::Demos] {
+            let mut app = App::new();
+            app.update(Msg::Navigate(view));
+            app.landing = Box::new(drag::App::new());
+            app.state.showing = catalog::ENTRIES
+                .iter()
+                .position(|entry| entry.name == "drag")
+                .unwrap();
+            draw_at(&mut app, 90, 40);
+            if view == View::Landing {
+                app.update(Msg::LandingScrolled(app.canvas.area.height / 2 + 24));
+            }
+            let before = draw_at(&mut app, 90, 30);
+            let embed = app.embed.unwrap();
+            let label = embed
+                .rect
+                .positions()
+                .find(|&point| before[point].symbol() == "D")
+                .unwrap();
+            route(
+                &mut app,
+                mouse(MouseKind::Down(MouseButton::Left), label.x, label.y),
+            );
+            route(
+                &mut app,
+                mouse(MouseKind::Moved, embed.rect.right() + 3, label.y),
+            );
+            route(
+                &mut app,
+                mouse(
+                    MouseKind::Up(MouseButton::Left),
+                    embed.rect.right() + 3,
+                    label.y,
+                ),
+            );
+            let after = draw_at(&mut app, 90, 30);
+            let moved = embed
+                .rect
+                .positions()
+                .find(|&point| after[point].symbol() == "D")
+                .expect("the dragged label must remain visible");
+            assert_eq!(
+                moved.y, label.y,
+                "horizontal raw motion must not jump to the canvas bottom"
+            );
+            assert!(moved.x > label.x);
+            route(&mut app, mouse(MouseKind::Moved, label.x, label.y));
+            let released = draw_at(&mut app, 90, 30);
+            let resting = embed
+                .rect
+                .positions()
+                .find(|&point| released[point].symbol() == "D")
+                .unwrap();
+            assert_eq!(resting, moved, "motion after Up must not continue the drag");
+        }
+    }
+
+    #[test]
+    fn leaving_ends_child_capture_before_reentry() {
+        let mut app = App::new();
+        app.update(Msg::Navigate(View::Demos));
+        app.state.showing = catalog::ENTRIES
+            .iter()
+            .position(|entry| entry.name == "drag")
+            .unwrap();
+        let before = draw_at(&mut app, 100, 40);
+        let pane = app.embed.unwrap().rect;
+        let label = pane
+            .positions()
+            .find(|&point| before[point].symbol() == "D")
+            .unwrap();
+        route(
+            &mut app,
+            mouse(MouseKind::Down(MouseButton::Left), label.x, label.y),
+        );
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Esc)));
+        assert!(!app.state.entered());
+        route(
+            &mut app,
+            mouse(MouseKind::Up(MouseButton::Left), label.x, label.y),
+        );
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right)));
+        assert!(app.state.entered());
+        route(&mut app, mouse(MouseKind::Moved, label.x + 3, label.y));
+        let after = draw_at(&mut app, 100, 40);
+        let moved = pane
+            .positions()
+            .find(|&point| after[point].symbol() == "D")
+            .unwrap();
+        assert_eq!(
+            moved, label,
+            "a released pointer must not continue a retained child capture"
+        );
+    }
+
+    #[test]
+    fn pointer_exit_restores_preview_hover_suppression_without_an_up() {
+        let Probed {
+            mut app,
+            seen,
+            handled,
+        } = probed();
+        handled.set(true);
+        let rect = app.embed.unwrap().rect;
+        route(
+            &mut app,
+            mouse(MouseKind::Down(MouseButton::Left), rect.x + 1, rect.y + 1),
+        );
+        assert!(
+            route(&mut app, mouse(MouseKind::Exited, 0, 0)),
+            "exit handling must request a repaint"
+        );
+        assert!(
+            !app.primary_down,
+            "Exited ends tracking even when release happens outside the terminal"
+        );
+        // The backend does not deliver that release; the next event is hover on chrome.
+        route(
+            &mut app,
+            mouse(MouseKind::Moved, rect.right() + 1, rect.y + 1),
+        );
+        assert_eq!(
+            seen.take(),
+            Some(mouse(MouseKind::Moved, u16::MAX, u16::MAX))
+        );
+    }
+
+    #[test]
+    fn preview_exit_precedes_resize_or_disappearance() {
+        for change in ["resize", "too-small", "scroll"] {
+            let Probed { mut app, seen, .. } = probed();
+            if change == "scroll" {
+                app.update(Msg::LandingScrolled(40));
+                draw_at(&mut app, 100, 20);
+            }
+            let rect = app.embed.unwrap().rect;
+            route(
+                &mut app,
+                mouse(MouseKind::Down(MouseButton::Left), rect.x + 1, rect.y + 1),
+            );
+            seen.take();
+            match change {
+                "resize" => {
+                    draw_at(&mut app, 101, 40);
+                }
+                "too-small" => {
+                    draw_at(&mut app, 10, 3);
+                }
+                "scroll" => {
+                    app.update(Msg::LandingScrolled(0));
+                    draw_at(&mut app, 100, 20);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                seen.take(),
+                Some(mouse(MouseKind::Exited, 0, 0)),
+                "{change} must notify the old painted instance"
+            );
+            assert!(!app.primary_down);
+            assert_eq!(app.embed.is_some(), change == "resize");
+        }
+    }
+
+    #[test]
+    fn switching_notifies_the_outgoing_demo_without_constructing_the_incoming_one() {
+        for change_view in [false, true] {
+            let mut app = App::new();
+            let seen = Rc::default();
+            app.opened[0] = Some(Box::new(Probe {
+                seen: Rc::clone(&seen),
+                handled: Rc::default(),
+            }));
+            app.update(Msg::Navigate(View::Demos));
+            draw_at(&mut app, 100, 40);
+            app.enter();
+            if change_view {
+                app.update(Msg::Navigate(View::GettingStarted));
+            } else {
+                let effects = catalog::ENTRIES
+                    .iter()
+                    .position(|entry| entry.name == "effects")
+                    .unwrap();
+                app.update(Msg::NavSelected(effects));
+                assert!(
+                    app.opened[effects].is_none(),
+                    "cancellation must not start a network request"
+                );
+            }
+            assert_eq!(seen.take(), Some(mouse(MouseKind::Exited, 0, 0)));
+            assert!(!app.state.entered());
+            assert!(app.embed.is_none());
+            assert!(
+                app.opened[0].is_some(),
+                "the old app state remains available"
+            );
+        }
+    }
+
+    #[test]
+    fn the_first_escape_leaves_the_mouse_driven_tooltip_demo() {
+        let mut app = App::new();
+        app.update(Msg::Navigate(View::Demos));
+        app.state.showing = catalog::ENTRIES
+            .iter()
+            .position(|entry| entry.name == "tooltip")
+            .unwrap();
+        draw_at(&mut app, 100, 40);
+        let pane = app.embed.unwrap().rect;
+        route(
+            &mut app,
+            mouse(
+                MouseKind::Down(MouseButton::Left),
+                pane.x + pane.width / 2,
+                pane.y,
+            ),
+        );
+        route(
+            &mut app,
+            mouse(
+                MouseKind::Up(MouseButton::Left),
+                pane.x + pane.width / 2,
+                pane.y,
+            ),
+        );
+        assert!(app.state.entered());
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Esc)));
+        assert!(
+            !app.state.entered(),
+            "an ignored Esc must not be claimed just to switch tooltip input mode"
+        );
+    }
+
+    #[test]
+    fn preview_pointer_tracking_ends_on_release_leave_hiding_and_view_change() {
+        for reset in ["release", "leave", "hide", "navigate"] {
+            let Probed { mut app, seen, .. } = probed();
+            let rect = app.embed.unwrap().rect;
+            route(
+                &mut app,
+                mouse(MouseKind::Down(MouseButton::Left), rect.x + 1, rect.y + 1),
+            );
+            assert!(app.primary_down);
+            match reset {
+                "release" => {
+                    route(
+                        &mut app,
+                        mouse(
+                            MouseKind::Up(MouseButton::Left),
+                            rect.right() + 1,
+                            rect.y + 1,
+                        ),
+                    );
+                }
+                "leave" => {
+                    app.leave();
+                    app.enter();
+                }
+                "hide" => {
+                    draw_at(&mut app, 10, 3);
+                    draw_at(&mut app, 100, 40);
+                }
+                "navigate" => {
+                    app.update(Msg::Navigate(View::GettingStarted));
+                    draw_at(&mut app, 100, 40);
+                    app.update(Msg::Navigate(View::Landing));
+                    draw_at(&mut app, 100, 40);
+                    app.enter();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                !app.primary_down,
+                "{reset} must end coordinate preservation"
+            );
+            seen.take();
+            let rect = app.embed.unwrap().rect;
+            route(
+                &mut app,
+                mouse(MouseKind::Moved, rect.right() + 1, rect.y + 1),
+            );
+            assert_eq!(
+                seen.take(),
+                Some(mouse(MouseKind::Moved, u16::MAX, u16::MAX)),
+                "{reset} must restore outside hover suppression"
+            );
+        }
+    }
+
     /// The one place in this crate where a mistake is a panic rather than a
     /// wrong pixel: base-layer paint is not clipped, so a chrome laid out in an
     /// area too small for it writes outside the buffer.
@@ -613,7 +1113,7 @@ mod tests {
         // than an incidental number: the nav column's widest demo name sets the
         // width, and the hint lines set the height. A fifth hint costs a row of
         // everyone's terminal, and should have to be argued for here.
-        assert_eq!((min.width, min.height), (42, 8));
+        assert_eq!((min.width, min.height), (43, 8));
         let mut app = App::new();
 
         let laid_out = text_of(&draw_at(&mut app, min.width, min.height));
@@ -646,16 +1146,22 @@ mod tests {
             source_row: 7,
         };
 
-        let inside = embed.translate(match mouse(MouseKind::Moved, 12, 6) {
-            Event::Mouse(mouse) => mouse,
-            _ => unreachable!(),
-        });
+        let inside = embed.translate(
+            match mouse(MouseKind::Moved, 12, 6) {
+                Event::Mouse(mouse) => mouse,
+                _ => unreachable!(),
+            },
+            false,
+        );
         assert_eq!((inside.column, inside.row), (2, 8));
 
-        let dragged = embed.translate(match mouse(MouseKind::Drag(MouseButton::Left), 4, 20) {
-            Event::Mouse(mouse) => mouse,
-            _ => unreachable!(),
-        });
+        let dragged = embed.translate(
+            match mouse(MouseKind::Drag(MouseButton::Left), 4, 20) {
+                Event::Mouse(mouse) => mouse,
+                _ => unreachable!(),
+            },
+            false,
+        );
         assert_eq!(
             (dragged.column, dragged.row),
             (0, 22),
@@ -663,10 +1169,13 @@ mod tests {
              that strays out and back lands where the user means"
         );
 
-        let hovered = embed.translate(match mouse(MouseKind::Moved, 4, 1) {
-            Event::Mouse(mouse) => mouse,
-            _ => unreachable!(),
-        });
+        let hovered = embed.translate(
+            match mouse(MouseKind::Moved, 4, 1) {
+                Event::Mouse(mouse) => mouse,
+                _ => unreachable!(),
+            },
+            false,
+        );
         assert_eq!(
             (hovered.column, hovered.row),
             (u16::MAX, u16::MAX),
@@ -1087,6 +1596,7 @@ mod tests {
             "the list consumed Enter, so it never reached the app's own fallback"
         );
 
+        draw_at(&mut app, 100, 40);
         route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right)));
         assert!(app.state.entered(), "Right is what enters the demo pane");
     }
@@ -1103,7 +1613,7 @@ mod tests {
         app.update(Msg::Navigate(View::Demos));
         // Short enough that the nav list holds far fewer rows than the catalog.
         draw_at(&mut app, 100, 16);
-        let rows = usize::from(app.nav_rows.expect("the nav list is on screen"));
+        let rows = usize::from(demos::visible_rows(demos::columns(app.body.unwrap()).nav));
         assert!(
             rows < catalog::ENTRIES.len(),
             "the list has to overflow its window for this to mean anything"
@@ -1189,9 +1699,10 @@ mod tests {
             mouse(MouseKind::Down(MouseButton::Left), 1, outside),
         );
         assert!(!app.state.entered(), "a press outside gives the input back");
-        assert!(
-            seen.take().is_none(),
-            "and it is the chrome's, not the demo's"
+        assert_eq!(
+            seen.take(),
+            Some(mouse(MouseKind::Exited, 0, 0)),
+            "the press belongs to chrome, but the outgoing demo must cancel its pointer"
         );
     }
 
@@ -1216,14 +1727,15 @@ mod tests {
 
         handled.set(false);
         route(&mut app, escape.clone());
-        assert_eq!(seen.take(), Some(escape), "the demo saw it again");
+        assert_eq!(
+            seen.take(),
+            Some(mouse(MouseKind::Exited, 0, 0)),
+            "the ignored Esc is followed by cancellation, not a synthetic release"
+        );
         assert!(!app.state.entered(), "and ignoring it gave the input back");
     }
 
-    /// A demo with no rows on screen has no cell for the pointer to land on,
-    /// so pointer events stop at the host rather than being given an invented
-    /// one — but keys still reach it, which is what lets Esc give the input
-    /// back from there.
+    /// Hidden controls receive neither pointer nor keyboard input; Esc leaves at the host.
     #[test]
     fn a_demo_with_nothing_on_screen_is_not_reachable_by_the_pointer() {
         let Probed { mut app, seen, .. } = probed();
@@ -1232,6 +1744,11 @@ mod tests {
         // leaves the demo with nothing on screen while it still holds the
         // input; the page scrolling its preview out of view is the other.
         draw_at(&mut app, 10, 3);
+        assert_eq!(
+            seen.take(),
+            Some(mouse(MouseKind::Exited, 0, 0)),
+            "the visible instance is cancelled before its geometry is discarded"
+        );
         assert!(app.embed.is_none(), "nothing of the demo is showing");
         assert!(app.state.entered(), "and it still has the input");
 
@@ -1241,9 +1758,15 @@ mod tests {
         );
         assert!(seen.take().is_none(), "so the demo is never handed a cell");
 
+        assert!(!route(&mut app, Event::Key(KeyEvent::new(KeyCode::Enter))));
+        assert!(seen.take().is_none(), "hidden buttons must not activate");
+
         let escape = Event::Key(KeyEvent::new(KeyCode::Esc));
         route(&mut app, escape.clone());
-        assert_eq!(seen.take(), Some(escape), "but a key still reaches it");
+        assert!(
+            seen.take().is_none(),
+            "Esc is handled by the host while hidden"
+        );
         assert!(!app.state.entered(), "and Esc still gives the input back");
     }
 
