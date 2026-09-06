@@ -183,34 +183,17 @@ fn push<'a>(lines: &mut [Line<'a>], text: &'a str, style: Style) {
 // against its *own* foreground, and on `field` Solarized's `accent` measures
 // 2.86:1.
 
-/// How far apart two colors have to be, in the channel that separates them
-/// most, to read as two colors rather than one — asked of the theme rather
-/// than fixed here.
+/// How far apart two colors have to be to read as two colors rather than one,
+/// in CIE76 ΔE.
 ///
-/// Every theme already states what it considers a visible step between two text
-/// colors: how far it puts its own muted text from its body text. A candidate
-/// at least that far from the body text is, by this palette's own reckoning,
-/// a color its reader can see.
-///
-/// This replaced a constant, and the constant is not coming back. Contrast is
-/// the wrong measure to start with — it is luminance only, and Catppuccin's
-/// blue and peach are 1.19:1 apart while being obviously different colors — but
-/// a *fixed* channel distance is wrong for a second reason: it has to serve
-/// palettes that disagree about what a step is. `default_dark` holds its muted
-/// text 89 channels off its body text and Catppuccin Mocha holds its 20, so one
-/// number cannot mean the same thing to both. It showed: a flat 40 declined
-/// Mocha's `accent` at 33 — a real pink, on one of the most-used terminal
-/// themes there is — and painted nothing but literals and comments, while
-/// admitting anything at 41 elsewhere. Asked of the theme, Mocha's 33 clears its
-/// own 20 and `default_dark`'s near-white `primary` at 21 still fails its 89,
-/// which is the pair of answers any floor has to get right.
-///
-/// [`None`] when the theme will not say — [`Theme::terminal`] leaves both text
-/// colors to the terminal — and a palette that states no step is not
-/// second-guessed.
-fn visible_step(theme: &Theme) -> Option<u8> {
-    channel_distance(to_floor(theme.muted_foreground, theme), theme.foreground)
-}
+/// A judgement about human vision rather than a number tuned to a palette,
+/// which is what every earlier version of this rule was. On the standard ΔE
+/// reading, 1–2 is the just-noticeable difference for two large patches, 2–10
+/// is "perceptible at a glance", and above 10 two colors are read as two colors
+/// rather than as one shade of each other. Syntax coloring lives at the top of
+/// that: these are small glyphs, side by side, and a difference you have to
+/// look for is a difference that is not doing any work.
+const VISIBLE_STEP: f64 = 10.0;
 
 /// WCAG 2.1 normal text (1.4.3), the same floor ratcn holds its own text roles
 /// to.
@@ -256,6 +239,11 @@ fn role(kind: Kind, theme: &Theme) -> Color {
 /// moving an accent closer to the body text can only ever demote it behind the
 /// other one.
 ///
+/// "Further" is measured in ΔE, not in channels, and that changes answers:
+/// Catppuccin's blue `primary` is 68 channels off its body text and its mauve
+/// `accent` only 48, but the body text is itself a pale blue, so the mauve is
+/// the one that stands out — 34.65 ΔE against 26.87.
+///
 /// A color carries no meaning across themes, so which hue lands on which kind
 /// may differ per palette, and so does how many colors a palette can carry —
 /// three on a terminal whose accents both sit close to its body text, five on
@@ -277,12 +265,13 @@ fn name_and_keyword(theme: &Theme) -> (Color, Color) {
         to_floor(theme.primary, theme),
         to_floor(theme.accent, theme),
     ];
-    accents.sort_by_key(|color| {
-        std::cmp::Reverse(channel_distance(*color, theme.foreground).unwrap_or(u8::MAX))
+    accents.sort_by(|a, b| {
+        let apart =
+            |color: &Color| perceptual_distance(*color, theme.foreground).unwrap_or(f64::INFINITY);
+        apart(b).total_cmp(&apart(a))
     });
     let usable = |color: Color| {
-        (separated(color, theme.foreground, theme) && separated(color, literals, theme))
-            .then_some(color)
+        (separated(color, theme.foreground) && separated(color, literals)).then_some(color)
     };
     let [name, keyword] = accents;
     (
@@ -314,31 +303,72 @@ fn to_floor(color: Color, theme: &Theme) -> Color {
         .unwrap_or(theme.foreground)
 }
 
-/// How far apart two colors are in the channel that separates them most, or
-/// [`None`] when one of them has no channels to read.
+/// `color` in CIELAB, or [`None`] when it has no channels to read.
 ///
 /// [`Theme::terminal`] is the palette that answers [`None`]: it leaves the
 /// background and the body text as [`Color::Reset`], which is the terminal's
 /// own and carries nothing to measure. Its accents are ordinary *named* colors,
 /// which resolve fine — so a comparison against them is real arithmetic and
 /// passes on the palette's merits, not by exemption.
-fn channel_distance(a: Color, b: Color) -> Option<u8> {
-    let (a, b) = (color::resolve_rgb(a)?, color::resolve_rgb(b)?);
-    let apart = |a: u8, b: u8| a.abs_diff(b);
-    Some(apart(a.0, b.0).max(apart(a.1, b.1)).max(apart(a.2, b.2)))
+fn lab(color: Color) -> Option<(f64, f64, f64)> {
+    let (red, green, blue) = color::resolve_rgb(color)?;
+    // sRGB, undo the transfer function, to CIE XYZ under D65, to Lab.
+    let linear = |channel: u8| {
+        let channel = f64::from(channel) / 255.0;
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (red, green, blue) = (linear(red), linear(green), linear(blue));
+    let x = (0.412_456_4 * red + 0.357_576_1 * green + 0.180_437_5 * blue) / 0.950_489;
+    let y = 0.212_672_9 * red + 0.715_152_2 * green + 0.072_175_0 * blue;
+    let z = (0.019_333_9 * red + 0.119_192_0 * green + 0.950_304_1 * blue) / 1.088_840;
+    let f = |t: f64| {
+        if t > 216.0 / 24_389.0 {
+            t.cbrt()
+        } else {
+            t.mul_add(841.0 / 108.0, 4.0 / 29.0)
+        }
+    };
+    let (fx, fy, fz) = (f(x), f(y), f(z));
+    Some((
+        fy.mul_add(116.0, -16.0),
+        500.0 * (fx - fy),
+        200.0 * (fy - fz),
+    ))
 }
 
-/// Whether two colors are far enough apart, by `theme`'s own reckoning, to read
-/// as two colors. See [`visible_step`].
+/// How far apart two colors look, in CIE76 ΔE, or [`None`] when one of them has
+/// no channels to read.
 ///
-/// A distance nothing can measure is taken as separated, and so is a theme that
-/// states no step: the unreadable half is the user's own terminal color, and
-/// second-guessing it is out of scope.
-fn separated(a: Color, b: Color, theme: &Theme) -> bool {
-    match (channel_distance(a, b), visible_step(theme)) {
-        (Some(apart), Some(step)) => apart >= step,
-        _ => true,
-    }
+/// Perceptual, and that is the whole point. Max-channel distance — what this
+/// replaced — counts a lightness step and a hue shift as the same quantity, so
+/// it could not tell `default_dark`'s near-white `primary` 21 channels off its
+/// body text (invisible) from Catppuccin Mocha's pink `accent` 33 channels off
+/// its own (plainly a color). In ΔE those are 7.33 and 22.19, and no threshold
+/// on channels separates them from Iceberg's 7.45 and Zenburn's 6.60, which are
+/// equally invisible and were being admitted.
+fn perceptual_distance(a: Color, b: Color) -> Option<f64> {
+    let (a, b) = (lab(a)?, lab(b)?);
+    Some(
+        (b.2 - a.2)
+            .mul_add(
+                b.2 - a.2,
+                (b.0 - a.0).mul_add(b.0 - a.0, (b.1 - a.1) * (b.1 - a.1)),
+            )
+            .sqrt(),
+    )
+}
+
+/// Whether two colors are far enough apart to read as two colors. See
+/// [`VISIBLE_STEP`].
+///
+/// A distance nothing can measure is taken as separated: the unreadable half is
+/// the user's own terminal color, and second-guessing it is out of scope.
+fn separated(a: Color, b: Color) -> bool {
+    perceptual_distance(a, b).is_none_or(|apart| apart >= VISIBLE_STEP)
 }
 
 // The scanner. One pass over the bytes; each arm above matches on the first
@@ -589,18 +619,6 @@ mod tests {
         "#",
     ];
 
-    /// One `Kind:text` per line, whitespace dropped: enough to read as a
-    /// classification, short of a debug dump of the whole `Vec`. A run that
-    /// spans lines of its own — a block comment, a multi-line string — keeps
-    /// the one-per-line shape by escaping its newlines.
-    fn snapshot(source: &str) -> String {
-        tokens(source)
-            .into_iter()
-            .filter(|(_, text)| !text.trim().is_empty())
-            .map(|(kind, text)| format!("{kind:?}:{}\n", text.replace('\n', "\\n")))
-            .collect()
-    }
-
     /// The one kind of scanner bug that would be invisible on the page: a run
     /// that eats or duplicates input. Every other test here rests on this one.
     #[test]
@@ -611,50 +629,14 @@ mod tests {
         }
     }
 
-    /// Where the snapshot lives, relative to the crate root `cargo test` runs
-    /// tests from.
-    const SNAPSHOT: &str = "src/code_snapshot.txt";
-
-    /// The one command that repairs this fixture, named everywhere it is
-    /// needed so the next person reads the fix rather than deriving it.
-    const REGENERATE: &str =
-        "UPDATE_CODE_SNAPSHOT=1 cargo test -p showcase the_template_tokenizes_the_same_way_it_did";
-
-    /// A snapshot of a real, in-repo file. If someone edits the template, this
-    /// fails and a human looks at what the coloring became.
-    ///
-    /// Setting `UPDATE_CODE_SNAPSHOT` rewrites the fixture instead of comparing
-    /// against it — see [`REGENERATE`] for the whole command. Rewriting is a
-    /// deliberate act: the point of the test is that the diff gets read.
-    #[test]
-    fn the_template_tokenizes_the_same_way_it_did() {
-        let actual = snapshot(TEMPLATE);
-        if std::env::var_os("UPDATE_CODE_SNAPSHOT").is_some() {
-            std::fs::write(SNAPSHOT, &actual).expect("the snapshot is writable");
-            return;
-        }
-
-        let expected = include_str!("code_snapshot.txt");
-        let differs = expected
-            .lines()
-            .zip(actual.lines())
-            .position(|(expected, actual)| expected != actual);
-
-        if let Some(line) = differs {
-            panic!(
-                "token snapshot differs at line {}:\n  expected: {}\n  actual:   {}\n\
-                 If `first-app.rs` changed on purpose, regenerate with:\n  {REGENERATE}",
-                line + 1,
-                expected.lines().nth(line).unwrap_or_default(),
-                actual.lines().nth(line).unwrap_or_default(),
-            );
-        }
-        assert_eq!(
-            expected.lines().count(),
-            actual.lines().count(),
-            "the template gained or lost tokens; if that was intended, regenerate with:\n  \
-             {REGENERATE}"
-        );
+    crate::snapshot::snapshot_test! {
+        /// A snapshot of a real, in-repo file: the starter `cargo ratcn init`
+        /// writes. If someone edits the template, this fails and a human looks
+        /// at what the coloring became.
+        name: the_template_tokenizes_the_same_way_it_did,
+        fixture: "src/code_snapshot.txt",
+        expected: include_str!("code_snapshot.txt"),
+        actual: crate::snapshot::of([TEMPLATE]),
     }
 
     /// The rules the surveyed highlighters get wrong, one assertion each. These
@@ -732,30 +714,6 @@ mod tests {
         Kind::Lifetime,
     ];
 
-    /// Catppuccin Latte's sixteen ANSI colors, as a terminal reports them.
-    ///
-    /// A real palette rather than a made-up one, and this one in particular:
-    /// it is where a threshold-picked name color went wrong, and
-    /// `Theme::adaptive` is what the showcase actually runs on.
-    const LATTE: [Color; 16] = [
-        Color::Rgb(0x5c, 0x5f, 0x77),
-        Color::Rgb(0xd2, 0x0f, 0x39),
-        Color::Rgb(0x40, 0xa0, 0x2b),
-        Color::Rgb(0xdf, 0x8e, 0x1d),
-        Color::Rgb(0x1e, 0x66, 0xf5),
-        Color::Rgb(0xea, 0x76, 0xcb),
-        Color::Rgb(0x17, 0x92, 0x99),
-        Color::Rgb(0xac, 0xb0, 0xbe),
-        Color::Rgb(0x6c, 0x6f, 0x85),
-        Color::Rgb(0xd2, 0x0f, 0x39),
-        Color::Rgb(0x40, 0xa0, 0x2b),
-        Color::Rgb(0xdf, 0x8e, 0x1d),
-        Color::Rgb(0x1e, 0x66, 0xf5),
-        Color::Rgb(0xea, 0x76, 0xcb),
-        Color::Rgb(0x17, 0x92, 0x99),
-        Color::Rgb(0xba, 0xc2, 0xde),
-    ];
-
     /// The themes the mapping has to hold for: the presets, plus solved ones —
     /// the case the showcase itself runs, and the one the presets cannot stand
     /// in for, since an adaptive palette is not known until it runs.
@@ -772,20 +730,11 @@ mod tests {
             None,
         ));
         themes.push(Theme::adaptive(
-            Color::Rgb(0xef, 0xf1, 0xf5),
-            Color::Rgb(0x4c, 0x4f, 0x69),
-            Some(&LATTE),
-        ));
-        themes.push(Theme::adaptive(
-            Color::Rgb(0x1e, 0x1e, 0x2e),
-            Color::Rgb(0xcd, 0xd6, 0xf4),
-            Some(&MOCHA),
-        ));
-        themes.push(Theme::adaptive(
             Color::Rgb(90, 90, 95),
             Color::Rgb(200, 200, 205),
             None,
         ));
+        themes.extend(PALETTES.iter().map(Palette::solve));
         themes
     }
 
@@ -821,111 +770,322 @@ mod tests {
                 theme.name
             );
         }
-        // A palette with a usable `primary` keeps both, or the swap would be a
-        // blanket rule rather than a fallback.
+        // A palette with two usable accents keeps both, or this would be a
+        // blanket rule rather than a fallback. Its mauve `accent` stands
+        // further off its pale blue body text than its blue `primary` does —
+        // 34.65 ΔE against 26.87 — so the mauve is what the names take.
         let theme = Theme::catppuccin();
-        assert_eq!(role(Kind::Type, &theme), theme.primary);
-        assert_eq!(role(Kind::Keyword, &theme), theme.accent);
+        assert_eq!(role(Kind::Type, &theme), theme.accent);
+        assert_eq!(role(Kind::Keyword, &theme), theme.primary);
     }
 
-    /// No two colors the block paints are nearly alike: each pair is either the
-    /// same color or plainly a different one.
+    /// Names and keywords are never nearly alike.
     ///
-    /// This is what the mapping guarantees, and it is not "the same number of
-    /// colors everywhere" — that count runs from three to five across the
-    /// palettes below, because a palette whose accents both sit close to its
-    /// body text has fewer colors to give. Comments are excluded on purpose:
-    /// they take the theme's own `muted_foreground`, and several themes hold
-    /// that within a near-miss of `foreground` themselves.
+    /// This is the one pair nothing else constrains. [`name_and_keyword`] holds
+    /// each accent away from the body text and away from the literals, so those
+    /// pairs are true by construction and asserting them here would only
+    /// restate the floor. Whether the two accents are far enough from *each
+    /// other* is asked nowhere else, and a palette that failed it would paint
+    /// `Button` and `let` in two shades of the same color.
+    ///
+    /// Measured against a step of its own rather than by calling
+    /// [`separated`]: a test whose arbiter is the code under test cannot fail,
+    /// which is exactly how a floor that admitted Iceberg's invisible keywords
+    /// went unnoticed. This number is the one an editor's own two accents would
+    /// have to clear, not the one the mapping happens to use.
+    const ACCENTS_APART: f64 = 10.0;
+
     #[test]
-    fn no_painted_color_is_a_near_miss_for_another() {
+    fn names_and_keywords_are_never_two_shades_of_the_same_color() {
         for theme in themes() {
             let (name, keyword) = name_and_keyword(&theme);
-            let chosen = [
-                ("body text", theme.foreground),
-                ("keywords", keyword),
-                ("names", name),
-                ("literals", to_floor(theme.warning, &theme)),
-            ];
-            for (index, (role, color)) in chosen.iter().enumerate() {
-                for (other_role, other) in &chosen[index + 1..] {
-                    assert!(
-                        color == other || separated(*color, *other, &theme),
-                        "{}: {role} and {other_role} are {:?} channels apart — \
-                         near enough to look like a mistake, far enough to look deliberate",
-                        theme.name,
-                        channel_distance(*color, *other),
-                    );
-                }
+            if name == keyword {
+                // Both fell back to the body text: the palette has no accent to
+                // spare, which is a different outcome from a near-miss.
+                assert_eq!(name, theme.foreground);
+                continue;
             }
+            let Some(apart) = perceptual_distance(name, keyword) else {
+                continue; // A color the terminal owns, which is not ours to measure.
+            };
+            assert!(
+                apart >= ACCENTS_APART,
+                "{}: names and keywords are {apart:.2} ΔE apart — near enough to look \
+                 like a mistake, far enough to look deliberate",
+                theme.name
+            );
         }
     }
 
-    /// Catppuccin Mocha's sixteen ANSI colors, as a terminal reports them.
-    ///
-    /// The palette that made the fixed floor untenable: its `accent` sits 33
-    /// channels from its body text, which a flat 40 declined and its own
-    /// 20-channel muted step accepts.
-    const MOCHA: [Color; 16] = [
-        Color::Rgb(0x1e, 0x1e, 0x2e),
-        Color::Rgb(0xf3, 0x8b, 0xa8),
-        Color::Rgb(0xa6, 0xe3, 0xa1),
-        Color::Rgb(0xf9, 0xe2, 0xaf),
-        Color::Rgb(0x89, 0xb4, 0xfa),
-        Color::Rgb(0xf5, 0xc2, 0xe7),
-        Color::Rgb(0x94, 0xe2, 0xd5),
-        Color::Rgb(0xcd, 0xd6, 0xf4),
-        Color::Rgb(0x58, 0x5b, 0x70),
-        Color::Rgb(0xf3, 0x8b, 0xa8),
-        Color::Rgb(0xa6, 0xe3, 0xa1),
-        Color::Rgb(0xf9, 0xe2, 0xaf),
-        Color::Rgb(0x89, 0xb4, 0xfa),
-        Color::Rgb(0xf5, 0xc2, 0xe7),
-        Color::Rgb(0x94, 0xe2, 0xd5),
-        Color::Rgb(0xcd, 0xd6, 0xf4),
+    /// A real terminal palette, in the two colors `Theme::adaptive` is given
+    /// plus the sixteen it solves the hued roles from.
+    struct Palette {
+        name: &'static str,
+        background: u32,
+        foreground: u32,
+        ansi: [u32; 16],
+    }
+
+    impl Palette {
+        fn solve(&self) -> Theme {
+            let hex = |value: u32| {
+                Color::Rgb(
+                    (value >> 16) as u8,
+                    ((value >> 8) & 0xff) as u8,
+                    (value & 0xff) as u8,
+                )
+            };
+            let ansi: [Color; 16] = std::array::from_fn(|index| hex(self.ansi[index]));
+            Theme::adaptive(hex(self.background), hex(self.foreground), Some(&ansi))
+        }
+    }
+
+    /// Real palettes people run terminals in, which is the population the
+    /// showcase actually meets: it is `ADAPTIVE`, so every one of these is
+    /// solved at runtime and none of them is a preset.
+    const PALETTES: &[Palette] = &[
+        Palette {
+            name: "Catppuccin Mocha",
+            background: 0x001e_1e2e & 0xff_ffff,
+            foreground: 0x00cd_d6f4 & 0xff_ffff,
+            ansi: [
+                0x0045_475a,
+                0x00f3_8ba8,
+                0x00a6_e3a1,
+                0x00f9_e2af,
+                0x0089_b4fa,
+                0x00f5_c2e7,
+                0x0094_e2d5,
+                0x00ba_c2de,
+                0x0058_5b70,
+                0x00f3_8ba8,
+                0x00a6_e3a1,
+                0x00f9_e2af,
+                0x0089_b4fa,
+                0x00f5_c2e7,
+                0x0094_e2d5,
+                0x00a6_adc8,
+            ],
+        },
+        Palette {
+            name: "Catppuccin Latte",
+            background: 0x00ef_f1f5,
+            foreground: 0x004c_4f69,
+            ansi: [
+                0x005c_5f77,
+                0x00d2_0f39,
+                0x0040_a02b,
+                0x00df_8e1d,
+                0x001e_66f5,
+                0x00ea_76cb,
+                0x0017_9299,
+                0x00ac_b0be,
+                0x006c_6f85,
+                0x00d2_0f39,
+                0x0040_a02b,
+                0x00df_8e1d,
+                0x001e_66f5,
+                0x00ea_76cb,
+                0x0017_9299,
+                0x00bc_c0cc,
+            ],
+        },
+        Palette {
+            name: "Iceberg",
+            background: 0x0016_1821,
+            foreground: 0x00c6_c8d1,
+            ansi: [
+                0x001e_2132,
+                0x00e2_7878,
+                0x00b4_be82,
+                0x00e2_a478,
+                0x0084_a0c6,
+                0x00a0_93c7,
+                0x0089_b8c2,
+                0x00c6_c8d1,
+                0x006b_7089,
+                0x00e9_8989,
+                0x00c0_ca8e,
+                0x00e9_b189,
+                0x0091_acd1,
+                0x00ad_a0d3,
+                0x0095_c4ce,
+                0x00d2_d4de,
+            ],
+        },
+        Palette {
+            name: "Zenburn",
+            background: 0x003f_3f3f,
+            foreground: 0x00dc_dccc,
+            ansi: [
+                0x004d_4d4d,
+                0x0070_5050,
+                0x0060_b48a,
+                0x00df_af8f,
+                0x0050_6070,
+                0x00dc_8cc3,
+                0x008c_d0d3,
+                0x00dc_dccc,
+                0x0070_9080,
+                0x00dc_a3a3,
+                0x00c3_bf9f,
+                0x00f0_dfaf,
+                0x0094_bff3,
+                0x00ec_93d3,
+                0x0093_e0e3,
+                0x00ff_ffff,
+            ],
+        },
+        Palette {
+            name: "Dracula",
+            background: 0x0028_2a36,
+            foreground: 0x00f8_f8f2,
+            ansi: [
+                0x0021_222c,
+                0x00ff_5555,
+                0x0050_fa7b,
+                0x00f1_fa8c,
+                0x00bd_93f9,
+                0x00ff_79c6,
+                0x008b_e9fd,
+                0x00f8_f8f2,
+                0x0062_72a4,
+                0x00ff_6e6e,
+                0x0069_ff94,
+                0x00ff_ffa5,
+                0x00d6_acff,
+                0x00ff_92df,
+                0x00a4_ffff,
+                0x00ff_ffff,
+            ],
+        },
+        Palette {
+            name: "One Dark",
+            background: 0x0028_2c34,
+            foreground: 0x00ab_b2bf,
+            ansi: [
+                0x0028_2c34,
+                0x00e0_6c75,
+                0x0098_c379,
+                0x00e5_c07b,
+                0x0061_afef,
+                0x00c6_78dd,
+                0x0056_b6c2,
+                0x00ab_b2bf,
+                0x005c_6370,
+                0x00e0_6c75,
+                0x0098_c379,
+                0x00e5_c07b,
+                0x0061_afef,
+                0x00c6_78dd,
+                0x0056_b6c2,
+                0x00ff_ffff,
+            ],
+        },
+        Palette {
+            name: "Rose Pine",
+            background: 0x0019_1724,
+            foreground: 0x00e0_def4,
+            ansi: [
+                0x0026_233a,
+                0x00eb_6f92,
+                0x0031_748f,
+                0x00f6_c177,
+                0x009c_cfd8,
+                0x00c4_a7e7,
+                0x00eb_bcba,
+                0x00e0_def4,
+                0x006e_6a86,
+                0x00eb_6f92,
+                0x0031_748f,
+                0x00f6_c177,
+                0x009c_cfd8,
+                0x00c4_a7e7,
+                0x00eb_bcba,
+                0x00e0_def4,
+            ],
+        },
+        Palette {
+            name: "Ayu Dark",
+            background: 0x000b_0e14,
+            foreground: 0x00bf_bdb6,
+            ansi: [
+                0x000d_1016,
+                0x00ea_6c73,
+                0x007f_d962,
+                0x00f9_af4f,
+                0x0053_bdfa,
+                0x00cd_a1fa,
+                0x0090_e1c6,
+                0x00bf_bdb6,
+                0x0056_5b66,
+                0x00ea_6c73,
+                0x007f_d962,
+                0x00f9_af4f,
+                0x0053_bdfa,
+                0x00cd_a1fa,
+                0x0090_e1c6,
+                0x00bf_bdb6,
+            ],
+        },
     ];
 
-    /// The two cases any visibility floor has to get right, and the reason it
-    /// is asked of the theme instead of fixed here.
-    ///
-    /// They are 12 channels apart and want opposite answers, so no single
-    /// number serves both: `default_dark`'s near-white `primary` at 21 is
-    /// genuinely invisible in its body text, and Catppuccin Mocha's pink
-    /// `accent` at 33 is plainly a color. Each theme's own muted step — 89 and
-    /// 20 — separates them, because a palette that de-emphasises hard means
-    /// something different by "a step" than one that de-emphasises gently.
-    #[test]
-    fn the_floor_each_theme_sets_admits_a_real_accent_and_declines_an_invisible_one() {
-        let dark = Theme::default_dark();
-        assert_eq!(visible_step(&dark), Some(89), "default_dark's own step");
-        assert_eq!(
-            channel_distance(to_floor(dark.primary, &dark), dark.foreground),
-            Some(21),
-            "and how far its `primary` stands off the body text"
-        );
-        assert_eq!(
-            role(Kind::Keyword, &dark),
-            dark.foreground,
-            "a near-white `primary` is not a color anyone can read in the text"
-        );
+    fn palette(name: &str) -> Theme {
+        PALETTES
+            .iter()
+            .find(|palette| palette.name == name)
+            .expect("a palette by that name")
+            .solve()
+    }
 
-        let mocha = Theme::adaptive(
-            Color::Rgb(0x1e, 0x1e, 0x2e),
-            Color::Rgb(0xcd, 0xd6, 0xf4),
-            Some(&MOCHA),
-        );
-        assert_eq!(visible_step(&mocha), Some(20), "Mocha's own step");
-        assert_eq!(
-            channel_distance(to_floor(mocha.accent, &mocha), mocha.foreground),
-            Some(33),
-            "and how far its `accent` stands off the body text"
+    /// The cases the metric has to get right, and why it is perceptual.
+    ///
+    /// These four defeated every version of this rule that measured channels.
+    /// `default_dark` sits 21 channels off its body text and Catppuccin Mocha's
+    /// accent 33, so a channel floor between them looked like the answer — but
+    /// Iceberg is 21 and Zenburn 19, both as invisible as `default_dark`, and
+    /// both were admitted by a floor low enough to keep Mocha. In ΔE the three
+    /// invisible ones are 7.45, 7.33 and 6.60 — indistinguishable from each
+    /// other — and Mocha's pink is 22.19, which is a different kind of
+    /// difference and not merely a larger one.
+    #[test]
+    fn the_metric_declines_what_no_reader_can_see_and_admits_what_they_can() {
+        let dark = Theme::default_dark();
+        let declined: [(&str, Theme, Color); 3] = [
+            ("default_dark", dark, dark.primary),
+            ("Iceberg", palette("Iceberg"), palette("Iceberg").primary),
+            ("Zenburn", palette("Zenburn"), palette("Zenburn").primary),
+        ];
+        for (name, theme, candidate) in declined {
+            let candidate = to_floor(candidate, &theme);
+            let apart =
+                perceptual_distance(candidate, theme.foreground).expect("a solved palette is rgb");
+            assert!(
+                apart < VISIBLE_STEP,
+                "{name}: {apart:.2} ΔE is not below the step, so this case has stopped \
+                 being the one it was written for"
+            );
+            assert_eq!(
+                role(Kind::Keyword, &theme),
+                theme.foreground,
+                "{name}: a near-neutral {apart:.2} ΔE off the body text is not a color \
+                 anyone can read in the text, and painting keywords in it is worse than \
+                 painting them plain"
+            );
+        }
+
+        let mocha = palette("Catppuccin Mocha");
+        let accent = to_floor(mocha.accent, &mocha);
+        let apart = perceptual_distance(accent, mocha.foreground).expect("a solved palette is rgb");
+        assert!(
+            apart >= VISIBLE_STEP,
+            "Catppuccin Mocha: its pink accent measures {apart:.2} ΔE"
         );
         assert_eq!(
             role(Kind::Type, &mocha),
-            to_floor(mocha.accent, &mocha),
-            "a pink at 33 is a color, and a fixed floor of 40 threw it away — \
-             leaving one of the most-used terminal themes with literals and \
-             comments and nothing else"
+            accent,
+            "a pink at {apart:.2} ΔE is a color, and throwing it away left one of the \
+             most-used terminal themes with literals and comments and nothing else"
         );
     }
 
@@ -945,7 +1105,8 @@ mod tests {
                 to_floor(theme.primary, &theme),
                 to_floor(theme.accent, &theme),
             );
-            let distance = |color| channel_distance(color, theme.foreground).unwrap_or(u8::MAX);
+            let distance =
+                |color| perceptual_distance(color, theme.foreground).unwrap_or(f64::INFINITY);
             let (far, near) = if distance(accent) > distance(primary) {
                 (accent, primary)
             } else {

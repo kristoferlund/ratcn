@@ -64,12 +64,13 @@ const CHARGE_INTRO: &str = "The runtime enters your loop at exactly two call sit
 /// bytes on the page and the bytes the compiler checks are therefore one thing,
 /// which a parallel copy kept by hand would not be.
 ///
-/// One byte diverges, and only this one: `include!` takes a single *expression*
+/// Two bytes diverge, and only these two: `include!` takes a single *expression*
 /// and nothing more, so `render.rs` cannot carry the `;` that ends the statement
 /// at every real call site. The file stores the expression — and no trailing
 /// newline, so this lands the semicolon on the last line — and the page shows it
 /// with the semicolon a reader would type. Displayed text is compiled text plus
-/// that one character. The `match` below needs no semicolon and gets none.
+/// `";\n"`: the semicolon a reader needs, and the newline that ends the line it
+/// sits on. The `match` below needs no semicolon and gets none.
 const RENDER_SNIPPET: &str = concat!(include_str!("../snippets/render.rs"), ";\n");
 const EVENT_SNIPPET: &str = include_str!("../snippets/handle_event.rs");
 const CHARGE_DOES: &str = "render declares what is on screen this frame; handle_event answers Emit, Consumed, or Ignored, and Ignored leaves the key to your own shortcuts. Components read your state and never write it; update is the only writer.";
@@ -310,32 +311,38 @@ mod tests {
     /// `include!` pulls in the same files [`RENDER_SNIPPET`] and
     /// [`EVENT_SNIPPET`] put on the page, so what a visitor reads and what the
     /// compiler checks are one set of bytes rather than two that agree today.
-    /// There is nothing to assert and the function is never called: compiling
-    /// *is* the assertion. Change `Ratcn::render`'s signature and this fails to
-    /// build, instead of the front page of the SSH site serving Rust that does
-    /// not compile as the first code anyone reads.
-    #[expect(
-        dead_code,
-        reason = "the compiler is the test; calling it would prove nothing more"
-    )]
-    fn the_snippets_on_the_page_compile(
-        ratcn: &mut Ratcn<HarnessState, HarnessMsg>,
-        frame: &mut Frame,
-        // Owned, like the state and theme a reader's own loop holds — a
-        // harness that passed references would make the snippets' `&state`
-        // and `&theme` redundant, and clippy would ask the page to drop the
-        // borrows that every real caller needs.
-        mut state: HarnessState,
-        theme: Theme,
-        area: Rect,
-        event: Event,
-    ) {
-        // The names the snippets use, which any app of the reader's would
-        // supply for itself.
-        use HarnessMsg as Msg;
+    /// Change `Ratcn::render`'s signature and this fails to build, instead of
+    /// the front page of the SSH site serving Rust that does not compile as the
+    /// first code anyone reads.
+    ///
+    /// The body is never run — it would want a real `Frame` and a real event —
+    /// and there would be nothing to assert if it were: compiling *is* the
+    /// assertion. Naming `snippets` at the end is what keeps it from being dead
+    /// code, which is cheaper than an `#[expect(dead_code)]` that would itself
+    /// fail the build the day the function stopped being dead.
+    #[test]
+    fn the_snippets_on_the_page_compile() {
+        fn snippets(
+            ratcn: &mut Ratcn<HarnessState, HarnessMsg>,
+            frame: &mut Frame,
+            // Owned, like the state and theme a reader's own loop holds — a
+            // harness that passed references would make the snippets' `&state`
+            // and `&theme` redundant, and clippy would ask the page to drop the
+            // borrows that every real caller needs.
+            mut state: HarnessState,
+            theme: Theme,
+            area: Rect,
+            event: Event,
+        ) {
+            // The names the snippets use, which any app of the reader's would
+            // supply for itself.
+            use HarnessMsg as Msg;
 
-        include!("../snippets/render.rs");
-        include!("../snippets/handle_event.rs");
+            include!("../snippets/render.rs");
+            include!("../snippets/handle_event.rs");
+        }
+
+        let _ = snippets;
     }
 
     /// The app state a snippet writes through, in the shape the page describes:
@@ -344,7 +351,6 @@ mod tests {
     struct HarnessState;
 
     impl HarnessState {
-        #[expect(clippy::needless_pass_by_ref_mut, reason = "the snippet calls it so")]
         fn update(&mut self, _msg: HarnessMsg) {}
     }
 
