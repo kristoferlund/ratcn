@@ -16,6 +16,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `FocusState::none()` and `is_none()` let a tree have no focused component,
+  distinct from default startup focus. Input can focus it again, and closing
+  a modal restores a saved no-focus state.
 - `Ratcn::render_into(buffer, area, state, theme, declare)` renders directly
   into your own buffer for offscreen pages and previews, without a test terminal.
   You own allocation, clearing, and windowing; no cursor metadata is returned.

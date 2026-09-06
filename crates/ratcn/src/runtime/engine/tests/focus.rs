@@ -2,6 +2,94 @@
 //! to a path whose target is not in the tree.
 
 use super::*;
+use crate::{ButtonSize, ButtonWidget};
+use ratatui::widgets::Widget;
+
+#[test]
+fn no_focus_paints_neither_button_ring_while_default_and_empty_intent_still_choose_first() {
+    for (focus, auto) in [
+        (FocusState::none(), false),
+        (FocusState::default(), true),
+        (FocusState::intent([] as [&str; 0]), true),
+    ] {
+        let state = FocusTestState { focus };
+        let mut driver = focus_driver(20, 3);
+        driver.render(&state, |ctx| {
+            for (id, x) in [("first", 0), ("last", 10)] {
+                ctx.component(
+                    id,
+                    Button::new(id)
+                        .outline()
+                        .size(ButtonSize::Large)
+                        .on_press(move || FocusTestMsg::Activated(vec![ChildId::Static(id)])),
+                    Rect::new(x, 0, 10, 3),
+                );
+            }
+        });
+
+        let mut expected = Buffer::empty(driver.area());
+        for (id, x) in [("first", 0), ("last", 10)] {
+            ButtonWidget::new(id)
+                .outline()
+                .size(ButtonSize::Large)
+                .themed(&Theme::default_dark())
+                .focused(auto && x == 0)
+                .render(Rect::new(x, 0, 10, 3), &mut expected);
+        }
+        assert_eq!(driver.buffer(), &expected);
+        if !auto {
+            assert!(driver.ratcn.resolved_focus.is_none());
+            assert_eq!(
+                driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+                EventResult::Ignored,
+                "no base control receives keyboard activation while none is focused"
+            );
+        }
+    }
+}
+
+#[test]
+fn traversal_root_hotkeys_and_pointer_focus_can_enter_a_blurred_tree() {
+    for (event, target) in [
+        (Event::Key(KeyEvent::new(KeyCode::Tab)), "first"),
+        (Event::Key(KeyEvent::new(KeyCode::BackTab)), "last"),
+        (Event::Key(KeyEvent::new(KeyCode::Char('x'))), "last"),
+        (mouse(MouseKind::Down(MouseButton::Left), 11, 0), "last"),
+    ] {
+        let mut state = FocusTestState {
+            focus: FocusState::none(),
+        };
+        let mut driver = Driver::with(
+            Ratcn::new()
+                .focus(|state: &FocusTestState| &state.focus, FocusTestMsg::Focus)
+                .focus_key('x', ["last"]),
+            20,
+            1,
+        );
+        driver.render(&state, |ctx| {
+            ctx.component("first", FocusLeaf::enabled(), Rect::new(0, 0, 8, 1));
+            ctx.component("last", FocusLeaf::enabled(), Rect::new(10, 0, 8, 1));
+        });
+
+        let expected = FocusState::intent([target]);
+        assert_eq!(
+            driver.ratcn.focus_path(&[ChildId::Static(target)]),
+            Some(expected.clone()),
+            "programmatic focus requests remain available while blurred"
+        );
+        let EventResult::Emit(FocusTestMsg::Focus(focus)) = driver.event(event, &state) else {
+            panic!("input must be able to focus {target} from none");
+        };
+        assert_eq!(focus, expected);
+        assert!(!focus.is_none());
+        state.focus = focus;
+        assert_eq!(
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+            EventResult::Emit(FocusTestMsg::Activated(vec![ChildId::Static(target)])),
+            "the focus message must leave the tree ready for keyboard input"
+        );
+    }
+}
 
 struct FocusComposite {
     parent_rendered: FocusRenderLog,
