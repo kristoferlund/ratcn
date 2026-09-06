@@ -66,6 +66,12 @@ through `Ratcn::focus(read, on_change)` as it does everywhere else: Tab,
 BackTab, focus keys, and pointer focus all produce that message, and the area
 adds the reveal on top of it.
 
+Focus reveal currently does not emit the `.scroll(...)` change message, so a
+controlled offset may differ from the effective offset used for painting. There
+is no public effective-offset readback. If you paint related content outside the
+ScrollArea, synchronize its windowing explicitly, as the showcase does for its
+landing preview; ordinary descendants need no extra synchronization.
+
 ## Layout and clipping
 
 One column on the right is reserved for the scrollbar gutter. The content

@@ -22,10 +22,28 @@ WebAssembly.
 cargo run -p showcase
 ```
 
-This is the site itself, in your terminal: the landing page, and a browser that
-lists every demo below with the selected one running beside it. It is a ratcn
-app like the rest, and it embeds the demo crates rather than reimplementing
-them — `crates/showcase` is worth reading for how one app hosts another.
+Three views bring the site into your terminal: the landing page, a scrolling
+Getting started guide, and a catalog with the selected demo running beside its
+navigation list. Showcase embeds the demo crates rather than reimplementing them.
+
+### Reading the source
+
+- Start with a small demo such as [`select/src/lib.rs`](https://github.com/kristoferlund/ratcn/blob/main/demos/select/src/lib.rs) for state, messages, and component declarations.
+- [`demos/shared/src/lib.rs`](https://github.com/kristoferlund/ratcn/blob/main/demos/shared/src/lib.rs) defines the single `Demo::draw(&mut Buffer, area, theme)` contract and the shared native/browser host. The host supplies the frame's buffer and area, routes events, and schedules redraws and wakeups.
+- [`showcase/src/main.rs`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/src/main.rs) owns view navigation, scroll offsets, chrome focus, and input ownership. [`catalog.rs`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/src/catalog.rs) adapts demos for hosting; instances are constructed lazily and keep their own state and runtime.
+
+Catalog demos draw directly into their pane. Interactive demos pass that area to
+`Ratcn::render_into`; paint-only demos use ordinary widgets. Pointer coordinates
+remain screen-absolute. Only the scrolling landing preview uses an
+offscreen buffer, copies visible rows, and translates pointer coordinates.
+The host owns allocation and clearing; the buffer contract carries no cursor
+metadata and does not sandbox arbitrary base paint.
+
+Showcase routes input to the active demo, saves and restores chrome focus, and
+cancels pointer interaction when a demo loses its input session or painted area.
+Its small focus-reveal helper keeps the separately painted landing preview aligned:
+[`ScrollArea` focus reveal](./components/scroll-area#focus) does not emit its
+effective offset to the app.
 
 ## Full applications
 
@@ -79,8 +97,9 @@ cd demos/ledger93
 trunk serve
 ```
 
-The demo itself lives in `lib.rs`, and the `main.rs` Trunk builds is the same
-one that runs natively. Each demo's `Cargo.toml` adds ratcn's `ratzilla`
+Each demo's `lib.rs` is its reusable entry point; larger demos split their
+implementation across modules. The `main.rs` Trunk builds is the same one that
+runs natively. Each demo's `Cargo.toml` adds ratcn's `ratzilla`
 feature for `wasm32`, and the host they all share, `demos/shared`, enables
 ratcn's `termina` feature for the native build. See
 [Host integration](./concepts/host-integration) for how that wiring works.

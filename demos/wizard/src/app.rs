@@ -4,6 +4,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
     style::Style,
+    widgets::Paragraph,
 };
 use ratcn::{
     ButtonSize, Theme,
@@ -117,6 +118,15 @@ impl demo_shared::Demo for App {
                 )
                 .inner(Margin::new(PADDING_X, PADDING_Y));
             let [stepper, panel, buttons] = area.layout(&shell_layout());
+            if panel.is_empty() {
+                ctx.paint_widget(
+                    Paragraph::new("Resize to continue")
+                        .centered()
+                        .style(Style::default().fg(ctx.theme.muted_foreground)),
+                    ctx.area().centered_vertically(Constraint::Length(1)),
+                );
+                return;
+            }
             let step = state.nav.step;
 
             ctx.paint_widget(nav::stepper(step, ctx.theme), stepper);
@@ -201,6 +211,66 @@ mod tests {
     fn press(app: &mut App, terminal: &mut Terminal<TestBackend>, code: KeyCode) {
         draw(app, terminal);
         app.handle_event(Event::Key(KeyEvent::new(code)));
+    }
+
+    #[test]
+    fn an_empty_small_pane_shows_a_hint_without_activating_hidden_controls() {
+        let (mut app, mut terminal) = app();
+        press(&mut app, &mut terminal, KeyCode::Enter);
+        app.update(Msg::Choose(ChoiceMsg::SetBackend(Backend::Browser)));
+        draw(&mut app, &mut terminal);
+        assert_eq!(app.state.nav.step, Step::Backend);
+
+        for pane in [Rect::new(40, 30, 20, 6), Rect::new(40, 30, 57, 8)] {
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 60));
+            for cell in &mut buffer.content {
+                cell.set_symbol("#").set_fg(ratatui::style::Color::Yellow);
+            }
+            let before = buffer.clone();
+            app.draw(&mut buffer, pane, &App::THEME);
+            assert!(
+                !app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter))),
+                "hidden navigation must not handle Enter in {pane:?}"
+            );
+            let text: String = pane
+                .positions()
+                .map(|point| buffer[point].symbol())
+                .collect();
+            assert!(
+                text.contains("Resize to continue"),
+                "small pane must explain its empty layout: {text:?}"
+            );
+            for point in buffer
+                .area
+                .positions()
+                .filter(|point| !pane.contains(*point))
+            {
+                assert_eq!(
+                    buffer[point], before[point],
+                    "hint changed the host at {point:?}"
+                );
+            }
+            assert_eq!(
+                app.state.nav.step,
+                Step::Backend,
+                "hidden Next must not advance"
+            );
+            assert_eq!(app.state.choices.backend, Backend::Browser);
+        }
+
+        draw(&mut app, &mut terminal);
+        assert!(
+            rendered_rows(&terminal)
+                .iter()
+                .any(|row| row.contains("Pick a backend"))
+        );
+        assert_eq!(app.state.choices.backend, Backend::Browser);
+        assert!(app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter))));
+        assert_eq!(
+            app.state.nav.step,
+            Step::Theme,
+            "normal navigation recovers after resize"
+        );
     }
 
     /// Project creation and dependency installation are separate steps, but the
