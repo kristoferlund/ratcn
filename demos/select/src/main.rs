@@ -88,7 +88,7 @@ impl demo_shared::Demo for App {
         let [select_area] = Layout::vertical([Constraint::Length(1)])
             .flex(Flex::Center)
             .areas(column);
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
+        self.ratcn.render(frame, area, &self.state, theme, |ctx| {
             ctx.component(
                 "fruit",
                 Select::new(FRUITS.map(|fruit| ListItem::new(fruit, fruit)))

@@ -85,7 +85,7 @@ impl demo_shared::Demo for App {
             .set_style(area, Style::default().bg(theme.background));
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render(frame, area, state, theme, |ctx| {
             let demo = area.centered(
                 Constraint::Length(DEMO_WIDTH),
                 Constraint::Length(DEMO_HEIGHT),

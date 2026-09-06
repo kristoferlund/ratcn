@@ -63,7 +63,7 @@ fn unified_render_apis_are_usable_from_an_external_crate() {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            ratcn.render(frame, &state, &theme, |ctx| {
+            ratcn.render(frame, area, &state, &theme, |ctx| {
                 ctx.scope(
                     ChildId::Static("view"),
                     area,

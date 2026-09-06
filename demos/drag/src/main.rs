@@ -89,7 +89,7 @@ impl demo_shared::Demo for App {
             ),
             self.state.block_offset,
         );
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
+        self.ratcn.render(frame, area, &self.state, theme, |ctx| {
             ctx.component(
                 ids::BLOCK,
                 DraggableBlock {

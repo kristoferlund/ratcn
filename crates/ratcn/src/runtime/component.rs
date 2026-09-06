@@ -159,12 +159,19 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
         self.area
     }
 
-    /// The terminal frame area for this declaration pass.
+    /// The root area supplied to [`Ratcn::render`](super::Ratcn::render), in
+    /// this declaration's coordinate space.
     ///
     /// Unlike [`area`](Self::area), this is not changed by component, scope,
-    /// modal, or popup declarations. Composite components use it when placing
-    /// an overlay relative to their declaration while keeping that overlay
-    /// within the terminal bounds.
+    /// or popup declarations. Inside a [`viewport`](Self::viewport), it is
+    /// the root area shifted into logical coordinates by the scroll offset,
+    /// not the viewport's visible or content rectangle. A modal leaves the
+    /// viewport and reads the root area in screen coordinates again.
+    ///
+    /// Floating components use these bounds to stay within their host's pane
+    /// rather than the whole terminal. This does not sandbox base-layer paint:
+    /// widgets may paint outside their rects, and [`PaintCtx::with_buffer`]
+    /// gives unprojected base paint the whole destination buffer.
     #[must_use]
     pub const fn frame_area(&self) -> Rect {
         self.frame_area
@@ -582,8 +589,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Deferred paint is decoration only: it has no identity, geometry, focus,
     /// hover, or hit target, and cannot be clicked. Its [`PaintCtx`] therefore
     /// reports all four interaction flags as false, and
-    /// [`area`](PaintCtx::area) is the whole surface it writes to — the
-    /// layer's footprint inside a layer, the frame otherwise.
+    /// [`area`](PaintCtx::area) is the layer's footprint inside a layer, the
+    /// supplied render area otherwise, expressed in the paint's coordinates.
+    /// That area does not clip base-layer paint.
     ///
     /// Because the closure runs after the declaration pass has ended, it does
     /// not get a `DeclareCtx`. It is `'static` and receives a [`PaintCtx`],

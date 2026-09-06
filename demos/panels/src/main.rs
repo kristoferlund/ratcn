@@ -128,7 +128,7 @@ impl demo_shared::Demo for App {
         let area = area.inner(Margin::new(PADDING_X, PADDING_Y));
         let state = &self.state;
         let panels_layout = Layout::vertical([Constraint::Fill(1); 2]).spacing(1);
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render(frame, area, state, theme, |ctx| {
             let [panel_a_area, panel_b_area] = area.layout(&panels_layout);
             ctx.scope(ids::PANEL_A, panel_a_area, Self::panel_options(), |ctx| {
                 Self::panel(ctx, PanelId::A, &[ids::A1, ids::A2]);

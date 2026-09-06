@@ -161,7 +161,7 @@ impl demo_shared::Demo for App {
             .areas(rest_area);
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render(frame, area, state, theme, |ctx| {
             let [edge_button_area] =
                 Layout::horizontal([Constraint::Length(button(EDGE.1).width())])
                     .flex(Flex::Center)

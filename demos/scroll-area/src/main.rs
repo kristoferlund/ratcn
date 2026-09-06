@@ -96,7 +96,7 @@ impl demo_shared::Demo for App {
             .set_style(area, Style::default().bg(theme.background));
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render(frame, area, state, theme, |ctx| {
             let [column] = Layout::horizontal([Constraint::Length(VIEWPORT_WIDTH)])
                 .flex(Flex::Center)
                 .areas(area);

@@ -230,7 +230,7 @@ fn a_pass_rejected_by_the_modal_stack_never_touches_the_screen() {
             // Nothing is open in the app's stack, so this modal root is a
             // declaration the runtime refuses to retain.
             let rejected = catch_unwind(AssertUnwindSafe(|| {
-                ratcn.render(frame, &state, &theme, |ctx| {
+                ratcn.render(frame, area, &state, &theme, |ctx| {
                     ctx.modal(ChildId::Static("sheet"), GlyphLeaf("B"), area);
                 });
             }));
@@ -278,7 +278,7 @@ fn a_rejected_pass_never_paints_its_base_layer_either() {
             let area = frame.area();
             frame.render_widget(ratatui::text::Line::from("A"), area);
             let rejected = catch_unwind(AssertUnwindSafe(|| {
-                ratcn.render(frame, &state, &theme, |ctx| {
+                ratcn.render(frame, area, &state, &theme, |ctx| {
                     // Base-layer content, which paints straight onto the
                     // frame, declared alongside the modal root the app's
                     // empty stack refuses.

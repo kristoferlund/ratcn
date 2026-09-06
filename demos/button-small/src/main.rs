@@ -79,7 +79,7 @@ impl demo_shared::Demo for App {
             .set_style(area, Style::default().bg(theme.background));
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render(frame, area, state, theme, |ctx| {
             let buttons = BUTTONS.map(|(id, label)| {
                 let button = Button::new(label)
                     .size(ButtonSize::Small)

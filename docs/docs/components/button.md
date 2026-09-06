@@ -26,7 +26,7 @@ Use `ButtonWidget` instead when only paint is needed.
 ```rust
 use ratcn::Button;
 
-ratcn.render(frame, state, &state.theme, |ctx| {
+ratcn.render(frame, save_area, state, &state.theme, |ctx| {
     let save = Button::new("Save")
         .disabled(state.saving)
         .on_press(|| Msg::Save);

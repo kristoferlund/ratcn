@@ -228,9 +228,10 @@ fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
                 // The backend clears between draws, so the frame this pass
                 // must leave alone is painted back first.
                 frame.render_widget(Paragraph::new("stable"), Rect::new(0, 0, 6, 1));
+                let area = frame.area();
                 driver
                     .ratcn
-                    .render(frame, &State, &Theme::default_dark(), move |ctx| {
+                    .render(frame, area, &State, &Theme::default_dark(), move |ctx| {
                         ctx.viewport(Rect::new(0, 0, 2, 1), 2, 0, move |ctx| {
                             ctx.paint(move |ctx| {
                                 let caught = catch_unwind(AssertUnwindSafe(|| {
@@ -285,7 +286,7 @@ fn a_caught_layer_paint_panic_composites_nothing_and_commits() {
             frame.render_widget(Paragraph::new("stable"), Rect::new(0, 0, 6, 1));
             driver
                 .ratcn
-                .render(frame, &State, &Theme::default_dark(), |ctx| {
+                .render(frame, frame.area(), &State, &Theme::default_dark(), |ctx| {
                     ctx.popup(
                         "popup",
                         Rect::new(0, 0, 4, 1),

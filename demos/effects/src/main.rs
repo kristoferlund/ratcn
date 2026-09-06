@@ -143,7 +143,7 @@ impl demo_shared::Demo for App {
             .set_style(area, Style::default().bg(theme.background));
 
         let joke = joke_text(&self.state.joke);
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
+        self.ratcn.render(frame, area, &self.state, theme, |ctx| {
             let content_width = area.width.min(CONTENT_WIDTH);
             let joke_height = wrapped_height(&joke, content_width).max(1);
             let content_height = joke_height + 1 + ButtonSize::Large.height();

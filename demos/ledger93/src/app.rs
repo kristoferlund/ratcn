@@ -118,7 +118,7 @@ impl demo_shared::Demo for App {
             )
             .inner(Margin::new(PADDING_X, PADDING_Y));
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render(frame, area, state, theme, |ctx| {
             let [title, _gap, tabs, content, status] = area.layout(&shell_layout());
 
             ctx.paint_widget(
