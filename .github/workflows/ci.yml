@@ -48,6 +48,9 @@ jobs:
         run: cargo test -p ratcn --locked
       - name: Tests, all features
         run: cargo test -p ratcn --all-features --locked
+      # Offline CLI fixtures use all-platform metadata, which needs non-native crates too.
+      - name: Fetch dependencies for offline tests
+        run: cargo fetch --locked
       # The demo crates have tests of their own. The clippy steps below compile
       # them; only this step runs them. ratcn's own ran above.
       - name: Tests, workspace
