@@ -1,5 +1,5 @@
-//! The frame the site is drawn in: the header bar, the rules, and the geometry
-//! every view lays itself out inside.
+//! The header bar and the rule under it — the two rows every view sits below —
+//! and the rule primitives the views draw their own separators with.
 
 use ratatui::{
     Frame,
@@ -11,7 +11,7 @@ use ratatui::{
 };
 use ratcn::{Button, ButtonVariant, Theme, runtime::DeclareCtx};
 
-use crate::{AppState, Msg, View, catalog};
+use crate::{AppState, Msg, View, demos};
 
 /// Child ids, named once so declarations and retained identity cannot drift.
 mod ids {
@@ -19,19 +19,11 @@ mod ids {
     pub const DEMOS: &str = "demos";
 }
 
-/// A column of breathing room on each side of the longest demo name.
-const NAV_PADDING: u16 = 1;
-
-/// The narrowest demo pane worth painting: below this every demo is clipped to
-/// a stripe, and the browser is showing nothing anyone can read.
-const MIN_PANE_WIDTH: u16 = 20;
-
-/// The rows the chrome owes before a view gets any: the header, the rule under
-/// it, one list row, the rule above the hints, and the three hint lines.
-const MIN_HEIGHT: u16 = 7;
+/// The header and the rule under it.
+const HEADER_ROWS: u16 = 2;
 
 /// The horizontal bands of the screen.
-pub struct Frames {
+pub struct Bands {
     /// Row 0: the logo and the nav buttons.
     pub header: Rect,
     /// Row 1: the rule under the header, full width.
@@ -40,26 +32,20 @@ pub struct Frames {
     pub body: Rect,
 }
 
-/// The vertical bands of the Demos view.
-pub struct Columns {
-    /// The demo names and the key hints.
-    pub nav: Rect,
-    /// The one-cell rule between them and the demo.
-    pub rule: Rect,
-    /// Where the selected demo paints.
-    pub pane: Rect,
-}
-
 /// The smallest area the chrome can lay itself out in.
+///
+/// The Demos view sets both numbers — its nav column and its hints are what
+/// the app cannot shrink past — and the landing page scrolls into whatever is
+/// left.
 pub fn min_size() -> Size {
-    Size::new(nav_text_width() + 1 + MIN_PANE_WIDTH, MIN_HEIGHT)
+    Size::new(demos::min_width(), HEADER_ROWS + demos::min_body_height())
 }
 
 /// Split `area` into its bands, or [`None`] when it is too small to hold them.
 ///
-/// Refusing is not politeness: the rules below are painted straight into the
-/// buffer, where a row outside it is a panic rather than a clip.
-pub fn layout(area: Rect) -> Option<Frames> {
+/// Refusing is not politeness: the rules are painted straight into the buffer,
+/// where a row outside it is a panic rather than a clip.
+pub fn layout(area: Rect) -> Option<Bands> {
     let min = min_size();
     if area.width < min.width || area.height < min.height {
         return None;
@@ -69,28 +55,7 @@ pub fn layout(area: Rect) -> Option<Frames> {
         Constraint::Length(1),
         Constraint::Fill(1),
     ]));
-    Some(Frames { header, rule, body })
-}
-
-/// Split the body of the Demos view into the nav column, its rule, and the pane.
-pub fn columns(body: Rect) -> Columns {
-    let [nav, rule, pane] = body.layout(&Layout::horizontal([
-        Constraint::Length(nav_width(body.width)),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-    ]));
-    Columns { nav, rule, pane }
-}
-
-/// The longest demo name with a column of padding on each side.
-fn nav_text_width() -> u16 {
-    catalog::widest_name() + 2 * NAV_PADDING
-}
-
-/// What the nav column takes of `total`, capped at half of it so a narrow
-/// terminal keeps a demo pane rather than a list of names.
-fn nav_width(total: u16) -> u16 {
-    nav_text_width().min(total / 2)
+    Some(Bands { header, rule, body })
 }
 
 /// The logo and the site's one nav button.
@@ -116,37 +81,14 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, state: &AppState, header
     ctx.component(ids::DEMOS, demos, demos_area);
 }
 
-/// The header rule, and — in the Demos view — the vertical rule below it,
-/// joined by a `┬`.
-///
-/// `column` is where that rule stands; `live` says the demo beside it has the
-/// input, which is what the rule's color tells the user.
-pub fn separators(
-    buffer: &mut Buffer,
-    frames: &Frames,
-    column: Option<u16>,
-    theme: &Theme,
-    live: bool,
-) {
-    horizontal_rule(buffer, frames.rule, theme.border);
-    let Some(x) = column else {
-        return;
-    };
-    let color = rule_color(theme, live);
-    buffer[(x, frames.rule.y)]
-        .set_symbol(line::HORIZONTAL_DOWN)
-        .set_fg(color);
-    vertical_rule(
-        buffer,
-        Rect::new(x, frames.body.y, 1, frames.body.height),
-        color,
-    );
+/// The rule under the header, full width. What meets it from below is the
+/// view's to draw.
+pub fn header_rule(buffer: &mut Buffer, bands: &Bands, theme: &Theme) {
+    horizontal_rule(buffer, bands.rule, theme.border);
 }
 
-/// What the line around the embedded demo is painted in — the rule down the
-/// side of it in the Demos view with every junction that meets it, the preview
-/// window's frame on the landing page: the ring while the demo has the input,
-/// so the user can see what is live, and the ordinary border otherwise.
+/// What a line around the embedded demo is painted in: the ring while the demo
+/// has the input, so the user can see what is live, and the border otherwise.
 pub fn rule_color(theme: &Theme, live: bool) -> Color {
     if live { theme.ring } else { theme.border }
 }
@@ -161,7 +103,7 @@ pub fn horizontal_rule(buffer: &mut Buffer, area: Rect, color: Color) {
 }
 
 /// A one-column rule filling `area`'s height.
-fn vertical_rule(buffer: &mut Buffer, area: Rect, color: Color) {
+pub fn vertical_rule(buffer: &mut Buffer, area: Rect, color: Color) {
     for y in area.top()..area.bottom() {
         buffer[(area.x, y)].set_symbol(line::VERTICAL).set_fg(color);
     }

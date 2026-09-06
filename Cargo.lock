@@ -1930,7 +1930,6 @@ dependencies = [
  "progress",
  "ratatui",
  "ratcn",
- "ratzilla",
  "scroll-area",
  "select",
  "shared",

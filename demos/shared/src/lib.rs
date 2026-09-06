@@ -48,11 +48,16 @@ pub trait Demo {
     /// the user changes them. They reach [`draw`](Self::draw) each frame.
     const ADAPTIVE: bool = false;
 
-    /// Paint one frame with `theme`, inside `area` and nowhere else.
+    /// Paint one frame with `theme`, laying the demo's own content out inside
+    /// `area`, which is what lets a demo be hosted in a corner of a larger app
+    /// rather than owning the terminal.
     ///
-    /// The host owns the rest of the screen: staying inside `area` is what lets
-    /// a demo be hosted in a corner of a larger app rather than owning the
-    /// terminal.
+    /// `area` does not bound everything the frame receives: a component's
+    /// floating layers — a select panel, a tooltip bubble — are sized and
+    /// clamped against the frame the runtime was handed, not against `area`,
+    /// so near an edge they can reach outside it. A host with chrome it cannot
+    /// afford to lose gives the demo a surface of its own instead, so that
+    /// frame *is* the demo's area.
     fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme);
 
     /// Route one event, returning whether the screen now needs redrawing.

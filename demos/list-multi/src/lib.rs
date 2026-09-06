@@ -89,12 +89,6 @@ impl App {
     }
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl demo_shared::Demo for App {
     // One line: paint with the terminal's own colors, falling back to `THEME`
     // if it will not say what they are.

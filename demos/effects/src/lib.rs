@@ -114,12 +114,6 @@ impl App {
     }
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl demo_shared::Demo for App {
     /// Route one input event through ratcn; a component that reacts emits a
     /// `Msg`, which feeds the same `dispatch` path as everything else.

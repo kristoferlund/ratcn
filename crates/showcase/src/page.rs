@@ -1,14 +1,14 @@
 //! The landing view: the site's front page, scrolling, with the `landing` demo
 //! running at its natural size inside a preview window.
 //!
-//! Every block's height is decided by [`page`] alone, so the height the scroll
-//! area is told and the rows the blocks are painted in cannot drift apart. The
-//! rects come back relative to the top-left of the content, and the declaration
-//! offsets them onto the content rect the runtime hands it.
+//! [`layout`] is the view's one measurement. It subtracts the scroll area's
+//! gutter, places every block, clamps the offset to the travel the content has,
+//! and works out where the demo lands — so the height the area is told, the
+//! rows the blocks paint in, and the rows the demo is blitted from all come
+//! from the same arithmetic and cannot drift apart.
 
 use ratatui::{
-    buffer::Buffer,
-    layout::{Constraint, Layout, Margin, Position, Rect},
+    layout::{Constraint, Layout, Margin, Rect, Size},
     style::{Color, Modifier, Style},
     text::{Line, Text},
     widgets::{Block, Paragraph},
@@ -16,7 +16,7 @@ use ratatui::{
 use ratcn::{
     Button, ButtonSize, ScrollArea,
     geometry::wrapped_height,
-    runtime::{DeclareCtx, KeyCode},
+    runtime::{DeclareCtx, FocusState, KeyCode},
     text_width::wrap_to_width,
 };
 use tui_big_text::{BigText, PixelSize};
@@ -27,6 +27,10 @@ use crate::{AppState, Msg, chrome};
 /// inside it would be revealed, and a landing page that opens scrolled to its
 /// own middle reads as broken. Tab reaches it, and the wheel needs no focus.
 const ID: &str = "page";
+
+/// The hero buttons' child ids, in declaration order. [`PageLayout::reveal`]
+/// matches focus against them, so the ids and the rects stay one list.
+const BUTTON_IDS: [&str; 2] = ["get-started", "github"];
 
 /// The site's 880-pixel hero column, at a 12-pixel cell.
 const HERO_WIDTH: u16 = 74;
@@ -41,6 +45,15 @@ const CAPTION_GAP: u16 = 1;
 const BOTTOM_PADDING: u16 = 2;
 /// Between the two hero buttons, and between them when they stack.
 const BUTTON_GAP: u16 = 2;
+
+/// What the preview window spends on itself: one row and column of border, and
+/// a column of air inside it on each side. Without the air the demo's own tile
+/// borders sit flush against the frame at every width where its grid exactly
+/// fills the interior, and the two read as one doubled border.
+const WINDOW_MARGIN: Margin = Margin {
+    horizontal: 2,
+    vertical: 1,
+};
 
 const TITLE: &str = "The Foundation for your Terminal UI";
 /// The heading, broken the way the site breaks it.
@@ -66,7 +79,9 @@ const GITHUB_URL: &str = "https://github.com/kristoferlund/ratcn";
 /// The site says WebAssembly here; in a terminal the same claim is the other
 /// way round.
 const CAPTION: &str = "Every component above is real Ratatui, running live in this terminal. The exact same code runs in your browser.";
-const HINT: &str = "Click the preview to interact · esc to leave";
+/// Short enough to fit the caption column at the narrowest terminal the chrome
+/// lays out in, so it never wraps and strands a word.
+const HINT: &str = "Click to interact · esc to leave";
 
 /// How the title is drawn at a given width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,26 +94,43 @@ pub enum Tier {
     Plain,
 }
 
-/// Where every block of the page sits, relative to the top-left of the
-/// content.
+/// The landing page, measured for one frame.
+///
+/// The block rects are relative to the top-left of the scroll area's content;
+/// the declaration offsets them onto the content rect the runtime hands it.
+/// Everything else is what the view needs around that: how far the page
+/// scrolls, where it is scrolled to, and where the embedded demo goes.
 #[derive(Debug, Clone, Copy)]
-pub struct Page {
-    pub title: Rect,
-    pub tier: Tier,
-    pub lede: Rect,
-    /// The two hero buttons, in the order they are declared.
-    pub buttons: [Rect; 2],
+pub struct PageLayout {
+    title: Rect,
+    tier: Tier,
+    lede: Rect,
+    buttons: [Rect; 2],
     /// The preview window, its border included.
-    pub window: Rect,
+    window: Rect,
     /// The caption, with the interaction hint on the rows under it.
-    pub caption: Rect,
-    /// Rows the whole page occupies: what the scroll area is told.
-    pub height: u16,
+    caption: Rect,
+    /// Rows the page occupies: what the scroll area is told.
+    pub content: u16,
+    /// Rows the viewport shows.
+    viewport: u16,
+    /// The offset in force, clamped to the travel the content has. The area
+    /// clamps the offset it lays out from the same way, so reading the app's
+    /// raw value anywhere else would draw the page and the demo at two
+    /// different rows after a resize.
+    pub offset: u16,
+    /// The size the embedded demo's canvas has to be.
+    pub canvas: Size,
+    /// Where the demo's rows land on screen, and which of its own rows the
+    /// first of them is. [`None`] when none of it is showing.
+    pub embed: Option<(Rect, u16)>,
 }
 
-/// Lay the page out for a content column `width` cells across.
+/// Measure the page for a body of `body`, scrolled to `offset`.
 #[must_use]
-pub fn page(width: u16) -> Page {
+pub fn layout(body: Rect, offset: u16) -> PageLayout {
+    // The scroll area always keeps a gutter column for its scrollbar.
+    let width = body.width.saturating_sub(1);
     let hero = HERO_WIDTH.min(width);
     let lede_width = text_width(width, LEDE_WIDTH);
     // Wider than the lede: at the lede's measure this orphans its last word,
@@ -127,7 +159,7 @@ pub fn page(width: u16) -> Page {
 
     // The window keeps the whole column: an edge beside the scrollbar reads
     // fine, and the demo inside wants every cell it can have.
-    let window = Rect::new(0, y, width, demo_height(width) + 2);
+    let window = Rect::new(0, y, width, demo_height(width) + 2 * WINDOW_MARGIN.vertical);
     y += window.height + CAPTION_GAP;
 
     let caption = Rect::new(
@@ -138,24 +170,87 @@ pub fn page(width: u16) -> Page {
     );
     y += caption.height + BOTTOM_PADDING;
 
-    Page {
+    let interior = window.inner(WINDOW_MARGIN);
+    let offset = offset.min(y.saturating_sub(body.height));
+    // Nothing scrolls horizontally, so the demo keeps the window's own columns
+    // and only the rows move under it.
+    let column = Rect::new(body.x + interior.x, body.y, interior.width, body.height);
+    PageLayout {
         title,
         tier: tier(width),
         lede,
         buttons,
         window,
         caption,
-        height: y,
+        content: y,
+        viewport: body.height,
+        offset,
+        canvas: Size::new(interior.width, interior.height),
+        embed: placement(column, interior.y, interior.height, offset),
+    }
+}
+
+impl PageLayout {
+    /// Where a page key leaves the scroll offset, or [`None`] when it is not
+    /// one of them or the page is already there.
+    ///
+    /// The landing page is the whole view, so these keys are the app's the way
+    /// the `landing` demo's own alt-chords are its. The scroll area answers
+    /// them first whenever focus is inside it; this is what happens when it is
+    /// not, and nothing here reaches into the area to find out.
+    #[must_use]
+    pub fn scrolled(&self, key: KeyCode) -> Option<u16> {
+        let next = match key {
+            KeyCode::PageDown => self.offset.saturating_add(self.viewport),
+            KeyCode::PageUp => self.offset.saturating_sub(self.viewport),
+            KeyCode::Home => 0,
+            KeyCode::End => self.furthest(),
+            _ => return None,
+        };
+        self.moved_to(next)
+    }
+
+    /// The offset that brings the hero button `focus` names fully into view,
+    /// or [`None`] when it names neither or the page already shows it.
+    ///
+    /// The scroll area reveals a clipped descendant by taking a hold it never
+    /// reports back, which would leave the page drawn at one offset and the
+    /// demo blitted from another. Doing the reveal here keeps the offset the
+    /// app holds the only one there is: by the next render the button is
+    /// already in view, so the area finds nothing to move and takes no hold.
+    #[must_use]
+    pub fn reveal(&self, focus: &FocusState) -> Option<u16> {
+        let button = BUTTON_IDS
+            .iter()
+            .zip(self.buttons)
+            .find_map(|(id, rect)| focus.contains_path([ID, id]).then_some(rect))?;
+        // The area's own rule, and minimal in both directions like it.
+        let next = if button.y < self.offset {
+            button.y
+        } else if button.bottom() > self.offset.saturating_add(self.viewport) {
+            button.bottom().saturating_sub(self.viewport)
+        } else {
+            self.offset
+        };
+        self.moved_to(next)
+    }
+
+    /// The last row the page can be scrolled to.
+    const fn furthest(&self) -> u16 {
+        self.content.saturating_sub(self.viewport)
+    }
+
+    /// `next`, clamped and reported only if it is somewhere new.
+    fn moved_to(&self, next: u16) -> Option<u16> {
+        let next = next.min(self.furthest());
+        (next != self.offset).then_some(next)
     }
 }
 
 /// Declare the page over `body`. `live` says the embedded demo has the input,
 /// which is what the preview window's frame tells the user.
-pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, body: Rect, page: Page, live: bool) {
-    // No guard on the cell cap the viewport asserts (262,144): the page is at
-    // its tallest in the demo's one-column layout, around 215 rows at 45
-    // columns, which is two orders of magnitude under it.
-    let area = ScrollArea::new(page.height)
+pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, body: Rect, page: PageLayout, live: bool) {
+    let area = ScrollArea::new(page.content)
         .scroll(|state: &AppState| state.page_scroll, Msg::PageScrolled)
         .content(move |ctx| content(ctx, page, live));
     ctx.component(ID, area, body);
@@ -163,7 +258,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, Msg>, body: Rect, page: Page, 
 
 /// Paint the blocks and declare the two buttons, inside the scroll area's
 /// logical content rect.
-fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: Page, live: bool) {
+fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: PageLayout, live: bool) {
     let origin = ctx.area();
     let theme = *ctx.theme;
 
@@ -191,18 +286,18 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: Page, live: bool) {
     );
 
     ctx.component(
-        "get-started",
+        BUTTON_IDS[0],
         Button::new(GET_STARTED)
             .size(ButtonSize::Large)
-            .on_press(|| Msg::Open(GET_STARTED_URL)),
+            .on_press(|| Msg::OpenUrl(GET_STARTED_URL)),
         place(page.buttons[0], origin),
     );
     ctx.component(
-        "github",
+        BUTTON_IDS[1],
         Button::new(GITHUB)
             .outline()
             .size(ButtonSize::Large)
-            .on_press(|| Msg::Open(GITHUB_URL)),
+            .on_press(|| Msg::OpenUrl(GITHUB_URL)),
         place(page.buttons[1], origin),
     );
 
@@ -220,8 +315,7 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: Page, live: bool) {
 
     let caption = place(page.caption, origin);
     // The hint is measured like the caption above it rather than assumed to be
-    // one row: at a narrow width it is a cell too long for the column, and a
-    // reserved single row would truncate it.
+    // one row, so a width that makes it wrap gets the row it needs.
     let [lines, hint] = caption.layout(&Layout::vertical([
         Constraint::Length(wrapped_height(CAPTION, caption.width)),
         Constraint::Fill(1),
@@ -236,12 +330,10 @@ fn content(ctx: &mut DeclareCtx<'_, AppState, Msg>, page: Page, live: bool) {
 /// Where the embedded region lands on screen, and which of its own rows that
 /// is.
 ///
-/// `column` is the region's screen column and width — nothing scrolls
-/// horizontally — bounded vertically by the viewport it lives in. The region
-/// occupies content rows `top..top + height`, and `offset` is the page's
-/// scroll. [`None`] when none of it is showing.
-#[must_use]
-pub fn placement(column: Rect, top: u16, height: u16, offset: u16) -> Option<(Rect, u16)> {
+/// `column` is the region's screen column and width, bounded vertically by the
+/// viewport it lives in. The region occupies content rows `top..top + height`,
+/// and `offset` is the page's scroll. [`None`] when none of it is showing.
+fn placement(column: Rect, top: u16, height: u16, offset: u16) -> Option<(Rect, u16)> {
     let top = i32::from(top) - i32::from(offset);
     let skipped = u16::try_from(-top).unwrap_or(0).min(height);
     let y = column.y + u16::try_from(top.max(0)).expect("a clamped row fits");
@@ -251,49 +343,9 @@ pub fn placement(column: Rect, top: u16, height: u16, offset: u16) -> Option<(Re
     (visible > 0).then(|| (Rect::new(column.x, y, column.width, visible), skipped))
 }
 
-/// Where a page key leaves the scroll offset, or [`None`] when it is not one
-/// of them or the view is already there.
-///
-/// The landing page is the whole view, so these keys are the app's the way the
-/// `landing` demo's own alt-chords are its. The scroll area answers them first
-/// whenever focus is inside it; this is what happens when it is not. Nothing
-/// here reaches into the area — the offset is the one the app already holds,
-/// and `content - viewport` is all the travel there is, so a page that fits
-/// its viewport does not move for any of them.
-#[must_use]
-pub fn scrolled(key: KeyCode, offset: u16, viewport: u16, content: u16) -> Option<u16> {
-    let furthest = content.saturating_sub(viewport);
-    let next = match key {
-        KeyCode::PageDown => offset.saturating_add(viewport),
-        KeyCode::PageUp => offset.saturating_sub(viewport),
-        KeyCode::Home => 0,
-        KeyCode::End => furthest,
-        _ => return None,
-    };
-    let next = next.min(furthest);
-    (next != offset).then_some(next)
-}
-
-/// Copy `target.height` rows of `source`, starting at its row `source_y`, into
-/// `target`.
-///
-/// The embedded demo owns its own runtime over its own state, so it cannot be
-/// declared inside the scroll area's viewport. It paints a canvas of exactly
-/// its own size instead, and the rows the page is showing are copied out of it.
-pub fn blit(destination: &mut Buffer, source: &Buffer, target: Rect, source_y: u16) {
-    for row in 0..target.height {
-        for column in 0..target.width {
-            let Some(cell) = source.cell(Position::new(column, source_y + row)) else {
-                continue;
-            };
-            destination[(target.x + column, target.y + row)] = cell.clone();
-        }
-    }
-}
-
 /// Rows the embedded demo needs inside a window `width` cells across.
 fn demo_height(width: u16) -> u16 {
-    landing::grid_height(width.saturating_sub(2))
+    landing::grid_height(width.saturating_sub(2 * WINDOW_MARGIN.horizontal))
 }
 
 /// How the title is drawn at `width`.
@@ -395,17 +447,26 @@ const fn text_width(content: u16, maximum: u16) -> u16 {
     if maximum < fits { maximum } else { fits }
 }
 
-/// The window's interior, in content coordinates.
-#[must_use]
-pub fn interior(window: Rect) -> Rect {
-    window.inner(Margin::new(1, 1))
-}
-
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     use super::*;
+
+    /// The cap [`DeclareCtx::viewport`] asserts on a viewport's logical
+    /// content, in cells.
+    const VIEWPORT_CELLS: u32 = 262_144;
+
+    /// A layout with the scrolling numbers a test wants, and the blocks a real
+    /// measurement gives.
+    fn scrolling(offset: u16, viewport: u16, content: u16) -> PageLayout {
+        PageLayout {
+            offset,
+            viewport,
+            content,
+            ..layout(Rect::new(0, 0, 80, viewport), offset)
+        }
+    }
 
     /// Rows of `buffer` that have anything painted on them.
     fn painted_rows(buffer: &Buffer) -> u16 {
@@ -444,25 +505,70 @@ mod tests {
     }
 
     /// The height the scroll area is told is the height the blocks fill: a
-    /// disagreement either clips the caption or leaves dead rows under it.
+    /// disagreement either clips the caption or leaves dead rows under it. And
+    /// a viewport asserts on its logical content in *cells*, so the page has to
+    /// stay under that too.
     #[test]
     fn the_page_ends_exactly_where_its_height_says() {
-        for width in [41, 45, 59, 79, 115, 139] {
-            let page = page(width);
+        // 61 is where the page is tallest: the widest terminal that still
+        // gives the demo a one-column grid, with the title already at a big
+        // tier.
+        for width in [42, 46, 60, 61, 80, 116, 140, 320] {
+            let page = layout(Rect::new(0, 0, width, 24), 0);
             assert_eq!(
                 page.title.y, TOP_PADDING,
                 "at width {width} the page does not start below its top padding"
             );
-            assert!(
-                page.window.bottom() + CAPTION_GAP == page.caption.y,
+            assert_eq!(
+                page.window.bottom() + CAPTION_GAP,
+                page.caption.y,
                 "at width {width} the caption does not follow the window"
             );
             assert_eq!(
                 page.caption.bottom() + BOTTOM_PADDING,
-                page.height,
+                page.content,
                 "at width {width} the last block does not end where the height says"
             );
+            let cells = u32::from(width) * u32::from(page.content);
+            assert!(
+                cells <= VIEWPORT_CELLS,
+                "at width {width} the page is {cells} cells, past the viewport's cap"
+            );
         }
+    }
+
+    /// The demo region stands still on screen while the page scrolls under it,
+    /// and the rows it shows are the rows scrolled to.
+    #[test]
+    fn placement_follows_the_scroll_and_stops_at_the_viewport() {
+        // A viewport ten rows tall, starting at screen row 2.
+        let column = Rect::new(4, 2, 30, 10);
+
+        assert_eq!(
+            placement(column, 0, 4, 0),
+            Some((Rect::new(4, 2, 30, 4), 0)),
+            "unscrolled, a region at the top of the content is shown whole"
+        );
+        assert_eq!(
+            placement(column, 20, 20, 20),
+            Some((Rect::new(4, 2, 30, 10), 0)),
+            "scrolled to the region, it starts at the viewport top and fills it"
+        );
+        assert_eq!(
+            placement(column, 20, 20, 45),
+            None,
+            "scrolled past the region entirely, none of it is showing"
+        );
+        assert_eq!(
+            placement(column, 20, 4, 22),
+            Some((Rect::new(4, 2, 30, 2), 2)),
+            "a region shorter than the viewport, two of its rows scrolled off the top"
+        );
+        assert_eq!(
+            placement(column, 20, 4, 8),
+            None,
+            "a region still below the viewport is not showing either"
+        );
     }
 
     /// The page keys are the app's on this view, so their arithmetic is the
@@ -471,8 +577,7 @@ mod tests {
     #[test]
     fn page_keys_step_by_a_viewport_and_stop_at_both_ends() {
         // Forty rows of page in a ten-row viewport: thirty rows of travel.
-        let (viewport, content) = (10, 40);
-        let scroll = |key, offset| scrolled(key, offset, viewport, content);
+        let scroll = |key, offset| scrolling(offset, 10, 40).scrolled(key);
 
         assert_eq!(
             scroll(KeyCode::PageDown, 0),
@@ -514,44 +619,65 @@ mod tests {
             KeyCode::End,
         ] {
             assert_eq!(
-                scrolled(key, 0, 20, 8),
+                scrolling(0, 20, 8).scrolled(key),
                 None,
                 "{key:?} on a page shorter than its viewport"
             );
         }
     }
 
-    /// The demo region stands still on screen while the page scrolls under it,
-    /// and the rows it shows are the rows scrolled to.
+    /// The app reveals its own hero buttons so the scroll area never takes a
+    /// hold it does not report — which would draw the page and the demo at two
+    /// different offsets. Minimal in both directions, like the area's own.
     #[test]
-    fn placement_follows_the_scroll_and_stops_at_the_viewport() {
-        // A viewport ten rows tall, starting at screen row 2.
-        let column = Rect::new(4, 2, 30, 10);
+    fn a_focused_hero_button_is_revealed_by_the_smallest_scroll_that_shows_it() {
+        // A ten-row viewport over forty rows, with a three-row button at rows
+        // 20..23.
+        let button = Rect::new(0, 20, 30, 3);
+        let page = |offset| PageLayout {
+            buttons: [button, Rect::new(0, 34, 10, 3)],
+            ..scrolling(offset, 10, 40)
+        };
+        let focus = |id| FocusState::intent([ID, id]);
 
         assert_eq!(
-            placement(column, 0, 4, 0),
-            Some((Rect::new(4, 2, 30, 4), 0)),
-            "unscrolled, a region at the top of the content is shown whole"
+            page(0).reveal(&focus(BUTTON_IDS[0])),
+            Some(13),
+            "a button below the viewport comes to its bottom edge, no further"
         );
         assert_eq!(
-            placement(column, 20, 20, 20),
-            Some((Rect::new(4, 2, 30, 10), 0)),
-            "scrolled to the region, it starts at the viewport top and fills it"
+            page(25).reveal(&focus(BUTTON_IDS[0])),
+            Some(20),
+            "a button above it comes to its top edge"
         );
         assert_eq!(
-            placement(column, 20, 20, 45),
+            page(15).reveal(&focus(BUTTON_IDS[0])),
             None,
-            "scrolled past the region entirely, none of it is showing"
+            "a button already in view moves nothing"
         );
         assert_eq!(
-            placement(column, 20, 4, 22),
-            Some((Rect::new(4, 2, 30, 2), 2)),
-            "a region shorter than the viewport, two of its rows scrolled off the top"
+            page(0).reveal(&focus(BUTTON_IDS[1])),
+            Some(27),
+            "the second button comes to the bottom edge on its own account"
         );
         assert_eq!(
-            placement(column, 20, 4, 8),
+            PageLayout {
+                buttons: [button, Rect::new(0, 38, 10, 3)],
+                ..scrolling(0, 10, 40)
+            }
+            .reveal(&focus(BUTTON_IDS[1])),
+            Some(30),
+            "and a reveal never asks for more scroll than the page has"
+        );
+        assert_eq!(
+            page(0).reveal(&FocusState::intent(["home"])),
             None,
-            "a region still below the viewport is not showing either"
+            "focus on the chrome is not the page's to reveal"
+        );
+        assert_eq!(
+            page(0).reveal(&FocusState::default()),
+            None,
+            "and neither is unresolved focus"
         );
     }
 }

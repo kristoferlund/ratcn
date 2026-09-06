@@ -23,3 +23,8 @@ web-sys.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ratcn.workspace = true
 ureq.workspace = true
+
+# `App::new` is the demo's entry point and starts an HTTP fetch; a `Default`
+# forwarding to it would be a second, surprising one.
+[lints.clippy]
+new_without_default = "allow"

@@ -62,12 +62,6 @@ impl App {
     }
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Up and Down step focus, by handing the runtime Tab and BackTab.
 fn as_traversal(event: Event) -> Event {
     let code = match &event {

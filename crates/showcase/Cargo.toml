@@ -37,7 +37,3 @@ tabs-large = { path = "../../demos/tabs-large" }
 toast = { path = "../../demos/toast" }
 tooltip = { path = "../../demos/tooltip" }
 wizard = { path = "../../demos/wizard" }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ratcn = { workspace = true, features = ["ratzilla"] }
-ratzilla.workspace = true

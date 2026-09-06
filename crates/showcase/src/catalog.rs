@@ -12,14 +12,13 @@ use ratcn::{Theme, runtime::Event};
 /// theme a demo paints with, and whether it follows the terminal instead — are
 /// associated consts, and a const is not dispatchable. This is the same
 /// contract with those turned into a method.
+/// The three [`demo_shared::Demo`] methods keep that trait's contracts; only
+/// `theme` is new.
 pub trait Embedded {
-    /// Paint one frame inside `area`, exactly as a standalone host would.
     fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme);
 
-    /// Route one event, returning whether the screen now needs redrawing.
     fn handle_event(&mut self, event: Event) -> bool;
 
-    /// How long the host may wait before it owes this demo a frame.
     fn wake(&self) -> Option<Duration>;
 
     /// The theme this demo paints with, given what the terminal resolves to.
@@ -51,8 +50,7 @@ impl<D: demo_shared::Demo> Embedded for D {
 pub struct Entry {
     /// The crate name, which is also what `cargo run -p <name>` takes.
     pub name: &'static str,
-    /// Builds the demo. Called on first use and not before: `effects` fetches
-    /// over the network the moment it is constructed.
+    /// Builds the demo. The host calls it on first use and not before.
     open: fn() -> Box<dyn Embedded>,
 }
 

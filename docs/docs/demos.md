@@ -79,7 +79,7 @@ cd demos/ledger93
 trunk serve
 ```
 
-The same `main.rs` covers both targets. Each demo's `Cargo.toml` adds ratcn's
+The same `lib.rs` covers both targets. Each demo's `Cargo.toml` adds ratcn's
 `ratzilla` feature for `wasm32`, and the host they all share, `demos/shared`,
 enables ratcn's `termina` feature for the native build. See
 [Host integration](./concepts/host-integration) for how that wiring works.

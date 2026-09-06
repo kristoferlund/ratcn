@@ -156,12 +156,6 @@ impl App {
     }
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl demo_shared::Demo for App {
     /// Bracketed paste natively, and the browser's `paste` event on the web:
     /// the wiring is the demonstration, since no component reads a paste yet.

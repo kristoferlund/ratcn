@@ -6,9 +6,9 @@
 //! keyboard is what is driving — so a tooltip appears on hover *and* on Tab,
 //! and goes away again when the pointer or focus moves on. Nothing is stored
 //! for the bubble itself and nothing in `update` writes it. Second, placement:
-//! each button in the row
-//! is named for the side its bubble prefers, and the one pinned to the frame's
-//! top row has no room above it, so its bubble flips below.
+//! each button in the row is named for the side its bubble prefers, and the
+//! one pinned to the top row of the demo's area has no room above it, so its
+//! bubble flips below.
 
 use ratatui::{
     Frame,
@@ -48,7 +48,8 @@ const ROW: [Explained; 4] = [
     (ids::RIGHT, "Right", TIP, TooltipSide::Right),
 ];
 
-/// Pinned to the frame's top row, so `Top` has nowhere to go and flips.
+/// Pinned to the top row of the demo's area, so `Top` has nowhere to go and
+/// flips.
 const EDGE: Explained = (
     ids::EDGE,
     "Edge",
@@ -122,12 +123,6 @@ impl App {
             Msg::Focus(focus) => self.state.focus = focus,
             Msg::Pressed => {}
         }
-    }
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

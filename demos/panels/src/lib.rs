@@ -106,12 +106,6 @@ impl App {
     }
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl demo_shared::Demo for App {
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
