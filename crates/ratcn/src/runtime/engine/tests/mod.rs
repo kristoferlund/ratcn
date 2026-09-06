@@ -21,6 +21,7 @@ use crate::{
 mod declaration;
 mod focus;
 mod gesture;
+mod hosting;
 mod hover;
 mod modal;
 mod paint;

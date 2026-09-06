@@ -11,7 +11,7 @@
 //! routing it to the component.
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Rect},
     style::{Color, Style},
     widgets::{Block, Paragraph},
@@ -70,10 +70,8 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
         let draggable_block_area = offset_rect(
             area,
             area.centered(
@@ -82,16 +80,17 @@ impl demo_shared::Demo for App {
             ),
             self.state.block_offset,
         );
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
-            ctx.component(
-                ids::BLOCK,
-                DraggableBlock {
-                    area,
-                    text: "Drag me!",
-                },
-                draggable_block_area,
-            );
-        });
+        self.ratcn
+            .render_into(buffer, area, &self.state, theme, |ctx| {
+                ctx.component(
+                    ids::BLOCK,
+                    DraggableBlock {
+                        area,
+                        text: "Drag me!",
+                    },
+                    draggable_block_area,
+                );
+            });
     }
 }
 

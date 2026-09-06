@@ -6,7 +6,7 @@ description: "How a frame is declared, how ratcn keeps it as the retained surfac
 
 Ratcn enters an app at two calls:
 
-- `Ratcn::render(frame, state, theme, declare)` declares and paints one frame.
+- `Ratcn::render(frame, area, state, theme, declare)` declares and paints one frame.
 - `Ratcn::handle_event(event, state)` routes one event through the last
   successful declaration.
 
@@ -16,7 +16,8 @@ split areas with Ratatui, queue decorative widgets with
 `DeclareCtx::component`:
 
 ```rust
-ratcn.render(frame, &state, &state.theme, |ctx| {
+let area = frame.area();
+ratcn.render(frame, area, &state, &state.theme, |ctx| {
     ctx.paint_widget(Paragraph::new("Account"), title_area);
     ctx.component(
         "save",
@@ -39,6 +40,14 @@ type used by nested scopes, dialog sections, and a component's own `declare`.
 with `component` get an identity and can receive events; widgets you paint are
 decoration and cannot.
 
+Pass a pane's rectangle as `area` to host a tree, or `frame.area()` to use the
+whole frame. `ctx.frame_area()` reports those root bounds, translated into
+logical coordinates inside a viewport. Floating components place themselves
+within them; layer copies and modal dimming are clipped to them. This is not
+a paint sandbox: base widgets can paint outside their rects, and unprojected
+base `PaintCtx::with_buffer` exposes the whole destination buffer. Events still
+arrive in screen coordinates; routing input between hosted trees stays yours.
+
 Declaring does not paint. `ctx.paint` queues a `'static` closure at the point it
 was reached, and the runtime replays the whole queue in that order once the
 tree is complete and focus has resolved — so paint order is still declaration
@@ -59,6 +68,40 @@ declares. What it cannot read is a focus flag — whether a declaration is
 focused, or contains focus, is offered to `PaintCtx`, once the tree is complete
 and focus has resolved. Hover is the exception: `DeclareCtx::pointer_within()`
 answers it while declaring.
+
+## Offscreen rendering
+
+Use `Ratcn::render_into(buffer, area, state, theme, declare)` when the destination
+is your own `ratatui::buffer::Buffer`, for example a page taller than its visible
+window. Ordinary terminal apps should keep using `render`, which delegates to
+the same lifecycle through the frame's buffer.
+
+```rust
+use ratatui::{buffer::Buffer, layout::Rect};
+
+let area = Rect::new(0, 0, 80, 200);
+let mut page = Buffer::empty(area);
+ratcn.render_into(&mut page, area, &state, &state.theme, |ctx| {
+    // Declare the full page, including content below the visible window.
+});
+```
+
+Allocate and resize the buffer yourself. Rendering does not clear it; clear a
+reused buffer first when old content should disappear. Choose an `area` within
+`buffer.area`: layout receives it unchanged, without validation or silent
+clamping. Coordinates are absolute within the buffer, including its origin;
+they do not restart at `(0, 0)` for a sub-area. Viewports still apply their
+logical-coordinate transforms.
+
+Copying a visible window to the terminal and translating pointer positions back
+into buffer coordinates before `handle_event` are the host's responsibilities.
+The bounds contract is unchanged: floating placement, layer copies, and modal
+dimming respect `area`, but arbitrary base paint is not sandboxed and raw base
+buffer access still reaches the whole destination.
+
+A buffer carries no cursor metadata, and `render_into` reports no caret
+position. Future caret-bearing components may require a caret result from this
+API. There is no cursor output machinery today.
 
 ## What an event sees
 

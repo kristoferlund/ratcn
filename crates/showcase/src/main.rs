@@ -3,7 +3,8 @@
 //! Three views under one header: the landing page, the Getting started page,
 //! and a browser for every demo in the repository. The two that embed a demo do
 //! it the way the website embeds a preview — it takes the input while the user
-//! is inside it — and both do it the same way, through [`App::blit_demo`].
+//! is inside it. Catalog demos draw directly into their pane; only the scrolling
+//! landing preview uses an offscreen buffer and a visible-row copy.
 
 mod catalog;
 mod chrome;
@@ -15,10 +16,8 @@ mod page_geometry;
 use std::{io, time::Duration};
 
 use ratatui::{
-    Frame, Terminal,
-    backend::TestBackend,
     buffer::Buffer,
-    layout::{Position, Rect, Size},
+    layout::{Position, Rect},
     style::Style,
 };
 use ratcn::{
@@ -38,14 +37,6 @@ enum View {
     GettingStarted,
     Demos,
 }
-
-/// Where the chrome's focus is parked while the embedded demo has the input.
-///
-/// The chrome declares no such child, and that is the point: an engine whose
-/// focus names nothing resolves to its first focusable leaf, so leaving the
-/// real path in place — or clearing it — would paint a chrome focus ring beside
-/// the demo's own. A path naming no declared component is left alone.
-const PARKED_FOCUS: &str = "demo-has-the-input";
 
 #[derive(Default)]
 struct AppState {
@@ -95,14 +86,13 @@ enum Msg {
 struct Embed {
     /// The demo's visible rows, on screen.
     rect: Rect,
-    /// The demo's own row showing at `rect`'s top. Its left column is always
-    /// the demo's column 0: nothing here scrolls horizontally, so a row is the
-    /// whole of what the region can be offset by.
+    /// The landing preview's row showing at `rect`'s top; its source column is
+    /// always zero. Unused for catalog demos, which use screen coordinates.
     source_row: u16,
 }
 
 impl Embed {
-    /// `mouse` in the demo's own coordinate space.
+    /// `mouse` in the landing preview's own coordinate space.
     ///
     /// The shift is a constant rather than a clip to the rect, which is what
     /// lets a drag that strays outside the region keep reaching the cell it
@@ -150,9 +140,8 @@ struct App {
     /// `effects::App::new` starts a network request, so constructing all
     /// twenty-six would fetch on launch.
     opened: Vec<Option<Box<dyn Embedded>>>,
-    /// The offscreen surface every embedded demo paints, resized to whatever
-    /// the demo is given. See [`App::blit_demo`].
-    canvas: Terminal<TestBackend>,
+    /// Only the scrolling landing preview needs offscreen rows.
+    canvas: Buffer,
     /// Where the embedded demo painted last frame, and how to reach its own
     /// cells from there — the only thing routing needs to know about the
     /// layout. [`None`] when no demo is on screen.
@@ -180,7 +169,7 @@ impl App {
             opened: std::iter::repeat_with(|| None)
                 .take(catalog::ENTRIES.len())
                 .collect(),
-            canvas: Terminal::new(TestBackend::new(1, 1)).expect("an offscreen canvas opens"),
+            canvas: Buffer::empty(Rect::default()),
             embed: None,
             landing_page: None,
             getting_started: None,
@@ -230,13 +219,15 @@ impl App {
 
     /// The demo the current view shows, built if this is its first appearance.
     fn shown_mut(&mut self) -> Option<&mut dyn Embedded> {
-        let Self {
-            state,
-            landing,
-            opened,
-            ..
-        } = self;
-        shown_in(state, landing, opened)
+        match self.state.view {
+            View::Landing => Some(self.landing.as_mut()),
+            View::GettingStarted => None,
+            View::Demos => Some(
+                self.opened[self.state.showing]
+                    .get_or_insert_with(|| catalog::ENTRIES[self.state.showing].open())
+                    .as_mut(),
+            ),
+        }
     }
 
     /// The demo on screen, if it has been built. Never builds one — see
@@ -259,7 +250,9 @@ impl App {
     /// the input back.
     fn route_to_demo(&mut self, event: Event) -> bool {
         let event = match (event, self.embed) {
-            (Event::Mouse(mouse), Some(embed)) => Event::Mouse(embed.translate(mouse)),
+            (Event::Mouse(mouse), Some(embed)) if self.state.view == View::Landing => {
+                Event::Mouse(embed.translate(mouse))
+            }
             (Event::Mouse(_), None) => return false,
             (event, _) => event,
         };
@@ -269,8 +262,7 @@ impl App {
 
     /// Hand the input to the embedded demo, parking the chrome's focus.
     fn enter(&mut self) {
-        let chrome_focus =
-            std::mem::replace(&mut self.state.focus, FocusState::intent([PARKED_FOCUS]));
+        let chrome_focus = std::mem::replace(&mut self.state.focus, FocusState::none());
         self.state.parked = Some(chrome_focus);
     }
 
@@ -332,44 +324,14 @@ impl App {
         true
     }
 
-    /// Paint the demo the current view shows onto the offscreen canvas, and
-    /// copy the rows `embed` asks for onto the screen.
-    ///
-    /// A demo cannot be declared inside this app's own render pass: it owns a
-    /// runtime over its own state, and `Ratcn::render` builds a surface from
-    /// `frame.area()`, so a `Select` panel or a `Tooltip` bubble would be
-    /// placed against the whole terminal and paint straight over the chrome.
-    /// Giving the demo a surface of exactly its own size makes `frame.area()`
-    /// *be* the demo's area, so the escape stops being possible rather than
-    /// merely unlikely.
-    ///
-    /// `Terminal<TestBackend>` is that surface because `Frame` has no public
-    /// constructor: a terminal over some backend is the only way ratatui
-    /// offers to get one. The cost is the cursor position, which a canvas
-    /// cannot carry back — no component sets one today, and a demo that wanted
-    /// a text caret would need this reconsidered.
-    fn blit_demo(&mut self, frame: &mut Frame, canvas: Size, embed: Embed, theme: &Theme) {
-        let Self {
-            state,
-            landing,
-            opened,
-            canvas: surface,
-            ..
-        } = self;
-        let Some(demo) = shown_in(state, landing, opened) else {
-            return;
-        };
-        let demo_theme = demo.theme(theme);
-        surface.backend_mut().resize(canvas.width, canvas.height);
-        let painted = surface
-            .draw(|offscreen| demo.draw(offscreen, offscreen.area(), &demo_theme))
-            .expect("an offscreen canvas cannot fail to draw")
-            .buffer;
-        blit(frame.buffer_mut(), painted, embed.rect, embed.source_row);
-    }
-
     /// The Demos view: the nav column, the rules, and the selected demo.
-    fn draw_demos(&mut self, frame: &mut Frame, bands: &chrome::Bands, theme: &Theme) {
+    fn draw_demos(
+        &mut self,
+        buffer: &mut Buffer,
+        area: Rect,
+        bands: &chrome::Bands,
+        theme: &Theme,
+    ) {
         let columns = demos::columns(bands.body);
         let embed = Embed {
             rect: columns.pane,
@@ -378,79 +340,73 @@ impl App {
         self.embed = Some(embed);
         self.nav_rows = Some(demos::visible_rows(columns.nav));
 
-        chrome::header_rule(frame.buffer_mut(), bands, theme);
-        demos::separators(
-            frame.buffer_mut(),
-            bands,
-            &columns,
-            theme,
-            self.state.entered(),
-        );
+        chrome::header_rule(buffer, bands, theme);
+        demos::separators(buffer, bands, &columns, theme, self.state.entered());
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             chrome::declare(ctx, state, bands.header);
             demos::declare(ctx, columns.nav);
         });
 
-        self.blit_demo(frame, columns.pane.as_size(), embed, theme);
+        if let Some(demo) = self.shown_mut() {
+            let demo_theme = demo.theme(theme);
+            demo.draw(buffer, columns.pane, &demo_theme);
+        }
     }
 
     /// The landing view: the site's front page, scrolling, with the demo
     /// blitted into its preview window.
-    fn draw_landing(&mut self, frame: &mut Frame, bands: &chrome::Bands, theme: &Theme) {
+    fn draw_landing(
+        &mut self,
+        buffer: &mut Buffer,
+        area: Rect,
+        bands: &chrome::Bands,
+        theme: &Theme,
+    ) {
         let page = page::layout(bands.body, self.state.landing_scroll);
         self.landing_page = Some(page);
         self.embed = page
             .embed
             .map(|(rect, source_row)| Embed { rect, source_row });
 
-        chrome::header_rule(frame.buffer_mut(), bands, theme);
+        chrome::header_rule(buffer, bands, theme);
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             chrome::declare(ctx, state, bands.header);
             page::declare(ctx, bands.body, page, state.entered());
         });
 
         if let Some(embed) = self.embed {
-            self.blit_demo(frame, page.canvas, embed, theme);
+            let canvas_area = Rect::new(0, 0, page.canvas.width, page.canvas.height);
+            self.canvas.resize(canvas_area);
+            self.canvas.reset();
+            let demo_theme = self.landing.theme(theme);
+            self.landing
+                .draw(&mut self.canvas, canvas_area, &demo_theme);
+            blit(buffer, &self.canvas, embed.rect, embed.source_row);
         }
     }
 
     /// The Getting started view: prose and code, scrolling, and nothing else.
-    fn draw_getting_started(&mut self, frame: &mut Frame, bands: &chrome::Bands, theme: &Theme) {
+    fn draw_getting_started(
+        &mut self,
+        buffer: &mut Buffer,
+        area: Rect,
+        bands: &chrome::Bands,
+        theme: &Theme,
+    ) {
         let page = getting_started::layout(bands.body, self.state.getting_started_scroll);
         self.getting_started = Some(page);
 
-        chrome::header_rule(frame.buffer_mut(), bands, theme);
+        chrome::header_rule(buffer, bands, theme);
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             chrome::declare(ctx, state, bands.header);
             getting_started::declare(ctx, bands.body, page);
         });
-    }
-}
-
-/// The demo `state`'s view shows, out of the two places demos are kept, built
-/// if this is its first appearance. [`None`] on a view that embeds nothing.
-///
-/// Free rather than a method so a caller can hold the canvas at the same time.
-fn shown_in<'a>(
-    state: &AppState,
-    landing: &'a mut Box<dyn Embedded>,
-    opened: &'a mut [Option<Box<dyn Embedded>>],
-) -> Option<&'a mut dyn Embedded> {
-    match state.view {
-        View::Landing => Some(landing.as_mut()),
-        // The Getting started page is prose and code; it embeds nothing.
-        View::GettingStarted => None,
-        View::Demos => Some(
-            opened[state.showing]
-                .get_or_insert_with(|| catalog::ENTRIES[state.showing].open())
-                .as_mut(),
-        ),
     }
 }
 
@@ -504,8 +460,8 @@ impl demo_shared::Demo for App {
                     }
                     // Only the wheel falls through, and only so the page keeps
                     // scrolling under a demo that does not scroll. Any other
-                    // event reaching the chrome would take focus off the parked
-                    // path on the press, which is the whole reason for parking.
+                    // event reaching the chrome could focus it again while the
+                    // demo still owns the input.
                     if !matches!(&event, Event::Mouse(mouse) if matches!(mouse.kind, MouseKind::Scroll(_)))
                     {
                         return false;
@@ -539,10 +495,8 @@ impl demo_shared::Demo for App {
         self.shown().and_then(Embedded::wake)
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
 
         // Everything derived from the last frame's layout, cleared before the
         // frame that replaces it: each view then sets only what it owns, and a
@@ -553,14 +507,14 @@ impl demo_shared::Demo for App {
         self.nav_rows = None;
 
         let Some(bands) = chrome::layout(area) else {
-            chrome::too_small(frame, area, theme);
+            chrome::too_small(buffer, area, theme);
             return;
         };
 
         match self.state.view {
-            View::Demos => self.draw_demos(frame, &bands, theme),
-            View::Landing => self.draw_landing(frame, &bands, theme),
-            View::GettingStarted => self.draw_getting_started(frame, &bands, theme),
+            View::Demos => self.draw_demos(buffer, area, &bands, theme),
+            View::Landing => self.draw_landing(buffer, area, &bands, theme),
+            View::GettingStarted => self.draw_getting_started(buffer, area, &bands, theme),
         }
     }
 }
@@ -585,26 +539,10 @@ mod tests {
     struct Probe {
         seen: Rc<Cell<Option<Event>>>,
         handled: Rc<Cell<bool>>,
-        /// Paint every cell of the frame rather than staying inside `area` —
-        /// what a component's floating layers do near an edge.
-        greedy: Rc<Cell<bool>>,
     }
 
-    /// What a greedy probe paints, in every cell it can reach.
-    const GREED: &str = "#";
-
     impl demo_shared::Demo for Probe {
-        fn draw(&mut self, frame: &mut Frame, _area: Rect, _theme: &Theme) {
-            if !self.greedy.get() {
-                return;
-            }
-            let all = frame.area();
-            for row in all.top()..all.bottom() {
-                for column in all.left()..all.right() {
-                    frame.buffer_mut()[(column, row)].set_symbol(GREED);
-                }
-            }
-        }
+        fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
 
         fn handle_event(&mut self, event: Event) -> bool {
             self.seen.set(Some(event));
@@ -619,8 +557,6 @@ mod tests {
         seen: Rc<Cell<Option<Event>>>,
         /// What the demo reports for the next event it gets.
         handled: Rc<Cell<bool>>,
-        /// Whether the demo paints its whole frame.
-        greedy: Rc<Cell<bool>>,
     }
 
     /// An app showing the landing view with a probe in place of the demo, and
@@ -628,31 +564,21 @@ mod tests {
     fn probed() -> Probed {
         let seen = Rc::<Cell<Option<Event>>>::default();
         let handled = Rc::<Cell<bool>>::default();
-        let greedy = Rc::<Cell<bool>>::default();
         let mut app = App::new();
         app.landing = Box::new(Probe {
             seen: Rc::clone(&seen),
             handled: Rc::clone(&handled),
-            greedy: Rc::clone(&greedy),
         });
         draw_at(&mut app, 100, 40);
-        Probed {
-            app,
-            seen,
-            handled,
-            greedy,
-        }
+        Probed { app, seen, handled }
     }
 
     /// Draw one frame at `width` × `height`, and hand back what was painted.
     fn draw_at(app: &mut App, width: u16, height: u16) -> Buffer {
-        let mut terminal =
-            Terminal::new(TestBackend::new(width, height)).expect("a test backend opens");
-        terminal
-            .draw(|frame| demo_shared::Demo::draw(app, frame, frame.area(), &Theme::default_dark()))
-            .expect("the test backend draws")
-            .buffer
-            .clone()
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        demo_shared::Demo::draw(app, &mut buffer, area, &Theme::default_dark());
+        buffer
     }
 
     fn text_of(buffer: &Buffer) -> String {
@@ -757,38 +683,271 @@ mod tests {
         assert_eq!(shift(u16::MAX, 0, 10), u16::MAX, "and at the top");
     }
 
-    /// The offscreen canvas, pinned by its consequence rather than its shape.
-    ///
-    /// A demo cannot keep to the `area` it is handed: its components place
-    /// their floating layers against `frame.area()`, so a select panel or a
-    /// tooltip bubble near an edge reaches outside it. Giving the demo a frame
-    /// of exactly its own size is what makes that harmless. Painted straight
-    /// into the app's frame, the demo below would take the header with it.
     #[test]
-    fn a_demo_that_paints_its_whole_frame_cannot_reach_the_chrome() {
-        let Probed {
-            mut app, greedy, ..
-        } = probed();
-        greedy.set(true);
-        let painted = draw_at(&mut app, 100, 40);
-        let rect = app.embed.expect("the demo is on screen").rect;
-
-        assert_eq!(
-            painted[(rect.x, rect.y)].symbol(),
-            GREED,
-            "the demo did paint, so the rest of this test means something"
-        );
-        assert!(
-            text_of(&painted).contains("ratcn"),
-            "the header survived a demo painting every cell of its frame"
-        );
-        for column in 0..painted.area.width {
-            assert_ne!(
-                painted[(column, 0)].symbol(),
-                GREED,
-                "the demo reached the header row at column {column}"
+    fn real_floating_and_modal_demos_respect_the_allocated_pane() {
+        let theme = Theme::default_dark();
+        let pane = Rect::new(40, 30, 60, 12);
+        let local_area = Rect::new(0, 0, pane.width, pane.height);
+        for (name, visible) in [
+            ("select", "Mango"),
+            ("tooltip", "This one"),
+            ("dialog", "Sci-fi writers"),
+        ] {
+            let entry = catalog::ENTRIES
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap();
+            let mut local_demo = entry.open();
+            let mut hosted_demo = entry.open();
+            let mut local = Buffer::empty(local_area);
+            let mut hosted = Buffer::empty(Rect::new(0, 0, 160, 90));
+            local_demo.draw(&mut local, local_area, &theme);
+            hosted_demo.draw(&mut hosted, pane, &theme);
+            let event = if name == "tooltip" {
+                // The edge trigger must flip below the pane's top, not use
+                // the ample space above it in the destination buffer.
+                mouse(MouseKind::Moved, pane.width / 2, 0)
+            } else {
+                Event::Key(KeyEvent::new(KeyCode::Enter))
+            };
+            let hosted_event = match event.clone() {
+                Event::Mouse(mut mouse) => {
+                    mouse.column += pane.x;
+                    mouse.row += pane.y;
+                    Event::Mouse(mouse)
+                }
+                event => event,
+            };
+            local_demo.handle_event(event);
+            hosted_demo.handle_event(hosted_event);
+            local.reset();
+            hosted.reset();
+            let untouched = hosted.clone();
+            local_demo.draw(&mut local, local_area, &theme);
+            hosted_demo.draw(&mut hosted, pane, &theme);
+            assert!(
+                text_of(&local).contains(visible),
+                "{name}'s overlay must be open"
             );
+            for y in 0..hosted.area.height {
+                for x in 0..hosted.area.width {
+                    let expected = if pane.contains(Position::new(x, y)) {
+                        &local[(x - pane.x, y - pane.y)]
+                    } else {
+                        &untouched[(x, y)]
+                    };
+                    assert_eq!(&hosted[(x, y)], expected, "{name} at ({x}, {y})");
+                }
+            }
         }
+    }
+
+    #[test]
+    fn catalog_forwards_pane_bounds_to_oversized_modal_layers_and_dimming() {
+        use ratatui::{style::Color, text::Line};
+        use ratcn::runtime::ScopeOptions;
+
+        struct ModalProbe(Ratcn<(), ()>);
+
+        impl demo_shared::Demo for ModalProbe {
+            fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+                let oversized = buffer.area;
+                self.0.render_into(buffer, area, &(), theme, |ctx| {
+                    ctx.modal_scope("modal", oversized, ScopeOptions::default(), |ctx| {
+                        ctx.paint_widget(
+                            Line::from("M".repeat(usize::from(oversized.width)))
+                                .style(Color::Green),
+                            Rect::new(oversized.x, area.y + area.height / 2, oversized.width, 1),
+                        );
+                    });
+                });
+            }
+        }
+
+        let mut app = App::new();
+        app.update(Msg::Navigate(View::Demos));
+        app.opened[0] = Some(Box::new(Probe::default()));
+        let area = Rect::new(0, 0, 100, 20);
+        let theme = Theme::default_dark();
+        let mut before = Buffer::empty(area);
+        for cell in &mut before.content {
+            cell.set_symbol("#").set_fg(Color::Yellow);
+        }
+        demo_shared::Demo::draw(&mut app, &mut before, area, &theme);
+        let pane = app.embed.unwrap().rect;
+        app.opened[0] = Some(Box::new(ModalProbe(Ratcn::new())));
+        let mut painted = before.clone();
+        demo_shared::Demo::draw(&mut app, &mut painted, area, &theme);
+        for position in area.positions() {
+            if !pane.contains(position) {
+                assert_eq!(
+                    painted[position], before[position],
+                    "modal changed chrome at {position:?}"
+                );
+            } else if position.y == pane.y + pane.height / 2 {
+                assert_eq!(
+                    painted[position].symbol(),
+                    "M",
+                    "the oversized layer must still copy into the pane"
+                );
+                assert_eq!(painted[position].fg, Color::Green);
+            } else {
+                assert_eq!(painted[position].symbol(), "#");
+                assert_ne!(
+                    painted[position].fg, before[position].fg,
+                    "the pane's backdrop must dim"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_input_hits_absolute_pane_cells() {
+        let mut app = App::new();
+        app.update(Msg::Navigate(View::Demos));
+        app.state.showing = catalog::ENTRIES
+            .iter()
+            .position(|entry| entry.name == "select")
+            .unwrap();
+        let closed = draw_at(&mut app, 100, 20);
+        let pane = app.embed.unwrap().rect;
+        let (x, y) = (pane.y..pane.bottom())
+            .flat_map(|y| (pane.x..pane.right()).map(move |x| (x, y)))
+            .find(|&cell| closed[cell].symbol() == "P")
+            .expect("the Select placeholder is painted in the pane");
+        route(&mut app, mouse(MouseKind::Down(MouseButton::Left), x, y));
+        route(&mut app, mouse(MouseKind::Up(MouseButton::Left), x, y));
+        let painted = draw_at(&mut app, 100, 20);
+        assert!(app.state.entered());
+        assert!(
+            text_of(&painted).contains("Mango"),
+            "the click must open the real Select at its absolute position"
+        );
+        assert_eq!(
+            app.canvas.area,
+            Rect::default(),
+            "catalog drawing must not allocate an offscreen canvas"
+        );
+    }
+
+    #[test]
+    fn landing_reuses_a_cleared_buffer_without_stale_overlays() {
+        let mut app = App::new();
+        app.landing = Box::new(select::App::new());
+        draw_at(&mut app, 100, 40);
+        let original = app.canvas.clone();
+        app.landing
+            .handle_event(Event::Key(KeyEvent::new(KeyCode::Enter)));
+        draw_at(&mut app, 100, 40);
+        assert!(text_of(&app.canvas).contains("Mango"));
+        app.landing
+            .handle_event(Event::Key(KeyEvent::new(KeyCode::Esc)));
+        draw_at(&mut app, 100, 40);
+        assert_eq!(
+            app.canvas, original,
+            "a closed overlay must leave no stale cells in the reused buffer"
+        );
+    }
+
+    #[test]
+    fn landing_copies_the_scrolled_rows_without_changing_the_surrounding_page() {
+        use ratatui::style::Color;
+
+        struct Rows;
+
+        impl demo_shared::Demo for Rows {
+            fn draw(&mut self, buffer: &mut Buffer, _area: Rect, _theme: &Theme) {
+                // Deliberately fill the whole offscreen buffer: only landing's
+                // copy, not a catalog sandbox, bounds this paint on screen.
+                for position in buffer.area.positions() {
+                    buffer[position]
+                        .set_symbol("R")
+                        .set_bg(Color::Indexed(position.y as u8));
+                }
+            }
+        }
+
+        let Probed { mut app, .. } = probed();
+        let original = app.canvas.area;
+        app.state.landing_scroll = 40;
+        let before = draw_at(&mut app, 90, 30);
+        app.landing = Box::new(Rows);
+        let painted = draw_at(&mut app, 90, 30);
+        assert_ne!(
+            app.canvas.area.width, original.width,
+            "the preview must resize with the page"
+        );
+        let embed = app.embed.unwrap();
+        assert!(
+            embed.source_row > 0,
+            "the preview must be cropped for this assertion"
+        );
+        assert_ne!(
+            app.canvas[(0, 0)],
+            app.canvas[(0, embed.source_row)],
+            "source row zero must differ from the scrolled row"
+        );
+        for position in painted.area.positions() {
+            if embed.rect.contains(position) {
+                assert_eq!(
+                    painted[position],
+                    app.canvas[(
+                        position.x - embed.rect.x,
+                        embed.source_row + position.y - embed.rect.y
+                    )],
+                    "wrong source row copied at {position:?}"
+                );
+            } else {
+                assert_eq!(
+                    painted[position], before[position],
+                    "preview copy changed the page at {position:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn landing_alone_translates_pointer_coordinates() {
+        let Probed { mut app, seen, .. } = probed();
+        app.state.landing_scroll = 15;
+        draw_at(&mut app, 100, 30);
+        let embed = app.embed.unwrap();
+        app.enter();
+        route(
+            &mut app,
+            mouse(MouseKind::Moved, embed.rect.x + 2, embed.rect.y + 1),
+        );
+        assert_eq!(
+            seen.take(),
+            Some(mouse(MouseKind::Moved, 2, embed.source_row + 1))
+        );
+
+        app.leave();
+        app.update(Msg::Navigate(View::Demos));
+        app.opened[0] = Some(Box::new(Probe {
+            seen: Rc::clone(&seen),
+            handled: Rc::default(),
+        }));
+        draw_at(&mut app, 100, 30);
+        let pane = app.embed.unwrap().rect;
+        app.enter();
+        let event = mouse(MouseKind::Moved, pane.x + 2, pane.y + 1);
+        route(&mut app, event.clone());
+        assert_eq!(seen.take(), Some(event));
+    }
+
+    #[test]
+    fn entering_suppresses_chrome_focus_and_leaving_restores_the_real_path() {
+        let Probed { mut app, .. } = probed();
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
+        let focus = app.state.focus.clone();
+        assert!(focus.contains_path(["getting-started"]));
+        app.enter();
+        draw_at(&mut app, 100, 40);
+        assert!(app.state.focus.is_none());
+        assert_eq!(app.state.parked.as_ref(), Some(&focus));
+        app.leave();
+        assert_eq!(app.state.focus, focus);
     }
 
     /// The reveal has to run from `update`, not just exist: the scroll area's
@@ -1093,7 +1252,7 @@ mod tests {
         let Probed { mut app, .. } = probed();
         let inside = app.embed.expect("the demo is on screen").rect;
         let (column, row) = (inside.x + 1, inside.y + 1);
-        let parked = FocusState::intent([PARKED_FOCUS]);
+        let parked = FocusState::none();
 
         app.enter();
         route(
@@ -1114,7 +1273,7 @@ mod tests {
         assert_eq!(
             app.state.focus, parked,
             "a press the demo ignored must not reach the chrome: it would take \
-             focus off the parked path, which is what parking is for"
+             focus while the demo still owns the input"
         );
         assert_eq!(app.state.landing_scroll, scrolled, "and moves nothing");
     }

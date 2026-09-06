@@ -15,7 +15,7 @@ use std::{
 };
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Alignment, Constraint, Flex, Layout, Rect},
     style::Style,
     widgets::{Paragraph, Wrap},
@@ -134,53 +134,52 @@ impl demo_shared::Demo for App {
         self.state.joke.is_loading().then_some(POLL_INTERVAL)
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         // Completions arrive between frames; applying them here is what turns a
         // wake-up into the frame that shows the new joke.
         let _ = self.drain();
 
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+        buffer.set_style(area, Style::default().bg(theme.background));
 
         let joke = joke_text(&self.state.joke);
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
-            let content_width = area.width.min(CONTENT_WIDTH);
-            let joke_height = wrapped_height(&joke, content_width).max(1);
-            let content_height = joke_height + 1 + ButtonSize::Large.height();
-            let content_area = area.centered(
-                Constraint::Length(content_width),
-                Constraint::Length(content_height),
-            );
-            let [joke_area, button_area] = Layout::vertical([
-                Constraint::Length(joke_height),
-                Constraint::Length(ButtonSize::Large.height()),
-            ])
-            .spacing(1)
-            .areas(content_area);
-            let joke = joke.clone().into_owned();
-            ctx.paint_widget(
-                Paragraph::new(joke)
-                    .alignment(Alignment::Center)
-                    .wrap(Wrap { trim: true })
-                    .style(Style::default().fg(ctx.theme.foreground)),
-                joke_area,
-            );
+        self.ratcn
+            .render_into(buffer, area, &self.state, theme, |ctx| {
+                let content_width = area.width.min(CONTENT_WIDTH);
+                let joke_height = wrapped_height(&joke, content_width).max(1);
+                let content_height = joke_height + 1 + ButtonSize::Large.height();
+                let content_area = area.centered(
+                    Constraint::Length(content_width),
+                    Constraint::Length(content_height),
+                );
+                let [joke_area, button_area] = Layout::vertical([
+                    Constraint::Length(joke_height),
+                    Constraint::Length(ButtonSize::Large.height()),
+                ])
+                .spacing(1)
+                .areas(content_area);
+                let joke = joke.clone().into_owned();
+                ctx.paint_widget(
+                    Paragraph::new(joke)
+                        .alignment(Alignment::Center)
+                        .wrap(Wrap { trim: true })
+                        .style(Style::default().fg(ctx.theme.foreground)),
+                    joke_area,
+                );
 
-            let loading = ctx.state().joke.is_loading();
-            let refresh = Button::new(if loading {
-                "Fetching..."
-            } else {
-                "Another joke"
-            })
-            .size(ButtonSize::Large)
-            .on_press(|| Msg::RefreshRequested)
-            .disabled(loading);
-            let [button_area] = Layout::horizontal([Constraint::Length(refresh.width())])
-                .flex(Flex::Center)
-                .areas(button_area);
-            ctx.component(ids::REFRESH, refresh, button_area);
-        });
+                let loading = ctx.state().joke.is_loading();
+                let refresh = Button::new(if loading {
+                    "Fetching..."
+                } else {
+                    "Another joke"
+                })
+                .size(ButtonSize::Large)
+                .on_press(|| Msg::RefreshRequested)
+                .disabled(loading);
+                let [button_area] = Layout::horizontal([Constraint::Length(refresh.width())])
+                    .flex(Flex::Center)
+                    .areas(button_area);
+                ctx.component(ids::REFRESH, refresh, button_area);
+            });
     }
 }
 

@@ -5,10 +5,10 @@
 //! direction over the vertical default.
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Rect},
     style::Style,
-    widgets::Bar,
+    widgets::{Bar, Widget},
 };
 use ratcn::{BarChartWidget, Theme};
 
@@ -38,23 +38,19 @@ pub struct Chart;
 impl demo_shared::Demo for Chart {
     const INPUT: bool = false;
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
 
         let chart_area = area.centered(
             Constraint::Length(CHART_WIDTH),
             Constraint::Length(CHART_HEIGHT),
         );
 
-        frame.render_widget(
-            BarChartWidget::horizontal(bars())
-                .themed(theme)
-                .max_value(24)
-                .bar_width(BAR_HEIGHT)
-                .bar_gap(BAR_GAP),
-            chart_area,
-        );
+        BarChartWidget::horizontal(bars())
+            .themed(theme)
+            .max_value(24)
+            .bar_width(BAR_HEIGHT)
+            .bar_gap(BAR_GAP)
+            .render(chart_area, buffer);
     }
 }

@@ -11,7 +11,7 @@
 //! bubble flips below.
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
     style::Style,
 };
@@ -147,10 +147,8 @@ impl demo_shared::Demo for App {
         switched || routed
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
 
         let [edge_area, rest_area] =
             Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
@@ -159,7 +157,7 @@ impl demo_shared::Demo for App {
             .areas(rest_area);
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             let [edge_button_area] =
                 Layout::horizontal([Constraint::Length(button(EDGE.1).width())])
                     .flex(Flex::Center)

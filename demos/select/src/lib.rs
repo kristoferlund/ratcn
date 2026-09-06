@@ -1,5 +1,5 @@
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
     style::Style,
 };
@@ -75,26 +75,25 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
         let [column] = Layout::horizontal([Constraint::Length(28)])
             .flex(Flex::Center)
             .areas(area);
         let [select_area] = Layout::vertical([Constraint::Length(1)])
             .flex(Flex::Center)
             .areas(column);
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
-            ctx.component(
-                "fruit",
-                Select::new(FRUITS.map(|fruit| ListItem::new(fruit, fruit)))
-                    .placeholder("Pick a fruit...")
-                    .open(|s: &State| s.open, Msg::Open)
-                    .item_focus(|s: &State| s.cursor, Msg::Focused)
-                    .selection(|s: &State| s.selected, Msg::Selected),
-                select_area,
-            );
-        });
+        self.ratcn
+            .render_into(buffer, area, &self.state, theme, |ctx| {
+                ctx.component(
+                    "fruit",
+                    Select::new(FRUITS.map(|fruit| ListItem::new(fruit, fruit)))
+                        .placeholder("Pick a fruit...")
+                        .open(|s: &State| s.open, Msg::Open)
+                        .item_focus(|s: &State| s.cursor, Msg::Focused)
+                        .selection(|s: &State| s.selected, Msg::Selected),
+                    select_area,
+                );
+            });
     }
 }

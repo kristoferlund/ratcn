@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::Style,
-    widgets::{Paragraph, Wrap},
+    widgets::{Paragraph, Widget, Wrap},
 };
 use ratcn::{
     Button, Dialog, List, ListItem, Theme, Toast, ToasterState, ToasterWidget,
@@ -141,32 +141,30 @@ impl demo_shared::Demo for App {
             .time_until_next_expiry(demo_shared::monotonic_time())
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         let now = demo_shared::monotonic_time();
         let _ = self.state.toasts.prune_expired(now);
 
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
-            let open_button = Button::new("Open Dialog").on_press(|| Msg::OpenDialog);
-            let button_area = area.centered(
-                Constraint::Length(open_button.width()),
-                Constraint::Length(ratcn::ButtonSize::Small.height()),
-            );
-            ctx.component(ids::OPEN, open_button, button_area);
-            if self.state.modals.is_open(ids::DIALOG) {
-                ctx.modal(
-                    ids::DIALOG,
-                    Self::build_dialog(self.state.dialog_offset),
-                    area,
+        buffer.set_style(area, Style::default().bg(theme.background));
+        self.ratcn
+            .render_into(buffer, area, &self.state, theme, |ctx| {
+                let open_button = Button::new("Open Dialog").on_press(|| Msg::OpenDialog);
+                let button_area = area.centered(
+                    Constraint::Length(open_button.width()),
+                    Constraint::Length(ratcn::ButtonSize::Small.height()),
                 );
-            }
-        });
-        frame.render_widget(
-            ToasterWidget::new(&self.state.toasts, now).themed(theme),
-            area,
-        );
+                ctx.component(ids::OPEN, open_button, button_area);
+                if self.state.modals.is_open(ids::DIALOG) {
+                    ctx.modal(
+                        ids::DIALOG,
+                        Self::build_dialog(self.state.dialog_offset),
+                        area,
+                    );
+                }
+            });
+        ToasterWidget::new(&self.state.toasts, now)
+            .themed(theme)
+            .render(area, buffer);
     }
 }
 

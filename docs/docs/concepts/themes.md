@@ -31,7 +31,8 @@ Choose one built-in preset directly:
 use ratcn::Theme;
 
 let theme = Theme::catppuccin();
-ratcn.render(frame, &state, &theme, |ctx| {
+let area = frame.area();
+ratcn.render(frame, area, &state, &theme, |ctx| {
     // Declare components.
 });
 ```

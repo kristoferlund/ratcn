@@ -8,8 +8,22 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Ratcn::render` now takes `area` second: pass your pane's rectangle, or
+  `frame.area()` for a whole-frame app. Floating placement, layer copies, and
+  modal dimming respect that area; arbitrary base paint remains unclipped.
+
 ### Added
 
+- A terminal showcase with reusable buffer-based demos: catalog panes draw
+  directly, while the scrolling landing preview owns its buffer and windowing.
+- `FocusState::none()` and `is_none()` let a tree have no focused component,
+  distinct from default startup focus. Input can focus it again, and closing
+  a modal restores a saved no-focus state.
+- `Ratcn::render_into(buffer, area, state, theme, declare)` renders directly
+  into your own buffer for offscreen pages and previews, without a test terminal.
+  You own allocation, clearing, and windowing; no cursor metadata is returned.
 - `cargo-ratcn`: a Cargo subcommand with terminal-only `cargo ratcn init`, which
   can keep Cargo's default `main.rs`, replace it with a minimal app loop, or
   install the Getting started demo; and `cargo ratcn add` for copying a built-in

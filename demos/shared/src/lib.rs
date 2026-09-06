@@ -20,7 +20,7 @@ use std::{io, time::Duration};
 
 #[cfg(target_arch = "wasm32")]
 use ratatui::style::Color;
-use ratatui::{Frame, Terminal, backend::Backend, layout::Rect};
+use ratatui::{Terminal, backend::Backend, buffer::Buffer, layout::Rect};
 #[cfg(not(target_arch = "wasm32"))]
 use ratcn::terminal::{Session, SessionEvent, SessionOptions, termina};
 use ratcn::{Theme, runtime::Event};
@@ -52,13 +52,12 @@ pub trait Demo {
     /// `area`, which is what lets a demo be hosted in a corner of a larger app
     /// rather than owning the terminal.
     ///
-    /// `area` does not bound everything the frame receives: a component's
-    /// floating layers — a select panel, a tooltip bubble — are sized and
-    /// clamped against the frame the runtime was handed, not against `area`,
-    /// so near an edge they can reach outside it. A host with chrome it cannot
-    /// afford to lose gives the demo a surface of its own instead, so that
-    /// frame *is* the demo's area.
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme);
+    /// Pass `area` to `Ratcn::render_into` for floating placement, layer copies,
+    /// and modal dimming within those bounds. This is not a sandbox: base paint
+    /// must respect its allocated area. Paint-only demos use `Widget::render`.
+    /// The host owns buffer allocation and clearing. No cursor metadata is
+    /// carried by this contract.
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme);
 
     /// Route one event, returning whether the screen now needs redrawing.
     ///
@@ -233,7 +232,10 @@ where
     B: Backend<Error = io::Error>,
 {
     let drawn = terminal
-        .draw(|frame| demo.draw(frame, frame.area(), theme))?
+        .draw(|frame| {
+            let area = frame.area();
+            demo.draw(frame.buffer_mut(), area, theme);
+        })?
         .area
         .as_size();
     Ok(terminal.size()? != drawn)
@@ -579,7 +581,7 @@ mod tests {
     };
 
     use super::{
-        ANIMATION_FRAME, Backend, Demo, Duration, Event, Frame, Host, Rect, SessionEvent,
+        ANIMATION_FRAME, Backend, Buffer, Demo, Duration, Event, Host, Rect, SessionEvent,
         SessionOptions, Terminal, draw_frame, drive, io,
     };
 
@@ -681,10 +683,10 @@ mod tests {
     }
 
     impl Demo for Probe {
-        fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
             self.frames += 1;
             self.themes.push(*theme);
-            frame.render_widget("probe", area);
+            ratatui::widgets::Widget::render("probe", area, buffer);
         }
 
         fn handle_event(&mut self, event: Event) -> bool {
@@ -786,12 +788,12 @@ mod tests {
         struct Everything;
         impl Demo for Quiet {
             const INPUT: bool = false;
-            fn draw(&mut self, _frame: &mut Frame, _area: Rect, _theme: &Theme) {}
+            fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
         }
         impl Demo for Everything {
             const PASTE: bool = true;
             const ADAPTIVE: bool = true;
-            fn draw(&mut self, _frame: &mut Frame, _area: Rect, _theme: &Theme) {}
+            fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
         }
 
         assert_eq!(

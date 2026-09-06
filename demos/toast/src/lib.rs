@@ -8,9 +8,10 @@
 use std::time::Duration;
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::Style,
+    widgets::Widget,
 };
 use ratcn::{
     Button, ButtonSize, Theme, Toast, ToastKind, ToasterState, ToasterWidget,
@@ -126,48 +127,46 @@ impl demo_shared::Demo for App {
             .time_until_next_expiry(demo_shared::monotonic_time())
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         // Every frame starts by dropping whatever has run out: the host wakes
         // for the deadline, and this is what the wake-up is for.
         let now = demo_shared::monotonic_time();
         let _ = self.state.toasts.prune_expired(now);
 
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+        buffer.set_style(area, Style::default().bg(theme.background));
 
-        self.ratcn.render(frame, &self.state, theme, |ctx| {
-            let random_button = Button::new("Make me a toast!")
-                .size(ButtonSize::Large)
-                .on_press(|| Msg::MakeToast);
-            let save_label = if self.state.save_in_progress {
-                "Finish save"
-            } else {
-                "Start save"
-            };
-            let save_button = Button::new(save_label)
-                .size(ButtonSize::Large)
-                .on_press(|| Msg::ToggleSave);
-            let buttons_area = area.centered(
-                Constraint::Length(random_button.width().max(save_button.width())),
-                Constraint::Length(ButtonSize::Large.height() * 2 + 1),
-            );
-            let [random_area, save_area] = Layout::vertical([
-                Constraint::Length(ButtonSize::Large.height()),
-                Constraint::Length(ButtonSize::Large.height()),
-            ])
-            .spacing(1)
-            .areas(buttons_area);
-            ctx.component(ids::BUTTON, random_button, random_area);
-            ctx.component(ids::SAVE, save_button, save_area);
-        });
+        self.ratcn
+            .render_into(buffer, area, &self.state, theme, |ctx| {
+                let random_button = Button::new("Make me a toast!")
+                    .size(ButtonSize::Large)
+                    .on_press(|| Msg::MakeToast);
+                let save_label = if self.state.save_in_progress {
+                    "Finish save"
+                } else {
+                    "Start save"
+                };
+                let save_button = Button::new(save_label)
+                    .size(ButtonSize::Large)
+                    .on_press(|| Msg::ToggleSave);
+                let buttons_area = area.centered(
+                    Constraint::Length(random_button.width().max(save_button.width())),
+                    Constraint::Length(ButtonSize::Large.height() * 2 + 1),
+                );
+                let [random_area, save_area] = Layout::vertical([
+                    Constraint::Length(ButtonSize::Large.height()),
+                    Constraint::Length(ButtonSize::Large.height()),
+                ])
+                .spacing(1)
+                .areas(buttons_area);
+                ctx.component(ids::BUTTON, random_button, random_area);
+                ctx.component(ids::SAVE, save_button, save_area);
+            });
 
         // Toasts are decoration over the whole area, painted after the
         // declaration pass so they sit above everything.
-        frame.render_widget(
-            ToasterWidget::new(&self.state.toasts, now).themed(theme),
-            area,
-        );
+        ToasterWidget::new(&self.state.toasts, now)
+            .themed(theme)
+            .render(area, buffer);
     }
 }
 

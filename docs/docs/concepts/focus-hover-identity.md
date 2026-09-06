@@ -40,10 +40,23 @@ Focus is a path stored in your app state — a `FocusState` bound with
 `Ratcn::focus(read, on_change)`. Focus changes come back as messages for your
 `update` to store, like every other state change.
 
-You never have to compute a starting focus: an empty path means "default
-startup focus", and the runtime resolves it to the first focusable component it
-finds. The first time the user moves focus, your app receives a concrete path
-to store.
+You never have to compute a starting focus: `FocusState::default()` or an empty
+`FocusState::intent(path)` means "default startup focus", and the runtime
+resolves it to the first focusable component it finds. The first time the user
+moves focus, your app receives a concrete path to store.
+
+**No focus.** Store `FocusState::none()` when no component should paint as
+focused, such as in an inactive hosted pane. It is distinct from default focus
+even though both have empty paths: `is_none()` distinguishes them, and
+`contains_path` is false for every query on `none()`, including an empty query.
+Unlike a parked path waiting for its target to appear, `none()` has no pending
+target to reveal.
+
+This does not disable input. Tab enters the first eligible control, Shift+Tab
+the last, root `focus_key` bindings still work, and pointer input can focus a
+control. The host decides which events reach an inactive pane. Explicit no-focus
+also survives modal resolution, but `ModalState::open` saves it and resets focus
+to `default()` so the new modal takes focus; `close` restores the saved `none()`.
 
 **Tab order follows declaration order.** `TabWrap::Wrap` cycles within a scope;
 `TabWrap::Escape` lets Tab leave it and continue in the parent. Shift+Tab walks

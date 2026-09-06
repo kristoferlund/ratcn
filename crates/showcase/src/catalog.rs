@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use ratatui::{Frame, layout::Rect};
+use ratatui::{buffer::Buffer, layout::Rect};
 use ratcn::{Theme, runtime::Event};
 
 /// One demo, in the shape a host can drive through a trait object.
@@ -15,7 +15,7 @@ use ratcn::{Theme, runtime::Event};
 /// The three [`demo_shared::Demo`] methods keep that trait's contracts; only
 /// `theme` is new.
 pub trait Embedded {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme);
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme);
 
     fn handle_event(&mut self, event: Event) -> bool;
 
@@ -26,8 +26,8 @@ pub trait Embedded {
 }
 
 impl<D: demo_shared::Demo> Embedded for D {
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        demo_shared::Demo::draw(self, frame, area, theme);
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        demo_shared::Demo::draw(self, buffer, area, theme);
     }
 
     fn handle_event(&mut self, event: Event) -> bool {

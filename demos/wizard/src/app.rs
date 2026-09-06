@@ -1,7 +1,7 @@
 //! The app shell owns orchestration and routes messages to the state owner.
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
     style::Style,
 };
@@ -105,19 +105,17 @@ impl demo_shared::Demo for App {
     }
 
     /// The wizard paints with the palette its own picker selects.
-    fn draw(&mut self, frame: &mut Frame, area: Rect, _theme: &Theme) {
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, _theme: &Theme) {
         let theme = self.palette();
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
-        let area = area
-            .centered(
-                Constraint::Length(DEMO_WIDTH),
-                Constraint::Length(DEMO_HEIGHT),
-            )
-            .inner(Margin::new(PADDING_X, PADDING_Y));
+        buffer.set_style(area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, state, &theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, &theme, |ctx| {
+            let area = area
+                .centered(
+                    Constraint::Length(DEMO_WIDTH),
+                    Constraint::Length(DEMO_HEIGHT),
+                )
+                .inner(Margin::new(PADDING_X, PADDING_Y));
             let [stepper, panel, buttons] = area.layout(&shell_layout());
             let step = state.nav.step;
 
@@ -182,7 +180,10 @@ mod tests {
 
     fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) {
         terminal
-            .draw(|frame| app.draw(frame, frame.area(), &App::THEME))
+            .draw(|frame| {
+                let area = frame.area();
+                app.draw(frame.buffer_mut(), area, &App::THEME);
+            })
             .expect("draw");
     }
 

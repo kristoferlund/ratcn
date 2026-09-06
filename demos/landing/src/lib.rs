@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
     style::Style,
     text::{Line, Span},
@@ -204,7 +204,7 @@ impl demo_shared::Demo for App {
         Some(expiry.map_or(frame, |expiry| expiry.min(frame)))
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         // The picker lists whatever the terminal currently resolves to, so the
         // frame's theme reaches the state before anything reads it.
         self.state.resolved_theme = *theme;
@@ -212,11 +212,9 @@ impl demo_shared::Demo for App {
         let _ = self.state.toasts.prune_expired(now);
 
         let theme = self.state.theme();
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+        buffer.set_style(area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, state, &theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, &theme, |ctx| {
             ctx.paint_widget(header_bar(ctx.theme), header_area(area));
             for (index, tile_area) in tile_areas(area).into_iter().enumerate() {
                 tiles::declare(index, ctx, tile_area);

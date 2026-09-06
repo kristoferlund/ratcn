@@ -2,12 +2,11 @@
 //! and the rule primitives the views draw their own separators with.
 
 use ratatui::{
-    Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect, Size},
     style::{Color, Style},
     symbols::line,
-    widgets::Paragraph,
+    widgets::{Paragraph, Widget},
 };
 use ratcn::{Button, ButtonVariant, Theme, runtime::DeclareCtx};
 
@@ -128,15 +127,13 @@ pub fn vertical_rule(buffer: &mut Buffer, area: Rect, color: Color) {
 }
 
 /// What a window too small for the chrome gets instead of a layout.
-pub fn too_small(frame: &mut Frame, area: Rect, theme: &Theme) {
+pub fn too_small(buffer: &mut Buffer, area: Rect, theme: &Theme) {
     let min = min_size();
-    frame.render_widget(
-        Paragraph::new(format!(
-            "Window too small — {}×{} needed",
-            min.width, min.height
-        ))
-        .centered()
-        .style(Style::default().fg(theme.muted_foreground)),
-        area.centered_vertically(Constraint::Length(1)),
-    );
+    Paragraph::new(format!(
+        "Window too small — {}×{} needed",
+        min.width, min.height
+    ))
+    .centered()
+    .style(Style::default().fg(theme.muted_foreground))
+    .render(area.centered_vertically(Constraint::Length(1)), buffer);
 }

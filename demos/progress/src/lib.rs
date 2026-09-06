@@ -7,9 +7,10 @@
 use std::time::Duration;
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
     style::Style,
+    widgets::Widget,
 };
 use ratcn::{ProgressWidget, Theme};
 
@@ -28,18 +29,14 @@ impl demo_shared::Demo for Progress {
         Some(demo_shared::ANIMATION_FRAME)
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
 
         let demo = area.centered(
             Constraint::Length(DEMO_WIDTH),
             Constraint::Length(DEMO_HEIGHT),
         );
-        frame
-            .buffer_mut()
-            .set_style(demo, Style::default().bg(theme.surface));
+        buffer.set_style(demo, Style::default().bg(theme.surface));
 
         // The clock decides how far along the download is, so any frame is a
         // truthful one however late it arrives.
@@ -55,20 +52,16 @@ impl demo_shared::Demo for Progress {
         .spacing(1)
         .areas(inner);
 
-        frame.render_widget(ProgressWidget::new(0.33).themed(theme), bare);
-        frame.render_widget(
-            ProgressWidget::new(downloading)
-                .label("Downloading assets.tar.gz")
-                .show_value(true)
-                .themed(theme),
-            active,
-        );
-        frame.render_widget(
-            ProgressWidget::new(1.0)
-                .label("Extracted")
-                .show_value(true)
-                .themed(theme),
-            finished,
-        );
+        ProgressWidget::new(0.33).themed(theme).render(bare, buffer);
+        ProgressWidget::new(downloading)
+            .label("Downloading assets.tar.gz")
+            .show_value(true)
+            .themed(theme)
+            .render(active, buffer);
+        ProgressWidget::new(1.0)
+            .label("Extracted")
+            .show_value(true)
+            .themed(theme)
+            .render(finished, buffer);
     }
 }

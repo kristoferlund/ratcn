@@ -15,7 +15,6 @@
 //! the transient gesture anchor and pointer capture.
 
 use ratatui::{
-    Frame,
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Margin, Position, Rect},
     style::Style,
@@ -98,10 +97,8 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
         let board_layout = BoardLayout {
             area: area.inner(Margin::new(
                 BOARD_HORIZONTAL_PADDING,
@@ -109,7 +106,7 @@ impl demo_shared::Demo for App {
             )),
         };
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             let column_areas = board_layout.column_areas();
             ctx.paint(move |ctx| {
                 for (column_index, column_area) in column_areas.iter().enumerate() {
@@ -204,7 +201,8 @@ impl BoardLayout {
     }
 
     /// The area a card occupies in its column's ordered list. A dragged card
-    /// keeps its slot, so the remaining cards do not reflow mid-drag.
+    /// keeps its slot, so the remaining cards do not reflow mid-drag. Constrain
+    /// paint and hit geometry together when only part of a card fits.
     fn card_area(&self, column_index: usize, card_index: usize) -> Rect {
         let column_area = self.column_areas()[column_index];
         let card_index = card_index as u16;
@@ -218,6 +216,7 @@ impl BoardLayout {
             width: card_width,
             height: CARD_HEIGHT,
         }
+        .intersection(column_area)
     }
 }
 
@@ -331,7 +330,91 @@ fn paint_card(buf: &mut Buffer, area: Rect, card_id: &ChildId, theme: &Theme) {
 // terminal or a pointer.
 #[cfg(test)]
 mod tests {
+    use demo_shared::Demo as _;
+    use ratcn::runtime::{MouseButton, MouseEvent, MouseKind};
+
     use super::*;
+
+    #[test]
+    fn a_short_offset_board_keeps_card_paint_and_hits_inside_its_allocation() {
+        for height in [8, 12, 20] {
+            let pane = Rect::new(40, 30, 60, height);
+            let board = BoardLayout {
+                area: pane.inner(Margin::new(
+                    BOARD_HORIZONTAL_PADDING,
+                    BOARD_VERTICAL_PADDING,
+                )),
+            };
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 120, 60));
+            for cell in &mut buffer.content {
+                cell.set_symbol("#").set_fg(ratatui::style::Color::Yellow);
+            }
+            let before = buffer.clone();
+            let mut app = App::new();
+            app.draw(&mut buffer, pane, &Theme::default_dark());
+            for position in buffer
+                .area
+                .positions()
+                .filter(|point| !pane.contains(*point))
+            {
+                assert_eq!(
+                    buffer[position], before[position],
+                    "host changed at {position:?}, pane height {height}"
+                );
+            }
+            for label in if height == 8 {
+                &["1", "2", "3"][..]
+            } else {
+                &["1", "2", "3", "4", "5"][..]
+            } {
+                assert!(
+                    board
+                        .area
+                        .positions()
+                        .any(|point| buffer[point].symbol() == *label),
+                    "visible card {label} disappeared at height {height}"
+                );
+            }
+
+            let first = board.card_area(0, 0);
+            let mouse = |kind, row| {
+                Event::Mouse(MouseEvent {
+                    kind,
+                    column: first.x,
+                    row,
+                    modifiers: Default::default(),
+                })
+            };
+            if height == 8 {
+                assert!(
+                    !app.handle_event(mouse(
+                        MouseKind::Down(MouseButton::Left),
+                        board.area.bottom()
+                    )),
+                    "clipped card rows must not remain hit targets in the padding"
+                );
+            }
+            assert!(app.handle_event(mouse(MouseKind::Down(MouseButton::Left), first.y)));
+            assert!(app.handle_event(mouse(MouseKind::Drag(MouseButton::Left), first.y + 1)));
+            assert_eq!(
+                app.state.active_drag.as_ref().unwrap().card_id.as_str(),
+                "1",
+                "the visible part of the card must still start a drag"
+            );
+            buffer.clone_from(&before);
+            app.draw(&mut buffer, pane, &Theme::default_dark());
+            for position in buffer
+                .area
+                .positions()
+                .filter(|point| !pane.contains(*point))
+            {
+                assert_eq!(
+                    buffer[position], before[position],
+                    "drag paint changed the host at {position:?}"
+                );
+            }
+        }
+    }
 
     fn dragging(card_id: &ChildId) -> Msg {
         Msg::DragStarted(ActiveDrag {

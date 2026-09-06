@@ -147,7 +147,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                ratcn.render(frame, &state, &theme, |ctx| {
+                ratcn.render(frame, area, &state, &theme, |ctx| {
                     ctx.paint_widget(Line::from("A"), area);
                     declare(ctx, area, Duration::ZERO);
                 });

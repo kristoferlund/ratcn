@@ -53,9 +53,10 @@ impl ModalState {
     /// Push `id` onto the stack and move focus into it.
     ///
     /// `focus` is your app's focus state, taken by `&mut` because this does two
-    /// things with it: it copies the current path into this modal's saved
-    /// history, then clears it, so the newly opened layer resolves focus to
-    /// its own first focusable leaf. [`close`](Self::close) reverses both.
+    /// things with it: it saves the current snapshot, including explicit
+    /// [`FocusState::none`], then replaces it with `FocusState::default()` so
+    /// the newly opened layer resolves focus to its own first focusable leaf.
+    /// [`close`](Self::close) reverses both.
     ///
     /// Re-opening whatever is already on top is a no-op — it will not overwrite
     /// the focus that modal saved when it first opened.
@@ -89,7 +90,7 @@ impl ModalState {
     ///
     /// The restored path is the exact one that was current when that modal
     /// opened, including a path whose component is not declared — focus parks
-    /// there.
+    /// there. A saved [`FocusState::none`] restores no focus.
     ///
     /// Returns the closed modal id, or `None` when the stack is already empty,
     /// in which case `focus` is left alone.

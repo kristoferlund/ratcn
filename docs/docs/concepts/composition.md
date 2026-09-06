@@ -36,7 +36,7 @@ Two panels, each a scope. `a` and `b` jump between them, Tab cycles inside the
 focused one, and Enter or Space presses a button.
 
 ```rust
-ratcn.render(frame, state, &state.theme, |ctx| {
+ratcn.render(frame, panel_a_area, state, &state.theme, |ctx| {
     ctx.scope(
         "panel_a",
         panel_a_area,

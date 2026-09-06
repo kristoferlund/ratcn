@@ -228,9 +228,10 @@ fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
                 // The backend clears between draws, so the frame this pass
                 // must leave alone is painted back first.
                 frame.render_widget(Paragraph::new("stable"), Rect::new(0, 0, 6, 1));
+                let area = frame.area();
                 driver
                     .ratcn
-                    .render(frame, &State, &Theme::default_dark(), move |ctx| {
+                    .render(frame, area, &State, &Theme::default_dark(), move |ctx| {
                         ctx.viewport(Rect::new(0, 0, 2, 1), 2, 0, move |ctx| {
                             ctx.paint(move |ctx| {
                                 let caught = catch_unwind(AssertUnwindSafe(|| {
@@ -285,7 +286,7 @@ fn a_caught_layer_paint_panic_composites_nothing_and_commits() {
             frame.render_widget(Paragraph::new("stable"), Rect::new(0, 0, 6, 1));
             driver
                 .ratcn
-                .render(frame, &State, &Theme::default_dark(), |ctx| {
+                .render(frame, frame.area(), &State, &Theme::default_dark(), |ctx| {
                     ctx.popup(
                         "popup",
                         Rect::new(0, 0, 4, 1),
@@ -739,6 +740,49 @@ fn render_reveal(
             ctx.modal("dialog", RevealLeaf, Rect::new(0, 0, 4, 1));
         }
     });
+}
+
+#[test]
+fn explicit_no_focus_cancels_a_pending_reveal_without_scrolling_to_a_late_target() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::none(),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        !driver.ratcn.reveal_pending,
+        "starting blurred owes no reveal"
+    );
+
+    state.focus = FocusState::intent(["area", "late"]);
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        driver.ratcn.reveal_pending,
+        "an absent explicit target still waits"
+    );
+
+    state.focus = FocusState::none();
+    render_reveal(&mut driver, &state, &log);
+    assert!(
+        !driver.ratcn.reveal_pending,
+        "explicit none completes the pending reveal"
+    );
+    state.late = true;
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(!driver.ratcn.reveal_pending);
+    assert!(
+        log.borrow().is_empty(),
+        "the cancelled target must not scroll the viewport"
+    );
+
+    state.focus = FocusState::intent(["area", "late"]);
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
+    assert!(!driver.ratcn.reveal_pending);
 }
 
 /// Focus the runtime moves itself reveals its destination: the app stores the

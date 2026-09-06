@@ -50,7 +50,7 @@ impl<State, Msg> Driver<State, Msg> {
         let theme = Theme::default_dark();
         let Self { terminal, ratcn } = self;
         terminal
-            .draw(|frame| ratcn.render(frame, state, &theme, declare))
+            .draw(|frame| ratcn.render(frame, frame.area(), state, &theme, declare))
             .expect("draw");
     }
 

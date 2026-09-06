@@ -10,7 +10,7 @@
 //! control.
 
 use ratatui::{
-    Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
     style::Style,
 };
@@ -76,13 +76,11 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
 
         let state = &self.state;
-        self.ratcn.render(frame, state, theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             let demo = area.centered(
                 Constraint::Length(DEMO_WIDTH),
                 Constraint::Length(DEMO_HEIGHT),
