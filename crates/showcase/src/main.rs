@@ -80,13 +80,15 @@ enum Msg {
     OpenUrl(&'static str),
 }
 
-/// Where the embedded demo is on screen, and what its own top-left maps to
-/// there.
+/// Where the embedded demo is on screen, and which of its own rows that is.
 #[derive(Clone, Copy)]
 struct Embed {
+    /// The demo's visible rows, on screen.
     rect: Rect,
-    /// The demo-space cell showing at `rect`'s top-left.
-    origin: Position,
+    /// The demo's own row showing at `rect`'s top. Its left column is always
+    /// the demo's column 0: nothing here scrolls horizontally, so a row is the
+    /// whole of what the region can be offset by.
+    source_row: u16,
 }
 
 impl Embed {
@@ -109,8 +111,8 @@ impl Embed {
             };
         }
         MouseEvent {
-            column: shift(mouse.column, self.rect.x, self.origin.x),
-            row: shift(mouse.row, self.rect.y, self.origin.y),
+            column: shift(mouse.column, self.rect.x, 0),
+            row: shift(mouse.row, self.rect.y, self.source_row),
             ..mouse
         }
     }
@@ -225,9 +227,17 @@ impl App {
     }
 
     /// Route one event to the embedded demo, in the demo's own coordinates.
+    ///
+    /// A demo with no rows on screen is not reachable by the pointer at all —
+    /// the page has scrolled its preview out of the viewport, or the window has
+    /// shrunk below the chrome's minimum — and it can still hold the input in
+    /// both states. There is no cell to name for it, so the event is dropped
+    /// rather than invented; keys still reach it, which is what lets Esc give
+    /// the input back.
     fn route_to_demo(&mut self, event: Event) -> bool {
         let event = match (event, self.embed) {
             (Event::Mouse(mouse), Some(embed)) => Event::Mouse(embed.translate(mouse)),
+            (Event::Mouse(_), None) => return false,
             (event, _) => event,
         };
         self.shown_mut().handle_event(event)
@@ -313,7 +323,7 @@ impl App {
             .draw(|offscreen| demo.draw(offscreen, offscreen.area(), &demo_theme))
             .expect("an offscreen canvas cannot fail to draw")
             .buffer;
-        blit(frame.buffer_mut(), painted, embed.rect, embed.origin.y);
+        blit(frame.buffer_mut(), painted, embed.rect, embed.source_row);
     }
 
     /// The Demos view: the nav column, the rules, and the selected demo.
@@ -321,7 +331,7 @@ impl App {
         let columns = demos::columns(bands.body);
         let embed = Embed {
             rect: columns.pane,
-            origin: Position::ORIGIN,
+            source_row: 0,
         };
         self.embed = Some(embed);
         self.page = None;
@@ -349,10 +359,9 @@ impl App {
     fn draw_landing(&mut self, frame: &mut Frame, bands: &chrome::Bands, theme: &Theme) {
         let page = page::layout(bands.body, self.state.page_scroll);
         self.page = Some(page);
-        self.embed = page.embed.map(|(rect, source)| Embed {
-            rect,
-            origin: Position::new(0, source),
-        });
+        self.embed = page
+            .embed
+            .map(|(rect, source_row)| Embed { rect, source_row });
 
         chrome::header_rule(frame.buffer_mut(), bands, theme);
 
@@ -552,10 +561,26 @@ mod tests {
     struct Probe {
         seen: Rc<Cell<Option<Event>>>,
         handled: Rc<Cell<bool>>,
+        /// Paint every cell of the frame rather than staying inside `area` —
+        /// what a component's floating layers do near an edge.
+        greedy: Rc<Cell<bool>>,
     }
 
+    /// What a greedy probe paints, in every cell it can reach.
+    const GREED: &str = "#";
+
     impl demo_shared::Demo for Probe {
-        fn draw(&mut self, _frame: &mut Frame, _area: Rect, _theme: &Theme) {}
+        fn draw(&mut self, frame: &mut Frame, _area: Rect, _theme: &Theme) {
+            if !self.greedy.get() {
+                return;
+            }
+            let all = frame.area();
+            for row in all.top()..all.bottom() {
+                for column in all.left()..all.right() {
+                    frame.buffer_mut()[(column, row)].set_symbol(GREED);
+                }
+            }
+        }
 
         fn handle_event(&mut self, event: Event) -> bool {
             self.seen.set(Some(event));
@@ -570,6 +595,8 @@ mod tests {
         seen: Rc<Cell<Option<Event>>>,
         /// What the demo reports for the next event it gets.
         handled: Rc<Cell<bool>>,
+        /// Whether the demo paints its whole frame.
+        greedy: Rc<Cell<bool>>,
     }
 
     /// An app showing the landing view with a probe in place of the demo, and
@@ -577,13 +604,20 @@ mod tests {
     fn probed() -> Probed {
         let seen = Rc::<Cell<Option<Event>>>::default();
         let handled = Rc::<Cell<bool>>::default();
+        let greedy = Rc::<Cell<bool>>::default();
         let mut app = App::new();
         app.landing = Box::new(Probe {
             seen: Rc::clone(&seen),
             handled: Rc::clone(&handled),
+            greedy: Rc::clone(&greedy),
         });
         draw_at(&mut app, 100, 40);
-        Probed { app, seen, handled }
+        Probed {
+            app,
+            seen,
+            handled,
+            greedy,
+        }
     }
 
     /// Draw one frame at `width` × `height`, and hand back what was painted.
@@ -654,7 +688,7 @@ mod tests {
         // A region at screen (10, 5) showing the demo from its own row 7.
         let embed = Embed {
             rect: Rect::new(10, 5, 20, 8),
-            origin: Position::new(0, 7),
+            source_row: 7,
         };
 
         let inside = embed.translate(match mouse(MouseKind::Moved, 12, 6) {
@@ -694,6 +728,64 @@ mod tests {
         assert_eq!(shift(u16::MAX, 0, 10), u16::MAX, "and at the top");
     }
 
+    /// The offscreen canvas, pinned by its consequence rather than its shape.
+    ///
+    /// A demo cannot keep to the `area` it is handed: its components place
+    /// their floating layers against `frame.area()`, so a select panel or a
+    /// tooltip bubble near an edge reaches outside it. Giving the demo a frame
+    /// of exactly its own size is what makes that harmless. Painted straight
+    /// into the app's frame, the demo below would take the header with it.
+    #[test]
+    fn a_demo_that_paints_its_whole_frame_cannot_reach_the_chrome() {
+        let Probed {
+            mut app, greedy, ..
+        } = probed();
+        greedy.set(true);
+        let painted = draw_at(&mut app, 100, 40);
+        let rect = app.embed.expect("the demo is on screen").rect;
+
+        assert_eq!(
+            painted[(rect.x, rect.y)].symbol(),
+            GREED,
+            "the demo did paint, so the rest of this test means something"
+        );
+        assert!(
+            text_of(&painted).contains("ratcn"),
+            "the header survived a demo painting every cell of its frame"
+        );
+        for column in 0..painted.area.width {
+            assert_ne!(
+                painted[(column, 0)].symbol(),
+                GREED,
+                "the demo reached the header row at column {column}"
+            );
+        }
+    }
+
+    /// The reveal has to run from `update`, not just exist: the scroll area's
+    /// own reveal takes a hold it never reports, so a focus that lands on a
+    /// clipped button without the app moving its offset would draw the page
+    /// and the blitted demo at two different rows.
+    #[test]
+    fn tabbing_to_a_clipped_hero_button_scrolls_the_page_the_app_holds() {
+        let Probed { mut app, .. } = probed();
+        // Short enough that the hero buttons are below the viewport.
+        draw_at(&mut app, 100, 20);
+        assert_eq!(app.state.page_scroll, 0, "the page opens at the top");
+
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab)));
+
+        assert!(
+            app.state.focus.contains_path(["page"]),
+            "two tabs reach the page"
+        );
+        assert!(
+            app.state.page_scroll > 0,
+            "and the app scrolled its own offset to show the button focus landed on"
+        );
+    }
+
     /// The routing rules while the demo has the input. Each of these is a
     /// decision the app makes and nothing else enforces.
     #[test]
@@ -729,6 +821,7 @@ mod tests {
             mut app,
             seen,
             handled,
+            ..
         } = probed();
         let escape = Event::Key(KeyEvent::new(KeyCode::Esc));
 
@@ -745,6 +838,33 @@ mod tests {
         route(&mut app, escape.clone());
         assert_eq!(seen.take(), Some(escape), "the demo saw it again");
         assert!(!app.state.entered(), "and ignoring it gave the input back");
+    }
+
+    /// A demo with no rows on screen has no cell for the pointer to land on,
+    /// so pointer events stop at the host rather than being given an invented
+    /// one — but keys still reach it, which is what lets Esc give the input
+    /// back from there.
+    #[test]
+    fn a_demo_with_nothing_on_screen_is_not_reachable_by_the_pointer() {
+        let Probed { mut app, seen, .. } = probed();
+        app.enter();
+        // A window too small for the chrome is one of the two states that
+        // leaves the demo with nothing on screen while it still holds the
+        // input; the page scrolling its preview out of view is the other.
+        draw_at(&mut app, 10, 3);
+        assert!(app.embed.is_none(), "nothing of the demo is showing");
+        assert!(app.state.entered(), "and it still has the input");
+
+        assert!(
+            !route(&mut app, mouse(MouseKind::Moved, 5, 1)),
+            "the pointer finds nothing to reach"
+        );
+        assert!(seen.take().is_none(), "so the demo is never handed a cell");
+
+        let escape = Event::Key(KeyEvent::new(KeyCode::Esc));
+        route(&mut app, escape.clone());
+        assert_eq!(seen.take(), Some(escape), "but a key still reaches it");
+        assert!(!app.state.entered(), "and Esc still gives the input back");
     }
 
     #[test]

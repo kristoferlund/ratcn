@@ -71,10 +71,11 @@ jobs:
       - name: Clippy (workspace)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Clippy (workspace, wasm)
-        # cargo-ratcn is a host-only Cargo subcommand and showcase is a host-only
-        # terminal app: no Trunk.toml, so nothing ever builds it for the browser.
-        # Lint every wasm-capable workspace package.
-        run: cargo clippy --workspace --exclude cargo-ratcn --exclude showcase --all-targets --target wasm32-unknown-unknown --locked -- -D warnings
+        # cargo-ratcn is a host-only Cargo subcommand; lint every wasm-capable
+        # workspace package. showcase has no browser entry point — no Trunk.toml,
+        # so nothing ships it — but it compiles for the target through the demo
+        # crates it embeds, so it is linted with everything else.
+        run: cargo clippy --workspace --exclude cargo-ratcn --all-targets --target wasm32-unknown-unknown --locked -- -D warnings
 
       # `-p shared` too: the demos' host is documentation a reader copies, and a
       # broken link in it fails nothing else.
