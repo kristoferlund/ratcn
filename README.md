@@ -18,9 +18,11 @@
   <a href="https://ratcn.com/docs/introduction">Docs</a>
 </p>
 
-<video src="https://github.com/user-attachments/assets/bc3e4b4d-b27e-47ee-8e0e-f0393962920c" controls width="800">
-  <a href="https://github.com/user-attachments/assets/bc3e4b4d-b27e-47ee-8e0e-f0393962920c">Watch the ratcn showcase video.</a>
-</video>
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/bc3e4b4d-b27e-47ee-8e0e-f0393962920c" controls width="800">
+    <a href="https://github.com/user-attachments/assets/bc3e4b4d-b27e-47ee-8e0e-f0393962920c">Watch the ratcn showcase video.</a>
+  </video>
+</div>
 
 A shadcn-inspired, themeable component library for [Ratatui](https://ratatui.rs),
 plus a small interaction runtime for focus, hover, and event routing. It is a
