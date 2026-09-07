@@ -647,7 +647,7 @@ mod tests {
                 .positions()
                 .map(|point| first[point].symbol())
                 .collect();
-            assert!(intro.contains("component library"));
+            assert!(intro.contains("ratcn gives Ratatui apps"));
             assert!(intro.contains("Preview release."));
             assert!(
                 !intro.contains("**Preview"),
