@@ -105,10 +105,6 @@ pub static ENTRIES: &[Entry] = &[
         open: || Box::new(kanban::App::new()),
     },
     Entry {
-        name: "landing",
-        open: || Box::new(landing::App::new()),
-    },
-    Entry {
         name: "ledger93",
         open: || Box::new(ledger93::App::new()),
     },
