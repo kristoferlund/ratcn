@@ -66,6 +66,13 @@ onMounted(async () => {
       <a class="ratcn-button ratcn-button-primary" href="/docs/getting-started">Get Started with the CLI <span aria-hidden="true">→</span></a>
       <a class="ratcn-button ratcn-button-secondary" href="https://github.com/kristoferlund/ratcn">GitHub</a>
     </div>
+    <div class="ratcn-showcase">
+      <h2>Try it in your terminal</h2>
+      <code>ssh ratcn.com</code>
+      <p>Explore interactive components, switch themes, and try full demo apps.
+        One command. No install. No account.</p>
+      <a href="/docs/demos#try-the-live-showcase">Explore the showcase</a>
+    </div>
   </section>
 
   <section class="ratcn-preview" aria-labelledby="ratcn-preview-title">

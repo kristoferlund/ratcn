@@ -9,6 +9,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.0.3] - 2026-09-07
 
+Try ratcn in your own terminal, no Rust installation or account needed:
+
+```sh
+ssh ratcn.com
+```
+
+Browse interactive components, switch themes, and explore demo apps in the
+live showcase. Start with a button, then try a Kanban board or a multi-step wizard.
+
 ### Breaking
 
 - `Ratcn::render(frame, area, state, theme, declare)` now takes `area` second.
@@ -31,8 +40,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- The website and documentation are now at [ratcn.com](https://ratcn.com),
-  with a hosted terminal showcase available via `ssh ratcn.com`.
+- The website and documentation are now at [ratcn.com](https://ratcn.com).
 
 ### Fixed
 

@@ -1,9 +1,45 @@
-# ratcn
+<h1 align="center">ratcn</h1>
+
+<p align="center">
+  <strong>Themeable terminal UI components for Ratatui. Copy, customize, and own them.</strong>
+</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/ratcn"><img src="https://img.shields.io/crates/v/ratcn?style=flat" alt="crates.io version"></a>
+  <a href="https://github.com/kristoferlund/ratcn/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/kristoferlund/ratcn/ci.yml?branch=main&style=flat&label=CI" alt="CI status"></a>
+  <a href="https://github.com/kristoferlund/ratcn/stargazers"><img src="https://img.shields.io/github/stars/kristoferlund/ratcn?style=flat" alt="GitHub stars"></a>
+  <a href="https://github.com/kristoferlund/ratcn/blob/main/LICENSE"><img src="https://img.shields.io/github/license/kristoferlund/ratcn?style=flat" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="#try-the-showcase">Try the Showcase</a> &middot;
+  <a href="#getting-started">Getting Started</a> &middot;
+  <a href="https://ratcn.com">Website</a> &middot;
+  <a href="https://ratcn.com/docs/introduction">Docs</a>
+</p>
+
+<video src="https://github.com/user-attachments/assets/bc3e4b4d-b27e-47ee-8e0e-f0393962920c" controls width="800">
+  <a href="https://github.com/user-attachments/assets/bc3e4b4d-b27e-47ee-8e0e-f0393962920c">Watch the ratcn showcase video.</a>
+</video>
 
 A shadcn-inspired, themeable component library for [Ratatui](https://ratatui.rs),
 plus a small interaction runtime for focus, hover, and event routing. It is a
 toolkit, not a framework: every piece is usable piecemeal, and nothing takes
 over your app loop.
+
+## Try the showcase
+
+See what ratcn feels like in your own terminal. Open the live showcase with one
+command, no Rust installation or account needed:
+
+```sh
+ssh ratcn.com
+```
+
+Browse interactive component demos, switch themes, drag cards across a Kanban
+board, and explore full demo apps. These are working Ratatui interfaces, not
+recordings. Try the controls with your keyboard and mouse, then
+[explore the demos and their source](https://ratcn.com/docs/demos).
 
 ## Preview status
 

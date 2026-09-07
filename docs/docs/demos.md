@@ -5,7 +5,27 @@ description: "Every ratcn demo, what it shows, and how to run it — from single
 # Demos
 
 Every demo in the repository runs in your terminal and in the browser from the
-same source. Clone the repository and run any of them by name:
+same source. Start with the live showcase, then explore the code behind it.
+
+## Try the live showcase
+
+Open your terminal and run:
+
+```sh
+ssh ratcn.com
+```
+
+No Rust installation or account needed. Browse the component catalog, switch
+themes, drag cards across the Kanban board, and try the larger demo apps with
+your keyboard and mouse. The showcase runs real Ratatui interfaces remotely
+and displays them in your terminal.
+
+The hosted sandbox leaves out the network-dependent Effects demo. Run the
+showcase locally or use the browser demos to explore the complete collection.
+
+## Run a demo locally
+
+Clone the repository and run any demo by name:
 
 ```sh
 git clone https://github.com/kristoferlund/ratcn

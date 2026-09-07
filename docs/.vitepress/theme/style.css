@@ -279,6 +279,43 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+.ratcn-showcase {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  max-width: 480px;
+  margin-top: 36px;
+}
+
+.ratcn-showcase h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.ratcn-showcase code {
+  padding: 12px 24px;
+  border: 1px solid var(--ratcn-border);
+  border-radius: 9px;
+  background: var(--ratcn-panel);
+  font-family: var(--vp-font-family-mono);
+  font-size: 20px;
+  user-select: all;
+}
+
+.ratcn-showcase p {
+  margin: 0;
+  color: var(--ratcn-muted);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.ratcn-showcase a {
+  font-size: 14px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 /* Preview window */
 
 .ratcn-preview {
