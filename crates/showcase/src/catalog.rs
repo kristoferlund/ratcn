@@ -1,5 +1,5 @@
-//! Every demo in the repository, in one table, and the trait that lets the
-//! showcase drive one without knowing its type.
+//! Catalog demos and the trait that lets the showcase drive one without
+//! knowing its type. The landing demo is hosted separately on the main page.
 
 use std::time::Duration;
 
@@ -61,8 +61,8 @@ impl Entry {
     }
 }
 
-/// Every demo, alphabetical by crate name — which is also the order the nav
-/// list shows them in.
+/// Every demo except the landing preview, alphabetical by crate name, which
+/// is also the order the nav list shows them in.
 pub static ENTRIES: &[Entry] = &[
     Entry {
         name: "barchart",
@@ -218,13 +218,13 @@ mod tests {
 
     /// The repository registers a demo by putting a `Trunk.toml` in its
     /// directory and nowhere else — `scripts/build-demos.sh` discovers the docs
-    /// build the same way. A new demo missing from the browser would otherwise
+    /// build the same way. A new demo missing from the catalog would otherwise
     /// go unnoticed, so the table is checked against the directory rather than
-    /// against a second list.
+    /// against a second list. The main page hosts the landing demo separately.
     #[test]
-    fn every_demo_in_the_repository_is_in_the_catalog() {
+    fn every_demo_except_the_landing_preview_is_in_the_catalog() {
         let demos = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demos");
-        let found: BTreeSet<String> = fs::read_dir(&demos)
+        let mut found: BTreeSet<String> = fs::read_dir(&demos)
             .expect("the demos directory is beside the workspace root")
             .map(|entry| entry.expect("a readable directory entry").path())
             .filter(|path| path.join("Trunk.toml").is_file())
@@ -236,8 +236,8 @@ mod tests {
             })
             .collect();
         assert!(
-            !found.is_empty(),
-            "no demos were discovered under {demos:?}"
+            found.remove("landing"),
+            "the main page's landing demo is missing under {demos:?}"
         );
 
         let listed: BTreeSet<String> = ENTRIES.iter().map(|entry| entry.name.to_owned()).collect();

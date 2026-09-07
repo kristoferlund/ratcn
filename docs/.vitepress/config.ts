@@ -1,6 +1,6 @@
 import { defineConfig, type HeadConfig } from 'vitepress'
 
-const siteUrl = 'https://ratcn.kristoferlund.se'
+const siteUrl = 'https://ratcn.com'
 const siteTitle = 'ratcn - themeable terminal UI components for Ratatui'
 const siteDescription =
   'ratcn is a component library for Ratatui apps: beautifully designed terminal UI components that you can copy, paste, theme, and own in your application code.'
@@ -129,7 +129,7 @@ export default defineConfig({
       'script',
       {
         defer: '',
-        'data-domain': 'ratcn.kristoferlund.se',
+        'data-domain': 'ratcn.com',
         src: '/js/script.js'
       }
     ]

@@ -37,7 +37,7 @@
 //!
 //! `init` adds `ratcn` with its `termina` feature and a compatible `ratatui`,
 //! writes `ratcn.toml`, and creates `src/components/mod.rs`.
-//! See [Getting started](https://ratcn.kristoferlund.se/docs/getting-started)
+//! See [Getting started](https://ratcn.com/docs/getting-started)
 //! for starter apps and copying components with `cargo ratcn add`.
 //!
 //! # Up to two halves, usable alone

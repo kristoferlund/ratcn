@@ -5,12 +5,12 @@ edition.workspace = true
 license.workspace = true
 readme = "../../README.md"
 repository = "https://github.com/kristoferlund/ratcn"
-homepage = "https://ratcn.kristoferlund.se"
+homepage = "https://ratcn.com"
 documentation = "https://docs.rs/cargo-ratcn"
 keywords = ["ratcn", "ratatui", "cargo-subcommand"]
 categories = ["command-line-utilities", "development-tools::cargo-plugins"]
 rust-version.workspace = true
-version = "0.0.1"
+version.workspace = true
 
 [dependencies]
 anyhow.workspace = true

@@ -61,7 +61,7 @@ on Cargo's untouched default `src/main.rs`, it offers **Keep it unchanged**,
 and `src/main.rs` in noninteractive runs remain unchanged.
 
 Choose **Create a demo app**, then run `cargo run` for a button and a Hello World
-toast. See [Getting started](https://ratcn.kristoferlund.se/docs/getting-started)
+toast. See [Getting started](https://ratcn.com/docs/getting-started)
 for the source. Use `cargo ratcn --help` for available commands.
 
 For a native crossterm app that already owns its event loop:
@@ -120,7 +120,7 @@ than asserted.
 
 ## Documentation
 
-The [documentation site](https://ratcn.kristoferlund.se), [documentation
+The [documentation site](https://ratcn.com), [documentation
 source](https://github.com/kristoferlund/ratcn/tree/main/docs), and [repository
 source](https://github.com/kristoferlund/ratcn) cover the concepts, components,
 and live WebAssembly previews. The demo crates under `demos/` are the canonical

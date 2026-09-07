@@ -117,7 +117,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "barchart"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "barchart-horizontal"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -235,7 +235,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "button-large"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "button-small"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-ratcn"
-version = "0.0.1"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -346,7 +346,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "checkbox"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "copy-fixture"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -605,7 +605,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "cycle"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "dialog"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "drag"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "effects"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "futures-util",
  "gloo-timers",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "kanban"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "landing"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "ledger93"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1229,7 +1229,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "list"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "list-multi"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1249,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "list-people"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "panels"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1550,7 +1550,7 @@ dependencies = [
 
 [[package]]
 name = "progress"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1678,7 +1678,7 @@ dependencies = [
 
 [[package]]
 name = "ratcn"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "criterion",
  "ratatui",
@@ -1911,7 +1911,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scroll-area"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1921,7 +1921,7 @@ dependencies = [
 
 [[package]]
 name = "select"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "gloo-timers",
  "ratatui",
@@ -2009,7 +2009,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "showcase"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "barchart",
  "barchart-horizontal",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "tabs-automatic"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "tabs-basic"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -2191,7 +2191,7 @@ dependencies = [
 
 [[package]]
 name = "tabs-disabled"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "tabs-large"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -2311,7 +2311,7 @@ dependencies = [
 
 [[package]]
 name = "toast"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -2372,7 +2372,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tooltip"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "wizard"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ratatui",
  "ratcn",

@@ -92,5 +92,5 @@ the infrastructure underneath it.
 components to larger applications with multiple views.
 
 More documentation is available at
-[ratcn.kristoferlund.se](https://ratcn.kristoferlund.se), including
+[ratcn.com](https://ratcn.com), including
 Crossterm and browser builds through ratzilla.

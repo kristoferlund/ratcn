@@ -76,7 +76,7 @@ dependency needs to argue for it.
 **The app owns its state.** Components read state and return messages; they
 never write it. If a change needs a component to hold durable state, that is
 usually a sign the design should move it to the app instead. See
-[State and messages](https://ratcn.kristoferlund.se/docs/concepts/state-and-messages).
+[State and messages](https://ratcn.com/docs/concepts/state-and-messages).
 
 **Naming follows a fixed vocabulary.** `render` means declare *and* paint,
 `paint` means write cells, `declare` means state that a component exists.
