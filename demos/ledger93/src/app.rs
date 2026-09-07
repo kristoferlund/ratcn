@@ -1,8 +1,8 @@
 //! The app shell owns orchestration and routes messages to the state owner.
 
 use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Margin},
+    buffer::Buffer,
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -106,19 +106,16 @@ impl demo_shared::Demo for App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
-        let area = frame.area();
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(theme.background));
-        let area = area
-            .centered(
-                Constraint::Length(DEMO_WIDTH),
-                Constraint::Length(DEMO_HEIGHT),
-            )
-            .inner(Margin::new(PADDING_X, PADDING_Y));
+    fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
+        buffer.set_style(area, Style::default().bg(theme.background));
         let state = &self.state;
-        self.ratcn.render(frame, area, state, theme, |ctx| {
+        self.ratcn.render_into(buffer, area, state, theme, |ctx| {
+            let area = area
+                .centered(
+                    Constraint::Length(DEMO_WIDTH),
+                    Constraint::Length(DEMO_HEIGHT),
+                )
+                .inner(Margin::new(PADDING_X, PADDING_Y));
             let [title, _gap, tabs, content, status] = area.layout(&shell_layout());
 
             ctx.paint_widget(
@@ -212,7 +209,10 @@ mod tests {
 
     fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) {
         terminal
-            .draw(|frame| app.draw(frame, &THEME))
+            .draw(|frame| {
+                let area = frame.area();
+                app.draw(frame.buffer_mut(), area, &THEME);
+            })
             .expect("draw");
     }
 

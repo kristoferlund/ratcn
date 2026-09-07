@@ -127,8 +127,8 @@ and live WebAssembly previews. The demo crates under `demos/` are the canonical
 integration examples.
 
 To build the site from a checkout, use the pinned toolchain, install Trunk
-`0.21.14`, run `npm ci`, then run `npm run docs:build`. The pinned toolchain
-installs the `wasm32-unknown-unknown` target used by the demos.
+`0.21.14`, run `pnpm install --frozen-lockfile`, then run `pnpm run docs:build`.
+The pinned toolchain installs the `wasm32-unknown-unknown` target used by the demos.
 Publishing this source does not deploy the hosted site; deployment remains a
 separate release step, so the currently hosted content may lag the repository.
 

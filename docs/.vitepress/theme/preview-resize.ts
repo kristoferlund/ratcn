@@ -2,7 +2,7 @@
 //
 // The landing demo (demos/landing/) runs on ratzilla's WebGl2 (canvas) backend,
 // which picks its tile column count from the iframe's rendered width using the
-// `column_count` math in demos/landing/src/main.rs:
+// `column_count` math in demos/landing/src/lib.rs:
 //
 //   wide screen   -> 3 columns x 3 rows
 //   medium screen -> 2 columns x 4 rows
@@ -16,10 +16,10 @@
 // the right height differs from the height the demo booted at, the iframe must
 // be reloaded to re-render the WebAssembly at the new size.
 
-const TILE_COUNT = 8 // main.rs: TILE_COUNT
-const TILE_WIDTH = 42 // main.rs: TILE_WIDTH (cells)
-const TILE_HEIGHT = 20 // main.rs: TILE_HEIGHT (cells)
-const TILE_GAP = 2 // main.rs: TILE_GAP (cells)
+const TILE_COUNT = 8 // lib.rs: TILE_COUNT
+const TILE_WIDTH = 42 // lib.rs: TILE_WIDTH (cells)
+const TILE_HEIGHT = 20 // lib.rs: TILE_HEIGHT (cells)
+const TILE_GAP = 2 // lib.rs: TILE_GAP (cells)
 
 // beamterm's embedded-atlas cell size, in CSS px. The backend sets the canvas
 // buffer to the CSS size (devicePixelRatio aside), so a cell is a fixed pixel
@@ -30,7 +30,7 @@ const TILE_GAP = 2 // main.rs: TILE_GAP (cells)
 const CELL_W = 9
 const CELL_H = 16
 
-// Mirrors `column_count` in main.rs.
+// Mirrors `column_count` in lib.rs.
 function columnCount(cols: number): number {
   const columns = Math.floor((cols + TILE_GAP) / (TILE_WIDTH + TILE_GAP))
   return Math.min(Math.max(columns, 1), 4)
