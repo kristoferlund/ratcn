@@ -27,6 +27,8 @@ const MAIN_SOURCE: &str = "fn main() {\n    println!(\"existing application code
 const INIT_OUTPUT: &str = "┌   cargo ratcn init \n│\n└  You're all set!\n";
 const MINIMAL_APP_TEMPLATE: &str = include_str!("../templates/minimal-app.rs");
 const FIRST_APP_TEMPLATE: &str = include_str!("../templates/first-app.rs");
+// Fixtures resolve the checkout's ratcn, which shares the CLI's workspace version.
+const RATCN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn ratcn_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -306,7 +308,7 @@ fn adding_dialog_from_a_nested_directory_preserves_the_entrypoint_and_compiles()
         " cargo ratcn add ",
         "Component added!",
         [
-            "Added src/components/dialog.rs (ratcn 0.0.2)",
+            &format!("Added src/components/dialog.rs (ratcn {RATCN_VERSION})"),
             "Registered src/components/mod.rs",
             "Registered src/main.rs",
             "Import",
@@ -321,7 +323,7 @@ fn adding_dialog_from_a_nested_directory_preserves_the_entrypoint_and_compiles()
         .expect("the copied source should separate its provenance header");
     assert_eq!(
         header,
-        "// Copied from ratcn 0.0.2: src/components/dialog.rs"
+        format!("// Copied from ratcn {RATCN_VERSION}: src/components/dialog.rs")
     );
     assert!(source.starts_with("use std::fmt;\n\nuse ratatui::"));
     assert!(source.contains("use ratcn::Theme;"));
@@ -523,7 +525,7 @@ fn force_replaces_an_existing_component_file() {
         " cargo ratcn add ",
         "Component added!",
         [
-            "Added src/components/button.rs (ratcn 0.0.2)",
+            &format!("Added src/components/button.rs (ratcn {RATCN_VERSION})"),
             "Registered src/components/mod.rs",
             "Registered src/main.rs",
             "Import",
@@ -531,7 +533,9 @@ fn force_replaces_an_existing_component_file() {
         ],
     );
     let copied = fs::read_to_string(&button).expect("forced component should be readable");
-    assert!(copied.starts_with("// Copied from ratcn 0.0.2: src/components/button.rs\n"));
+    assert!(copied.starts_with(&format!(
+        "// Copied from ratcn {RATCN_VERSION}: src/components/button.rs\n"
+    )));
     assert!(
         !copied.contains("user-owned button"),
         "--force must replace the prior component content"
@@ -624,7 +628,7 @@ fn adding_every_available_component_creates_a_compilable_consumer_crate() {
     );
     let mut expected_messages = COMPONENTS
         .iter()
-        .map(|component| format!("Added src/components/{component}.rs (ratcn 0.0.2)"))
+        .map(|component| format!("Added src/components/{component}.rs (ratcn {RATCN_VERSION})"))
         .collect::<Vec<_>>();
     expected_messages.extend([
         "Registered src/components/mod.rs".to_owned(),
@@ -718,7 +722,7 @@ fn init_offline_keeps_terminal_dependencies_and_is_safe_to_rerun() {
     assert_eq!(dependency_features(ratatui), ["layout-cache", "std"]);
     assert_eq!(
         fs::read_to_string(project.join("ratcn.toml")).expect("init should create configuration"),
-        "[ratcn]\nversion = \"0.0.2\"\ncomponents = \"src/components\"\n"
+        format!("[ratcn]\nversion = \"{RATCN_VERSION}\"\ncomponents = \"src/components\"\n")
     );
     assert_eq!(
         fs::read_to_string(project.join("src/components/mod.rs"))
@@ -817,7 +821,7 @@ fn init_accepts_a_custom_crate_root_without_touching_it() {
     );
     assert_eq!(
         fs::read_to_string(project.join("ratcn.toml")).expect("configuration should write"),
-        "[ratcn]\nversion = \"0.0.2\"\ncomponents = \"src/components\"\n"
+        format!("[ratcn]\nversion = \"{RATCN_VERSION}\"\ncomponents = \"src/components\"\n")
     );
     assert_eq!(
         fs::read_to_string(project.join("src/components/mod.rs"))
@@ -871,7 +875,7 @@ fn add_with_ambiguous_standard_crate_roots_prints_the_manual_registration() {
         " cargo ratcn add ",
         "Component added!",
         [
-            "Added src/components/dialog.rs (ratcn 0.0.2)",
+            &format!("Added src/components/dialog.rs (ratcn {RATCN_VERSION})"),
             "Registered src/components/mod.rs",
             "Add `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)",
             "Import",
@@ -913,7 +917,7 @@ fn add_with_a_custom_crate_root_prints_manual_registration_without_touching_it()
         " cargo ratcn add ",
         "Component added!",
         [
-            "Added src/components/dialog.rs (ratcn 0.0.2)",
+            &format!("Added src/components/dialog.rs (ratcn {RATCN_VERSION})"),
             "Registered src/components/mod.rs",
             "Add `mod components;` to your crate entrypoint (src/main.rs or src/lib.rs)",
             "Import",
