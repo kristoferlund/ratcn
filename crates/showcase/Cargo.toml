@@ -7,9 +7,10 @@ version.workspace = true
 
 [dependencies]
 demo-shared.workspace = true
-ratatui.workspace = true
+ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 ratcn.workspace = true
 tui-big-text.workspace = true
+tui-markdown.workspace = true
 
 barchart = { path = "../../demos/barchart" }
 barchart-horizontal = { path = "../../demos/barchart-horizontal" }

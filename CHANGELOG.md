@@ -18,6 +18,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A terminal showcase with reusable buffer-based demos: catalog panes draw
   directly, while the scrolling landing preview owns its buffer and windowing.
+  Its Getting started view renders a single Markdown document with `tui-markdown`.
 - `FocusState::none()` and `is_none()` let a tree have no focused component,
   distinct from default startup focus. Input can focus it again, and closing
   a modal restores a saved no-focus state.

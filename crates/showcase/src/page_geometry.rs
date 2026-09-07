@@ -113,8 +113,7 @@ pub fn place(rect: Rect, origin: Rect) -> Rect {
 /// [`wrapped_height`](ratcn::geometry::wrapped_height) measures it with, so the
 /// paint cannot need a row the layout did not reserve.
 ///
-/// Lines come back with no alignment of their own; the landing page centers the
-/// result, and the Getting started page leaves it flush left.
+/// Lines come back with no alignment of their own; the landing page centers them.
 #[must_use]
 pub fn wrapped(text: &'static str, width: u16) -> Text<'static> {
     Text::from(

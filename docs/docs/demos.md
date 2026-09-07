@@ -31,6 +31,7 @@ navigation list. Showcase embeds the demo crates rather than reimplementing them
 - Start with a small demo such as [`select/src/lib.rs`](https://github.com/kristoferlund/ratcn/blob/main/demos/select/src/lib.rs) for state, messages, and component declarations.
 - [`demos/shared/src/lib.rs`](https://github.com/kristoferlund/ratcn/blob/main/demos/shared/src/lib.rs) defines the single `Demo::draw(&mut Buffer, area, theme)` contract and the shared native/browser host. The host supplies the frame's buffer and area, routes events, and schedules redraws and wakeups.
 - [`showcase/src/main.rs`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/src/main.rs) owns view navigation, scroll offsets, chrome focus, and input ownership. [`catalog.rs`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/src/catalog.rs) adapts demos for hosting; instances are constructed lazily and keep their own state and runtime.
+- The Getting started view renders [`getting_started.md`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/getting_started.md) with `tui-markdown` inside a ScrollArea. Edit the document, not a collection of Rust widgets; code highlighting is disabled.
 
 Catalog demos draw directly into their pane. Interactive demos pass that area to
 `Ratcn::render_into`; paint-only demos use ordinary widgets. Pointer coordinates

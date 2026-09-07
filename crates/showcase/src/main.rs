@@ -637,6 +637,52 @@ mod tests {
     }
 
     #[test]
+    fn getting_started_markdown_wraps_and_scrolls_without_changing_the_header() {
+        for width in [43, 60, 100, 140] {
+            let mut app = App::new();
+            app.update(Msg::Navigate(View::GettingStarted));
+            let first = draw_at(&mut app, width, 20);
+            let body = app.body.unwrap();
+            let intro: String = body
+                .positions()
+                .map(|point| first[point].symbol())
+                .collect();
+            assert!(intro.contains("component library"));
+            assert!(intro.contains("Preview release."));
+            assert!(
+                !intro.contains("**Preview"),
+                "Markdown emphasis must be rendered, not shown as source markup"
+            );
+            assert!(route(&mut app, Event::Key(KeyEvent::new(KeyCode::End))));
+            let last = draw_at(&mut app, width, 20);
+            assert!(
+                text_of(&last).contains("ratzilla."),
+                "the final paragraph must remain reachable at width {width}"
+            );
+            for y in 0..body.y {
+                for x in 0..width {
+                    assert_eq!(
+                        last[(x, y)],
+                        first[(x, y)],
+                        "scrolling overwrote the header"
+                    );
+                }
+            }
+            assert!(route(&mut app, Event::Key(KeyEvent::new(KeyCode::Home))));
+            assert_eq!(draw_at(&mut app, width, 20), first);
+        }
+        assert!(
+            getting_started::layout(Rect::new(0, 0, 43, 20), 0)
+                .scroll
+                .content
+                > getting_started::layout(Rect::new(0, 0, 100, 20), 0)
+                    .scroll
+                    .content,
+            "narrow columns must wrap the document instead of clipping it"
+        );
+    }
+
+    #[test]
     fn consecutive_header_page_keys_use_the_current_scroll_offset() {
         for view in [View::Landing, View::GettingStarted] {
             let mut app = App::new();
