@@ -7,6 +7,17 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `EventCtx::pointer_captured` reports whether the current event arrived through
+  this component's pointer capture rather than by hit-test.
+
+### Fixed
+
+- `ScrollArea`'s scrollbar thumb can be dragged with the mouse. A press on the
+  gutter captures the pointer and moves the view; previously the thumb was
+  paint-only.
+
 ## [0.0.3] - 2026-09-07
 
 Try ratcn in your own terminal, no Rust installation or account needed:

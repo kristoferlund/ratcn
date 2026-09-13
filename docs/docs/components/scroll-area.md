@@ -89,11 +89,13 @@ is clipped away.
 ## Input
 
 The mouse wheel scrolls three rows. Page Up and Page Down scroll by the visible
-height; Home and End jump to the bounds. Descendants receive each event first,
-so a focused list can take Page Down and a nested control can take the wheel.
-An event that leaves the offset where it is — every one of these keys at an
-edge, and a horizontal wheel — bubbles on to the app, which keeps app hotkeys on
-those keys alive.
+height; Home and End jump to the bounds. Press the scrollbar gutter and drag to
+move the view; a press on the track jumps to that position, and capture keeps
+the drag after the pointer leaves the column. Descendants receive each event
+first, so a focused list can take Page Down and a nested control can take the
+wheel. An event that leaves the offset where it is — every one of these keys at
+an edge, and a horizontal wheel — bubbles on to the app, which keeps app hotkeys
+on those keys alive.
 
 A bound offset reader runs for every event, so applying each emitted message
 before routing the next one makes repeated wheel or page events compose even
@@ -109,8 +111,6 @@ children should take focus as the pointer crosses them, opt in with
 Mouse events and `DragPhase` positions arrive in content coordinates, matching
 `EventCtx::area`. A drag anchor is screen-absolute inside the runtime, so
 scrolling under a held pointer leaves the travel it measures alone.
-
-The scrollbar is an indicator of where the view sits.
 
 ## Layers
 

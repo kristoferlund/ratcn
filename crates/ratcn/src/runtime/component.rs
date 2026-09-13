@@ -1348,6 +1348,17 @@ impl<'a> EventCtx<'a> {
             *capture = Some(self.path.clone());
         }
     }
+
+    /// Whether this event reached the component through its own pointer
+    /// capture, rather than by hit-test.
+    ///
+    /// A [`MouseKind::Drag`] that arrived by geometry belongs to a press this
+    /// component did not start. [`EventCtx::drag`] uses the same distinction;
+    /// a component that cannot share that helper's transient still needs it.
+    #[must_use]
+    pub fn pointer_captured(&self) -> bool {
+        self.pointer.captured_press.is_some()
+    }
 }
 
 /// Which way a one-step move goes through an ordered sequence.
