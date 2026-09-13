@@ -92,6 +92,11 @@ cd my-app
 cargo ratcn init
 ```
 
+> [!NOTE]
+> On Arch Linux, the CLI is available from the official
+> [`cargo-ratcn` package](https://archlinux.org/packages/extra/x86_64/cargo-ratcn/):
+> `pacman -S cargo-ratcn`
+
 `init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
 `ratcn.toml`, and creates `src/components/mod.rs`. In an interactive terminal,
 on Cargo's untouched default `src/main.rs`, it offers **Keep it unchanged**,
