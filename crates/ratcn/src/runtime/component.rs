@@ -1349,14 +1349,13 @@ impl<'a> EventCtx<'a> {
         }
     }
 
-    /// Whether this event reached the component through its own pointer
-    /// capture, rather than by hit-test.
+    /// Whether this event reached the component because it captured the pointer.
     ///
-    /// A [`MouseKind::Drag`] that arrived by geometry belongs to a press this
-    /// component did not start. [`EventCtx::drag`] uses the same distinction;
-    /// a component that cannot share that helper's transient still needs it.
+    /// `false` for an event that arrived by hit-test, including movement and
+    /// release of a press this component did not start. A captured scrollbar
+    /// or border drag uses this to ignore a descendant's leftover `Drag`/`Up`.
     #[must_use]
-    pub fn pointer_captured(&self) -> bool {
+    pub const fn pointer_captured(&self) -> bool {
         self.pointer.captured_press.is_some()
     }
 }

@@ -58,19 +58,6 @@ enum ScrollHold {
     Held { offset: u16, base: Option<u16> },
 }
 
-/// Per-path scratch for one [`ScrollArea`]: the offset hold, plus whether a
-/// gutter drag is captured.
-///
-/// One path holds one transient type, so the gutter drag cannot use
-/// [`EventCtx::drag`] — that helper would replace this value with its own.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct ScrollTransient {
-    hold: ScrollHold,
-    /// Set on a gutter press and cleared on release. Distinguishes our captured
-    /// drag from a drag that bubbled out of a descendant.
-    dragging: bool,
-}
-
 type ReadOffsetFn<S> = Box<dyn Fn(&S) -> u16>;
 type OnChangeFn<M> = Box<dyn Fn(u16) -> M>;
 type ContentFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
@@ -231,19 +218,17 @@ impl<S, M> ScrollArea<S, M> {
     /// where a bound offset is read; and it is permanent, so an app that
     /// returns to the offset a hold was taken at does not revive it.
     fn settle(&self, ctx: &mut DeclareCtx<'_, S, M>, area: Rect, bound: Option<u16>) -> u16 {
-        let mut unheld = ScrollTransient::default();
-        let stored = ctx
-            .transient_mut::<ScrollTransient>()
-            .unwrap_or(&mut unheld);
-        if matches!(stored.hold, ScrollHold::Held { base, .. } if base != bound) {
-            stored.hold = ScrollHold::Released;
+        let mut unheld = ScrollHold::Released;
+        let hold = ctx.transient_mut::<ScrollHold>().unwrap_or(&mut unheld);
+        if matches!(*hold, ScrollHold::Held { base, .. } if base != bound) {
+            *hold = ScrollHold::Released;
         }
-        self.resolve(area, bound, stored.hold)
+        self.resolve(area, bound, *hold)
     }
 
     /// The offset in force at event time.
     fn current(&self, state: &S, ctx: &mut EventCtx<'_>) -> u16 {
-        let hold = ctx.transient::<ScrollTransient>().hold;
+        let hold = *ctx.transient::<ScrollHold>();
         self.resolve(ctx.area(), self.bound_offset(state), hold)
     }
 
@@ -256,8 +241,10 @@ impl<S, M> ScrollArea<S, M> {
         if offset == current {
             return None;
         }
-        let base = self.bound_offset(state);
-        ctx.transient::<ScrollTransient>().hold = ScrollHold::Held { offset, base };
+        *ctx.transient::<ScrollHold>() = ScrollHold::Held {
+            offset,
+            base: self.bound_offset(state),
+        };
         Some(offset)
     }
 
@@ -278,19 +265,17 @@ impl<S, M> ScrollArea<S, M> {
     /// Map a pointer row on the gutter to an offset: the top cell is 0, the
     /// bottom cell is [`max_offset`](Self::max_offset). Rows past either end
     /// clamp, so a captured drag that leaves the track still reaches the bounds.
-    fn offset_for_gutter_row(&self, area: Rect, row: u16) -> u16 {
+    ///
+    /// A one-row track cannot express a range, so the view stays at `current`.
+    fn offset_for_gutter_row(&self, area: Rect, row: u16, current: u16) -> u16 {
         let max_offset = self.max_offset(area);
         let last = area.height.saturating_sub(1);
         if max_offset == 0 || last == 0 {
-            return 0;
+            return current.min(max_offset);
         }
-        let y = i32::from(row)
-            .saturating_sub(i32::from(area.y))
-            .clamp(0, i32::from(last));
-        let y = u32::try_from(y).unwrap_or(0);
-        u16::try_from((y * u32::from(max_offset) + u32::from(last) / 2) / u32::from(last))
-            .unwrap_or(u16::MAX)
-            .min(max_offset)
+        let y = row.saturating_sub(area.y).min(last);
+        let mapped = (u32::from(y) * u32::from(max_offset) + u32::from(last) / 2) / u32::from(last);
+        u16::try_from(mapped).unwrap_or(max_offset).min(max_offset)
     }
 
     /// Treat an unchanged offset as handled: a gutter press that does not
@@ -303,6 +288,9 @@ impl<S, M> ScrollArea<S, M> {
     }
 
     /// Scroll to the offset the gutter row names, capturing on the press.
+    ///
+    /// Capture is the gesture, not a second transient: this path already stores
+    /// [`ScrollHold`], so [`EventCtx::drag`] cannot run here.
     fn handle_gutter_drag(
         &self,
         mouse: &MouseEvent,
@@ -310,36 +298,31 @@ impl<S, M> ScrollArea<S, M> {
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<M> {
         let area = ctx.area();
-        let position = Position::new(mouse.column, mouse.row);
         match mouse.kind {
             MouseKind::Down(MouseButton::Left)
-                if self.max_offset(area) > 0 && Self::gutter_contains(area, position) =>
+                if self.max_offset(area) > 0
+                    && Self::gutter_contains(area, Position::new(mouse.column, mouse.row)) =>
             {
                 ctx.capture_pointer(MouseButton::Left);
-                ctx.transient::<ScrollTransient>().dragging = true;
+                let current = self.current(state, ctx);
                 Self::consume(self.scroll_to(
-                    self.offset_for_gutter_row(area, mouse.row),
+                    self.offset_for_gutter_row(area, mouse.row, current),
                     state,
                     ctx,
                 ))
             }
-            MouseKind::Drag(MouseButton::Left)
-            | MouseKind::Up(MouseButton::Left)
-            | MouseKind::DragEnd(MouseButton::Left) => {
-                if !ctx.pointer_captured() || !ctx.transient::<ScrollTransient>().dragging {
-                    ctx.transient::<ScrollTransient>().dragging = false;
-                    return EventResult::Ignored;
-                }
-                if matches!(mouse.kind, MouseKind::Drag(_)) {
-                    Self::consume(self.scroll_to(
-                        self.offset_for_gutter_row(area, mouse.row),
-                        state,
-                        ctx,
-                    ))
-                } else {
-                    ctx.transient::<ScrollTransient>().dragging = false;
-                    EventResult::Consumed
-                }
+            MouseKind::Drag(MouseButton::Left) if ctx.pointer_captured() => {
+                let current = self.current(state, ctx);
+                Self::consume(self.scroll_to(
+                    self.offset_for_gutter_row(area, mouse.row, current),
+                    state,
+                    ctx,
+                ))
+            }
+            MouseKind::Up(MouseButton::Left) | MouseKind::DragEnd(MouseButton::Left)
+                if ctx.pointer_captured() =>
+            {
+                EventResult::Consumed
             }
             _ => EventResult::Ignored,
         }
@@ -422,25 +405,33 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
-        let area = ctx.area();
-        let current = self.current(state, ctx);
-        let page = Self::viewport(area).height;
-        let target = match event {
+        match event {
             Event::Mouse(mouse) => match mouse.kind {
-                MouseKind::Scroll(ScrollDirection::Up) => current.saturating_sub(WHEEL_ROWS),
-                MouseKind::Scroll(ScrollDirection::Down) => current.saturating_add(WHEEL_ROWS),
-                _ => return self.handle_gutter_drag(mouse, state, ctx),
+                MouseKind::Scroll(ScrollDirection::Up) => {
+                    let current = self.current(state, ctx);
+                    self.scroll_to(current.saturating_sub(WHEEL_ROWS), state, ctx)
+                }
+                MouseKind::Scroll(ScrollDirection::Down) => {
+                    let current = self.current(state, ctx);
+                    self.scroll_to(current.saturating_add(WHEEL_ROWS), state, ctx)
+                }
+                _ => self.handle_gutter_drag(mouse, state, ctx),
             },
-            Event::Key(key) if !key.modifiers.any() => match key.code {
-                KeyCode::PageUp => current.saturating_sub(page),
-                KeyCode::PageDown => current.saturating_add(page),
-                KeyCode::Home => 0,
-                KeyCode::End => self.max_offset(area),
-                _ => return EventResult::Ignored,
-            },
-            _ => return EventResult::Ignored,
-        };
-        self.scroll_to(target, state, ctx)
+            Event::Key(key) if !key.modifiers.any() => {
+                let area = ctx.area();
+                let current = self.current(state, ctx);
+                let page = Self::viewport(area).height;
+                let target = match key.code {
+                    KeyCode::PageUp => current.saturating_sub(page),
+                    KeyCode::PageDown => current.saturating_add(page),
+                    KeyCode::Home => 0,
+                    KeyCode::End => self.max_offset(area),
+                    _ => return EventResult::Ignored,
+                };
+                self.scroll_to(target, state, ctx)
+            }
+            _ => EventResult::Ignored,
+        }
     }
 
     fn reveal_in_viewport(&mut self, target: Rect, state: &S, ctx: &mut EventCtx<'_>) {
@@ -1392,6 +1383,54 @@ mod tests {
             &driver.row(0)[..1],
             "g",
             "the gutter press moved the view by itself"
+        );
+    }
+
+    /// A one-row track cannot express a range. Jumping to offset 0 would
+    /// discard whatever the wheel or a reveal had already placed there.
+    #[test]
+    fn a_one_row_gutter_press_leaves_the_offset_where_it_is() {
+        let mut driver = driver(6, 1);
+        let state = State {
+            offset: 4,
+            ..State::default()
+        };
+        driver.render(&state, |ctx| {
+            ctx.component("scroll", scroll_area(12, |_| {}), Rect::new(0, 0, 6, 1));
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 0), &state),
+            EventResult::Consumed,
+            "a one-row gutter still owns the press"
+        );
+        assert_eq!(state.offset, 4, "the press must not jump the offset to 0");
+    }
+
+    /// A press on the content still focuses a descendant. The gutter is the
+    /// handle; the rest of the area is not.
+    #[test]
+    fn a_content_press_still_focuses_a_descendant() {
+        let mut driver = driver(8, 3);
+        let state = State {
+            focus: FocusState::intent(["scroll", "first"]),
+            ..State::default()
+        };
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "scroll",
+                scroll_area(9, |ctx| {
+                    ctx.component("first", Probe::focusable("first"), Rect::new(0, 0, 7, 1));
+                    ctx.component("second", Probe::focusable("second"), Rect::new(0, 1, 7, 1));
+                }),
+                Rect::new(0, 0, 8, 3),
+            );
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state),
+            EventResult::Emit(Msg::Focus(FocusState::intent(["scroll", "second"]))),
+            "a content press is still a focus change, not a gutter drag"
         );
     }
 
