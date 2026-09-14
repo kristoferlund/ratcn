@@ -27,8 +27,8 @@ use crate::Theme;
 use crate::backdrop::dim_background;
 
 use super::{
-    ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyCode, KeyEvent,
-    ModalState, MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
+    ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyEvent, ModalState,
+    MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
     component::{InteractionFlags, PaintTarget, PointerInputs, TransientMap},
     focus,
     gesture::{Gestures, Press},
@@ -2506,7 +2506,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let Event::Key(key) = event else {
             return EventResult::Ignored;
         };
-        match traversal_direction(key) {
+        match key.traversal_step() {
             Some(direction) => {
                 match self
                     .surface
@@ -3116,19 +3116,6 @@ fn copy_rect(source: &Buffer, destination: &mut Buffer, area: Rect, clip: Rect) 
         if cell.cell_width() > clip.right() - position.x {
             target.set_symbol(" ").set_diff_option(CellDiffOption::None);
         }
-    }
-}
-
-/// Which way this key moves focus, or `None` if it is not a traversal key.
-///
-/// Tab must be unmodified: Ctrl+Tab and friends belong to the app or the
-/// terminal. `BackTab` already implies Shift, so only Ctrl and Alt disqualify
-/// it.
-fn traversal_direction(key: &KeyEvent) -> Option<Step> {
-    match key.code {
-        KeyCode::Tab if !key.modifiers.any() => Some(Step::Forward),
-        KeyCode::BackTab if !key.modifiers.ctrl && !key.modifiers.alt => Some(Step::Backward),
-        _ => None,
     }
 }
 

@@ -7,6 +7,25 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Landing demo Tab traversal now continues between tiles; arrows and Vim keys
+  remain within item controls. The scroll-area demo uses Tab/Shift+Tab between
+  buttons rather than remapping arrows to focus traversal.
+- The landing demo's Quake III asset checklist is one multi-select List:
+  Up/Down or `k`/`j` navigates, Enter/Space toggles, and Tab leaves the list.
+
+### Fixed
+
+- Enter/Space in the showcase demo list selects and focuses the chosen demo
+  without forwarding that key to its controls; Right still enters the preview.
+- Shift+Tab traverses backward whether a backend sends `BackTab` or shifted
+  `Tab`; open Selects recognize both forms when closing their panel.
+- An already-focused Select can still close with Esc or Tab after its items
+  become empty. Cycle and Checkbox changes compose between redraws.
+- Plain Esc dismisses the landing screensaver and restores focus. Modified Esc
+  no longer leaves an embedded showcase demo at the host level.
+
 ## [0.0.3] - 2026-09-07
 
 Try ratcn in your own terminal, no Rust installation or account needed:

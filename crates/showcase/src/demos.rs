@@ -22,12 +22,13 @@ const HINT_INDENT: u16 = 1;
 /// a stripe, and the browser is showing nothing anyone can read.
 const MIN_PANE_WIDTH: u16 = 20;
 
-/// Enter commits the list row; Right enters the selected demo.
+/// Lists take arrows and `j`/`k`; Tab changes components; Enter selects and
+/// enters the cursor's demo; Right enters the already-selected preview.
 const HINTS: [(&str, &str); 4] = [
-    ("↑ ↓", "browse"),
-    ("enter", "show"),
-    ("→", "into the demo"),
-    ("esc", "leave the demo"),
+    ("↑/k ↓/j", "browse list"),
+    ("tab", "change focus"),
+    ("enter/→", "enter demo"),
+    ("esc", "leave demo"),
 ];
 
 /// The vertical bands of the view.
@@ -140,7 +141,7 @@ pub fn visible_rows(nav: Rect) -> u16 {
 }
 
 /// Cells the hints' key column takes: the widest key above, measured rather
-/// than counted, since `↑ ↓` is three cells of seven bytes.
+/// than counted, since `↑/k ↓/j` is seven cells of eleven bytes.
 fn hint_key_width() -> u16 {
     HINTS
         .iter()
