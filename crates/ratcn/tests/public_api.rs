@@ -2,7 +2,7 @@
 
 #[cfg(any(feature = "crossterm", feature = "ratzilla"))]
 use ratcn::runtime::Event;
-use ratcn::{Button, ScrollArea, Theme, Toast, ToasterState};
+use ratcn::{Button, Input, ScrollArea, Theme, Toast, ToasterState};
 
 #[test]
 fn documented_root_imports_are_available_to_external_crates() {
@@ -13,6 +13,7 @@ fn documented_root_imports_are_available_to_external_crates() {
     let _ = ScrollArea::<(), ()>::new(10)
         .scroll(|()| 0, |_: u16| ())
         .hover_focus();
+    let _ = Input::<(), ()>::new().value(|()| "", |_: String| ());
 }
 
 #[cfg(any(feature = "crossterm", feature = "ratzilla"))]

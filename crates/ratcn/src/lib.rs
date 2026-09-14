@@ -19,10 +19,10 @@
 //!   configures terminal Cargo packages and can install a starter only over Cargo's
 //!   untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
 //!   you want to own its source.
-//! - **Twelve components are available:** [`Button`],
+//! - **Thirteen components are available:** [`Button`],
 //!   [`List`], [`Select`], [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget),
 //!   [`BarChartWidget`], [`Tooltip`], [`ScrollArea`], [`Checkbox`], [`Cycle`],
-//!   and [`ProgressWidget`].
+//!   [`Input`], and [`ProgressWidget`].
 //!
 //! # Getting started
 //!
@@ -90,7 +90,7 @@
 //! button idiom's cap and fill rows, the color arithmetic every focus, hover,
 //! and disabled state derives through, area arithmetic, item-index movement,
 //! value-keyed items and their row viewport, the radio and checkbox markers,
-//! display-width measurement — so a component module depends on the crate root
+//! display-width and grapheme measurement — so a component module depends on the crate root
 //! and these, and on no sibling component. That is what lets you copy one
 //! component module into your own project and have it compile against `ratcn`
 //! alone.
@@ -174,6 +174,7 @@ pub use components::{
     checkbox::{Checkbox, CheckboxStyle, CheckboxWidget},
     cycle::{Cycle, CycleStyle, CycleWidget},
     dialog::{Dialog, DialogStyle},
+    input::{Input, InputStyle, InputWidget},
     list::{List, ListStyle, ListWidget},
     progress::{ProgressStyle, ProgressWidget},
     scroll_area::{ScrollArea, ScrollAreaStyle},

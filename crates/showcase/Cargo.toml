@@ -19,6 +19,7 @@ button-small = { path = "../../demos/button-small" }
 checkbox = { path = "../../demos/checkbox" }
 cycle = { path = "../../demos/cycle" }
 dialog = { path = "../../demos/dialog" }
+input = { path = "../../demos/input" }
 drag = { path = "../../demos/drag" }
 effects = { path = "../../demos/effects" }
 kanban = { path = "../../demos/kanban" }

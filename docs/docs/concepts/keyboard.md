@@ -52,7 +52,7 @@ movement clamps at the ends — no wrapping.
 
 | Key | Does |
 |---|---|
-| `Enter` &nbsp;`Space` | Press a [Button](../components/button); commit the cursor in List, Select, or Tabs |
+| `Enter` &nbsp;`Space` | Press a [Button](../components/button); commit the cursor in List, Select, or Tabs. Space also types in an [Input](../components/input) |
 | `Esc` | Close a [Dialog](../components/dialog), a [Tooltip](../components/tooltip), or an open Select panel |
 
 `Dialog`'s dismiss key is rebindable with
@@ -67,7 +67,11 @@ they are what keeps your app's own hotkeys working.
 **A component claims only unmodified keys.** `Ctrl+S` reaches your save handler
 even while a List has focus. The navigation chords above are the exception —
 `Ctrl+N` is a control's own key, because every control with a
-cursor wants the same four.
+cursor wants the same four. An [Input](../components/input) claims printable
+characters, Backspace, Delete, Ctrl+Backspace, Ctrl+Delete, Option+Backspace,
+the arrows, Home, and End; Tab, Enter, Esc, and Ctrl+W still bubble. Hosts
+disagree on the bytes: Windows ConPTY and WSL send Ctrl+H for Ctrl+Backspace;
+macOS Option is Alt+Backspace. The field treats those as the same chord.
 
 **Shift is never navigation.** `J` is not `j`. Shift is left unclaimed.
 
