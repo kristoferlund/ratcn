@@ -41,13 +41,13 @@ are worth knowing before you build on it:
   configures terminal Cargo packages and can install a starter only over Cargo's
   untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
   you want to own its source.
-- **Twelve components are available:**
+- **Thirteen components are available:**
   [Button](./components/button), [List](./components/list),
   [ScrollArea](./components/scroll-area), [Select](./components/select),
   [Tabs](./components/tabs), [Dialog](./components/dialog),
   [Toast](./components/toast), [BarChart](./components/barchart),
   [Tooltip](./components/tooltip), [Checkbox](./components/checkbox),
-  [Cycle](./components/cycle), and
+  [Cycle](./components/cycle), [Input](./components/input), and
   [Progress](./components/progress).
 
 If there are specific components, patterns, or features you would like to see

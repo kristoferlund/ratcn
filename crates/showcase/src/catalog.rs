@@ -101,6 +101,10 @@ pub static ENTRIES: &[Entry] = &[
         open: || Box::new(effects::App::new()),
     },
     Entry {
+        name: "input",
+        open: || Box::new(input::App::new()),
+    },
+    Entry {
         name: "kanban",
         open: || Box::new(kanban::App::new()),
     },

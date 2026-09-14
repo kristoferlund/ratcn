@@ -7,6 +7,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Input`: a one-line text field. The value is app-owned; the caret is a
+  blinking `|`. Placeholder, well, grapheme-aware editing, and paste.
+
 ## [0.0.3] - 2026-09-07
 
 Try ratcn in your own terminal, no Rust installation or account needed:

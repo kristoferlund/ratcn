@@ -54,10 +54,10 @@ it:
   configures terminal Cargo packages and can install a starter only over Cargo's
   untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
   you want to own its source.
-- **Twelve components are available:**
+- **Thirteen components are available:**
   `Button`, `List`, `Select`, `Tabs`, `Dialog`, `ToasterWidget`,
-  `BarChartWidget`, `Tooltip`, `ScrollArea`, `Checkbox`, `Cycle`, and
-  `ProgressWidget`.
+  `BarChartWidget`, `Tooltip`, `ScrollArea`, `Checkbox`, `Cycle`, `Input`,
+  and `ProgressWidget`.
 
 If you want specific components, patterns, or features, please
 [open an issue](https://github.com/kristoferlund/ratcn/issues).

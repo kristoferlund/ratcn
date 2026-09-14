@@ -21,6 +21,29 @@ pub fn display_width_u16(text: &str) -> u16 {
     u16::try_from(display_width(text)).unwrap_or(u16::MAX)
 }
 
+/// The number of grapheme clusters in `text`.
+///
+/// This is the unit a caret moves in: one cluster is one caret stop, even
+/// when the cluster occupies two cells or several code points.
+#[must_use]
+pub fn grapheme_count(text: &str) -> usize {
+    text.graphemes(true).count()
+}
+
+/// Byte index of grapheme `index` in `text`. Past the last grapheme is
+/// `text.len()`.
+#[must_use]
+pub fn grapheme_byte(text: &str, index: usize) -> usize {
+    text.grapheme_indices(true)
+        .nth(index)
+        .map_or(text.len(), |(byte, _)| byte)
+}
+
+/// Walk the grapheme clusters of `text`.
+pub fn graphemes(text: &str) -> impl Iterator<Item = &str> {
+    text.graphemes(true)
+}
+
 /// The longest prefix of `text` that fits in `width` cells, cut on a grapheme
 /// cluster boundary. Never splits a multi-code-point glyph or a wide glyph's
 /// two cells, so the prefix may come up one cell short of `width`.
@@ -218,6 +241,16 @@ mod tests {
     #[test]
     fn wrap_to_width_trims_a_space_with_its_combining_mark() {
         assert_eq!(wrap_to_width("a \u{301}b", 1), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn grapheme_count_and_byte_treat_a_cluster_as_one_stop() {
+        assert_eq!(grapheme_count("a😀b"), 3);
+        assert_eq!(grapheme_byte("a😀b", 0), 0);
+        assert_eq!(grapheme_byte("a😀b", 1), 1);
+        assert_eq!(grapheme_byte("a😀b", 2), 1 + "😀".len());
+        assert_eq!(grapheme_byte("a😀b", 3), "a😀b".len());
+        assert_eq!(graphemes("a😀b").count(), 3);
     }
 
     #[test]
