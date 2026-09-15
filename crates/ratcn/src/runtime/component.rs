@@ -1163,8 +1163,8 @@ pub(crate) struct PointerInputs<'a> {
     /// The event as it arrived, before any declaration-space projection.
     pub(crate) screen_mouse: Option<MouseEvent>,
     /// The press that opened the gesture this event continues, when the
-    /// event reached this component through its capture claim. `None` for an
-    /// event that arrived by hit-test.
+    /// event reached the component that owns its capture claim. `None` for an
+    /// event that arrived by hit-test or bubbled from a captured descendant.
     pub(crate) captured_press: Option<Press>,
 }
 
@@ -1347,6 +1347,17 @@ impl<'a> EventCtx<'a> {
         if capture.is_none() {
             *capture = Some(self.path.clone());
         }
+    }
+
+    /// Whether this event reached **this** component because it captured the pointer.
+    ///
+    /// `false` for an event that arrived by hit-test, including movement and
+    /// release of a press this component did not start, and `false` when it
+    /// bubbled from a descendant that owns the capture. A captured scrollbar
+    /// or border drag uses this to ignore a descendant's leftover `Drag`/`Up`.
+    #[must_use]
+    pub const fn pointer_captured(&self) -> bool {
+        self.pointer.captured_press.is_some()
     }
 }
 

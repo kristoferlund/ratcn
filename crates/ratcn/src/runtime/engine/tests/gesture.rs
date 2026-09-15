@@ -61,6 +61,95 @@ impl Component<GestureState, GestureMsg> for Recorder {
     }
 }
 
+#[derive(Clone)]
+struct CaptureOwner {
+    log: Log,
+}
+
+impl Component<GestureState, GestureMsg> for CaptureOwner {
+    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, GestureState, GestureMsg>) {}
+
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        _state: &GestureState,
+        ctx: &mut EventCtx<'_>,
+    ) -> EventResult<GestureMsg> {
+        let Event::Mouse(mouse) = event else {
+            return EventResult::Ignored;
+        };
+        if let MouseKind::Down(button) = mouse.kind {
+            ctx.capture_pointer(button);
+        }
+        if matches!(mouse.kind, MouseKind::Drag(_)) && ctx.pointer_captured() {
+            self.log.borrow_mut().push("child".to_owned());
+        }
+        EventResult::Ignored
+    }
+}
+
+struct CaptureParent {
+    log: Log,
+}
+
+impl Component<GestureState, GestureMsg> for CaptureParent {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, GestureState, GestureMsg>) {
+        ctx.component(
+            ChildId::Static("child"),
+            CaptureOwner {
+                log: Rc::clone(&self.log),
+            },
+            ctx.area(),
+        );
+    }
+
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        _state: &GestureState,
+        ctx: &mut EventCtx<'_>,
+    ) -> EventResult<GestureMsg> {
+        if matches!(
+            event,
+            Event::Mouse(MouseEvent {
+                kind: MouseKind::Drag(_),
+                ..
+            })
+        ) && ctx.pointer_captured()
+        {
+            self.log.borrow_mut().push("parent".to_owned());
+        }
+        EventResult::Ignored
+    }
+}
+
+/// A bubbled captured drag must not make an ancestor appear to own capture —
+/// otherwise a scroll area would treat a descendant's drag as its own.
+#[test]
+fn pointer_captured_is_true_only_for_the_component_that_claimed_the_gesture() {
+    let state = GestureState::default();
+    let mut driver = Driver::with(Ratcn::new(), 10, 1);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    driver.render(&state, |ctx| {
+        ctx.component(
+            "parent",
+            CaptureParent {
+                log: Rc::clone(&log),
+            },
+            Rect::new(0, 0, 10, 1),
+        );
+    });
+
+    driver.event(mouse(MouseKind::Down(LEFT), 0, 0), &state);
+    driver.event(mouse(MouseKind::Moved, 1, 0), &state);
+
+    assert_eq!(
+        *log.borrow(),
+        ["child"],
+        "a bubbled captured drag must not make an ancestor appear to own capture"
+    );
+}
+
 /// A [`Recorder`] that declares a child of its own, so a press the child
 /// leaves alone bubbles up to it and it claims the gesture from above the
 /// node the pointer actually hit.

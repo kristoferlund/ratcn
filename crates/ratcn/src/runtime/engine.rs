@@ -2787,6 +2787,10 @@ impl<State, Msg> Ratcn<State, Msg> {
         };
         let full_path = self.surface.path_of(innermost);
         let outermost_depth = full_path.len() - chain.len();
+        let capture_owner = match event {
+            Event::Mouse(mouse) => self.gestures.capture_for(mouse.kind).map(ToOwned::to_owned),
+            _ => None,
+        };
         for (position, &index) in chain.iter().enumerate().rev() {
             if !self.surface.participates(index) {
                 continue;
@@ -2807,6 +2811,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                 Event::Mouse(mouse) => Some(*mouse),
                 _ => None,
             };
+            let owns_capture = capture_owner.as_deref().is_some_and(|owner| path == owner);
             let Some(component) = self.surface.nodes[index].component.as_mut() else {
                 continue;
             };
@@ -2818,7 +2823,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                     capture: Some(capture),
                     button: capture_button,
                     screen_mouse,
-                    captured_press,
+                    captured_press: captured_press.filter(|_| owns_capture),
                 },
             );
             let result = component.handle_event(delivered, state, &mut ctx);
