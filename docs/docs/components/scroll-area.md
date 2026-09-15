@@ -89,8 +89,9 @@ is clipped away.
 ## Input
 
 The mouse wheel scrolls three rows. Page Up and Page Down scroll by the visible
-height; Home and End jump to the bounds. Press or drag the scrollbar gutter to
-move the view: the pointer's row maps onto the offset range, and capture keeps
+height; Home and End jump to the bounds. Press the scrollbar thumb and it stays
+put until the pointer moves, then the grabbed point stays under the pointer.
+Press the track outside the thumb to jump the view to that row. Capture keeps
 the drag after the pointer leaves the column. Descendants receive each event
 first, so a focused list can take Page Down and a nested control can take the
 wheel. An event that leaves the offset where it is — every one of these keys at

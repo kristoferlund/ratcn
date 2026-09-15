@@ -40,6 +40,17 @@ impl ScrollAreaStyle {
     }
 }
 
+/// Scratch at this path: the offset hold, and a thumb-grab while a gutter
+/// drag is in flight. One path holds one transient type, so they share a slot
+/// rather than fighting [`EventCtx::drag`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ScrollTransient {
+    hold: ScrollHold,
+    /// Rows from the thumb's top to the cell that was pressed. `None` when the
+    /// gesture is a track jump, or there is no gutter drag.
+    grab: Option<u16>,
+}
+
 /// Where the wheel, a key, a gutter drag, or a reveal left the view.
 ///
 /// Event handling writes it and the next declaration reads it, which is what
@@ -68,7 +79,7 @@ type StyleFn = Box<dyn Fn(&Theme) -> ScrollAreaStyle>;
 /// One column is reserved at the right for the scrollbar. The
 /// [`content`](Self::content) closure receives the remaining width and exactly
 /// `content_height` logical rows, however many of them are visible. Press the
-/// gutter to capture the pointer and drag the thumb; the view follows.
+/// thumb to drag it from the grabbed point; press the track to jump the view.
 ///
 /// The offset is the area's own until [`scroll`](Self::scroll) binds it. Wheel,
 /// Page Up, Page Down, Home, End, and a press on the scrollbar gutter reach
@@ -218,17 +229,19 @@ impl<S, M> ScrollArea<S, M> {
     /// where a bound offset is read; and it is permanent, so an app that
     /// returns to the offset a hold was taken at does not revive it.
     fn settle(&self, ctx: &mut DeclareCtx<'_, S, M>, area: Rect, bound: Option<u16>) -> u16 {
-        let mut unheld = ScrollHold::Released;
-        let hold = ctx.transient_mut::<ScrollHold>().unwrap_or(&mut unheld);
-        if matches!(*hold, ScrollHold::Held { base, .. } if base != bound) {
-            *hold = ScrollHold::Released;
+        let mut unused = ScrollTransient::default();
+        let transient = ctx
+            .transient_mut::<ScrollTransient>()
+            .unwrap_or(&mut unused);
+        if matches!(transient.hold, ScrollHold::Held { base, .. } if base != bound) {
+            transient.hold = ScrollHold::Released;
         }
-        self.resolve(area, bound, *hold)
+        self.resolve(area, bound, transient.hold)
     }
 
     /// The offset in force at event time.
     fn current(&self, state: &S, ctx: &mut EventCtx<'_>) -> u16 {
-        let hold = *ctx.transient::<ScrollHold>();
+        let hold = ctx.transient::<ScrollTransient>().hold;
         self.resolve(ctx.area(), self.bound_offset(state), hold)
     }
 
@@ -241,7 +254,7 @@ impl<S, M> ScrollArea<S, M> {
         if offset == current {
             return None;
         }
-        *ctx.transient::<ScrollHold>() = ScrollHold::Held {
+        ctx.transient::<ScrollTransient>().hold = ScrollHold::Held {
             offset,
             base: self.bound_offset(state),
         };
@@ -262,6 +275,44 @@ impl<S, M> ScrollArea<S, M> {
         Self::gutter(area).contains(position)
     }
 
+    /// Ratatui's nearest-integer division: `(n + d/2) / d`.
+    const fn rounding_divide(numerator: u32, denominator: u32) -> u32 {
+        (numerator + denominator / 2) / denominator
+    }
+
+    /// Thumb start and length in rows from `area.y`, matching the painted
+    /// Ratatui scrollbar so a press can tell the thumb from the track.
+    fn thumb_span(&self, area: Rect, offset: u16) -> Option<(u16, u16)> {
+        let track = area.height;
+        let max_offset = self.max_offset(area);
+        let viewport = Self::viewport(area).height;
+        if track == 0 || max_offset == 0 {
+            return None;
+        }
+        let max_viewport = u32::from(max_offset).saturating_add(u32::from(viewport));
+        if max_viewport == 0 {
+            return None;
+        }
+        let thumb_len = Self::rounding_divide(u32::from(viewport) * u32::from(track), max_viewport)
+            .clamp(1, u32::from(track));
+        let thumb_len = u16::try_from(thumb_len).unwrap_or(track);
+        let start = Self::rounding_divide(u32::from(offset) * u32::from(track), max_viewport)
+            .min(u32::from(track.saturating_sub(thumb_len)));
+        let start = u16::try_from(start).unwrap_or(0);
+        Some((start, thumb_len))
+    }
+
+    /// Rows from the thumb's top to `row` when that cell is on the thumb.
+    fn thumb_grab(&self, area: Rect, offset: u16, row: u16) -> Option<u16> {
+        let (start, len) = self.thumb_span(area, offset)?;
+        let y = row.checked_sub(area.y)?;
+        (y >= start && y < start.saturating_add(len)).then_some(y - start)
+    }
+
+    fn current_grab(ctx: &mut EventCtx<'_>) -> Option<u16> {
+        ctx.transient::<ScrollTransient>().grab
+    }
+
     /// Map a pointer row on the gutter to an offset: the top cell is 0, the
     /// bottom cell is [`max_offset`](Self::max_offset). Rows past either end
     /// clamp, so a captured drag that leaves the track still reaches the bounds.
@@ -278,6 +329,24 @@ impl<S, M> ScrollArea<S, M> {
         u16::try_from(mapped).unwrap_or(max_offset).min(max_offset)
     }
 
+    /// Offset that keeps the grabbed thumb cell under `row`.
+    fn offset_for_grabbed_row(&self, area: Rect, row: u16, grab: u16, current: u16) -> u16 {
+        let max_offset = self.max_offset(area);
+        let Some((_, thumb_len)) = self.thumb_span(area, current) else {
+            return current.min(max_offset);
+        };
+        let movable = area.height.saturating_sub(thumb_len);
+        if max_offset == 0 || movable == 0 {
+            return current.min(max_offset);
+        }
+        let local = i32::from(row).saturating_sub(i32::from(area.y));
+        let start = (local - i32::from(grab)).clamp(0, i32::from(movable));
+        let start = u16::try_from(start).unwrap_or(0);
+        let mapped = (u32::from(start) * u32::from(max_offset) + u32::from(movable) / 2)
+            / u32::from(movable);
+        u16::try_from(mapped).unwrap_or(max_offset).min(max_offset)
+    }
+
     /// Treat an unchanged offset as handled: a gutter press that does not
     /// move the view still owns the gesture, so focus-on-press cannot steal it.
     fn consume(result: EventResult<M>) -> EventResult<M> {
@@ -290,7 +359,9 @@ impl<S, M> ScrollArea<S, M> {
     /// Scroll to the offset the gutter row names, capturing on the press.
     ///
     /// Capture is the gesture, not a second transient: this path already stores
-    /// [`ScrollHold`], so [`EventCtx::drag`] cannot run here.
+    /// [`ScrollTransient`], so [`EventCtx::drag`] cannot run here. A press on
+    /// the thumb stores a grab there instead of jumping; a press on the track
+    /// keeps the jump.
     fn handle_gutter_drag(
         &self,
         mouse: &MouseEvent,
@@ -305,23 +376,30 @@ impl<S, M> ScrollArea<S, M> {
             {
                 ctx.capture_pointer(MouseButton::Left);
                 let current = self.current(state, ctx);
-                Self::consume(self.scroll_to(
-                    self.offset_for_gutter_row(area, mouse.row, current),
-                    state,
-                    ctx,
-                ))
+                if let Some(grab) = self.thumb_grab(area, current, mouse.row) {
+                    ctx.transient::<ScrollTransient>().grab = Some(grab);
+                    EventResult::Consumed
+                } else {
+                    ctx.transient::<ScrollTransient>().grab = None;
+                    Self::consume(self.scroll_to(
+                        self.offset_for_gutter_row(area, mouse.row, current),
+                        state,
+                        ctx,
+                    ))
+                }
             }
             MouseKind::Drag(MouseButton::Left) if ctx.pointer_captured() => {
                 let current = self.current(state, ctx);
-                Self::consume(self.scroll_to(
-                    self.offset_for_gutter_row(area, mouse.row, current),
-                    state,
-                    ctx,
-                ))
+                let target = match Self::current_grab(ctx) {
+                    Some(grab) => self.offset_for_grabbed_row(area, mouse.row, grab, current),
+                    None => self.offset_for_gutter_row(area, mouse.row, current),
+                };
+                Self::consume(self.scroll_to(target, state, ctx))
             }
             MouseKind::Up(MouseButton::Left) | MouseKind::DragEnd(MouseButton::Left)
                 if ctx.pointer_captured() =>
             {
+                ctx.transient::<ScrollTransient>().grab = None;
                 EventResult::Consumed
             }
             _ => EventResult::Ignored,
@@ -1277,10 +1355,10 @@ mod tests {
         assert_ne!(bottom.first(), Some(&0), "one row is now above the view");
     }
 
-    /// The gutter is a handle, not decoration: a press on it moves the view,
-    /// and capture keeps the drag even after the pointer leaves the column.
+    /// The gutter is a handle, not decoration: a press on the track jumps the
+    /// view, and capture keeps the drag even after the pointer leaves the column.
     #[test]
-    fn dragging_the_scrollbar_thumb_scrolls_the_area() {
+    fn dragging_the_scrollbar_track_scrolls_the_area() {
         let mut driver = driver(6, 4);
         let mut state = State::default();
         let render = |driver: &mut Driver<State, Msg>, state: &State| {
@@ -1293,14 +1371,14 @@ mod tests {
         assert_eq!(
             driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 3), &state),
             EventResult::Emit(Msg::Area(8)),
-            "a press on the bottom gutter cell jumps to max offset"
+            "a press on the track jumps so the thumb follows the pointer row"
         );
         state.offset = 8;
 
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 5, 0), &state),
             EventResult::Emit(Msg::Area(0)),
-            "a captured gutter drag keeps routing after leaving the thumb"
+            "a captured gutter drag keeps routing after leaving the track"
         );
         state.offset = 0;
 
@@ -1313,6 +1391,65 @@ mod tests {
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 0, 3), &state),
             EventResult::Consumed
+        );
+    }
+
+    /// Pressing the thumb must not map that row onto a new offset — the thumb
+    /// would jump under the pointer. Movement then keeps the grabbed cell.
+    #[test]
+    fn pressing_the_thumb_anchors_until_the_pointer_moves() {
+        let mut driver = driver(6, 4);
+        let state = State::default();
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    "scroll",
+                    scroll_area(6, |_| {}).style(|_| ScrollAreaStyle {
+                        thumb: Color::Yellow,
+                        track: Color::Blue,
+                    }),
+                    Rect::new(0, 0, 6, 4),
+                );
+            });
+        };
+        render(&mut driver, &state);
+        let thumb: Vec<u16> = (0..4)
+            .filter(|&row| {
+                driver
+                    .terminal
+                    .backend()
+                    .buffer()
+                    .cell((5, row))
+                    .is_some_and(|cell| cell.fg == Color::Yellow)
+            })
+            .collect();
+        assert!(
+            thumb.contains(&2),
+            "the fixture needs a multi-row thumb covering row 2, got {thumb:?}"
+        );
+        assert!(
+            !thumb.contains(&3),
+            "row 3 must be track so a later press can still jump, got {thumb:?}"
+        );
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 2), &state),
+            EventResult::Consumed,
+            "a press on the thumb must not jump the offset"
+        );
+        assert_eq!(state.offset, 0);
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 5, 1), &state),
+            EventResult::Consumed,
+            "moving within the grabbed thumb must not jump as a track click would"
+        );
+        assert_eq!(state.offset, 0);
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 5, 3), &state),
+            EventResult::Emit(Msg::Area(2)),
+            "dragging keeps the grabbed thumb cell under the pointer"
         );
     }
 
@@ -1405,6 +1542,34 @@ mod tests {
             "a one-row gutter still owns the press"
         );
         assert_eq!(state.offset, 4, "the press must not jump the offset to 0");
+    }
+
+    /// A descendant that captured the pointer can bubble its drag. The area
+    /// must not treat that as its own gutter gesture.
+    #[test]
+    fn a_captured_descendant_drag_does_not_scroll_the_area() {
+        let mut driver = driver(8, 3);
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "scroll",
+                scroll_area(9, |ctx| {
+                    ctx.component("child", CapturingLeaf, Rect::new(0, 1, 7, 1));
+                }),
+                Rect::new(0, 0, 8, 3),
+            );
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state),
+            EventResult::Consumed
+        );
+        let dragged = driver.event(mouse(MouseKind::Moved, 1, 2), &state);
+        assert!(
+            !matches!(dragged, EventResult::Emit(Msg::Area(_))),
+            "a bubbled captured drag must not scroll the area, got {dragged:?}"
+        );
+        assert_eq!(state.offset, 0);
     }
 
     /// A press on the content still focuses a descendant. The gutter is the
@@ -1808,6 +1973,29 @@ mod tests {
                     });
                 }
                 LayerExample::Modal => {}
+            }
+        }
+    }
+
+    /// Captures on press and lets later events bubble, so an ancestor can see
+    /// a captured descendant drag.
+    struct CapturingLeaf;
+
+    impl Component<State, Msg> for CapturingLeaf {
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
+
+        fn handle_event(
+            &mut self,
+            event: &Event,
+            _state: &State,
+            ctx: &mut EventCtx<'_>,
+        ) -> EventResult<Msg> {
+            match event {
+                Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left) => {
+                    ctx.capture_pointer(MouseButton::Left);
+                    EventResult::Consumed
+                }
+                _ => EventResult::Ignored,
             }
         }
     }
