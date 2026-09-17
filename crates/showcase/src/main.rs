@@ -226,7 +226,7 @@ impl App {
         }
     }
 
-    /// Only a painted demo receives input. The host can still leave on Esc.
+    /// Only a painted demo receives input. The host can still leave on plain Esc.
     fn route_to_demo(&mut self, event: Event) -> bool {
         let Some(embed) = self.embed else {
             return false;
@@ -246,9 +246,10 @@ impl App {
             .is_some_and(|demo| demo.handle_event(event))
     }
 
-    /// Hand the input to the embedded demo, parking the chrome's focus.
+    /// Hand the input to the selected demo, parking the chrome's focus.
+    /// A newly selected demo receives no events until its first paint.
     fn enter(&mut self) {
-        if self.embed.is_none() || self.state.entered() {
+        if self.state.entered() {
             return;
         }
         let chrome_focus = std::mem::replace(&mut self.state.focus, FocusState::none());
@@ -286,8 +287,9 @@ impl App {
     }
 
     /// Enter the demo region on a key the chrome passed on. Only the Demos view
-    /// has a key for it, and only Right: the nav list's bound selection makes
-    /// Enter the list's own. The landing page is entered by clicking into it.
+    /// has a fallback key for it: Right enters the painted preview without
+    /// changing selection. Keyboard list commits enter through their message.
+    /// The landing page is entered by clicking into it.
     fn enter_key(&mut self, event: &Event) -> bool {
         let Event::Key(key) = event else {
             return false;
@@ -449,7 +451,8 @@ impl demo_shared::Demo for App {
             self.primary_down = false;
         }
         if self.body.is_none() {
-            if self.state.entered() && matches!(&event, Event::Key(key) if key.code == KeyCode::Esc)
+            if self.state.entered()
+                && matches!(&event, Event::Key(key) if key.code == KeyCode::Esc && !key.modifiers.any())
             {
                 self.leave();
                 return true;
@@ -459,9 +462,9 @@ impl demo_shared::Demo for App {
         let mut redraw = false;
         if self.state.entered() {
             match &event {
-                // Esc is the demo's first: a dialog inside it dismisses on the
-                // key, and only an Esc the demo ignored gives the input back.
-                Event::Key(key) if key.code == KeyCode::Esc => {
+                // Plain Esc is the demo's first: a dialog inside it dismisses on
+                // the key, and only one the demo ignored gives the input back.
+                Event::Key(key) if key.code == KeyCode::Esc && !key.modifiers.any() => {
                     if self.route_to_demo(event) {
                         return true;
                     }
@@ -503,7 +506,12 @@ impl demo_shared::Demo for App {
 
         match self.ratcn.handle_event(event.clone(), &self.state) {
             EventResult::Emit(msg) => {
+                let enter_demo =
+                    matches!(&msg, Msg::NavSelected(_)) && matches!(&event, Event::Key(_));
                 self.update(msg);
+                if enter_demo {
+                    self.enter();
+                }
                 true
             }
             EventResult::Consumed => true,
@@ -1627,6 +1635,7 @@ mod tests {
             mouse(MouseKind::Click(MouseButton::Left), 2, row(3)),
         );
         assert_eq!(app.state.showing, 3, "a click is the choice");
+        assert!(!app.state.entered(), "list clicks only change the preview");
 
         route(&mut app, mouse(MouseKind::Moved, 2, row(5)));
         assert_eq!(app.state.cursor, 5, "the cursor browses on");
@@ -1638,13 +1647,62 @@ mod tests {
             "and Enter commits the row the cursor reached"
         );
         assert!(
-            !app.state.entered(),
-            "the list consumed Enter, so it never reached the app's own fallback"
+            app.state.entered(),
+            "Enter commits the row and hands input to its demo"
         );
 
         draw_at(&mut app, 100, 40);
+        route(&mut app, Event::Key(KeyEvent::new(KeyCode::Esc)));
+        assert_eq!(app.state.focus, FocusState::intent([demos::NAV_ID]));
         route(&mut app, Event::Key(KeyEvent::new(KeyCode::Right)));
-        assert!(app.state.entered(), "Right is what enters the demo pane");
+        assert!(
+            app.state.entered(),
+            "Right still enters the painted preview"
+        );
+    }
+
+    #[test]
+    fn keyboard_commit_enters_the_chosen_demo_without_forwarding_the_commit_key() {
+        for code in [KeyCode::Enter, KeyCode::Char(' ')] {
+            for target in [0, 1] {
+                let mut app = App::new();
+                let seen = Rc::new(Cell::new(None));
+                app.opened[target] = Some(Box::new(Probe {
+                    seen: Rc::clone(&seen),
+                    handled: Rc::new(Cell::new(true)),
+                }));
+                app.update(Msg::Navigate(View::Demos));
+                draw_at(&mut app, 100, 40);
+                if target != 0 {
+                    route(&mut app, Event::Key(KeyEvent::new(KeyCode::Down)));
+                }
+
+                assert!(route(&mut app, Event::Key(KeyEvent::new(code))));
+                assert_eq!(app.state.showing, target);
+                assert!(app.state.entered());
+                assert!(app.state.focus.is_none());
+                assert!(
+                    seen.take().is_none(),
+                    "selection must not activate a demo control"
+                );
+                if target != 0 {
+                    assert!(!route(&mut app, Event::Key(KeyEvent::new(KeyCode::Tab))));
+                    assert!(
+                        seen.take().is_none(),
+                        "a new selection cannot use stale geometry"
+                    );
+                }
+
+                draw_at(&mut app, 100, 40);
+                let tab = Event::Key(KeyEvent::new(KeyCode::Tab));
+                assert!(route(&mut app, tab.clone()));
+                assert_eq!(
+                    seen.take(),
+                    Some(tab),
+                    "the next key belongs to the chosen demo"
+                );
+            }
+        }
     }
 
     /// The wheel is the one gesture that separates the cursor from the
@@ -1722,6 +1780,47 @@ mod tests {
         assert!(app.state.entered(), "while plain Right still does");
     }
 
+    #[test]
+    fn modified_esc_stays_with_the_visible_demo() {
+        let Probed { mut app, seen, .. } = probed();
+        app.enter();
+
+        for modifiers in [
+            Modifiers {
+                ctrl: true,
+                alt: false,
+                shift: false,
+            },
+            Modifiers {
+                ctrl: false,
+                alt: true,
+                shift: false,
+            },
+            Modifiers {
+                ctrl: false,
+                alt: false,
+                shift: true,
+            },
+        ] {
+            let mut key = KeyEvent::new(KeyCode::Esc);
+            key.modifiers = modifiers;
+            let escape = Event::Key(key);
+            assert!(
+                !route(&mut app, escape.clone()),
+                "{modifiers:?}+Esc must not be a host leave"
+            );
+            assert_eq!(
+                seen.take(),
+                Some(escape),
+                "{modifiers:?}+Esc must stay isolated with the demo"
+            );
+            assert!(
+                app.state.entered(),
+                "{modifiers:?}+Esc must not take input from the demo"
+            );
+        }
+    }
+
     /// The routing rules while the demo has the input. Each of these is a
     /// decision the app makes and nothing else enforces.
     #[test]
@@ -1781,7 +1880,7 @@ mod tests {
         assert!(!app.state.entered(), "and ignoring it gave the input back");
     }
 
-    /// Hidden controls receive neither pointer nor keyboard input; Esc leaves at the host.
+    /// Hidden controls receive neither pointer nor keyboard input; plain Esc leaves at the host.
     #[test]
     fn a_demo_with_nothing_on_screen_is_not_reachable_by_the_pointer() {
         let Probed { mut app, seen, .. } = probed();
@@ -1806,6 +1905,33 @@ mod tests {
 
         assert!(!route(&mut app, Event::Key(KeyEvent::new(KeyCode::Enter))));
         assert!(seen.take().is_none(), "hidden buttons must not activate");
+
+        for modifiers in [
+            Modifiers {
+                ctrl: true,
+                alt: false,
+                shift: false,
+            },
+            Modifiers {
+                ctrl: false,
+                alt: true,
+                shift: false,
+            },
+            Modifiers {
+                ctrl: false,
+                alt: false,
+                shift: true,
+            },
+        ] {
+            let mut key = KeyEvent::new(KeyCode::Esc);
+            key.modifiers = modifiers;
+            assert!(
+                !route(&mut app, Event::Key(key)),
+                "{modifiers:?}+Esc must not be a host leave while hidden"
+            );
+            assert!(seen.take().is_none(), "the hidden demo receives no input");
+            assert!(app.state.entered(), "the demo keeps input while hidden");
+        }
 
         let escape = Event::Key(KeyEvent::new(KeyCode::Esc));
         route(&mut app, escape.clone());

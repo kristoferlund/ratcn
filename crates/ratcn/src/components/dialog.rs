@@ -537,7 +537,9 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     /// Only meaningful together with [`on_dismiss`](Dialog::on_dismiss), which
     /// supplies the message to emit. Accepts anything that converts into a
     /// [`KeyChord`], so a bare `char` or [`KeyCode`] works, with
-    /// [`ctrl`](KeyChord::ctrl) / [`alt`](KeyChord::alt) for combinations:
+    /// [`ctrl`](KeyChord::ctrl) / [`alt`](KeyChord::alt) for combinations.
+    /// Like every `KeyChord`, matching ignores Shift, so Shift+Esc still
+    /// dismisses the default chord. For example:
     ///
     /// ```
     /// use ratcn::{Dialog, runtime::KeyChord};
@@ -871,6 +873,20 @@ mod tests {
         assert_eq!(
             driver.event(Event::Key(KeyEvent::new(KeyCode::Esc)), &state),
             EventResult::Emit(Msg::Dismissed)
+        );
+        assert_eq!(
+            driver.event(
+                key_with(
+                    KeyCode::Esc,
+                    Modifiers {
+                        shift: true,
+                        ..Modifiers::NONE
+                    },
+                ),
+                &state,
+            ),
+            EventResult::Emit(Msg::Dismissed),
+            "KeyChord intentionally ignores Shift"
         );
     }
 

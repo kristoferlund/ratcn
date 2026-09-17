@@ -330,17 +330,25 @@ impl<S, M> Cycle<S, M> {
         }
     }
 
+    fn selected_index(&self, state: &S) -> usize {
+        self.selection
+            .as_ref()
+            .map_or(0, |(read, _)| read(state))
+            .min(self.options.len().saturating_sub(1))
+    }
+
     /// Advance one option. Forward past the end wraps to the first; backward
     /// before the start wraps to the last.
-    fn step(&self, backward: bool) -> EventResult<M> {
+    fn step(&self, backward: bool, state: &S) -> EventResult<M> {
         let Some((_, on_change)) = &self.selection else {
             return EventResult::Ignored;
         };
         let len = self.options.len();
+        let selected = self.selected_index(state);
         let next = if backward {
-            (self.resolved_selected + len - 1) % len
+            (selected + len - 1) % len
         } else {
-            (self.resolved_selected + 1) % len
+            (selected + 1) % len
         };
         EventResult::Emit(on_change(next))
     }
@@ -350,15 +358,15 @@ impl<S, M> Cycle<S, M> {
     /// because it owns Ctrl+N/Ctrl+P — then the commit keys, which advance.
     /// Home and End step nothing: a ring has no ends. Shift belongs to the
     /// app, so Shift+Space passes through untouched.
-    fn handle_key(&self, key: KeyEvent) -> EventResult<M> {
+    fn handle_key(&self, key: KeyEvent, state: &S) -> EventResult<M> {
         if let Some(step) = step_key(key, Axis::Horizontal) {
-            return self.step(matches!(step, Step::Backward));
+            return self.step(matches!(step, Step::Backward), state);
         }
         if key.modifiers.any() {
             return EventResult::Ignored;
         }
         match key.code {
-            KeyCode::Enter | KeyCode::Char(' ') => self.step(false),
+            KeyCode::Enter | KeyCode::Char(' ') => self.step(false, state),
             _ => EventResult::Ignored,
         }
     }
@@ -366,11 +374,7 @@ impl<S, M> Cycle<S, M> {
 
 impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
     fn prepare(&mut self, state: &S) {
-        self.resolved_selected = self
-            .selection
-            .as_ref()
-            .map_or(0, |(read, _)| read(state))
-            .min(self.options.len().saturating_sub(1));
+        self.resolved_selected = self.selected_index(state);
         self.resolved_width = self
             .options
             .get(self.resolved_selected)
@@ -400,7 +404,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
     fn handle_event(
         &mut self,
         event: &Event,
-        _state: &S,
+        state: &S,
         _ctx: &mut EventCtx<'_>,
     ) -> EventResult<M> {
         if !self.can_act() {
@@ -408,10 +412,10 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
         }
         match event {
             Event::Mouse(mouse) => match mouse.kind {
-                MouseKind::Click(MouseButton::Left) => self.step(false),
+                MouseKind::Click(MouseButton::Left) => self.step(false, state),
                 _ => EventResult::Ignored,
             },
-            Event::Key(key) => self.handle_key(*key),
+            Event::Key(key) => self.handle_key(*key, state),
             _ => EventResult::Ignored,
         }
     }
@@ -493,6 +497,28 @@ mod tests {
         assert_eq!(
             driver.event(key(KeyCode::Enter), &state),
             EventResult::Emit(Msg::Size(1))
+        );
+    }
+
+    #[test]
+    fn consecutive_events_use_current_selection_without_redraw() {
+        let mut driver = driver();
+        let mut state = State::default();
+        render(&mut driver, &state);
+
+        assert_eq!(
+            driver.event(key(KeyCode::Right), &state),
+            EventResult::Emit(Msg::Size(1))
+        );
+        state.size = 1;
+        assert_eq!(
+            driver.event(key(KeyCode::Char('l')), &state),
+            EventResult::Emit(Msg::Size(2))
+        );
+        state.size = 2;
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 5, 2), &state),
+            EventResult::Emit(Msg::Size(0))
         );
     }
 
