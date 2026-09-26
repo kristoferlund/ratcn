@@ -139,6 +139,17 @@ mod frame {
         group.finish();
     }
 
+    fn wrapping_scaling(c: &mut Criterion) {
+        let mut group = c.benchmark_group("wrap_long_word");
+        for count in [20_000, 40_000, 80_000] {
+            let text = "a".repeat(count);
+            group.bench_with_input(BenchmarkId::from_parameter(count), &text, |b, text| {
+                b.iter(|| black_box(ratcn::text_width::wrap_to_width(black_box(text), 40)));
+            });
+        }
+        group.finish();
+    }
+
     fn route_click(c: &mut Criterion) {
         let (mut ratcn, mut terminal, state, theme) = surface();
         terminal
@@ -208,6 +219,7 @@ mod frame {
         benches,
         render,
         sibling_scaling,
+        wrapping_scaling,
         route_click,
         render_list_1000,
         render_dialog_wrapped

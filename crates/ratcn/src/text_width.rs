@@ -29,6 +29,11 @@ pub fn truncate_to_width(text: &str, width: usize) -> &str {
     if display_width(text) <= width {
         return text;
     }
+    fitting_prefix(text, width)
+}
+
+/// Find one row without measuring the entire remaining paragraph first.
+fn fitting_prefix(text: &str, width: usize) -> &str {
     // A prefix is usually as wide as its clusters measured apart, so walk the
     // clusters and measure the prefix itself only where the running total
     // crosses `width`. Ligatures spanning a cluster boundary break the sum both
@@ -94,11 +99,11 @@ fn wrap_line_to_width(text: &str, width: usize) -> Vec<&str> {
     }
     let mut lines = Vec::new();
     loop {
-        if display_width(rest) <= width {
+        let prefix = fitting_prefix(rest, width);
+        if prefix.len() == rest.len() {
             lines.push(rest);
             return lines;
         }
-        let prefix = truncate_to_width(rest, width);
         let split = if rest[prefix.len()..].starts_with(' ') {
             // The row ends exactly on a word boundary.
             prefix.len()
@@ -213,6 +218,19 @@ mod tests {
         );
         assert_eq!(wrap_to_width("🇸🇪X", 1), vec!["🇸🇪", "X"]);
         assert_eq!(wrap_to_width("❤️X", 1), vec!["❤️", "X"]);
+    }
+
+    #[test]
+    fn wrapping_preserves_cross_cluster_width_and_complete_glyphs() {
+        assert_eq!(wrap_to_width("لالالالا", 1), ["لا", "لا", "لا", "لا"]);
+        assert_eq!(
+            wrap_to_width("‘\u{fe0f}\u{fe01}ឯX", 2),
+            ["‘\u{fe0f}\u{fe01}", "ឯX"]
+        );
+        assert_eq!(
+            wrap_to_width("e\u{301}e\u{301} 🚀🚀", 2),
+            ["e\u{301}e\u{301}", "🚀", "🚀"]
+        );
     }
 
     #[test]
