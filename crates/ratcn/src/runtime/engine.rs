@@ -533,7 +533,15 @@ impl<State, Msg> Surface<State, Msg> {
     /// Where `index` sits in this frame's resolved focus and hover — the four
     /// flags [`PaintCtx`] reports.
     fn interaction_flags(&self, index: usize, resolved: Resolved<'_>) -> InteractionFlags {
-        let (focused, contains_focus) = self.path_match(index, resolved.focus.path());
+        let focus_path = resolved.focus.path();
+        let effective = self
+            .leaf_of(focus_path)
+            .is_some_and(|target| self.takes_focus(target));
+        let (focused, contains_focus) = if effective {
+            self.path_match(index, focus_path)
+        } else {
+            (false, false)
+        };
         let (hovered, contains_hover) = self.path_match(index, resolved.hover);
         InteractionFlags {
             focused,
@@ -2393,9 +2401,11 @@ impl<State, Msg> Ratcn<State, Msg> {
                 gestures, surface, ..
             } = self;
             gestures.cancel_lost_claims(|path| {
-                surface
-                    .leaf_of(path)
-                    .is_some_and(|index| surface.participates(index))
+                surface.leaf_of(path).is_some_and(|index| {
+                    surface.participates(index)
+                        && surface.interactive(index)
+                        && surface.policy(surface.nodes[index].layer).hit_testable
+                })
             });
         }
         self.transients
@@ -2528,10 +2538,19 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// Keys never cross such a layer outward. Bubbling stops at its root,
     /// which doubles as the layer-wide fallback for keys nothing inside
-    /// handled. A popup or a hint leaves keys alone, so an unhandled Esc
-    /// under one still reaches whatever declared it.
+    /// handled. A popup's unhandled keys reach its declaring component. A
+    /// hint is inert: stored intent beneath it may reach an outside ancestor,
+    /// but never the hint's content.
     fn key_bubble_chain(&self, focus: &FocusState) -> Vec<usize> {
         let mut matched = self.surface.nodes_along_path(focus.path());
+        if let Some(position) = matched.iter().position(|&index| {
+            !self
+                .surface
+                .policy(self.surface.nodes[index].layer)
+                .allows_focus
+        }) {
+            matched.truncate(position);
+        }
         let Some(takeover) = self.surface.takeover_root() else {
             return matched;
         };

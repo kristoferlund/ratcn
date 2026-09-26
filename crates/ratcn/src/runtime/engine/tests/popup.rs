@@ -3,6 +3,70 @@
 
 use super::*;
 
+#[test]
+fn stored_focus_cannot_activate_or_highlight_a_hint() {
+    let state = FocusTestState {
+        focus: FocusState::intent(["tip", "button"]),
+    };
+    let rendered = Rc::new(RefCell::new(Vec::new()));
+    let mut driver = focus_driver(10, 2);
+    let area = driver.area();
+    // Keep identity stable while the layer becomes inert, then interactive again.
+    for hint in [false, true, false] {
+        driver.render(&state, |ctx| {
+            let content = |ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>| {
+                ctx.component("button", FocusLeaf::recording(rendered.clone()), area);
+            };
+            if hint {
+                ctx.hint("tip", area, ScopeOptions::default(), content);
+            } else {
+                ctx.scope("tip", area, ScopeOptions::default(), content);
+            }
+        });
+        assert_eq!(
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+            if hint {
+                EventResult::Ignored
+            } else {
+                EventResult::Emit(FocusTestMsg::Activated(vec!["tip".into(), "button".into()]))
+            },
+            "stored intent must not bypass the layer's interaction policy"
+        );
+        assert_eq!(rendered.borrow().last(), Some(&(!hint, !hint)));
+    }
+}
+
+#[test]
+fn capture_is_cancelled_when_its_layer_becomes_a_hint() {
+    let mut driver = Driver::<PointerState, PointerMsg>::new(10, 2);
+    let area = driver.area();
+    let render = |driver: &mut Driver<PointerState, PointerMsg>, hint| {
+        driver.render(&PointerState, |ctx| {
+            let content = |ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>| {
+                ctx.component("drag", Draggable { name: "drag" }, area);
+            };
+            if hint {
+                ctx.hint("layer", area, ScopeOptions::default(), content);
+            } else {
+                ctx.scope("layer", area, ScopeOptions::default(), content);
+            }
+        });
+    };
+    render(&mut driver, false);
+    driver.event(
+        mouse(MouseKind::Down(MouseButton::Left), 1, 0),
+        &PointerState,
+    );
+    render(&mut driver, true);
+    assert!(
+        !matches!(
+            driver.event(mouse(MouseKind::Moved, 2, 0), &PointerState),
+            EventResult::Emit(_)
+        ),
+        "an inert layer cannot retain a gesture claim"
+    );
+}
+
 fn render_popup_over_leaf(
     driver: &mut Driver<PointerState, PointerMsg>,
     state: &PointerState,
