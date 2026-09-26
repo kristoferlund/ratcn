@@ -219,7 +219,7 @@ impl<S, M> ScrollArea<S, M> {
     /// returns to the offset a hold was taken at does not revive it.
     fn settle(&self, ctx: &mut DeclareCtx<'_, S, M>, area: Rect, bound: Option<u16>) -> u16 {
         let mut unheld = ScrollHold::Released;
-        let hold = ctx.transient_mut::<ScrollHold>().unwrap_or(&mut unheld);
+        let hold = ctx.settle_transient::<ScrollHold>().unwrap_or(&mut unheld);
         if matches!(*hold, ScrollHold::Held { base, .. } if base != bound) {
             *hold = ScrollHold::Released;
         }

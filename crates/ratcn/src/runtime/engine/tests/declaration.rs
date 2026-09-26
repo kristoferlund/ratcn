@@ -3,6 +3,60 @@
 
 use super::*;
 
+#[test]
+fn failed_declaration_discards_staged_transient_settlement() {
+    struct Probe(bool);
+    impl Component<(), u32> for Probe {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
+            if self.0 {
+                *ctx.settle_transient::<u32>().unwrap() = 99;
+                assert_eq!(
+                    ctx.transient::<u32>(),
+                    Some(&99),
+                    "declaration reads its own staged work"
+                );
+            }
+        }
+        fn scope_options(&self) -> ScopeOptions {
+            ScopeOptions::default().focusable(true)
+        }
+        fn handle_event(&mut self, _: &Event, _: &(), ctx: &mut EventCtx<'_>) -> EventResult<u32> {
+            let value = ctx.transient::<u32>();
+            *value += 1;
+            EventResult::Emit(*value)
+        }
+    }
+    let mut driver = Driver::<(), u32>::new(4, 1);
+    let area = driver.area();
+    driver.render(&(), |ctx| ctx.component("probe", Probe(false), area));
+    let key = Event::Key(KeyEvent::new(KeyCode::Enter));
+    assert_eq!(driver.event(key.clone(), &()), EventResult::Emit(1));
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        driver.render(&(), |ctx| {
+            ctx.component("probe", Probe(true), area);
+            panic!("reject this declaration");
+        });
+    }));
+    assert!(failed.is_err());
+    assert_eq!(driver.event(key.clone(), &()), EventResult::Emit(2));
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            driver.render(&(), |ctx| {
+                ctx.component("probe", Probe(true), area);
+                ctx.defer_paint(|_| panic!("reject during paint"));
+            });
+        }))
+        .is_err()
+    );
+    assert_eq!(driver.event(key.clone(), &()), EventResult::Emit(3));
+    driver.render(&(), |ctx| ctx.component("probe", Probe(true), area));
+    assert_eq!(
+        driver.event(key, &()),
+        EventResult::Emit(100),
+        "a successful pass publishes settlement"
+    );
+}
+
 struct ContextProbe {
     area: Rect,
 }

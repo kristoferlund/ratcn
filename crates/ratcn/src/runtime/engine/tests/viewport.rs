@@ -948,6 +948,29 @@ fn focus_held_before_its_target_was_ever_declared_reveals_one_frame_later() {
     );
 }
 
+#[test]
+fn failed_render_preserves_the_committed_follow_up_request() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["area", "bottom"]),
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    assert!(driver.ratcn.needs_render());
+    state.focus = FocusState::none();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            driver.render(&state, |_| panic!("reject the unfocused frame"));
+        }))
+        .is_err()
+    );
+    assert!(
+        driver.ratcn.needs_render(),
+        "a rejected pass cannot publish its focus bookkeeping"
+    );
+}
+
 /// The same when the target appears in the frame that focuses it: the surface
 /// that opens the frame has never declared it, so the frame after reveals it.
 #[test]

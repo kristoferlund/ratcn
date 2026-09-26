@@ -217,11 +217,12 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// declared — see [`EventCtx::transient`] for the ownership rules; semantic
     /// state does not belong here.
     ///
-    /// Use [`transient_mut`](Self::transient_mut) when the declaration must
+    /// Use [`settle_transient`](Self::settle_transient) when the declaration must
     /// also settle the value it reads.
     #[must_use]
     pub fn transient<T: 'static>(&self) -> Option<&T> {
-        slot_ref(self.transients, self.pass.current_path()?)
+        let path = self.pass.current_path()?;
+        slot_ref(&self.pass.settled_transients, path).or_else(|| slot_ref(self.transients, path))
     }
 
     /// [`transient`](Self::transient), for the rare value a declaration has to
@@ -243,12 +244,39 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Prefer writing from [`EventCtx::transient`] whenever an event can carry
     /// the change instead.
     ///
+    /// This borrows the live value unless it was already staged through
+    /// [`settle_transient`](Self::settle_transient). Live mutations survive a
+    /// failed render. Prefer that staged API for cloneable presentation state.
+    ///
     /// `None` until an event handler has stored a value: this never inserts
     /// one, which is what keeps a transient's lifetime tied to the events
     /// that created it rather than to a pass that may yet fail.
     pub fn transient_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        let path = self.pass.current_path()?;
-        slot_mut(self.transients, path)
+        let path = self.pass.current_path()?.to_vec();
+        if slot_ref::<T>(&self.pass.settled_transients, &path).is_some() {
+            slot_mut(&mut self.pass.settled_transients, &path)
+        } else {
+            slot_mut(self.transients, &path)
+        }
+    }
+
+    /// Settle an existing transient on a clone, published only after this
+    /// render succeeds. Returns `None` until an event has created the value.
+    ///
+    /// Use this for declaration-derived presentation state. A rejected pass
+    /// discards its staged value. `Clone` must isolate the fields being changed:
+    /// mutations through shared interior state cannot be rolled back.
+    pub fn settle_transient<T: Clone + 'static>(&mut self) -> Option<&mut T> {
+        let path = self.pass.current_path()?.to_vec();
+        if slot_ref::<T>(&self.pass.settled_transients, &path).is_none() {
+            let value = slot_ref::<T>(self.transients, &path)?.clone();
+            self.pass
+                .settled_transients
+                .entry(path.clone())
+                .or_default()
+                .insert(TypeId::of::<T>(), Box::new(value));
+        }
+        slot_mut(&mut self.pass.settled_transients, &path)
     }
 
     /// The app state supplied to the current declaration pass.

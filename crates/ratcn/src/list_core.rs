@@ -73,7 +73,7 @@ pub const SCROLL_STEP: usize = 3;
 /// The declaration settles it rather than event handling because only the
 /// declaration sees every cursor change: a select's options are scrolled by
 /// the panel but moved by the keys its trigger handles. The hold is stored
-/// through [`DeclareCtx::transient_mut`](crate::runtime::DeclareCtx::transient_mut),
+/// through [`DeclareCtx::settle_transient`](crate::runtime::DeclareCtx::settle_transient),
 /// so it survives between frames and the wheel's own event handler writes it
 /// from the other side.
 ///
@@ -184,7 +184,7 @@ impl<T: Clone + PartialEq + 'static> WheelHold<T> {
         area: Rect,
     ) {
         let mut unheld = Self::default();
-        ctx.transient_mut::<Self>()
+        ctx.settle_transient::<Self>()
             .unwrap_or(&mut unheld)
             .settle(items, cursor, requested, viewport, area);
     }

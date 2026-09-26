@@ -1205,6 +1205,8 @@ impl<'a, State> DeclarationEnv<'a, State> {
 
 pub(crate) struct RenderPass<State, Msg> {
     frame_area: Rect,
+    /// Declaration settlements are published only after painting succeeds.
+    pub(crate) settled_transients: TransientMap,
     surface: Surface<State, Msg>,
     parent_stack: Vec<usize>,
     /// The identity path of the open declaration chain, maintained in step
@@ -1250,6 +1252,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         Self {
             frame_area,
             surface: Surface::default(),
+            settled_transients: HashMap::new(),
             parent_stack: Vec::new(),
             path_cursor: Vec::new(),
             deferred: Vec::new(),
@@ -1922,7 +1925,10 @@ impl<State, Msg> RenderPass<State, Msg> {
 /// on screen: declaring does not draw, and every reason to reject a pass is
 /// known before the first cell is written. The one thing that cannot be taken
 /// back is a panic thrown by painting itself, after the pass had already been
-/// accepted.
+/// accepted. This is not a transaction over arbitrary user code: live
+/// [`DeclareCtx::transient_mut`] writes and viewport reveal callbacks can
+/// mutate interaction scratch before commit. Built-in declaration settlement
+/// uses [`DeclareCtx::settle_transient`] so rejected passes discard it.
 pub struct Ratcn<State, Msg> {
     surface: Surface<State, Msg>,
     has_rendered: bool,
@@ -2282,7 +2288,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         // sits and what clips it. What it answers is a transient the
         // declaration below reads. A change this surface cannot place — a path
         // it never declared — stays pending for the frame that can.
-        self.reveal_moved_focus(focus_snapshot, state);
+        let (revealed_focus, reveal_pending) = self.reveal_moved_focus(focus_snapshot, state);
 
         // Declare. Nothing is drawn and no *focus* flag is read: the walk
         // builds the tree and queues the paint it owes. Hover is the one
@@ -2318,7 +2324,11 @@ impl<State, Msg> Ratcn<State, Msg> {
             },
         );
         pass.finish_frame(buffer, state, theme);
-        self.commit_surface(pass.surface, resolved_hover, resolved_focus);
+        for (path, slots) in pass.settled_transients {
+            self.transients.entry(path).or_default().extend(slots);
+        }
+        let reveal_pending = reveal_pending || resolved_focus != revealed_focus;
+        self.commit_surface(pass.surface, resolved_hover, resolved_focus, reveal_pending);
     }
 
     /// What the pointer is on, answered against `surface`.
@@ -2389,6 +2399,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         next: Surface<State, Msg>,
         hover: Vec<ChildId>,
         focus: FocusState,
+        reveal_pending: bool,
     ) {
         let active_modal_changed = self
             .surface
@@ -2426,7 +2437,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         // the one the frame opened with never reached that frame's reveal:
         // this tree is the first that can answer for it, so the next frame
         // owes the reveal.
-        self.reveal_pending |= focus != self.resolved_focus;
+        self.reveal_pending = reveal_pending;
         self.resolved_focus = focus;
         drop(previous);
     }
@@ -3081,12 +3092,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// A surface that does not declare the focused leaf has no geometry to
     /// answer with, so the reveal stays pending and each frame asks its own
     /// surface again.
-    fn reveal_moved_focus(&mut self, stored: &FocusState, state: &State) {
+    fn reveal_moved_focus(&mut self, stored: &FocusState, state: &State) -> (FocusState, bool) {
         let focus = self.surface.resolve_focus(stored);
-        if std::mem::take(&mut self.reveal_pending) || focus != self.resolved_focus {
-            self.reveal_pending = !self.reveal_focus(&focus, state);
-        }
-        self.resolved_focus = focus;
+        let pending = (self.reveal_pending || focus != self.resolved_focus)
+            && !self.reveal_focus(&focus, state);
+        (focus, pending)
     }
 
     /// Ask the component that declared the viewport clipping `focus`'s target
