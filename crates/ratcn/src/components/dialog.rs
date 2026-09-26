@@ -72,12 +72,13 @@ struct DialogDims<'a> {
     footer_width: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_field_names,
     reason = "these are three distinct rects; the `_area` suffix reads clearly"
 )]
 struct DialogLayout {
+    base: Rect,
     box_area: Rect,
     main_area: Rect,
     footer_area: Rect,
@@ -111,20 +112,18 @@ fn dialog_box_base(area: Rect, dims: &DialogDims<'_>) -> Rect {
     // The dialog only ever measures — a stated content height, or a
     // description's wrapped lines. Custom content without a height is
     // rejected at declaration, so there is no branch that guesses.
-    let automatic_height = if let Some(content_height) = dims.content_height {
-        content_height
-            .saturating_add(footer_block)
-            .saturating_add(EDGE * 2)
-            .max(3)
-    } else {
-        wrapped_height(dims.description, inner_width)
-            .saturating_add(footer_block)
-            .saturating_add(EDGE * 2)
-            .max(3)
-    };
     let outer_height = dims
         .height
-        .map_or(automatic_height, |height| height.max(1))
+        .map_or_else(
+            || {
+                dims.content_height
+                    .unwrap_or_else(|| wrapped_height(dims.description, inner_width))
+                    .saturating_add(footer_block)
+                    .saturating_add(EDGE * 2)
+                    .max(3)
+            },
+            |height| height.max(1),
+        )
         .min(area.height);
 
     area.centered(
@@ -136,11 +135,7 @@ fn dialog_box_base(area: Rect, dims: &DialogDims<'_>) -> Rect {
 fn dialog_layout(area: Rect, offset: CellOffset, dims: &DialogDims<'_>) -> DialogLayout {
     let base = dialog_box_base(area, dims);
     if base.width == 0 || base.height == 0 {
-        return DialogLayout {
-            box_area: Rect::ZERO,
-            main_area: Rect::ZERO,
-            footer_area: Rect::ZERO,
-        };
+        return DialogLayout::default();
     }
     let box_area = offset_rect(area, base, offset);
     let inner = Rect {
@@ -161,6 +156,7 @@ fn dialog_layout(area: Rect, offset: CellOffset, dims: &DialogDims<'_>) -> Dialo
         (inner, Rect::ZERO)
     };
     DialogLayout {
+        base,
         box_area,
         main_area,
         footer_area,
@@ -196,9 +192,8 @@ type ActionFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>, Rect)>;
 
 /// What fills the dialog's main area.
 ///
-/// The closure is `FnOnce` and gone once painted, but the variant and its
-/// height outlive it: `handle_event` recomputes the same box geometry between
-/// frames and needs to know what the main area was sized for.
+/// The closure is `FnOnce` and consumed during declaration; the variant records
+/// whether the dialog paints a description or its children fill the body.
 enum DialogBody<S, M> {
     /// The [`description`](Dialog::description) paragraph, possibly empty.
     Description,
@@ -221,8 +216,7 @@ enum DialogFooter<S, M> {
 }
 
 /// One standard action: its measured size, and the declaration that puts it on
-/// screen. The size stays readable after the declaration is consumed, because
-/// event-time geometry sizes the action row from it.
+/// screen. Its size determines the action row's declaration-time layout.
 struct ActionSlot<S, M> {
     declare: Option<ActionFn<S, M>>,
     size: ratatui::layout::Size,
@@ -309,6 +303,8 @@ pub struct Dialog<S, M> {
     style: Option<StyleFn>,
     /// The area the dialog was last declared in; drag offsets are clamped to it.
     paint_area: Rect,
+    /// Resolved once during declaration, shared by paint and drag clamping.
+    layout: DialogLayout,
 }
 
 impl<S: 'static, M: 'static> fmt::Debug for Dialog<S, M> {
@@ -350,6 +346,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
             tab_wrap: TabWrap::Wrap,
             style: None,
             paint_area: Rect::default(),
+            layout: DialogLayout::default(),
         }
     }
 
@@ -640,6 +637,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         let area = ctx.area();
         self.paint_area = area;
         let layout = dialog_layout(area, self.offset, &self.dims());
+        self.layout = layout;
         match &mut self.body {
             DialogBody::Description => {}
             DialogBody::Content { declare, .. } => {
@@ -682,7 +680,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
-        let layout = dialog_layout(ctx.area(), self.offset, &self.dims());
+        let layout = self.layout;
         let style = resolve_style(self.style.as_deref(), ctx.theme, DialogStyle::from_theme);
         // Queued where the dialog was declared, so the box lands beneath
         // everything declared inside it without being painted first here.
@@ -711,7 +709,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
-        dialog_layout(area, self.offset, &self.dims()).box_area
+        let base = dialog_box_base(area, &self.dims());
+        if base.is_empty() {
+            base
+        } else {
+            offset_rect(area, base, self.offset)
+        }
     }
 
     fn handle_event(
@@ -732,7 +735,6 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         // EventCtx exposes the narrowed interaction area; paint_area retains
         // the original allocation needed to clamp the app-owned offset.
         let box_area = ctx.area();
-        let base = dialog_box_base(self.paint_area, &self.dims());
         let can_start = self.drag_enabled() && is_border(box_area, mouse.column, mouse.row);
         match ctx.drag(mouse, DragOptions::new(self.offset).start_if(can_start)) {
             DragPhase::Down | DragPhase::Ended { .. } => EventResult::Consumed,
@@ -742,7 +744,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
                     .map_or(EventResult::Consumed, |on_offset_change| {
                         EventResult::Emit(on_offset_change(clamp_offset(
                             self.paint_area,
-                            base,
+                            self.layout.base,
                             offset,
                         )))
                     })
