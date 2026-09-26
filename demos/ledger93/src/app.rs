@@ -92,6 +92,10 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
+    fn needs_render(&self) -> bool {
+        self.ratcn.needs_render()
+    }
+
     // The module const is the one source: `screens` paints from it directly.
     const THEME: Theme = THEME;
 

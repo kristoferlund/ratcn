@@ -2635,6 +2635,31 @@ impl<State, Msg> Ratcn<State, Msg> {
         self.surface.modal_roots().next().is_some()
     }
 
+    /// Whether another render can settle focus reveal from the last frame.
+    ///
+    /// An on-demand host should schedule a frame when this is true, even if no
+    /// input arrived. Check again after rendering. An absent, parked focus path
+    /// does not request frames: only a newly declared target can unblock it.
+    #[must_use]
+    pub fn needs_render(&self) -> bool {
+        self.reveal_pending
+            && self
+                .surface
+                .leaf_of(self.resolved_focus.path())
+                .is_some_and(|target| {
+                    self.surface.takes_focus(target)
+                        && self.surface.viewport_visibility(target) != ViewportVisibility::Full
+                        && self
+                            .surface
+                            .clipping_viewport(target)
+                            .is_some_and(|viewport| {
+                                viewport.owner.is_some_and(|owner| {
+                                    self.surface.nodes[owner].component.is_some()
+                                })
+                            })
+                })
+    }
+
     fn modal_stack_matches(&self, state: &State) -> bool {
         self.modal_binding.as_ref().is_none_or(|binding| {
             let retained = self
@@ -3072,7 +3097,9 @@ impl<State, Msg> Ratcn<State, Msg> {
         let Some(target) = self.surface.leaf_of(focus.path()) else {
             return false;
         };
-        if self.surface.viewport_visibility(target) == ViewportVisibility::Full {
+        if !self.surface.takes_focus(target)
+            || self.surface.viewport_visibility(target) == ViewportVisibility::Full
+        {
             return true;
         }
         let Some(owner) = self

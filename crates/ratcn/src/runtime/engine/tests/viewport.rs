@@ -875,9 +875,16 @@ fn focus_held_before_its_target_was_ever_declared_reveals_one_frame_later() {
         log.borrow().is_empty(),
         "the first frame opened with no surface to answer against"
     );
-
+    assert!(
+        driver.ratcn.needs_render(),
+        "an on-demand host must be told to settle focus"
+    );
     render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
+    assert!(
+        !driver.ratcn.needs_render(),
+        "a completed reveal must not spin"
+    );
 }
 
 /// The same when the target appears in the frame that focuses it: the surface
@@ -950,6 +957,10 @@ fn focus_parked_on_a_path_that_resolves_to_nothing_reveals_no_prefix_of_it() {
 
     state.focus = FocusState::intent(["area", "bottom", "nowhere"]);
     render_reveal(&mut driver, &state, &log);
+    assert!(
+        !driver.ratcn.needs_render(),
+        "absent intent cannot make progress by redrawing"
+    );
     render_reveal(&mut driver, &state, &log);
 
     assert!(
