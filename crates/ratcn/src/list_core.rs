@@ -828,8 +828,8 @@ mod tests {
     }
 
     /// The one key map, as every item control answers it. The axis-specific
-    /// keys differ (Down for a column, Right for a row); everything else — the
-    /// chords, Home/End, the commit keys, and what bubbles — must not.
+    /// keys differ; the shared chords, Home/End, commit keys, and bubbles must
+    /// not.
     #[test]
     fn list_select_and_tabs_answer_the_shared_keys_alike() {
         use crate::runtime::{Component, EventCtx, EventResult, Modifiers};
@@ -849,31 +849,15 @@ mod tests {
             Commit(char),
             Bubble,
         }
+        use Answer::{Bubble, Commit, Move, Stay};
         let answer = |result: EventResult<Msg>| match result {
-            EventResult::Emit(Msg::Focused(value)) => Answer::Move(value),
-            EventResult::Emit(Msg::Selected(value)) => Answer::Commit(value),
-            EventResult::Consumed => Answer::Stay,
-            EventResult::Ignored => Answer::Bubble,
+            EventResult::Emit(Msg::Focused(value)) => Move(value),
+            EventResult::Emit(Msg::Selected(value)) => Commit(value),
+            EventResult::Consumed => Stay,
+            EventResult::Ignored => Bubble,
             EventResult::Emit(other) => panic!("unexpected {other:?}"),
         };
-        let ctrl = |code: char| {
-            key_with(
-                KeyCode::Char(code),
-                Modifiers {
-                    ctrl: true,
-                    ..Modifiers::NONE
-                },
-            )
-        };
-        let shift = |code: KeyCode| {
-            key_with(
-                code,
-                Modifiers {
-                    shift: true,
-                    ..Modifiers::NONE
-                },
-            )
-        };
+        let chord = |code, ctrl, alt, shift| key_with(code, Modifiers { ctrl, alt, shift });
         let items = || {
             [
                 ListItem::new('a', "A"),
@@ -896,31 +880,57 @@ mod tests {
             .item_focus(|(): &()| Some('a'), Msg::Focused)
             .selection(|(): &()| None, Msg::Selected);
 
-        for (event, expected) in [
-            (ctrl('n'), Answer::Move('c')),
-            (ctrl('p'), Answer::Stay),
-            (key(KeyCode::Home), Answer::Stay),
-            (key(KeyCode::End), Answer::Move('c')),
-            (key(KeyCode::Enter), Answer::Commit('a')),
-            (key(KeyCode::Char(' ')), Answer::Commit('a')),
-            (shift(KeyCode::Enter), Answer::Bubble),
-            (ctrl('s'), Answer::Bubble),
-            (key(KeyCode::Char('x')), Answer::Bubble),
+        for (event, vertical, horizontal) in [
+            (
+                chord(KeyCode::Char('n'), true, false, false),
+                Move('c'),
+                Move('c'),
+            ),
+            (chord(KeyCode::Char('p'), true, false, false), Stay, Stay),
+            (key(KeyCode::Home), Stay, Stay),
+            (key(KeyCode::End), Move('c'), Move('c')),
+            (key(KeyCode::Up), Stay, Bubble),
+            (key(KeyCode::Char('k')), Stay, Bubble),
+            (key(KeyCode::Down), Move('c'), Bubble),
+            (key(KeyCode::Char('j')), Move('c'), Bubble),
+            (key(KeyCode::Left), Bubble, Stay),
+            (key(KeyCode::Char('h')), Bubble, Stay),
+            (key(KeyCode::Right), Bubble, Move('c')),
+            (key(KeyCode::Char('l')), Bubble, Move('c')),
+            (key(KeyCode::PageUp), Stay, Bubble),
+            (key(KeyCode::PageDown), Move('c'), Bubble),
+            (chord(KeyCode::Char('u'), true, false, false), Stay, Bubble),
+            (
+                chord(KeyCode::Char('d'), true, false, false),
+                Move('c'),
+                Bubble,
+            ),
+            (key(KeyCode::Enter), Commit('a'), Commit('a')),
+            (key(KeyCode::Char(' ')), Commit('a'), Commit('a')),
+            (chord(KeyCode::Down, false, false, true), Bubble, Bubble),
+            (chord(KeyCode::Right, false, true, false), Bubble, Bubble),
+            (chord(KeyCode::Enter, false, false, true), Bubble, Bubble),
+            (
+                chord(KeyCode::Char('s'), true, false, false),
+                Bubble,
+                Bubble,
+            ),
+            (key(KeyCode::Char('x')), Bubble, Bubble),
         ] {
             let mut ctx = EventCtx::default().with_area(area);
             assert_eq!(
                 answer(list.handle_event(&event, &state, &mut ctx)),
-                expected,
+                vertical,
                 "List on {event:?}"
             );
             assert_eq!(
                 answer(select.handle_event(&event, &state, &mut ctx)),
-                expected,
+                vertical,
                 "Select on {event:?}"
             );
             assert_eq!(
                 answer(tabs.handle_event(&event, &state, &mut ctx)),
-                expected,
+                horizontal,
                 "Tabs on {event:?}"
             );
         }

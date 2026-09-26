@@ -18,12 +18,25 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A path keeps one transient per type, so a component can hold its own
   `EventCtx::transient` state alongside `EventCtx::drag`. Asking for a second
   type no longer panics.
+- Landing demo Tab traversal now continues between tiles; arrows and Vim keys
+  remain within item controls. The scroll-area demo uses Tab/Shift+Tab between
+  buttons rather than remapping arrows to focus traversal.
+- The landing demo's Quake III asset checklist is one multi-select List:
+  Up/Down or `k`/`j` navigates, Enter/Space toggles, and Tab leaves the list.
 
 ### Fixed
 
 - `ScrollArea`'s scrollbar thumb can be dragged with the mouse. A press on the
   thumb holds until movement and keeps the grabbed point; a press on the track
   jumps the view. Previously the thumb was paint-only.
+- Enter/Space in the showcase demo list selects and focuses the chosen demo
+  without forwarding that key to its controls; Right still enters the preview.
+- Shift+Tab traverses backward whether a backend sends `BackTab` or shifted
+  `Tab`; open Selects recognize both forms when closing their panel.
+- An already-focused Select can still close with Esc or Tab after its items
+  become empty. Cycle and Checkbox changes compose between redraws.
+- Plain Esc dismisses the landing screensaver and restores focus. Modified Esc
+  no longer leaves an embedded showcase demo at the host level.
 
 ## [0.0.3] - 2026-09-07
 

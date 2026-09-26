@@ -15,7 +15,7 @@ use crate::runtime::PopupOptions;
 use crate::test_support::{Driver, mouse};
 use crate::{
     Button, Dialog,
-    runtime::{CellOffset, DragOptions, DragPhase, KeyChord, Modifiers},
+    runtime::{CellOffset, DragOptions, DragPhase, KeyChord, KeyCode, KeyEvent, Modifiers},
 };
 
 mod declaration;

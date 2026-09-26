@@ -65,8 +65,8 @@ do not make the Select a keyboard focus stop or consume keyboard input.
 Enter or Space opens a focused Select, and so does any key that would step the
 cursor — Up, Down, `k`, `j`, Ctrl+P, or Ctrl+N. While open, the full
 [navigation key map](../concepts/keyboard) moves the cursor; Enter or Space
-selects; Esc closes. The first Tab closes the panel, and the next Tab moves
-focus. Every closing gesture arrives through the `open` binding as
+selects; Esc closes. The first Tab or Shift+Tab closes the panel, and the next
+traversal key moves focus. Every closing gesture arrives through the `open` binding as
 `on_open_change(false)`, so one message handles them all.
 
 Pointer motion moves the cursor, and a left click selects the option under the
@@ -78,9 +78,9 @@ sight — the same wheel behavior as [List](./list), and held under the same rul
 only while the option under the cursor is still that option, still on that row,
 in an option list of the same length. Moving the cursor, or changing the options
 under it, scrolls the cursor back into view.
-Modified keys other than the closing Tab chords bubble to app hotkeys,
-as does a typed character matching no option. Paste events also bubble because
-Select has no text-editing behavior.
+Modified keys other than the supported Ctrl navigation and closing Shift+Tab
+chords bubble to app hotkeys. Other letters and paste events also bubble:
+Select has neither typeahead nor text-editing behavior.
 
 The panel shows at most eight options by default and scrolls to keep the cursor
 visible, except while the wheel is holding the view elsewhere.

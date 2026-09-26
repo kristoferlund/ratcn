@@ -1,8 +1,8 @@
 //! Ten boxes in a `ScrollArea` three of them tall.
 //!
-//! Click a box to focus it, or step through them with Up and Down, which reach
-//! the runtime as the traversal keys it already understands. Focus landing on a
-//! box the viewport is clipping scrolls that box into view.
+//! Click a box to focus it, or step through them with Tab and Shift+Tab. Focus
+//! landing on a box the viewport is clipping scrolls that box into view. Page
+//! Up and Page Down scroll the viewport without moving focus.
 
 use ratatui::{
     buffer::Buffer,
@@ -11,7 +11,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, ButtonSize, ScrollArea, Theme,
-    runtime::{Event, EventResult, FocusState, KeyCode, KeyEvent, Ratcn},
+    runtime::{Event, EventResult, FocusState, Ratcn},
 };
 
 /// One entry per box: its child id, which is also its label.
@@ -62,22 +62,9 @@ impl App {
     }
 }
 
-/// Up and Down step focus, by handing the runtime Tab and BackTab.
-fn as_traversal(event: Event) -> Event {
-    let code = match &event {
-        Event::Key(key) if !key.modifiers.any() => match key.code {
-            KeyCode::Up => Some(KeyCode::BackTab),
-            KeyCode::Down => Some(KeyCode::Tab),
-            _ => None,
-        },
-        _ => None,
-    };
-    code.map_or(event, |code| Event::Key(KeyEvent::new(code)))
-}
-
 impl demo_shared::Demo for App {
     fn handle_event(&mut self, event: Event) -> bool {
-        match self.ratcn.handle_event(as_traversal(event), &self.state) {
+        match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {
                 self.update(msg);
                 true
@@ -120,5 +107,124 @@ impl demo_shared::Demo for App {
             });
             ctx.component("boxes", scroll, viewport);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use demo_shared::Demo as _;
+    use ratatui::{Terminal, backend::TestBackend};
+    use ratcn::runtime::{KeyCode, KeyEvent};
+
+    use super::*;
+
+    fn app() -> (App, Terminal<TestBackend>) {
+        (
+            App::new(),
+            Terminal::new(TestBackend::new(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)).expect("terminal"),
+        )
+    }
+
+    fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) {
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                app.draw(frame.buffer_mut(), area, &Theme::default_dark());
+            })
+            .expect("draw");
+    }
+
+    fn press(app: &mut App, code: KeyCode) -> bool {
+        app.handle_event(Event::Key(KeyEvent::new(code)))
+    }
+
+    fn rendered(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn arrows_and_vi_keys_do_not_traverse_independent_buttons() {
+        let (mut app, mut terminal) = app();
+        let focused = FocusState::intent(["boxes", "One"]);
+        app.state.focus = focused.clone();
+        draw(&mut app, &mut terminal);
+
+        for code in [
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Char('h'),
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('l'),
+        ] {
+            assert!(
+                !press(&mut app, code),
+                "{code:?} must remain available to the host"
+            );
+            assert_eq!(app.state.focus, focused, "{code:?} moved button focus");
+        }
+    }
+
+    #[test]
+    fn tab_traverses_buttons_and_reveals_a_clipped_destination() {
+        let (mut app, mut terminal) = app();
+        app.state.focus = FocusState::intent(["boxes", "One"]);
+        draw(&mut app, &mut terminal);
+
+        for label in &BOXES[1..] {
+            assert!(press(&mut app, KeyCode::Tab));
+            assert_eq!(app.state.focus, FocusState::intent(["boxes", *label]));
+            draw(&mut app, &mut terminal);
+        }
+
+        let screen = rendered(&terminal);
+        assert!(
+            screen.contains("Ten"),
+            "focused last button was not revealed"
+        );
+        assert!(
+            !screen.contains("One"),
+            "viewport did not scroll to the last button"
+        );
+        assert!(press(&mut app, KeyCode::BackTab));
+        assert_eq!(app.state.focus, FocusState::intent(["boxes", "Nine"]));
+    }
+
+    #[test]
+    fn page_keys_scroll_the_component_without_traversing_focus() {
+        let (mut app, mut terminal) = app();
+        let focused = FocusState::intent(["boxes", "One"]);
+        app.state.focus = focused.clone();
+        draw(&mut app, &mut terminal);
+
+        assert!(press(&mut app, KeyCode::PageDown));
+        assert_eq!(app.state.focus, focused);
+        draw(&mut app, &mut terminal);
+
+        let screen = rendered(&terminal);
+        assert!(
+            screen.contains("Four"),
+            "PageDown did not scroll the viewport"
+        );
+        assert!(
+            !screen.contains("One"),
+            "PageDown left the first page visible"
+        );
+
+        assert!(press(&mut app, KeyCode::Tab));
+        assert_eq!(app.state.focus, FocusState::intent(["boxes", "Two"]));
+        draw(&mut app, &mut terminal);
+        assert!(
+            rendered(&terminal).contains("Two"),
+            "Tab did not reveal its target"
+        );
     }
 }

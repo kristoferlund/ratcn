@@ -142,7 +142,7 @@ impl demo_shared::Demo for App {
             );
 
             let status_line = format!(
-                " {} · Tab/←→ to navigate ",
+                " {} · Tab controls · ←→/hl tabs ",
                 state.shared.prefs.currency.code()
             );
             ctx.paint_widget(

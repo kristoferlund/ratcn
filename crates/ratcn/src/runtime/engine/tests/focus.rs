@@ -432,7 +432,7 @@ fn tab_and_backtab_traverse_siblings_and_honor_nested_escape_and_wrap() {
 }
 
 #[test]
-fn backtab_accepts_shift_but_ignores_ctrl_and_alt() {
+fn both_shift_tab_representations_traverse_backward_but_ctrl_and_alt_do_not() {
     let state = FocusTestState {
         focus: FocusState::intent([ChildId::Static("second")]),
     };
@@ -443,39 +443,71 @@ fn backtab_accepts_shift_but_ignores_ctrl_and_alt() {
         ctx.component("second", FocusLeaf::enabled(), area);
     });
 
-    let backtab = |modifiers| {
-        Event::Key(KeyEvent {
-            code: KeyCode::BackTab,
-            modifiers,
-        })
-    };
-    assert_eq!(
-        driver.event(
-            backtab(Modifiers {
+    let key = |code, modifiers| Event::Key(KeyEvent { code, modifiers });
+    for code in [KeyCode::Tab, KeyCode::BackTab] {
+        assert_eq!(
+            driver.event(
+                key(
+                    code,
+                    Modifiers {
+                        shift: true,
+                        ..Modifiers::NONE
+                    },
+                ),
+                &state,
+            ),
+            EventResult::Emit(FocusTestMsg::Focus(FocusState::intent([ChildId::Static(
+                "first"
+            ),])))
+        );
+    }
+    for code in [KeyCode::Tab, KeyCode::BackTab] {
+        for modifiers in [
+            Modifiers {
+                ctrl: true,
                 shift: true,
                 ..Modifiers::NONE
-            }),
-            &state,
-        ),
-        EventResult::Emit(FocusTestMsg::Focus(FocusState::intent([ChildId::Static(
-            "first"
-        ),])))
-    );
-    for modifiers in [
-        Modifiers {
-            ctrl: true,
-            shift: true,
-            ..Modifiers::NONE
-        },
-        Modifiers {
-            alt: true,
-            shift: true,
-            ..Modifiers::NONE
-        },
+            },
+            Modifiers {
+                alt: true,
+                shift: true,
+                ..Modifiers::NONE
+            },
+        ] {
+            assert_eq!(
+                driver.event(key(code, modifiers), &state),
+                EventResult::Ignored
+            );
+        }
+    }
+}
+
+#[test]
+fn arrows_and_vi_keys_do_not_traverse_independent_components() {
+    let state = FocusTestState {
+        focus: FocusState::intent([ChildId::Static("first")]),
+    };
+    let mut driver = focus_driver(10, 2);
+    let area = driver.area();
+    driver.render(&state, |ctx| {
+        ctx.component("first", FocusLeaf::enabled(), area);
+        ctx.component("second", FocusLeaf::enabled(), area);
+    });
+
+    for code in [
+        KeyCode::Left,
+        KeyCode::Right,
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Char('h'),
+        KeyCode::Char('j'),
+        KeyCode::Char('k'),
+        KeyCode::Char('l'),
     ] {
         assert_eq!(
-            driver.event(backtab(modifiers), &state),
-            EventResult::Ignored
+            driver.event(Event::Key(KeyEvent::new(code)), &state),
+            EventResult::Ignored,
+            "{code:?} belongs to the focused control, not focus traversal"
         );
     }
 }

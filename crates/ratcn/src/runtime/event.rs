@@ -85,6 +85,24 @@ impl KeyEvent {
             modifiers: Modifiers::NONE,
         }
     }
+
+    /// The focus-traversal step represented by this key press.
+    ///
+    /// Shift+Tab is accepted in either backend representation: `Tab` with
+    /// Shift held, or the normalized `BackTab` code (with or without Shift
+    /// still present). Ctrl and Alt variants are not traversal keys.
+    #[must_use]
+    pub const fn traversal_step(self) -> Option<super::Step> {
+        if self.modifiers.ctrl || self.modifiers.alt {
+            return None;
+        }
+        match self.code {
+            KeyCode::Tab if self.modifiers.shift => Some(super::Step::Backward),
+            KeyCode::Tab => Some(super::Step::Forward),
+            KeyCode::BackTab => Some(super::Step::Backward),
+            _ => None,
+        }
+    }
 }
 
 impl From<KeyCode> for KeyEvent {

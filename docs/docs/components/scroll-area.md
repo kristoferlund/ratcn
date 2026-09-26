@@ -21,9 +21,9 @@ receive their real logical allocations however many of their rows are visible.
 </div>
 
 Ten buttons stand in a viewport three of them tall. Click one to focus it, or
-step through them with Up and Down, which the demo passes to the runtime as Tab
-and BackTab. Focus landing on a button the viewport is clipping scrolls that
-button into view.
+step through them with Tab and Shift+Tab. Focus landing on a button the viewport
+is clipping scrolls that button into view. Page Up and Page Down scroll the
+viewport without moving focus.
 
 ```rust
 use ratatui::layout::Rect;

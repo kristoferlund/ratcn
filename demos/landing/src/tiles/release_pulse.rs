@@ -5,43 +5,49 @@ use ratatui::{
     style::{Modifier, Style},
     widgets::{Paragraph, Wrap},
 };
-use ratcn::{Checkbox, ProgressWidget, runtime::DeclareCtx};
+use ratcn::{List, ListItem, ProgressWidget, runtime::DeclareCtx};
 
 use crate::{AppMsg, AppState};
 
 use super::shared::declare_tile_panel;
 
+const ASSET_OPTIONS: [&str; 3] = ["Tournament skins", "Powerup icons", "Quad damage glow"];
+
 pub const ID: &str = "quake_download";
 
 pub struct State {
-    tournament_skins: bool,
-    powerup_icons: bool,
-    quad_glow: bool,
+    focused: Option<&'static str>,
+    selected: Vec<&'static str>,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
-            tournament_skins: true,
-            powerup_icons: true,
-            quad_glow: false,
+            focused: Some(ASSET_OPTIONS[0]),
+            selected: vec![ASSET_OPTIONS[0], ASSET_OPTIONS[1]],
         }
     }
 }
 
 #[derive(Clone, Copy)]
 pub enum Msg {
-    TournamentSkins(bool),
-    PowerupIcons(bool),
-    QuadGlow(bool),
+    FocusChanged(&'static str),
+    Toggled(&'static str),
 }
 
 impl State {
     pub fn update(&mut self, msg: Msg) {
         match msg {
-            Msg::TournamentSkins(checked) => self.tournament_skins = checked,
-            Msg::PowerupIcons(checked) => self.powerup_icons = checked,
-            Msg::QuadGlow(checked) => self.quad_glow = checked,
+            Msg::FocusChanged(focused) => self.focused = Some(focused),
+            Msg::Toggled(value) => {
+                self.focused = Some(value);
+                if let Some(position) = self.selected.iter().position(|selected| *selected == value)
+                {
+                    self.selected.remove(position);
+                } else {
+                    self.selected.push(value);
+                }
+            }
         }
     }
 }
@@ -49,22 +55,14 @@ impl State {
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
     let disabled = ctx.state().controls_disabled;
-    let tournament_skins = Checkbox::new("Tournament skins")
-        .checked(
-            |state: &AppState| state.quake_state.tournament_skins,
-            |checked| AppMsg::Quake(Msg::TournamentSkins(checked)),
+    let assets = List::new(ASSET_OPTIONS.map(|label| ListItem::new(label, label)))
+        .item_focus(
+            |state: &AppState| state.quake_state.focused,
+            |focused, _| AppMsg::Quake(Msg::FocusChanged(focused)),
         )
-        .disabled(disabled);
-    let powerup_icons = Checkbox::new("Powerup icons")
-        .checked(
-            |state: &AppState| state.quake_state.powerup_icons,
-            |checked| AppMsg::Quake(Msg::PowerupIcons(checked)),
-        )
-        .disabled(disabled);
-    let quad_glow = Checkbox::new("Quad damage glow")
-        .checked(
-            |state: &AppState| state.quake_state.quad_glow,
-            |checked| AppMsg::Quake(Msg::QuadGlow(checked)),
+        .multi_selection(
+            |state: &AppState, value| state.quake_state.selected.contains(value),
+            |value| AppMsg::Quake(Msg::Toggled(value)),
         )
         .disabled(disabled);
 
@@ -89,8 +87,6 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         Constraint::Fill(1),
     ])
     .areas(inner);
-    let [skins_area, powerups_area, quad_glow_area] =
-        Layout::vertical([Constraint::Length(1); 3]).areas(checks_area);
     let theme = ctx.theme;
 
     ctx.paint_widget(
@@ -107,9 +103,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
             .wrap(Wrap { trim: true }),
         intro_area,
     );
-    ctx.component("skins", tournament_skins, skins_area);
-    ctx.component("powerups", powerup_icons, powerups_area);
-    ctx.component("quad_glow", quad_glow, quad_glow_area);
+    ctx.component("assets", assets, checks_area);
     ctx.paint_widget(
         ProgressWidget::new(download_ratio(demo_shared::monotonic_time()))
             .label("Downloading quake_x86.zip")
@@ -136,7 +130,23 @@ fn download_ratio(now: std::time::Duration) -> f64 {
 mod tests {
     use std::time::Duration;
 
-    use super::download_ratio;
+    use super::{ASSET_OPTIONS, Msg, State, download_ratio};
+
+    #[test]
+    fn asset_navigation_preserves_selection_and_toggles_only_the_chosen_asset() {
+        let mut state = State::default();
+        assert_eq!(state.focused, Some(ASSET_OPTIONS[0]));
+        assert_eq!(state.selected, ASSET_OPTIONS[..2]);
+
+        state.update(Msg::FocusChanged(ASSET_OPTIONS[2]));
+        assert_eq!(state.focused, Some(ASSET_OPTIONS[2]));
+        assert_eq!(state.selected, ASSET_OPTIONS[..2]);
+        state.update(Msg::Toggled(ASSET_OPTIONS[2]));
+        assert_eq!(state.selected, ASSET_OPTIONS);
+        state.update(Msg::Toggled(ASSET_OPTIONS[1]));
+        assert_eq!(state.selected, [ASSET_OPTIONS[0], ASSET_OPTIONS[2]]);
+        assert_eq!(state.focused, Some(ASSET_OPTIONS[1]));
+    }
 
     #[test]
     fn the_download_pulse_reverses_without_dropping_back_to_zero() {

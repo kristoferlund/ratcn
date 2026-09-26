@@ -5,8 +5,8 @@
 //! wide as the value it currently shows; `.align(Alignment::Right)` hugs it
 //! against the panel's edge, so a row is one declaration, unmeasured.
 //!
-//! Tab moves between rows. Enter, Space, an arrow, or a click advances the
-//! focused one, wrapping at both ends.
+//! Tab moves between rows. Right/l advances the focused value; Left/h goes
+//! backward, wrapping at both ends. Enter, Space, or a click also advances.
 
 use ratatui::{
     buffer::Buffer,

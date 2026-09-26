@@ -10,11 +10,13 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
     style::Style,
-    text::{Line, Span},
+    text::{Line, Span, Text},
 };
 use ratcn::{
     Theme, Toast, ToasterState, ToasterWidget,
-    runtime::{Event, EventResult, FocusState, KeyChord, ModalState, MouseKind, Ratcn, TabWrap},
+    runtime::{
+        Event, EventResult, FocusState, KeyChord, KeyCode, ModalState, MouseKind, Ratcn, TabWrap,
+    },
 };
 
 mod screensaver;
@@ -166,11 +168,15 @@ impl demo_shared::Demo for App {
     const ADAPTIVE: bool = true;
 
     fn handle_event(&mut self, event: Event) -> bool {
-        // The screensaver is dismissed by app policy, before routing: any
-        // pointer motion wakes the app. Other events fall through and are
+        // The screensaver is dismissed by app policy, before routing: pointer
+        // motion or plain Esc wakes the app. Other events fall through and are
         // absorbed by the modal layer.
         if self.state.modals_state.is_open(screensaver::ID)
-            && matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseKind::Moved)
+            && (matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseKind::Moved)
+                || matches!(
+                    &event,
+                    Event::Key(key) if key.code == KeyCode::Esc && !key.modifiers.any()
+                ))
         {
             self.update(AppMsg::ScreensaverDismissed);
             return true;
@@ -240,24 +246,31 @@ impl demo_shared::Demo for App {
     }
 }
 
-/// The global-shortcut hints, centered on one line.
-fn header_bar(theme: &Theme) -> Line<'static> {
+/// Navigation and app shortcuts fit in the grid's existing top padding.
+fn header_bar(theme: &Theme) -> Text<'static> {
     let key = Style::default().fg(theme.foreground);
     let hint = Style::default().fg(theme.muted_foreground);
-    Line::from(vec![
-        Span::styled("alt+d", key),
-        Span::styled(" disable all controls", hint),
-        Span::styled("   ", hint),
-        Span::styled("alt+s", key),
-        Span::styled(" screensaver", hint),
+    Text::from(vec![
+        Line::from(vec![
+            Span::styled("tab/shift+tab", key),
+            Span::styled(" controls   ", hint),
+            Span::styled("arrows/hjkl", key),
+            Span::styled(" items", hint),
+        ]),
+        Line::from(vec![
+            Span::styled("alt+d", key),
+            Span::styled(" disable", hint),
+            Span::styled("   ", hint),
+            Span::styled("alt+s", key),
+            Span::styled(" screensaver", hint),
+        ]),
     ])
     .centered()
 }
 
-/// The second row, centered within the grid's top padding; empty when the
-/// area is too short to spare it.
+/// Two rows within the grid's top padding, clipped for a shorter area.
 fn header_area(area: Rect) -> Rect {
-    let height = u16::from(area.height > 1);
+    let height = area.height.saturating_sub(1).min(2);
     Rect::new(area.x, area.y + 1, area.width, height)
 }
 
@@ -322,7 +335,86 @@ fn tile_height(area_height: u16, rows: u16) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use demo_shared::Demo as _;
+    use ratatui::{Terminal, backend::TestBackend};
+    use ratcn::runtime::{KeyEvent, Modifiers};
+
     use super::*;
+
+    const TEST_WIDTH: u16 = 4 * TILE_WIDTH + 3 * TILE_GAP;
+    const TEST_HEIGHT: u16 = 2 * GRID_PADDING_Y + 2 * TILE_HEIGHT + TILE_GAP;
+
+    fn app() -> (App, Terminal<TestBackend>) {
+        (
+            App::new(),
+            Terminal::new(TestBackend::new(TEST_WIDTH, TEST_HEIGHT)).expect("terminal"),
+        )
+    }
+
+    fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) {
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                app.draw(frame.buffer_mut(), area, &Theme::default_dark());
+            })
+            .expect("draw");
+    }
+
+    fn press(app: &mut App, terminal: &mut Terminal<TestBackend>, code: KeyCode) -> bool {
+        press_with(app, terminal, code, Modifiers::NONE)
+    }
+
+    fn press_with(
+        app: &mut App,
+        terminal: &mut Terminal<TestBackend>,
+        code: KeyCode,
+        modifiers: Modifiers,
+    ) -> bool {
+        draw(app, terminal);
+        app.handle_event(Event::Key(KeyEvent { code, modifiers }))
+    }
+
+    fn focus_tile(app: &mut App, terminal: &mut Terminal<TestBackend>, number: char) {
+        if app.state.focus.path().is_empty() && !app.state.focus.is_none() {
+            app.state.focus = FocusState::none();
+        }
+        assert!(press_with(
+            app,
+            terminal,
+            KeyCode::Char(number),
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            },
+        ));
+    }
+
+    fn assert_focus(app: &App, path: &[&str]) {
+        assert_eq!(
+            app.state.focus,
+            FocusState::intent(path.iter().map(|id| (*id).to_owned())),
+            "unexpected focus path"
+        );
+    }
+
+    fn rendered(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn keyboard_hints_fit_the_single_column_layout_without_moving_tiles() {
+        let hints = header_bar(&Theme::default_dark());
+        assert!(hints.width() <= usize::from(TILE_WIDTH));
+        assert_eq!(hints.height(), 2);
+        let area = Rect::new(0, 0, TILE_WIDTH, grid_height(TILE_WIDTH));
+        assert!(header_area(area).bottom() <= tile_areas(area)[0].y);
+    }
 
     /// The height a host reserves has to be the height the grid lays itself out
     /// in, or a scrolled page would clip its last row or trail empty space.
@@ -347,5 +439,381 @@ mod tests {
                 "at width {width} the grid does not end where the height says"
             );
         }
+    }
+
+    #[test]
+    fn every_tile_hotkey_lands_on_its_first_available_control() {
+        let (mut app, mut terminal) = app();
+        let expected = [
+            ("1", &[tiles::themes::ID, "themes"] as &[_]),
+            ("2", &[tiles::release::ID, "create_release"] as &[_]),
+            ("3", &[tiles::button_variants::ID, "default"] as &[_]),
+            ("4", &[tiles::notifications::ID, "notifications"] as &[_]),
+            ("5", &[tiles::tooltip::ID, "Change mode"] as &[_]),
+            ("6", &[tiles::contributions::ID] as &[_]),
+            ("7", &[tiles::payout::ID, "currency"] as &[_]),
+            ("8", &[tiles::release_pulse::ID, "assets"] as &[_]),
+        ];
+
+        for (number, path) in expected {
+            focus_tile(
+                &mut app,
+                &mut terminal,
+                number.chars().next().expect("digit"),
+            );
+            assert_focus(&app, path);
+        }
+
+        let before = app.state.focus.clone();
+        assert!(!press(&mut app, &mut terminal, KeyCode::Char('1')));
+        assert_eq!(
+            app.state.focus, before,
+            "plain digits are not focus hotkeys"
+        );
+        assert!(!press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Char('1'),
+            Modifiers {
+                ctrl: true,
+                alt: true,
+                ..Modifiers::NONE
+            },
+        ));
+        assert_eq!(
+            app.state.focus, before,
+            "Ctrl+Alt is not an Alt-only hotkey"
+        );
+    }
+
+    #[test]
+    fn theme_list_keeps_vertical_navigation_internal() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '1');
+        let path = [tiles::themes::ID, "themes"];
+        assert_focus(&app, &path);
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Char('j')));
+        assert!(press(&mut app, &mut terminal, KeyCode::Char('j')));
+        assert_focus(&app, &path);
+        assert!(press(&mut app, &mut terminal, KeyCode::Enter));
+        assert_ne!(app.state.theme(), Theme::default_dark());
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Char('k')));
+        assert_focus(&app, &path);
+        assert!(press(&mut app, &mut terminal, KeyCode::Enter));
+        assert_eq!(app.state.theme(), Theme::default_dark());
+
+        assert!(!press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Char('j'),
+            Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+        ));
+        assert_focus(&app, &path);
+    }
+
+    #[test]
+    fn release_tile_has_one_independent_control() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '2');
+        let path = [tiles::release::ID, "create_release"];
+
+        for code in [
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Char('h'),
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('l'),
+        ] {
+            assert!(!press(&mut app, &mut terminal, code), "{code:?} traversed");
+            assert_focus(&app, &path);
+        }
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::button_variants::ID, "default"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
+        assert_focus(&app, &path);
+    }
+
+    #[test]
+    fn button_tile_uses_tab_only_and_reaches_all_five_buttons() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '3');
+        let first = [tiles::button_variants::ID, "default"];
+
+        for code in [
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Char('h'),
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('l'),
+        ] {
+            assert!(!press(&mut app, &mut terminal, code), "{code:?} traversed");
+            assert_focus(&app, &first);
+        }
+
+        for id in ["secondary", "outline", "ghost", "destructive"] {
+            assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+            assert_focus(&app, &[tiles::button_variants::ID, id]);
+        }
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::notifications::ID, "notifications"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
+        assert_focus(&app, &[tiles::button_variants::ID, "destructive"]);
+    }
+
+    #[test]
+    fn notifications_list_keeps_j_and_k_internal_and_rejects_modifiers() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '4');
+        let path = [tiles::notifications::ID, "notifications"];
+
+        for (code, expected) in [
+            (KeyCode::Char('j'), "Security alerts"),
+            (KeyCode::Char('k'), "Transaction alerts"),
+            (KeyCode::Down, "Security alerts"),
+        ] {
+            draw(&mut app, &mut terminal);
+            let EventResult::Emit(AppMsg::Notifications(tiles::notifications::Msg::FocusChanged(
+                focused,
+            ))) = app
+                .ratcn
+                .handle_event(Event::Key(KeyEvent::new(code)), &app.state)
+            else {
+                panic!("{code:?} must move the List cursor, not just consume the key");
+            };
+            assert_eq!(focused, expected);
+            app.update(AppMsg::Notifications(
+                tiles::notifications::Msg::FocusChanged(focused),
+            ));
+            assert_focus(&app, &path);
+        }
+        assert!(!press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Char('k'),
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            },
+        ));
+        assert_focus(&app, &path);
+    }
+
+    #[test]
+    fn cycle_settings_use_tab_between_fields_and_horizontal_keys_for_values() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '5');
+        let change_mode = [tiles::tooltip::ID, "Change mode"];
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Char('l')));
+        assert_focus(&app, &change_mode);
+        draw(&mut app, &mut terminal);
+        assert!(rendered(&terminal).contains("Apply directly"));
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Char('h')));
+        draw(&mut app, &mut terminal);
+        assert!(rendered(&terminal).contains("Review first"));
+        for code in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Up,
+            KeyCode::Down,
+        ] {
+            assert!(
+                !press(&mut app, &mut terminal, code),
+                "{code:?} traversed fields"
+            );
+            assert_focus(&app, &change_mode);
+        }
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::tooltip::ID, "Retry policy"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::Char('l')));
+        draw(&mut app, &mut terminal);
+        assert!(rendered(&terminal).contains("Back off"));
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::tooltip::ID, "Updates"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
+        assert_focus(&app, &[tiles::tooltip::ID, "Retry policy"]);
+    }
+
+    #[test]
+    fn controls_free_tile_tabs_to_the_next_independent_control() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '6');
+        assert_focus(&app, &[tiles::contributions::ID]);
+        assert!(!press(&mut app, &mut terminal, KeyCode::Down));
+        assert_focus(&app, &[tiles::contributions::ID]);
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::payout::ID, "currency"]);
+    }
+
+    #[test]
+    fn payout_select_closes_on_first_tab_then_traverses_actions() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '7');
+        let currency = [tiles::payout::ID, "currency"];
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Enter));
+        assert!(!press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Char('j'),
+            Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+        ));
+        assert!(press(&mut app, &mut terminal, KeyCode::Char('j')));
+        assert_focus(&app, &currency);
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &currency);
+        assert!(press(&mut app, &mut terminal, KeyCode::Enter));
+        assert!(press(&mut app, &mut terminal, KeyCode::Enter));
+        draw(&mut app, &mut terminal);
+        assert!(rendered(&terminal).contains("EUR - Euro"));
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::payout::ID, "cancel"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::payout::ID, "save"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::release_pulse::ID, "assets"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
+        assert_focus(&app, &[tiles::payout::ID, "save"]);
+    }
+
+    #[test]
+    fn quake_assets_navigate_and_toggle_as_one_list_and_tab_leaves_it() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '8');
+        let path = [tiles::release_pulse::ID, "assets"];
+
+        for (code, expected) in [
+            (KeyCode::Char('j'), "Powerup icons"),
+            (KeyCode::Down, "Quad damage glow"),
+            (KeyCode::Char('k'), "Powerup icons"),
+            (KeyCode::Up, "Tournament skins"),
+            (KeyCode::End, "Quad damage glow"),
+            (KeyCode::Home, "Tournament skins"),
+        ] {
+            draw(&mut app, &mut terminal);
+            let EventResult::Emit(AppMsg::Quake(tiles::release_pulse::Msg::FocusChanged(focused))) =
+                app.ratcn
+                    .handle_event(Event::Key(KeyEvent::new(code)), &app.state)
+            else {
+                panic!("{code:?} must move the asset cursor without changing component focus");
+            };
+            assert_eq!(focused, expected);
+            app.update(AppMsg::Quake(tiles::release_pulse::Msg::FocusChanged(
+                focused,
+            )));
+            assert_focus(&app, &path);
+        }
+        for code in [KeyCode::Enter, KeyCode::Char(' ')] {
+            draw(&mut app, &mut terminal);
+            let EventResult::Emit(AppMsg::Quake(tiles::release_pulse::Msg::Toggled(value))) = app
+                .ratcn
+                .handle_event(Event::Key(KeyEvent::new(code)), &app.state)
+            else {
+                panic!("{code:?} must toggle the focused asset");
+            };
+            assert_eq!(value, "Tournament skins");
+            app.update(AppMsg::Quake(tiles::release_pulse::Msg::Toggled(value)));
+            assert_focus(&app, &path);
+        }
+        assert!(press(&mut app, &mut terminal, KeyCode::Char('k')));
+        assert_focus(&app, &path); // At the first item, navigation stays in the list.
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::themes::ID, "themes"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
+        assert_focus(&app, &path);
+        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
+        assert_focus(&app, &[tiles::payout::ID, "save"]);
+    }
+
+    #[test]
+    fn disabled_controls_are_skipped_by_traversal_and_focus_hotkeys() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '3');
+        assert!(press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Char('d'),
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            },
+        ));
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::contributions::ID]);
+        focus_tile(&mut app, &mut terminal, '6');
+        let before = app.state.focus.clone();
+        assert!(!press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Char('3'),
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            },
+        ));
+        assert_eq!(
+            app.state.focus, before,
+            "disabled tile accepted its focus hotkey"
+        );
+        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
+        assert_eq!(
+            app.state.focus, before,
+            "disabled controls entered traversal"
+        );
+    }
+
+    #[test]
+    fn plain_escape_dismisses_screensaver_and_restores_focus() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '3');
+        let return_focus = app.state.focus.clone();
+        assert!(press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Char('s'),
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            },
+        ));
+        assert!(app.state.modals_state.is_open(screensaver::ID));
+
+        let _ = press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Esc,
+            Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+        );
+        assert!(
+            app.state.modals_state.is_open(screensaver::ID),
+            "modified Esc must not dismiss"
+        );
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Esc));
+        assert!(!app.state.modals_state.is_open(screensaver::ID));
+        assert_eq!(app.state.focus, return_focus);
     }
 }

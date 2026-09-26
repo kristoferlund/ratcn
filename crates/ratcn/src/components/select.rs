@@ -847,16 +847,6 @@ fn trigger_area(area: Rect) -> Rect {
     }
 }
 
-/// Tab or `BackTab`: the keys that move focus out of the Select entirely. Ctrl
-/// and Alt variants belong to the app, so they are not traversal here.
-fn is_traversal(key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Tab => !key.modifiers.any(),
-        KeyCode::BackTab => !key.modifiers.ctrl && !key.modifiers.alt,
-        _ => false,
-    }
-}
-
 impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
     fn disabled_at(&self, index: usize) -> bool {
         list_core::disabled_at(&self.items, index)
@@ -918,7 +908,7 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
             return EventResult::Ignored;
         }
         let open = self.is_open(state);
-        if open && is_traversal(key) {
+        if open && key.traversal_step().is_some() {
             return self.toggle(false);
         }
         if open {
@@ -1045,10 +1035,11 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         state: &S,
         _ctx: &mut EventCtx<'_>,
     ) -> EventResult<M> {
-        if self.disabled || self.items.is_empty() {
+        if self.disabled {
             return EventResult::Ignored;
         }
         match event {
+            Event::Mouse(_) if self.items.is_empty() => EventResult::Ignored,
             Event::Mouse(mouse) => match mouse.kind {
                 MouseKind::Click(MouseButton::Left) => self.toggle(!self.is_open(state)),
                 _ => EventResult::Ignored,
@@ -1434,6 +1425,82 @@ mod tests {
             driver.event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state),
             EventResult::Emit(Msg::Open(false))
         );
+    }
+
+    #[test]
+    fn open_select_accepts_both_shift_tab_representations_but_not_ctrl_or_alt() {
+        let open = State {
+            open: true,
+            ..State::default()
+        };
+        let mut component = select(items());
+        component.prepare(&open);
+        let key = |code, modifiers| Event::Key(KeyEvent { code, modifiers });
+
+        for code in [KeyCode::Tab, KeyCode::BackTab] {
+            assert_eq!(
+                component.handle_event(
+                    &key(
+                        code,
+                        Modifiers {
+                            shift: true,
+                            ..Modifiers::NONE
+                        },
+                    ),
+                    &open,
+                    &mut EventCtx::default(),
+                ),
+                EventResult::Emit(Msg::Open(false))
+            );
+        }
+        for code in [KeyCode::Tab, KeyCode::BackTab] {
+            for modifiers in [
+                Modifiers {
+                    ctrl: true,
+                    shift: true,
+                    ..Modifiers::NONE
+                },
+                Modifiers {
+                    alt: true,
+                    shift: true,
+                    ..Modifiers::NONE
+                },
+            ] {
+                assert_eq!(
+                    component.handle_event(&key(code, modifiers), &open, &mut EventCtx::default(),),
+                    EventResult::Ignored
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn open_empty_select_can_close_with_escape_or_traversal() {
+        let open = State {
+            open: true,
+            focus: FocusState::intent(["fruit"]),
+            ..State::default()
+        };
+        let mut driver = driver(20, 4);
+        render_select(&mut driver, &open, Rect::new(0, 0, 20, 1), &[]);
+
+        for event in [
+            Event::Key(KeyEvent::new(KeyCode::Esc)),
+            Event::Key(KeyEvent::new(KeyCode::Tab)),
+            Event::Key(KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Modifiers::NONE
+                },
+            }),
+        ] {
+            assert_eq!(
+                driver.event(event, &open),
+                EventResult::Emit(Msg::Open(false)),
+                "the parked focus path must keep an already-open empty Select dismissable"
+            );
+        }
     }
 
     #[test]

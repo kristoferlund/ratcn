@@ -463,22 +463,22 @@ impl<S, M> Checkbox<S, M> {
             .width()
     }
 
-    /// The message that flips the bound state.
-    fn toggle(&self) -> EventResult<M> {
-        let Some((_, on_change)) = &self.checked else {
+    /// The message that flips the current bound state.
+    fn toggle(&self, state: &S) -> EventResult<M> {
+        let Some((read, on_change)) = &self.checked else {
             return EventResult::Ignored;
         };
-        EventResult::Emit(on_change(!self.resolved_checked))
+        EventResult::Emit(on_change(!read(state)))
     }
 
     /// The keys a checkbox answers: its commit keys, and nothing else.
     /// Modified keys belong to the app, so Shift+Enter passes through.
-    fn handle_key(&self, key: KeyEvent) -> EventResult<M> {
+    fn handle_key(&self, key: KeyEvent, state: &S) -> EventResult<M> {
         if key.modifiers.any() {
             return EventResult::Ignored;
         }
         match key.code {
-            KeyCode::Enter | KeyCode::Char(' ') => self.toggle(),
+            KeyCode::Enter | KeyCode::Char(' ') => self.toggle(state),
             _ => EventResult::Ignored,
         }
     }
@@ -509,7 +509,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
     fn handle_event(
         &mut self,
         event: &Event,
-        _state: &S,
+        state: &S,
         _ctx: &mut EventCtx<'_>,
     ) -> EventResult<M> {
         if !self.can_act() {
@@ -517,10 +517,10 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
         }
         match event {
             Event::Mouse(mouse) => match mouse.kind {
-                MouseKind::Click(MouseButton::Left) => self.toggle(),
+                MouseKind::Click(MouseButton::Left) => self.toggle(state),
                 _ => EventResult::Ignored,
             },
-            Event::Key(key) => self.handle_key(*key),
+            Event::Key(key) => self.handle_key(*key, state),
             _ => EventResult::Ignored,
         }
     }
@@ -621,6 +621,28 @@ mod tests {
                 &state
             ),
             EventResult::Ignored
+        );
+    }
+
+    #[test]
+    fn consecutive_events_use_current_checked_state_without_redraw() {
+        let mut driver = driver();
+        let mut state = State::default();
+        render(&mut driver, &state);
+
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Vim(true))
+        );
+        state.vim = true;
+        assert_eq!(
+            driver.event(key(KeyCode::Char(' ')), &state),
+            EventResult::Emit(Msg::Vim(false))
+        );
+        state.vim = false;
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 8, 2), &state),
+            EventResult::Emit(Msg::Vim(true))
         );
     }
 

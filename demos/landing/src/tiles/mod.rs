@@ -9,14 +9,14 @@ pub mod themes;
 pub mod tooltip;
 
 use ratatui::layout::Rect;
-use ratcn::runtime::{DeclareCtx, ScopeOptions, TabWrap};
+use ratcn::runtime::{DeclareCtx, ScopeOptions};
 
 use crate::{AppMsg, AppState};
 
 pub struct Tile {
     pub id: &'static str,
-    /// A tile with controls is a Tab-trapping scope; a controls-free tile is
-    /// a plain focusable leaf.
+    /// A tile with controls groups its children; a controls-free tile is a
+    /// plain focusable leaf.
     pub has_controls: bool,
     pub declare: fn(&mut DeclareCtx<'_, AppState, AppMsg>),
 }
@@ -69,7 +69,7 @@ pub const TILES: [Tile; 8] = [
 pub fn declare(index: usize, ctx: &mut DeclareCtx<'_, AppState, AppMsg>, area: Rect) {
     let tile = &TILES[index];
     let options = if tile.has_controls {
-        ScopeOptions::default().tab_wrap(TabWrap::Wrap)
+        ScopeOptions::default()
     } else {
         ScopeOptions::default().focusable(true)
     };
