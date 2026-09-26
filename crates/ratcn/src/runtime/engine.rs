@@ -298,7 +298,7 @@ impl ViewportRecord {
 /// together.
 #[derive(Debug, Clone, Copy)]
 struct Resolved<'a> {
-    focus: &'a FocusState,
+    focus: &'a [ChildId],
     hover: &'a [ChildId],
 }
 
@@ -446,6 +446,8 @@ struct Layer<Msg> {
 
 pub(crate) struct Surface<State, Msg> {
     nodes: Vec<Node<State, Msg>>,
+    /// Scoped identity lookup; child vectors retain declaration order.
+    child_index: HashMap<(Option<usize>, ChildId), usize>,
     roots: Vec<usize>,
     /// Every layer, in declaration order, indexed by the layer number nodes
     /// carry. Nesting appends, so scanning backwards reaches the topmost
@@ -459,6 +461,7 @@ impl<State, Msg> Default for Surface<State, Msg> {
     fn default() -> Self {
         Self {
             nodes: Vec::new(),
+            child_index: HashMap::new(),
             roots: Vec::new(),
             layers: Vec::new(),
             viewports: Vec::new(),
@@ -533,15 +536,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// Where `index` sits in this frame's resolved focus and hover — the four
     /// flags [`PaintCtx`] reports.
     fn interaction_flags(&self, index: usize, resolved: Resolved<'_>) -> InteractionFlags {
-        let focus_path = resolved.focus.path();
-        let effective = self
-            .leaf_of(focus_path)
-            .is_some_and(|target| self.takes_focus(target));
-        let (focused, contains_focus) = if effective {
-            self.path_match(index, focus_path)
-        } else {
-            (false, false)
-        };
+        let (focused, contains_focus) = self.path_match(index, resolved.focus);
         let (hovered, contains_hover) = self.path_match(index, resolved.hover);
         InteractionFlags {
             focused,
@@ -665,10 +660,11 @@ impl<State, Msg> Surface<State, Msg> {
     /// whole. The empty path names no node: every declaration has at least its
     /// own id.
     fn leaf_of(&self, path: &[ChildId]) -> Option<usize> {
-        let matched = self.nodes_along_path(path);
-        (matched.len() == path.len())
-            .then(|| matched.last().copied())
-            .flatten()
+        let mut parent = None;
+        for id in path {
+            parent = Some(*self.child_index.get(&(parent, id.clone()))?);
+        }
+        parent
     }
 
     /// The node indices along `path`, outermost first, stopping at the first
@@ -678,12 +674,7 @@ impl<State, Msg> Surface<State, Msg> {
         let mut parent = None;
         let mut matched = Vec::new();
         for id in path {
-            let Some(index) = self
-                .children(parent)
-                .iter()
-                .copied()
-                .find(|&index| self.nodes[index].id == *id)
-            else {
+            let Some(&index) = self.child_index.get(&(parent, id.clone())) else {
                 break;
             };
             matched.push(index);
@@ -1484,16 +1475,14 @@ impl<State, Msg> RenderPass<State, Msg> {
         is_scope: bool,
     ) -> usize {
         let parent = self.parent_stack.last().copied();
-        let siblings = parent.map_or(self.surface.roots.as_slice(), |index| {
-            self.surface.nodes[index].children.as_slice()
-        });
+        let index = self.surface.nodes.len();
         assert!(
-            !siblings
-                .iter()
-                .any(|&index| self.surface.nodes[index].id == id),
+            self.surface
+                .child_index
+                .insert((parent, id.clone()), index)
+                .is_none(),
             "duplicate child id `{id}` in one declaration scope"
         );
-        let index = self.surface.nodes.len();
         let layer = self.current_layer();
         let viewport = self.open_viewport;
         self.surface.nodes.push(Node {
@@ -1851,7 +1840,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         *deferred = rest;
         // Deferred thunks carry `node: None`, so no flag is ever read from this.
         let resolved = Resolved {
-            focus: &focus::UNRESOLVED,
+            focus: &[],
             hover: &[],
         };
         for QueuedPaint { slot, paint } in theirs {
@@ -2314,12 +2303,17 @@ impl<State, Msg> Ratcn<State, Msg> {
         // declaration was built from.
         let resolved_focus = pass.surface.resolve_focus(focus_snapshot);
         let resolved_hover = self.resolve_hover(&pass.surface);
+        let effective_focus = pass
+            .surface
+            .leaf_of(resolved_focus.path())
+            .filter(|&target| pass.surface.takes_focus(target))
+            .map_or(&[][..], |_| resolved_focus.path());
         pass.replay_paint(
             buffer,
             state,
             theme,
             Resolved {
-                focus: &resolved_focus,
+                focus: effective_focus,
                 hover: &resolved_hover,
             },
         );

@@ -7,13 +7,13 @@
 mod frame {
     use std::hint::black_box;
 
-    use criterion::{Criterion, criterion_group};
-    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+    use criterion::{BenchmarkId, Criterion, criterion_group};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
     use ratcn::{
         Button, Dialog, List, ListItem, Theme,
         runtime::{
-            DeclareCtx, Event, FocusState, Modifiers, MouseButton, MouseEvent, MouseKind, Ratcn,
-            ScopeOptions,
+            ChildId, DeclareCtx, Event, FocusState, Modifiers, MouseButton, MouseEvent, MouseKind,
+            Ratcn, ScopeOptions,
         },
     };
 
@@ -118,6 +118,27 @@ mod frame {
         });
     }
 
+    fn sibling_scaling(c: &mut Criterion) {
+        let mut group = c.benchmark_group("sibling_scopes");
+        let area = Rect::new(0, 0, 1, 1);
+        let theme = Theme::default_dark();
+        for count in [100, 1_000, 10_000] {
+            let ids: Vec<ChildId> = (0..count).map(|i| format!("node-{i}").into()).collect();
+            let mut runtime = Ratcn::<(), ()>::new();
+            let mut buffer = Buffer::empty(area);
+            group.bench_with_input(BenchmarkId::from_parameter(count), &ids, |b, ids| {
+                b.iter(|| {
+                    runtime.render_into(&mut buffer, area, &(), &theme, |ctx| {
+                        for id in ids {
+                            ctx.scope(id, Rect::ZERO, ScopeOptions::default(), |_| {});
+                        }
+                    })
+                });
+            });
+        }
+        group.finish();
+    }
+
     fn route_click(c: &mut Criterion) {
         let (mut ratcn, mut terminal, state, theme) = surface();
         terminal
@@ -186,6 +207,7 @@ mod frame {
     criterion_group!(
         benches,
         render,
+        sibling_scaling,
         route_click,
         render_list_1000,
         render_dialog_wrapped
