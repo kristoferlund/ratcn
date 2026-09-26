@@ -448,6 +448,10 @@ type MultiSelectionFn<S, T> = Box<dyn Fn(&S, &T) -> bool>;
 type OnChangeFn<T, M> = Box<dyn Fn(T) -> M>;
 type OnFocusChangeFn<T, M> = Box<dyn Fn(T, usize) -> M>;
 type ScrollFn<S> = Box<dyn Fn(&S) -> usize>;
+type FocusBinding<S, T, M> = (ReadFn<S, T>, OnFocusChangeFn<T, M>);
+type SelectionBinding<S, T, M> = (ReadFn<S, T>, OnChangeFn<T, M>);
+type MultiSelectionBinding<S, T, M> = (MultiSelectionFn<S, T>, OnChangeFn<T, M>);
+type ScrollBinding<S, M> = (ScrollFn<S>, Box<dyn Fn(usize) -> M>);
 type PaintItemFn<S, T> = Box<dyn for<'a> Fn(&S, ListItemState<'a, T>) -> Text<'static>>;
 type StyleFn = Box<dyn Fn(&Theme) -> ListStyle>;
 
@@ -502,14 +506,10 @@ type StyleFn = Box<dyn Fn(&Theme) -> ListStyle>;
 /// ```
 pub struct List<T, S, M> {
     items: Vec<ListItem<T>>,
-    focused_item: Option<ReadFn<S, T>>,
-    on_focus_change: Option<OnFocusChangeFn<T, M>>,
-    selected: Option<ReadFn<S, T>>,
-    on_select: Option<OnChangeFn<T, M>>,
-    selected_many: Option<MultiSelectionFn<S, T>>,
-    on_toggle: Option<OnChangeFn<T, M>>,
-    scroll: Option<ScrollFn<S>>,
-    on_scroll_change: Option<Box<dyn Fn(usize) -> M>>,
+    focused_item: Option<FocusBinding<S, T, M>>,
+    selected: Option<SelectionBinding<S, T, M>>,
+    selected_many: Option<MultiSelectionBinding<S, T, M>>,
+    scroll: Option<ScrollBinding<S, M>>,
     disabled: bool,
     paint_item: Option<PaintItemFn<S, T>>,
     style: Option<StyleFn>,
@@ -547,13 +547,9 @@ impl<T, S, M> List<T, S, M> {
         Self {
             items: items.into_iter().map(Into::into).collect(),
             focused_item: None,
-            on_focus_change: None,
             selected: None,
-            on_select: None,
             selected_many: None,
-            on_toggle: None,
             scroll: None,
-            on_scroll_change: None,
             disabled: false,
             paint_item: None,
             style: None,
@@ -582,8 +578,7 @@ impl<T, S, M> List<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_change: impl Fn(T, usize) -> M + 'static,
     ) -> Self {
-        self.focused_item = Some(Box::new(read));
-        self.on_focus_change = Some(Box::new(on_change));
+        self.focused_item = Some((Box::new(read), Box::new(on_change)));
         self
     }
 
@@ -612,8 +607,7 @@ impl<T, S, M> List<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_select: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.selected = Some(Box::new(read));
-        self.on_select = Some(Box::new(on_select));
+        self.selected = Some((Box::new(read), Box::new(on_select)));
         self
     }
 
@@ -643,8 +637,7 @@ impl<T, S, M> List<T, S, M> {
         read: impl Fn(&S, &T) -> bool + 'static,
         on_toggle: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.selected_many = Some(Box::new(read));
-        self.on_toggle = Some(Box::new(on_toggle));
+        self.selected_many = Some((Box::new(read), Box::new(on_toggle)));
         self
     }
 
@@ -678,8 +671,7 @@ impl<T, S, M> List<T, S, M> {
         read: impl Fn(&S) -> usize + 'static,
         on_change: impl Fn(usize) -> M + 'static,
     ) -> Self {
-        self.scroll = Some(Box::new(read));
-        self.on_scroll_change = Some(Box::new(on_change));
+        self.scroll = Some((Box::new(read), Box::new(on_change)));
         self
     }
 
@@ -778,16 +770,18 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
     }
 
     fn focused_index(&self, state: &S) -> Option<usize> {
-        list_core::index_of(&self.items, &(self.focused_item.as_ref()?)(state)?)
+        let (read, _) = self.focused_item.as_ref()?;
+        list_core::index_of(&self.items, &read(state)?)
     }
 
     fn selected_index(&self, state: &S) -> Option<usize> {
-        list_core::index_of(&self.items, &(self.selected.as_ref()?)(state)?)
+        let (read, _) = self.selected.as_ref()?;
+        list_core::index_of(&self.items, &read(state)?)
     }
 
     fn move_focus(&self, index: usize, state: &S, area: Rect) -> EventResult<M> {
-        match &self.on_focus_change {
-            Some(on_change) => EventResult::Emit(on_change(
+        match &self.focused_item {
+            Some((_, on_change)) => EventResult::Emit(on_change(
                 self.items[index].value().clone(),
                 self.offset_for_focus(state, area, index),
             )),
@@ -799,16 +793,16 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
         let current = self
             .scroll
             .as_ref()
-            .map_or(self.viewport.painted_offset(), |read| read(state));
+            .map_or(self.viewport.painted_offset(), |(read, _)| read(state));
         self.viewport
             .cursor_visible_offset(area, self.items.len(), current, Some(index))
     }
 
     fn select(&self, index: usize) -> EventResult<M> {
-        if let Some(on_select) = &self.on_select {
+        if let Some((_, on_select)) = &self.selected {
             return EventResult::Emit(on_select(self.items[index].value().clone()));
         }
-        if let Some(on_toggle) = &self.on_toggle {
+        if let Some((_, on_toggle)) = &self.selected_many {
             return EventResult::Emit(on_toggle(self.items[index].value().clone()));
         }
         EventResult::Ignored
@@ -821,7 +815,6 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
         area: Rect,
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<M> {
-        let painted = self.viewport.painted_offset();
         // The wheel moves the view, never the cursor, and holds it there on
         // the list's identity — which outlives this instance, and is what
         // lets an unbound list scroll at all.
@@ -832,10 +825,10 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
         else {
             return EventResult::Ignored;
         };
-        let Some(on_change) = &self.on_scroll_change else {
+        let Some((read, on_change)) = &self.scroll else {
             return EventResult::Consumed;
         };
-        let current = self.scroll.as_ref().map_or(painted, |read| read(state));
+        let current = read(state);
         if current == next {
             EventResult::Consumed
         } else {
@@ -877,7 +870,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         let area = ctx.area();
         let state = ctx.state();
         let focused_item = self.focused_index(state);
-        let requested = self.scroll.as_ref().map(|scroll| scroll(state));
+        let requested = self.scroll.as_ref().map(|(read, _)| read(state));
         // The wheel holds the view against the list as it stood. While nothing
         // has moved under it, the held offset is painted as it is — the wheel
         // may leave the cursor off-screen. Once the cursor moves, or the items
@@ -947,7 +940,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
             // Asked per painted row rather than looked up in a list of every
             // selected index, which would make painting quadratic.
             |index, value| match &self.selected_many {
-                Some(selected_many) => selected_many(state, value),
+                Some((selected_many, _)) => selected_many(state, value),
                 None => selected_row == Some(index),
             },
             |row| {

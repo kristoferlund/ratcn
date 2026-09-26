@@ -537,22 +537,24 @@ type ReadOpenFn<S> = Rc<dyn Fn(&S) -> bool>;
 type OnOpenChangeFn<M> = Rc<dyn Fn(bool) -> M>;
 type OpenBinding<S, M> = (ReadOpenFn<S>, OnOpenChangeFn<M>);
 type OnChangeFn<T, M> = Rc<dyn Fn(T) -> M>;
+type ItemBinding<S, T, M> = (ReadFn<S, T>, OnChangeFn<T, M>);
 type PaintItemFn<S, T> = Rc<dyn for<'a> Fn(&S, ListItemState<'a, T>) -> Text<'static>>;
 type StyleFn = Rc<dyn Fn(&Theme) -> SelectStyle>;
 
-fn bound_index<T: PartialEq, S>(
+fn bound_index<T: PartialEq, S, M>(
     items: &[ListItem<T>],
     state: &S,
-    read: Option<&ReadFn<S, T>>,
+    binding: Option<&ItemBinding<S, T, M>>,
 ) -> Option<usize> {
-    list_core::index_of(items, &(read?)(state)?)
+    let (read, _) = binding?;
+    list_core::index_of(items, &read(state)?)
 }
 
-fn resolved_cursor_index<T: PartialEq, S>(
+fn resolved_cursor_index<T: PartialEq, S, M>(
     items: &[ListItem<T>],
     state: &S,
-    focused: Option<&ReadFn<S, T>>,
-    selected: Option<&ReadFn<S, T>>,
+    focused: Option<&ItemBinding<S, T, M>>,
+    selected: Option<&ItemBinding<S, T, M>>,
 ) -> Option<usize> {
     // A bound value is never second-guessed: a cursor resting on a disabled
     // option stays there and is painted there, exactly as in `List`, and the
@@ -562,12 +564,12 @@ fn resolved_cursor_index<T: PartialEq, S>(
         .or_else(|| linear_nav::first_enabled(items.len(), |i| list_core::disabled_at(items, i)))
 }
 
-fn emit_item<T: Clone, M>(
-    handler: Option<&OnChangeFn<T, M>>,
+fn emit_item<T: Clone, S, M>(
+    binding: Option<&ItemBinding<S, T, M>>,
     items: &[ListItem<T>],
     index: usize,
 ) -> EventResult<M> {
-    handler.map_or(EventResult::Ignored, |handler| {
+    binding.map_or(EventResult::Ignored, |(_, handler)| {
         EventResult::Emit(handler(items[index].value().clone()))
     })
 }
@@ -610,18 +612,12 @@ fn emit_item<T: Clone, M>(
 /// Other modified keys are ignored so app shortcuts can handle
 /// them after they bubble through the popup. Paste events bubble for the same
 /// reason; Select has no text-editing behavior.
-#[expect(
-    clippy::struct_field_names,
-    reason = "on_select matches the public selection binding vocabulary"
-)]
 pub struct Select<T, S, M> {
     items: Rc<[ListItem<T>]>,
     placeholder: String,
     open: Option<OpenBinding<S, M>>,
-    focused_item: Option<ReadFn<S, T>>,
-    on_focus_change: Option<OnChangeFn<T, M>>,
-    selected: Option<ReadFn<S, T>>,
-    on_select: Option<OnChangeFn<T, M>>,
+    focused_item: Option<ItemBinding<S, T, M>>,
+    selected: Option<ItemBinding<S, T, M>>,
     max_visible: u16,
     disabled: bool,
     paint_item: Option<PaintItemFn<S, T>>,
@@ -658,9 +654,7 @@ impl<T, S, M> Select<T, S, M> {
             placeholder: String::new(),
             open: None,
             focused_item: None,
-            on_focus_change: None,
             selected: None,
-            on_select: None,
             max_visible: DEFAULT_MAX_VISIBLE_ITEMS,
             disabled: false,
             paint_item: None,
@@ -721,8 +715,7 @@ impl<T, S, M> Select<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_change: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.focused_item = Some(Rc::new(read));
-        self.on_focus_change = Some(Rc::new(on_change));
+        self.focused_item = Some((Rc::new(read), Rc::new(on_change)));
         self
     }
 
@@ -738,8 +731,7 @@ impl<T, S, M> Select<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_select: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.selected = Some(Rc::new(read));
-        self.on_select = Some(Rc::new(on_select));
+        self.selected = Some((Rc::new(read), Rc::new(on_select)));
         self
     }
 
@@ -878,11 +870,11 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
     }
 
     fn move_cursor(&self, index: usize) -> EventResult<M> {
-        emit_item(self.on_focus_change.as_ref(), &self.items, index)
+        emit_item(self.focused_item.as_ref(), &self.items, index)
     }
 
     fn select(&self, index: usize) -> EventResult<M> {
-        emit_item(self.on_select.as_ref(), &self.items, index)
+        emit_item(self.selected.as_ref(), &self.items, index)
     }
 
     fn keyboard_enabled(&self) -> bool {
@@ -993,9 +985,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             items: Rc::clone(&self.items),
             open: Rc::clone(open),
             focused_item: self.focused_item.clone(),
-            on_focus_change: self.on_focus_change.clone(),
             selected: self.selected.clone(),
-            on_select: self.on_select.clone(),
             paint_item: self.paint_item.clone(),
             selected_marker: self.selected_marker.clone(),
             unselected_marker: self.unselected_marker.clone(),
@@ -1062,10 +1052,8 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
 struct SelectPanel<T, S, M> {
     items: Rc<[ListItem<T>]>,
     open: ReadOpenFn<S>,
-    focused_item: Option<ReadFn<S, T>>,
-    on_focus_change: Option<OnChangeFn<T, M>>,
-    selected: Option<ReadFn<S, T>>,
-    on_select: Option<OnChangeFn<T, M>>,
+    focused_item: Option<ItemBinding<S, T, M>>,
+    selected: Option<ItemBinding<S, T, M>>,
     paint_item: Option<PaintItemFn<S, T>>,
     selected_marker: Option<String>,
     unselected_marker: Option<String>,
@@ -1184,15 +1172,15 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                 &self.items,
                 option,
                 cursor,
-                self.on_select.is_some(),
+                self.selected.is_some(),
             ) {
                 RowIntent::BlockPress => EventResult::Consumed,
-                RowIntent::Commit(index) => emit_item(self.on_select.as_ref(), &self.items, index),
+                RowIntent::Commit(index) => emit_item(self.selected.as_ref(), &self.items, index),
                 // Motion means nothing without a cursor to move: a panel bound
                 // for pointer selection alone lets it through to whatever is
                 // under it, rather than swallowing every drift over an option.
                 RowIntent::Focus(index) if self.focused_item.is_some() => {
-                    emit_item(self.on_focus_change.as_ref(), &self.items, index)
+                    emit_item(self.focused_item.as_ref(), &self.items, index)
                 }
                 RowIntent::Stay if self.focused_item.is_some() => EventResult::Consumed,
                 // The popup occludes exactly its own footprint, so a click

@@ -469,6 +469,7 @@ pub type Tab<T> = list_core::ListItem<T>;
 type ReadFn<S, T> = Box<dyn Fn(&S) -> Option<T>>;
 /// Builds the app's message from a tab value.
 type OnChangeFn<T, M> = Box<dyn Fn(T) -> M>;
+type ItemBinding<S, T, M> = (ReadFn<S, T>, OnChangeFn<T, M>);
 /// Resolves the tabs' style from the active theme (the style override).
 type StyleFn = Box<dyn Fn(&Theme) -> TabsStyle>;
 
@@ -523,10 +524,8 @@ type StyleFn = Box<dyn Fn(&Theme) -> TabsStyle>;
 pub struct Tabs<T, S, M> {
     items: Vec<Tab<T>>,
     /// Current semantic state bindings; events re-read these between frames.
-    focused_item: Option<ReadFn<S, T>>,
-    on_focus_change: Option<OnChangeFn<T, M>>,
-    selected: Option<ReadFn<S, T>>,
-    on_select: Option<OnChangeFn<T, M>>,
+    focused_item: Option<ItemBinding<S, T, M>>,
+    selected: Option<ItemBinding<S, T, M>>,
     activation: TabsActivation,
     size: TabsSize,
     style: Option<StyleFn>,
@@ -565,9 +564,7 @@ impl<T, S, M> Tabs<T, S, M> {
         Self {
             items: tabs.into_iter().map(Into::into).collect(),
             focused_item: None,
-            on_focus_change: None,
             selected: None,
-            on_select: None,
             activation: TabsActivation::Manual,
             size: TabsSize::Small,
             style: None,
@@ -600,8 +597,7 @@ impl<T, S, M> Tabs<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_change: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.focused_item = Some(Box::new(read));
-        self.on_focus_change = Some(Box::new(on_change));
+        self.focused_item = Some((Box::new(read), Box::new(on_change)));
         self
     }
 
@@ -623,8 +619,7 @@ impl<T, S, M> Tabs<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_select: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.selected = Some(Box::new(read));
-        self.on_select = Some(Box::new(on_select));
+        self.selected = Some((Box::new(read), Box::new(on_select)));
         self
     }
 
@@ -716,7 +711,8 @@ where
     /// The index of the selected tab, or `None` when nothing is selected yet or
     /// the stored value matches no tab (render/route defensively).
     fn selected_index(&self, state: &S) -> Option<usize> {
-        let value = (self.selected.as_ref()?)(state)?;
+        let (read, _) = self.selected.as_ref()?;
+        let value = read(state)?;
         self.index_of(&value)
     }
 
@@ -728,7 +724,7 @@ where
             TabsActivation::Manual => self
                 .focused_item
                 .as_ref()
-                .and_then(|read| self.index_of(&read(state)?)),
+                .and_then(|(read, _)| self.index_of(&read(state)?)),
         }
     }
 
@@ -742,8 +738,8 @@ where
 
     /// Commit the tab at `index` as the selection when wired.
     fn select(&self, index: usize) -> EventResult<M> {
-        match &self.on_select {
-            Some(on_select) => EventResult::Emit(on_select(self.items[index].value().clone())),
+        match &self.selected {
+            Some((_, on_select)) => EventResult::Emit(on_select(self.items[index].value().clone())),
             None => EventResult::Ignored,
         }
     }
@@ -751,8 +747,8 @@ where
     /// Move focus to the tab at `index`, or let the event bubble when no focus
     /// handler is wired.
     fn move_focus(&self, index: usize) -> EventResult<M> {
-        match &self.on_focus_change {
-            Some(on_focus_change) => {
+        match &self.focused_item {
+            Some((_, on_focus_change)) => {
                 EventResult::Emit(on_focus_change(self.items[index].value().clone()))
             }
             None => EventResult::Ignored,
