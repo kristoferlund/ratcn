@@ -270,4 +270,6 @@ pointer. It cannot know what the drag *meant*, though — clear your own drag
 state in the same `update` that removes the thing.
 
 For gestures that do not fit this shape, `EventCtx::transient` and
-`EventCtx::capture_pointer` are public and documented on docs.rs.
+`EventCtx::capture_pointer` are public and documented on docs.rs. Check
+`EventCtx::pointer_captured` before continuing such a gesture: a descendant's
+captured drag bubbles up too, and only the owner sees it as captured.

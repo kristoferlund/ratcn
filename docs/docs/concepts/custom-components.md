@@ -134,9 +134,10 @@ app state. The declared area needs no cache: `EventCtx::area` hands
 
 **Transient interaction state** — gesture mechanics that must outlive the
 instance itself, such as a drag anchor. A field would reset every frame, so
-`ctx.transient::<T>()` stores one value per identity path instead, kept for as
-long as that path keeps being declared. See [Dragging](./dragging) for the
-standard use.
+`ctx.transient::<T>()` stores one value per type at an identity path instead,
+kept for as long as that path keeps being declared. Each type has its own slot,
+so a component's transients never collide with those `ctx.drag` keeps. See
+[Dragging](./dragging) for the standard use.
 
 `declare` can read the same value back with `DeclareCtx::transient::<T>()` — that
 is how a wheel scroll survives a redraw. Prefer writing from the event side,

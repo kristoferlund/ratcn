@@ -7,8 +7,17 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `EventCtx::pointer_captured` reports whether the current event arrived through
+  this component's own pointer capture, rather than by hit-test or from a
+  captured descendant.
+
 ### Changed
 
+- A path keeps one transient per type, so a component can hold its own
+  `EventCtx::transient` state alongside `EventCtx::drag`. Asking for a second
+  type no longer panics.
 - Landing demo Tab traversal now continues between tiles; arrows and Vim keys
   remain within item controls. The scroll-area demo uses Tab/Shift+Tab between
   buttons rather than remapping arrows to focus traversal.
@@ -17,6 +26,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `ScrollArea`'s scrollbar thumb can be dragged with the mouse. A press on the
+  thumb holds until movement and keeps the grabbed point; a press on the track
+  jumps the view. Previously the thumb was paint-only.
 - Enter/Space in the showcase demo list selects and focuses the chosen demo
   without forwarding that key to its controls; Right still enters the preview.
 - Shift+Tab traverses backward whether a backend sends `BackTab` or shifted

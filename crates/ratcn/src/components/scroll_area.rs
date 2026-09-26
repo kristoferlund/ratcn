@@ -6,15 +6,15 @@
 //! traversal. Popup, hint, modal, and deferred paint escape the ordinary clip.
 
 use ratatui::{
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Style},
     widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::Theme;
 use crate::runtime::{
-    Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MouseKind, ScopeOptions,
-    ScrollDirection,
+    CellOffset, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx, EventResult,
+    KeyCode, MouseButton, MouseEvent, MouseKind, ScopeOptions, ScrollDirection,
 };
 use crate::theme::resolve_style;
 
@@ -40,7 +40,7 @@ impl ScrollAreaStyle {
     }
 }
 
-/// Where the wheel, a key, or a reveal left the view.
+/// Where the wheel, a key, a gutter drag, or a reveal left the view.
 ///
 /// Event handling writes it and the next declaration reads it, which is what
 /// lets an unbound area scroll at all and what carries a reveal into the frame
@@ -67,15 +67,17 @@ type StyleFn = Box<dyn Fn(&Theme) -> ScrollAreaStyle>;
 ///
 /// One column is reserved at the right for the scrollbar. The
 /// [`content`](Self::content) closure receives the remaining width and exactly
-/// `content_height` logical rows, however many of them are visible. The
-/// scrollbar is an indicator of where the view sits.
+/// `content_height` logical rows, however many of them are visible. Press the
+/// thumb to drag it from the grabbed point; press the track to jump the view.
 ///
 /// The offset is the area's own until [`scroll`](Self::scroll) binds it. Wheel,
-/// Page Up, Page Down, Home, and End reach descendants first; what none of them
-/// handles scrolls the area. An event that leaves the offset where it is — every
-/// one of these keys at an edge, and a horizontal wheel — bubbles on to the app,
-/// which keeps app hotkeys on those keys alive. The area is a fallback focus
-/// stop while it holds no focusable descendant, so keyboard scrolling works for
+/// Page Up, Page Down, Home, End, and a press on the scrollbar gutter reach
+/// descendants first; what none of them handles scrolls the area. An event that
+/// leaves the offset where it is — every one of these keys at an edge, and a
+/// horizontal wheel — bubbles on to the app, which keeps app hotkeys on those
+/// keys alive. A gutter press that does not move the view still consumes, so
+/// it cannot steal focus into a descendant. The area is a fallback focus stop
+/// while it holds no focusable descendant, so keyboard scrolling works for
 /// paint-only content.
 ///
 /// Focus moving to a descendant the viewport clips scrolls that descendant
@@ -246,6 +248,137 @@ impl<S, M> ScrollArea<S, M> {
         Some(offset)
     }
 
+    /// The right-hand gutter column, empty when the area has no width.
+    fn gutter(area: Rect) -> Rect {
+        if area.width == 0 {
+            Rect::ZERO
+        } else {
+            Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
+        }
+    }
+
+    /// Whether `position` is a cell of the scrollbar gutter.
+    fn gutter_contains(area: Rect, position: Position) -> bool {
+        Self::gutter(area).contains(position)
+    }
+
+    /// Ratatui's nearest-integer division: `(n + d/2) / d`.
+    const fn rounding_divide(numerator: u32, denominator: u32) -> u32 {
+        (numerator + denominator / 2) / denominator
+    }
+
+    /// Thumb start and length in rows from `area.y`, matching the painted
+    /// Ratatui scrollbar so a press can tell the thumb from the track.
+    fn thumb_span(&self, area: Rect, offset: u16) -> Option<(u16, u16)> {
+        let track = area.height;
+        let max_offset = self.max_offset(area);
+        let viewport = Self::viewport(area).height;
+        if track == 0 || max_offset == 0 {
+            return None;
+        }
+        let max_viewport = u32::from(max_offset).saturating_add(u32::from(viewport));
+        if max_viewport == 0 {
+            return None;
+        }
+        let thumb_len = Self::rounding_divide(u32::from(viewport) * u32::from(track), max_viewport)
+            .clamp(1, u32::from(track));
+        let thumb_len = u16::try_from(thumb_len).unwrap_or(track);
+        let start = Self::rounding_divide(u32::from(offset) * u32::from(track), max_viewport)
+            .min(u32::from(track.saturating_sub(thumb_len)));
+        let start = u16::try_from(start).unwrap_or(0);
+        Some((start, thumb_len))
+    }
+
+    /// Whether `row` is a cell of the thumb painted at `offset`.
+    fn thumb_contains(&self, area: Rect, offset: u16, row: u16) -> bool {
+        let Some((start, len)) = self.thumb_span(area, offset) else {
+            return false;
+        };
+        row.checked_sub(area.y)
+            .is_some_and(|y| y >= start && y < start.saturating_add(len))
+    }
+
+    /// The first thumb row painted at `offset`, relative to the track.
+    fn thumb_start(&self, area: Rect, offset: u16) -> Option<u16> {
+        self.thumb_span(area, offset).map(|(start, _)| start)
+    }
+
+    /// The offset whose thumb is painted from `start` rows into the track:
+    /// [`thumb_span`](Self::thumb_span)'s placement run backwards, so the thumb
+    /// lands on exactly that row. Starts past either end clamp. `None` when
+    /// the thumb fills the track and cannot move.
+    fn offset_for_thumb_start(&self, area: Rect, start: i16) -> Option<u16> {
+        let max_offset = self.max_offset(area);
+        let (_, thumb_len) = self.thumb_span(area, 0)?;
+        let movable = area.height.saturating_sub(thumb_len);
+        if movable == 0 {
+            return None;
+        }
+        let start = u16::try_from(start.max(0)).unwrap_or(0);
+        if start >= movable {
+            return Some(max_offset);
+        }
+        let max_viewport = u32::from(max_offset) + u32::from(Self::viewport(area).height);
+        let mapped = Self::rounding_divide(u32::from(start) * max_viewport, u32::from(area.height));
+        Some(u16::try_from(mapped).unwrap_or(max_offset).min(max_offset))
+    }
+
+    /// Treat an unchanged offset as handled: a gutter press that does not
+    /// move the view still owns the gesture, so focus-on-press cannot steal it.
+    fn consume(result: EventResult<M>) -> EventResult<M> {
+        match result {
+            EventResult::Ignored => EventResult::Consumed,
+            other => other,
+        }
+    }
+
+    /// Drag the thumb from the cell it was grabbed by; a press on the track
+    /// first jumps the thumb's top to that row.
+    ///
+    /// [`EventCtx::drag`] owns the gesture, anchored at the thumb's top row,
+    /// so a thumb press holds still until the pointer moves.
+    fn handle_gutter_drag(
+        &self,
+        mouse: &MouseEvent,
+        state: &S,
+        ctx: &mut EventCtx<'_>,
+    ) -> EventResult<M> {
+        let area = ctx.area();
+        let can_start = self.max_offset(area) > 0
+            && Self::gutter_contains(area, Position::new(mouse.column, mouse.row));
+        let mut jumped = EventResult::Ignored;
+        let mut anchor = CellOffset::default();
+        if can_start && mouse.kind == MouseKind::Down(MouseButton::Left) {
+            let current = self.current(state, ctx);
+            if !self.thumb_contains(area, current, mouse.row) {
+                let row = i16::try_from(mouse.row.saturating_sub(area.y)).unwrap_or(i16::MAX);
+                if let Some(target) = self.offset_for_thumb_start(area, row) {
+                    jumped = self.scroll_to(target, state, ctx);
+                }
+            }
+            let current = self.current(state, ctx);
+            let start = self.thumb_start(area, current).unwrap_or(0);
+            anchor.y = i16::try_from(start).unwrap_or(i16::MAX);
+        }
+        match ctx.drag(mouse, DragOptions::new(anchor).start_if(can_start)) {
+            DragPhase::Down => Self::consume(jumped),
+            DragPhase::Moved { offset, .. } => {
+                // Only a new thumb row moves the view. Remapping the row the
+                // thumb already sits on would snap an offset the wheel left
+                // between rows.
+                let painted = self.thumb_start(area, self.current(state, ctx));
+                match self.offset_for_thumb_start(area, offset.y) {
+                    Some(target) if self.thumb_start(area, target) != painted => {
+                        Self::consume(self.scroll_to(target, state, ctx))
+                    }
+                    _ => EventResult::Consumed,
+                }
+            }
+            DragPhase::Ended { .. } => EventResult::Consumed,
+            DragPhase::Ignored => EventResult::Ignored,
+        }
+    }
+
     /// Scroll to `offset`.
     ///
     /// [`EventResult::Ignored`] when the view is already there, which leaves an
@@ -296,7 +429,7 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
         if self.content_height <= viewport.height || area.width == 0 || area.height == 0 {
             return;
         }
-        let gutter = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
+        let gutter = Self::gutter(area);
         let style = resolve_style(
             self.style.as_deref(),
             ctx.theme,
@@ -323,25 +456,33 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
-        let area = ctx.area();
-        let current = self.current(state, ctx);
-        let page = Self::viewport(area).height;
-        let target = match event {
+        match event {
             Event::Mouse(mouse) => match mouse.kind {
-                MouseKind::Scroll(ScrollDirection::Up) => current.saturating_sub(WHEEL_ROWS),
-                MouseKind::Scroll(ScrollDirection::Down) => current.saturating_add(WHEEL_ROWS),
-                _ => return EventResult::Ignored,
+                MouseKind::Scroll(ScrollDirection::Up) => {
+                    let current = self.current(state, ctx);
+                    self.scroll_to(current.saturating_sub(WHEEL_ROWS), state, ctx)
+                }
+                MouseKind::Scroll(ScrollDirection::Down) => {
+                    let current = self.current(state, ctx);
+                    self.scroll_to(current.saturating_add(WHEEL_ROWS), state, ctx)
+                }
+                _ => self.handle_gutter_drag(mouse, state, ctx),
             },
-            Event::Key(key) if !key.modifiers.any() => match key.code {
-                KeyCode::PageUp => current.saturating_sub(page),
-                KeyCode::PageDown => current.saturating_add(page),
-                KeyCode::Home => 0,
-                KeyCode::End => self.max_offset(area),
-                _ => return EventResult::Ignored,
-            },
-            _ => return EventResult::Ignored,
-        };
-        self.scroll_to(target, state, ctx)
+            Event::Key(key) if !key.modifiers.any() => {
+                let area = ctx.area();
+                let current = self.current(state, ctx);
+                let page = Self::viewport(area).height;
+                let target = match key.code {
+                    KeyCode::PageUp => current.saturating_sub(page),
+                    KeyCode::PageDown => current.saturating_add(page),
+                    KeyCode::Home => 0,
+                    KeyCode::End => self.max_offset(area),
+                    _ => return EventResult::Ignored,
+                };
+                self.scroll_to(target, state, ctx)
+            }
+            _ => EventResult::Ignored,
+        }
     }
 
     fn reveal_in_viewport(&mut self, target: Rect, state: &S, ctx: &mut EventCtx<'_>) {
@@ -370,9 +511,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::runtime::{
-        ChildId, FocusState, KeyChord, Modifiers, MouseButton, PopupOptions, Ratcn,
-    };
+    use crate::runtime::{ChildId, FocusState, KeyChord, Modifiers, PopupOptions, Ratcn};
     use crate::test_support::{Driver, key, key_with, mouse};
     use crate::{Button, ListItem, Select, Tooltip};
 
@@ -1189,6 +1328,409 @@ mod tests {
         assert_ne!(bottom.first(), Some(&0), "one row is now above the view");
     }
 
+    /// The gutter is a handle, not decoration: a press on the track jumps the
+    /// view, and capture keeps the drag even after the pointer leaves the column.
+    #[test]
+    fn dragging_the_scrollbar_track_scrolls_the_area() {
+        let mut driver = driver(6, 4);
+        let mut state = State::default();
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component("scroll", scroll_area(12, |_| {}), Rect::new(0, 0, 6, 4));
+            });
+        };
+        render(&mut driver, &state);
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 3), &state),
+            EventResult::Emit(Msg::Area(8)),
+            "a press on the track jumps so the thumb follows the pointer row"
+        );
+        state.offset = 8;
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 5, 0), &state),
+            EventResult::Emit(Msg::Area(0)),
+            "a captured gutter drag keeps routing after leaving the track"
+        );
+        state.offset = 0;
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 0, 3), &state),
+            EventResult::Emit(Msg::Area(8)),
+            "capture, not hit-testing, owns the gutter drag"
+        );
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 0, 3), &state),
+            EventResult::Consumed
+        );
+    }
+
+    /// Pressing the thumb must not map that row onto a new offset — the thumb
+    /// would jump under the pointer. Movement then keeps the grabbed cell.
+    #[test]
+    fn pressing_the_thumb_anchors_until_the_pointer_moves() {
+        let mut driver = driver(6, 4);
+        let state = State::default();
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    "scroll",
+                    scroll_area(6, |_| {}).style(|_| ScrollAreaStyle {
+                        thumb: Color::Yellow,
+                        track: Color::Blue,
+                    }),
+                    Rect::new(0, 0, 6, 4),
+                );
+            });
+        };
+        render(&mut driver, &state);
+        let thumb: Vec<u16> = (0..4)
+            .filter(|&row| {
+                driver
+                    .terminal
+                    .backend()
+                    .buffer()
+                    .cell((5, row))
+                    .is_some_and(|cell| cell.fg == Color::Yellow)
+            })
+            .collect();
+        assert!(
+            thumb.contains(&2),
+            "the fixture needs a multi-row thumb covering row 2, got {thumb:?}"
+        );
+        assert!(
+            !thumb.contains(&3),
+            "row 3 must be track so a later press can still jump, got {thumb:?}"
+        );
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 2), &state),
+            EventResult::Consumed,
+            "a press on the thumb must not jump the offset"
+        );
+        assert_eq!(state.offset, 0);
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 5, 1), &state),
+            EventResult::Consumed,
+            "moving within the grabbed thumb must not jump as a track click would"
+        );
+        assert_eq!(state.offset, 0);
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 5, 3), &state),
+            EventResult::Emit(Msg::Area(2)),
+            "dragging keeps the grabbed thumb cell under the pointer"
+        );
+    }
+
+    /// Every row the thumb can occupy maps to an offset painted on that same
+    /// row, and moving the thumb down never scrolls the view up. Otherwise a
+    /// drag runs backwards, skips rows, or leaves the thumb off the pointer.
+    #[test]
+    fn every_thumb_row_maps_to_an_offset_painted_on_that_row() {
+        for height in 2..=40 {
+            let area = Rect::new(0, 0, 2, height);
+            for content in height + 1..=300 {
+                let scroll = ScrollArea::<State, Msg>::new(content);
+                let (_, thumb_len) = scroll.thumb_span(area, 0).expect("content overflows");
+                let movable = height - thumb_len;
+                let mut previous = 0;
+                for start in 0..=movable {
+                    let row = i16::try_from(start).expect("small track");
+                    let Some(offset) = scroll.offset_for_thumb_start(area, row) else {
+                        assert_eq!(movable, 0, "only a thumb filling the track cannot move");
+                        continue;
+                    };
+                    assert_eq!(
+                        scroll.thumb_start(area, offset),
+                        Some(start),
+                        "height {height}, content {content}: row {start} maps to {offset}"
+                    );
+                    assert!(offset >= previous, "height {height}, content {content}");
+                    previous = offset;
+                }
+            }
+        }
+    }
+
+    /// The thumb rows painted in the gutter column of a 2-wide area.
+    fn painted_thumb_rows(driver: &Driver<State, Msg>, height: u16) -> Vec<u16> {
+        (0..height)
+            .filter(|&row| {
+                driver
+                    .terminal
+                    .backend()
+                    .buffer()
+                    .cell((1, row))
+                    .is_some_and(|cell| cell.fg == Color::Yellow)
+            })
+            .collect()
+    }
+
+    fn render_thumb_fixture(driver: &mut Driver<State, Msg>, state: &State, content: u16) {
+        let area = driver.area();
+        driver.render(state, |ctx| {
+            ctx.component(
+                "scroll",
+                scroll_area(content, |_| {}).style(|_| ScrollAreaStyle {
+                    thumb: Color::Yellow,
+                    track: Color::Blue,
+                }),
+                area,
+            );
+        });
+    }
+
+    /// Dragging a one-row thumb up one row must scroll up and paint the thumb
+    /// on that row, even where the thumb's length is clamped to one cell.
+    #[test]
+    fn dragging_a_short_thumb_up_one_row_scrolls_up_to_that_row() {
+        let mut driver = driver(2, 10);
+        let mut state = State {
+            offset: 210,
+            ..State::default()
+        };
+        render_thumb_fixture(&mut driver, &state, 247);
+        assert_eq!(painted_thumb_rows(&driver, 10), [9]);
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 9), &state);
+        let EventResult::Emit(Msg::Area(offset)) =
+            driver.event(mouse(MouseKind::Moved, 1, 8), &state)
+        else {
+            panic!("moving the thumb a row must scroll");
+        };
+        assert!(offset < 210, "the view must scroll up, not to {offset}");
+        state.offset = offset;
+        render_thumb_fixture(&mut driver, &state, 247);
+        assert_eq!(painted_thumb_rows(&driver, 10), [8]);
+    }
+
+    /// Moving along the thumb's row leaves the view alone, even at an offset
+    /// the wheel left between the offsets two thumb rows stand for.
+    #[test]
+    fn moving_sideways_on_the_thumb_keeps_the_offset() {
+        let mut driver = driver(2, 20);
+        let state = State {
+            offset: 13,
+            ..State::default()
+        };
+        render_thumb_fixture(&mut driver, &state, 60);
+        let thumb = painted_thumb_rows(&driver, 20);
+        assert_eq!(thumb.first(), Some(&4), "fixture thumb starts at row 4");
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 4), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 0, 4), &state),
+            EventResult::Consumed,
+            "no vertical travel, so no scroll"
+        );
+    }
+
+    /// A track press puts the thumb's top on the pressed row, so the drag
+    /// that follows keeps the thumb under the pointer.
+    #[test]
+    fn a_track_press_puts_the_thumb_on_the_pressed_row() {
+        let mut driver = driver(2, 10);
+        let mut state = State::default();
+        render_thumb_fixture(&mut driver, &state, 220);
+
+        let EventResult::Emit(Msg::Area(offset)) =
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 8), &state)
+        else {
+            panic!("a track press must jump");
+        };
+        state.offset = offset;
+        render_thumb_fixture(&mut driver, &state, 220);
+        assert_eq!(painted_thumb_rows(&driver, 10), [8]);
+    }
+
+    /// A gutter press that does not change the offset still owns the event, so
+    /// focus-on-press cannot land on a descendant sitting in the same rows.
+    #[test]
+    fn a_gutter_press_does_not_move_focus_into_a_descendant() {
+        let mut driver = driver(8, 3);
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "scroll",
+                scroll_area(9, |ctx| {
+                    ctx.component("first", Probe::focusable("first"), Rect::new(0, 0, 7, 1));
+                    ctx.component("last", Probe::focusable("last"), Rect::new(0, 6, 7, 1));
+                }),
+                Rect::new(0, 0, 8, 3),
+            );
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state),
+            EventResult::Consumed,
+            "a gutter press at the current offset still owns the event"
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 7, 0), &state),
+            EventResult::Consumed
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 2), &state),
+            EventResult::Emit(Msg::Area(6)),
+            "a gutter press must not emit a focus change"
+        );
+    }
+
+    /// An unbound area owns the gutter drag the same way it owns the wheel:
+    /// the press moves the view and nothing is emitted.
+    #[test]
+    fn an_unbound_area_drags_its_scrollbar_without_emitting() {
+        let mut driver = driver(8, 3);
+        let state = State::default();
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    "scroll",
+                    ScrollArea::new(9).content(|ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(
+                            Paragraph::new(Text::from("a\nb\nc\nd\ne\nf\ng\nh\ni")),
+                            area,
+                        );
+                    }),
+                    Rect::new(0, 0, 8, 3),
+                );
+            });
+        };
+        render(&mut driver, &state);
+        assert_eq!(&driver.row(0)[..1], "a");
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 2), &state),
+            EventResult::Consumed,
+            "there is no offset binding, so nothing is emitted"
+        );
+        render(&mut driver, &state);
+        assert_eq!(
+            &driver.row(0)[..1],
+            "g",
+            "the gutter press moved the view by itself"
+        );
+
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 7, 2), &state);
+        render(&mut driver, &state);
+        assert_eq!(
+            &driver.row(0)[..1],
+            "g",
+            "ending the drag must not drop the hold that placed the view"
+        );
+    }
+
+    /// A one-row track cannot express a range. Jumping to offset 0 would
+    /// discard whatever the wheel or a reveal had already placed there.
+    #[test]
+    fn a_one_row_gutter_press_leaves_the_offset_where_it_is() {
+        let mut driver = driver(6, 1);
+        let state = State {
+            offset: 4,
+            ..State::default()
+        };
+        driver.render(&state, |ctx| {
+            ctx.component("scroll", scroll_area(12, |_| {}), Rect::new(0, 0, 6, 1));
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 0), &state),
+            EventResult::Consumed,
+            "a one-row gutter still owns the press"
+        );
+        assert_eq!(state.offset, 4, "the press must not jump the offset to 0");
+    }
+
+    /// A descendant that captured the pointer can bubble its drag. The area
+    /// must not treat that as its own gutter gesture.
+    #[test]
+    fn a_captured_descendant_drag_does_not_scroll_the_area() {
+        let mut driver = driver(8, 3);
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "scroll",
+                scroll_area(9, |ctx| {
+                    ctx.component("child", CapturingLeaf, Rect::new(0, 1, 7, 1));
+                }),
+                Rect::new(0, 0, 8, 3),
+            );
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state),
+            EventResult::Consumed
+        );
+        let dragged = driver.event(mouse(MouseKind::Moved, 1, 2), &state);
+        assert!(
+            !matches!(dragged, EventResult::Emit(Msg::Area(_))),
+            "a bubbled captured drag must not scroll the area, got {dragged:?}"
+        );
+        assert_eq!(state.offset, 0);
+    }
+
+    /// A gutter drag cut off without its release leaves the area's drag state
+    /// behind. A descendant's captured drag that bubbles later must still not
+    /// continue it: only the capture owner sees the captured press.
+    #[test]
+    fn a_descendant_drag_does_not_revive_an_abandoned_gutter_drag() {
+        let mut driver = driver(8, 3);
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "scroll",
+                scroll_area(9, |ctx| {
+                    ctx.component("child", CapturingLeaf, Rect::new(0, 1, 7, 1));
+                }),
+                Rect::new(0, 0, 8, 3),
+            );
+        });
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state);
+        driver.event(mouse(MouseKind::Exited, 7, 0), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state),
+            EventResult::Consumed
+        );
+        let dragged = driver.event(mouse(MouseKind::Moved, 1, 2), &state);
+        assert!(
+            !matches!(dragged, EventResult::Emit(Msg::Area(_))),
+            "a descendant's drag must not continue the abandoned gutter drag, got {dragged:?}"
+        );
+    }
+
+    /// A press on the content still focuses a descendant. The gutter is the
+    /// handle; the rest of the area is not.
+    #[test]
+    fn a_content_press_still_focuses_a_descendant() {
+        let mut driver = driver(8, 3);
+        let state = State {
+            focus: FocusState::intent(["scroll", "first"]),
+            ..State::default()
+        };
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "scroll",
+                scroll_area(9, |ctx| {
+                    ctx.component("first", Probe::focusable("first"), Rect::new(0, 0, 7, 1));
+                    ctx.component("second", Probe::focusable("second"), Rect::new(0, 1, 7, 1));
+                }),
+                Rect::new(0, 0, 8, 3),
+            );
+        });
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state),
+            EventResult::Emit(Msg::Focus(FocusState::intent(["scroll", "second"]))),
+            "a content press is still a focus change, not a gutter drag"
+        );
+    }
+
     #[test]
     fn zero_sized_viewports_are_inert_without_dropping_declarations() {
         for area in [Rect::new(0, 0, 0, 3), Rect::new(0, 0, 4, 0)] {
@@ -1563,6 +2105,29 @@ mod tests {
                     });
                 }
                 LayerExample::Modal => {}
+            }
+        }
+    }
+
+    /// Captures on press and lets later events bubble, so an ancestor can see
+    /// a captured descendant drag.
+    struct CapturingLeaf;
+
+    impl Component<State, Msg> for CapturingLeaf {
+        fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
+
+        fn handle_event(
+            &mut self,
+            event: &Event,
+            _state: &State,
+            ctx: &mut EventCtx<'_>,
+        ) -> EventResult<Msg> {
+            match event {
+                Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left) => {
+                    ctx.capture_pointer(MouseButton::Left);
+                    EventResult::Consumed
+                }
+                _ => EventResult::Ignored,
             }
         }
     }
