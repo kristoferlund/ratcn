@@ -64,6 +64,7 @@
 
 use std::{cmp::Ordering, fmt, hash::Hash, sync::Arc};
 
+mod buffer;
 mod component;
 mod drag;
 mod engine;

@@ -804,14 +804,12 @@ fn with_projected_buffer<R>(
 
     let result = paint(scratch);
 
-    for (logical_position, screen_position) in projection.projected_positions(logical, surface) {
-        if let (Some(source), Some(destination)) = (
-            scratch.cell(logical_position),
-            target.cell_mut(screen_position),
-        ) {
-            *destination = source.clone();
-        }
-    }
+    super::buffer::copy_cells(
+        scratch,
+        target,
+        projection.projected_positions(logical, surface),
+        projection.clip(surface),
+    );
     result
 }
 

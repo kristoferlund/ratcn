@@ -7,6 +7,67 @@ use ratatui::{
 };
 
 use super::*;
+
+#[test]
+fn viewport_clipping_never_leaves_a_wide_glyph_over_host_cells() {
+    use ratatui::{buffer::CellWidth, text::Line};
+
+    for offset in [0, 2] {
+        let mut driver = Driver::<(), ()>::new(4, 1);
+        driver.render(&(), |ctx| {
+            ctx.paint_widget(Line::from("HHHH"), Rect::new(0, 0, 4, 1));
+            ctx.viewport(Rect::new(1, 0, 1, 1), 4, offset, |ctx| {
+                ctx.paint_widget(Line::from("界"), Rect::new(1, offset, 2, 1));
+            });
+        });
+        assert_eq!(
+            driver.cell(1, 0).symbol(),
+            " ",
+            "the clipped glyph must be blanked"
+        );
+        assert!(driver.cell(1, 0).cell_width() <= 1);
+        assert_eq!(driver.cell(0, 0).symbol(), "H");
+        assert_eq!(driver.cell(2, 0).symbol(), "H");
+    }
+}
+
+#[test]
+fn viewport_left_clip_copies_only_the_blank_tail_of_a_wide_glyph() {
+    use ratatui::text::Line;
+
+    let mut driver = Driver::<(), ()>::new(4, 1);
+    driver.render(&(), |ctx| {
+        ctx.paint_widget(Line::from("HHHH"), Rect::new(0, 0, 4, 1));
+        ctx.viewport(Rect::new(1, 0, 2, 1), 1, 0, |ctx| {
+            ctx.paint_widget(Line::from("界"), Rect::new(0, 0, 2, 1));
+        });
+    });
+    assert_eq!(driver.cell(0, 0).symbol(), "H");
+    assert_eq!(driver.cell(1, 0).symbol(), " ");
+    assert_eq!(driver.cell(2, 0).symbol(), "H");
+}
+
+#[test]
+fn viewport_style_overlay_preserves_an_intact_wide_glyph() {
+    use ratatui::{
+        style::{Color, Style},
+        text::Line,
+    };
+
+    let mut driver = Driver::<(), ()>::new(4, 1);
+    driver.render(&(), |ctx| {
+        ctx.viewport(Rect::new(1, 0, 2, 1), 1, 0, |ctx| {
+            ctx.paint_widget(Line::from("界"), Rect::new(1, 0, 2, 1));
+            ctx.paint(|ctx| {
+                ctx.with_buffer(|buffer| {
+                    buffer.set_style(Rect::new(1, 0, 1, 1), Style::default().fg(Color::Red));
+                })
+            });
+        });
+    });
+    assert_eq!(driver.cell(1, 0).symbol(), "界");
+    assert_eq!(driver.cell(1, 0).fg, Color::Red);
+}
 use crate::test_support::{key, key_with};
 
 #[derive(Default)]

@@ -8,6 +8,7 @@ use ratatui::{
 
 use super::*;
 use crate::{ListItem, Select, Tooltip, TooltipSide};
+use ratatui::buffer::CellWidth;
 
 const ROOT: Rect = Rect::new(8, 4, 18, 7);
 

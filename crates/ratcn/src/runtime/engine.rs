@@ -19,7 +19,7 @@ use std::{collections::HashMap, fmt};
 
 use ratatui::{
     Frame,
-    buffer::{Buffer, CellDiffOption, CellWidth},
+    buffer::Buffer,
     layout::{Position, Rect},
 };
 
@@ -217,7 +217,7 @@ impl Projection {
 
     /// The screen rectangle paint carrying this reaches, given the `surface`
     /// it lands on.
-    fn clip(self, surface: Rect) -> Rect {
+    pub(crate) fn clip(self, surface: Rect) -> Rect {
         match self {
             Self::Clipped(viewport) => viewport.visible_screen(),
             Self::Escaped(_) => surface,
@@ -1819,8 +1819,16 @@ impl<State, Msg> RenderPass<State, Msg> {
         self.flush_deferred(deferred, Some(index), buffer, state, theme);
         let frame_area = self.frame_area;
         let canvas = &self.canvases[index];
+        let clip = frame_area.intersection(canvas.buffer.area);
         for &rect in &canvas.painted {
-            copy_rect(&canvas.buffer, buffer, rect, frame_area);
+            super::buffer::copy_cells(
+                &canvas.buffer,
+                buffer,
+                rect.intersection(clip)
+                    .positions()
+                    .map(|position| (position, position)),
+                clip,
+            );
         }
     }
 
@@ -3150,23 +3158,6 @@ impl<State, Msg> Ratcn<State, Msg> {
         (0..self.surface.nodes.len())
             .map(|index| self.surface.path_of(index))
             .collect()
-    }
-}
-
-/// Copy `area` through `clip`, blanking glyphs cut by the composite boundary.
-/// A paint rect may cover only part of an otherwise intact glyph.
-fn copy_rect(source: &Buffer, destination: &mut Buffer, area: Rect, clip: Rect) {
-    let clip = clip
-        .intersection(source.area)
-        .intersection(destination.area);
-    let area = area.intersection(clip);
-    for position in area.positions() {
-        let cell = &source[position];
-        let target = &mut destination[position];
-        *target = cell.clone();
-        if cell.cell_width() > clip.right() - position.x {
-            target.set_symbol(" ").set_diff_option(CellDiffOption::None);
-        }
     }
 }
 
