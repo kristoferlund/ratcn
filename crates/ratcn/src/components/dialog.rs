@@ -73,10 +73,6 @@ struct DialogDims<'a> {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "these are three distinct rects; the `_area` suffix reads clearly"
-)]
 struct DialogLayout {
     base: Rect,
     box_area: Rect,
@@ -323,6 +319,7 @@ impl<S: 'static, M: 'static> fmt::Debug for Dialog<S, M> {
             .field("tab_wrap", &self.tab_wrap)
             .field("style", &self.style.is_some())
             .field("paint_area", &self.paint_area)
+            .field("layout", &self.layout)
             .finish()
     }
 }

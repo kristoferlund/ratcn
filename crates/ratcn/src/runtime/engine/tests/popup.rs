@@ -15,7 +15,7 @@ fn stored_focus_cannot_activate_or_highlight_a_hint() {
     for hint in [false, true, false] {
         driver.render(&state, |ctx| {
             let content = |ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>| {
-                ctx.component("button", FocusLeaf::recording(rendered.clone()), area);
+                ctx.component("button", FocusLeaf::recording(Rc::clone(&rendered)), area);
             };
             if hint {
                 ctx.hint("tip", area, ScopeOptions::default(), content);

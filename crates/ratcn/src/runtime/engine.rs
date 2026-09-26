@@ -473,6 +473,7 @@ impl<State, Msg> fmt::Debug for Surface<State, Msg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Surface")
             .field("nodes", &self.nodes.len())
+            .field("child_index", &self.child_index.len())
             .field("roots", &self.roots.len())
             .field("layers", &self.layers.len())
             .field("viewports", &self.viewports.len())
@@ -1913,9 +1914,9 @@ impl<State, Msg> RenderPass<State, Msg> {
 /// Replacement is atomic, and so is the frame. A pass that panics or fails
 /// validation leaves the previous surface in charge *and* the previous frame
 /// on screen: declaring does not draw, and every reason to reject a pass is
-/// known before the first cell is written. The one thing that cannot be taken
-/// back is a panic thrown by painting itself, after the pass had already been
-/// accepted. This is not a transaction over arbitrary user code: live
+/// known before the first cell is written. Painting can leave partial writes
+/// if it panics after validation. This is not a transaction over arbitrary
+/// user code: live
 /// [`DeclareCtx::transient_mut`] writes and viewport reveal callbacks can
 /// mutate interaction scratch before commit. Built-in declaration settlement
 /// uses [`DeclareCtx::settle_transient`] so rejected passes discard it.
@@ -2557,6 +2558,9 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// but never the hint's content.
     fn key_bubble_chain(&self, focus: &FocusState) -> Vec<usize> {
         let mut matched = self.surface.nodes_along_path(focus.path());
+        // Focusability controls traversal, not fallback delivery: an open
+        // Select with no options still needs Esc on its parked path. Layer
+        // inertness, in contrast, blocks delivery regardless of the component.
         if let Some(position) = matched.iter().position(|&index| {
             !self
                 .surface

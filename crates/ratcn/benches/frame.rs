@@ -132,7 +132,7 @@ mod frame {
                         for id in ids {
                             ctx.scope(id, Rect::ZERO, ScopeOptions::default(), |_| {});
                         }
-                    })
+                    });
                 });
             });
         }
@@ -166,7 +166,7 @@ mod frame {
                                 ctx.defer_paint(|_| {});
                             });
                         }
-                    })
+                    });
                 });
             });
         }

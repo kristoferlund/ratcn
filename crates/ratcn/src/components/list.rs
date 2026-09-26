@@ -1127,7 +1127,7 @@ mod tests {
                 ctx.component(
                     "list",
                     List::new((0..10).map(|i| ListItem::new(i, format!("row {i}"))))
-                        .selection(|_: &()| None, |i| i),
+                        .selection(|(): &()| None, |i| i),
                     area,
                 );
             });
@@ -1158,7 +1158,7 @@ mod tests {
                 ctx.component(
                     "list",
                     List::new((0..10).map(|i| ListItem::new(i, format!("item{i}"))))
-                        .item_focus(|_| Some(0), |_, _| ())
+                        .item_focus(|()| Some(0), |_, _| ())
                         .focus_symbol("> "),
                     area,
                 );

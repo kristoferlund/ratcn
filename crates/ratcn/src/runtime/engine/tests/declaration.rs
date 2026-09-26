@@ -20,7 +20,7 @@ fn failed_declaration_discards_staged_transient_settlement() {
         fn scope_options(&self) -> ScopeOptions {
             ScopeOptions::default().focusable(true)
         }
-        fn handle_event(&mut self, _: &Event, _: &(), ctx: &mut EventCtx<'_>) -> EventResult<u32> {
+        fn handle_event(&mut self, _: &Event, (): &(), ctx: &mut EventCtx<'_>) -> EventResult<u32> {
             let value = ctx.transient::<u32>();
             *value += 1;
             EventResult::Emit(*value)

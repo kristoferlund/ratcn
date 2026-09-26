@@ -61,7 +61,7 @@ fn viewport_style_overlay_preserves_an_intact_wide_glyph() {
             ctx.paint(|ctx| {
                 ctx.with_buffer(|buffer| {
                     buffer.set_style(Rect::new(1, 0, 1, 1), Style::default().fg(Color::Red));
-                })
+                });
             });
         });
     });
