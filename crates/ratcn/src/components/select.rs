@@ -1101,8 +1101,6 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let state = ctx.state();
-        let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
-        let disabled: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
         let cursor = self.cursor(state);
         let selected = bound_index(&self.items, state, self.selected.as_ref());
         let rows_per_item = self.viewport.rows_per_item();
@@ -1114,6 +1112,11 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         let last_option = first_option
             .saturating_add(self.viewport.visible_items(self.inner))
             .min(self.items.len());
+        // Adapt only the painted window, with widget-local indices. The row
+        // callback above the widget boundary keeps its whole-list identity.
+        let visible = &self.items[first_option..last_option];
+        let labels: Vec<&str> = visible.iter().map(ListItem::label).collect();
+        let disabled: Vec<bool> = visible.iter().map(ListItem::is_disabled).collect();
         let rows: Option<Vec<Text<'static>>> = self.paint_item.as_ref().map(|paint_item| {
             list_core::windowed_rows(
                 &self.items,
@@ -1129,10 +1132,9 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
             .open(true)
             .options(&labels)
             .row_height(rows_per_item)
-            .focused_item(cursor)
-            .selected_item(selected)
+            .focused_item(cursor.and_then(|index| index.checked_sub(first_option)))
+            .selected_item(selected.and_then(|index| index.checked_sub(first_option)))
             .disabled_items(&disabled)
-            .first_item(self.viewport.painted_offset())
             .style(self.style);
         if let Some(marker) = self.selected_marker.as_deref() {
             widget = widget.selected_marker(marker);
