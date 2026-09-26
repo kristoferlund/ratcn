@@ -10,8 +10,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `EventCtx::pointer_captured` reports whether the current event arrived through
-  this component's own pointer capture rather than by hit-test or from a
+  this component's own pointer capture, rather than by hit-test or from a
   captured descendant.
+
+### Changed
+
+- A path keeps one transient per type, so a component can hold its own
+  `EventCtx::transient` state alongside `EventCtx::drag`. Asking for a second
+  type no longer panics.
 
 ### Fixed
 

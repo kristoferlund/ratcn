@@ -124,7 +124,8 @@ impl Component<GestureState, GestureMsg> for CaptureParent {
 }
 
 /// A bubbled captured drag must not make an ancestor appear to own capture —
-/// otherwise a scroll area would treat a descendant's drag as its own.
+/// otherwise the ancestor's [`EventCtx::drag`], or a gesture built on
+/// [`EventCtx::pointer_captured`], would continue a drag that is not its own.
 #[test]
 fn pointer_captured_is_true_only_for_the_component_that_claimed_the_gesture() {
     let state = GestureState::default();

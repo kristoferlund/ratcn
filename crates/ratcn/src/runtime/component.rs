@@ -14,7 +14,7 @@
 //! how focus travels through a subtree.
 
 use std::{
-    any::{Any, type_name},
+    any::{Any, TypeId},
     collections::HashMap,
     fmt,
 };
@@ -212,22 +212,16 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// wheel-scrolled viewport offset, say — and the next declaration reads
     /// them here to lay out accordingly.
     ///
-    /// `None` when no event handler has stored a value at this path. Like every
+    /// `None` when no event handler has stored a `T` at this path. Like every
     /// transient, the value disappears as soon as its path stops being
     /// declared — see [`EventCtx::transient`] for the ownership rules; semantic
     /// state does not belong here.
     ///
     /// Use [`transient_mut`](Self::transient_mut) when the declaration must
     /// also settle the value it reads.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the stored transient has a different type: one path holds one
-    /// `T`, and reader and writer must agree on it.
     #[must_use]
     pub fn transient<T: 'static>(&self) -> Option<&T> {
-        let path = self.pass.current_path()?;
-        Some(self.transients.get(path)?.expect_ref(path))
+        slot_ref(self.transients, self.pass.current_path()?)
     }
 
     /// [`transient`](Self::transient), for the rare value a declaration has to
@@ -252,14 +246,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// `None` until an event handler has stored a value: this never inserts
     /// one, which is what keeps a transient's lifetime tied to the events
     /// that created it rather than to a pass that may yet fail.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the stored transient has a different type: one path holds one
-    /// `T`, and reader and writer must agree on it.
     pub fn transient_mut<T: 'static>(&mut self) -> Option<&mut T> {
         let path = self.pass.current_path()?;
-        Some(self.transients.get_mut(path)?.expect_mut(path))
+        slot_mut(self.transients, path)
     }
 
     /// The app state supplied to the current declaration pass.
@@ -1074,54 +1063,52 @@ pub(crate) struct FocusKeyBinding {
     pub(crate) path: Vec<ChildId>,
 }
 
-pub(crate) struct TransientValue {
-    type_name: &'static str,
-    value: Box<dyn Any>,
+/// One path's transients: at most one value per type, so a component's own
+/// scratch and a helper's (such as [`EventCtx::drag`]) never collide. That
+/// holds only while each helper keys its state by a private type, as
+/// `ActiveDrag` does; a runtime helper must never store a public one.
+pub(crate) type TransientSlots = HashMap<TypeId, Box<dyn Any>>;
+
+pub(crate) type TransientMap = HashMap<Vec<ChildId>, TransientSlots>;
+
+/// The `T` stored at `path`, if any.
+fn slot_ref<'m, T: 'static>(store: &'m TransientMap, path: &[ChildId]) -> Option<&'m T> {
+    let value = store.get(path)?.get(&TypeId::of::<T>())?;
+    Some(
+        value
+            .downcast_ref()
+            .expect("a transient is keyed by its own TypeId"),
+    )
 }
 
-impl TransientValue {
-    /// The stored value as a `T`, borrowed.
-    ///
-    /// # Panics
-    ///
-    /// Panics when this path stores another type: one path holds one `T`, and
-    /// reader and writer must agree on it. The same goes for
-    /// [`expect_mut`](Self::expect_mut) and
-    /// [`expect_owned`](Self::expect_owned).
-    pub(crate) fn expect_ref<T: 'static>(&self, path: &[ChildId]) -> &T {
-        match self.value.downcast_ref::<T>() {
-            Some(value) => value,
-            None => transient_mismatch::<T>(path, self.type_name),
-        }
+/// The `T` stored at `path`, stored as `T::default()` on first access.
+fn slot_or_default<'m, T: Default + 'static>(
+    store: &'m mut TransientMap,
+    path: &[ChildId],
+) -> &'m mut T {
+    // `entry` would want an owned key; the borrowed one is enough to look
+    // with, and only a path's first transient stores a copy of it.
+    if !store.contains_key(path) {
+        store.insert(path.to_vec(), TransientSlots::new());
     }
-
-    /// The stored value as a `T`, borrowed mutably.
-    pub(crate) fn expect_mut<T: 'static>(&mut self, path: &[ChildId]) -> &mut T {
-        let stored = self.type_name;
-        match self.value.downcast_mut::<T>() {
-            Some(value) => value,
-            None => transient_mismatch::<T>(path, stored),
-        }
-    }
-
-    /// The stored value as a `T`, taken out of the store.
-    pub(crate) fn expect_owned<T: 'static>(self, path: &[ChildId]) -> T {
-        let stored = self.type_name;
-        match self.value.downcast::<T>() {
-            Ok(value) => *value,
-            Err(_) => transient_mismatch::<T>(path, stored),
-        }
-    }
+    store
+        .get_mut(path)
+        .expect("the path holds its slots, stored just above if it did not")
+        .entry(TypeId::of::<T>())
+        .or_insert_with(|| Box::<T>::default())
+        .downcast_mut()
+        .expect("a transient is keyed by its own TypeId")
 }
 
-/// The one message for a transient read that names a type its path does not
-/// hold.
-fn transient_mismatch<T: 'static>(path: &[ChildId], stored: &'static str) -> ! {
-    let requested = type_name::<T>();
-    panic!("transient type mismatch at path {path:?}: stored `{stored}`, requested `{requested}`")
+/// The `T` stored at `path`, if any, borrowed mutably.
+fn slot_mut<'m, T: 'static>(store: &'m mut TransientMap, path: &[ChildId]) -> Option<&'m mut T> {
+    let value = store.get_mut(path)?.get_mut(&TypeId::of::<T>())?;
+    Some(
+        value
+            .downcast_mut()
+            .expect("a transient is keyed by its own TypeId"),
+    )
 }
-
-pub(crate) type TransientMap = HashMap<Vec<ChildId>, TransientValue>;
 
 /// The extra facilities a component gets while handling an event.
 ///
@@ -1282,37 +1269,34 @@ impl<'a> EventCtx<'a> {
     /// persists from one such context to the next, so behavior that spans
     /// events is tested through [`Ratcn`](super::Ratcn).
     ///
-    /// # Panics
-    ///
-    /// Panics if this path already stores a transient of a different type —
-    /// one path holds one `T`.
+    /// Each type has its own slot at a path, so a component can keep several
+    /// transients and still use helpers such as [`drag`](Self::drag) that
+    /// keep theirs. Two values of the same type need distinct newtypes, and
+    /// reader and writer must name the exact same type: a `u16` written here
+    /// is not there to a `usize` read, which sees no value.
     pub fn transient<T: Default + 'static>(&mut self) -> &mut T {
         let (store, path) = self.transient_slot();
-        // `entry` would want an owned key; the borrowed one is enough to look
-        // with, and only a first access stores a copy of it.
-        if !store.contains_key(path) {
-            store.insert(
-                path.to_vec(),
-                TransientValue {
-                    type_name: type_name::<T>(),
-                    value: Box::<T>::default(),
-                },
-            );
-        }
-        store
-            .get_mut(path)
-            .expect("the path holds a transient, stored just above if it did not")
-            .expect_mut(path)
+        slot_or_default(store, path)
     }
 
     pub(super) fn transient_if_present<T: 'static>(&mut self) -> Option<&mut T> {
         let (store, path) = self.transient_slot();
-        Some(store.get_mut(path)?.expect_mut(path))
+        slot_mut(store, path)
     }
 
+    /// Remove this path's `T`, and the path's entry once it holds nothing.
     pub(super) fn take_transient<T: 'static>(&mut self) -> Option<T> {
         let (store, path) = self.transient_slot();
-        Some(store.remove(path)?.expect_owned(path))
+        let slots = store.get_mut(path)?;
+        let value = slots.remove(&TypeId::of::<T>())?;
+        if slots.is_empty() {
+            store.remove(path);
+        }
+        Some(
+            *value
+                .downcast()
+                .expect("a transient is keyed by its own TypeId"),
+        )
     }
 
     /// Send the rest of this button's gesture here, wherever the pointer goes.
@@ -1353,8 +1337,10 @@ impl<'a> EventCtx<'a> {
     ///
     /// `false` for an event that arrived by hit-test, including movement and
     /// release of a press this component did not start, and `false` when it
-    /// bubbled from a descendant that owns the capture. A captured scrollbar
-    /// or border drag uses this to ignore a descendant's leftover `Drag`/`Up`.
+    /// bubbled from a descendant that owns the capture. A gesture built on
+    /// [`capture_pointer`](Self::capture_pointer) and
+    /// [`transient`](Self::transient) uses this to ignore a descendant's
+    /// `Drag`/`Up`; [`drag`](Self::drag) already does.
     #[must_use]
     pub const fn pointer_captured(&self) -> bool {
         self.pointer.captured_press.is_some()

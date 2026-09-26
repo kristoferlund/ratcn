@@ -73,35 +73,30 @@ impl Component<PointerState, PointerMsg> for LifecycleDrag {
     }
 }
 
-struct StringTransient;
+/// Counts every mouse event in a transient of its own while running
+/// [`EventCtx::drag`], whose state lives at the same path.
+struct CountingDrag;
 
-impl Component<PointerState, PointerMsg> for StringTransient {
+impl Component<PointerState, PointerMsg> for CountingDrag {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
     fn handle_event(
         &mut self,
-        _event: &Event,
+        event: &Event,
         _state: &PointerState,
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<PointerMsg> {
-        ctx.transient::<String>().push('x');
-        EventResult::Consumed
-    }
-}
-
-struct NumberTransient;
-
-impl Component<PointerState, PointerMsg> for NumberTransient {
-    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
-
-    fn handle_event(
-        &mut self,
-        _event: &Event,
-        _state: &PointerState,
-        ctx: &mut EventCtx<'_>,
-    ) -> EventResult<PointerMsg> {
+        let Event::Mouse(mouse) = event else {
+            return EventResult::Ignored;
+        };
         *ctx.transient::<usize>() += 1;
-        EventResult::Consumed
+        match ctx.drag(mouse, DragOptions::new(CellOffset::default())) {
+            DragPhase::Down => EventResult::Consumed,
+            DragPhase::Moved { .. } | DragPhase::Ended { .. } => {
+                EventResult::Emit(PointerMsg::Transient(*ctx.transient::<usize>()))
+            }
+            DragPhase::Ignored => EventResult::Ignored,
+        }
     }
 }
 
@@ -610,32 +605,35 @@ fn deferred_paint_failure_preserves_capture_transient_and_previous_component() {
     );
 }
 
+/// A helper's transient and the component's own share a path without
+/// colliding: each type has its own slot, and the drag's release clears only
+/// the drag's.
 #[test]
-fn incompatible_transient_reuse_reports_path_and_types() {
+fn a_component_keeps_its_own_transient_alongside_the_drag_helper() {
     let state = PointerState;
     let mut driver = Driver::new(5, 2);
     let area = driver.area();
     driver.render(&state, |ctx| {
-        ctx.component(ChildId::Static("typed"), StringTransient, area);
-    });
-    driver.event(mouse(MouseKind::Moved, 0, 0), &state);
-    let area = driver.area();
-    driver.render(&state, |ctx| {
-        ctx.component(ChildId::Static("typed"), NumberTransient, area);
+        ctx.component(ChildId::Static("counting"), CountingDrag, area);
     });
 
-    let panic = catch_unwind(AssertUnwindSafe(|| {
-        driver.event(mouse(MouseKind::Moved, 0, 0), &state);
-    }));
-    let payload = panic.expect_err("incompatible transient type must panic");
-    let message = payload
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .expect("string panic");
-    assert!(message.contains("typed"));
-    assert!(message.contains("alloc::string::String"));
-    assert!(message.contains("usize"));
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 0, 0), &state),
+        EventResult::Consumed
+    );
+    assert_eq!(
+        driver.event(mouse(MouseKind::Moved, 1, 0), &state),
+        EventResult::Emit(PointerMsg::Transient(2))
+    );
+    assert_eq!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 0), &state),
+        EventResult::Emit(PointerMsg::Transient(3))
+    );
+    assert_eq!(
+        driver.ratcn.transients.len(),
+        1,
+        "the release drops the drag's slot but keeps the component's counter"
+    );
 }
 
 #[test]

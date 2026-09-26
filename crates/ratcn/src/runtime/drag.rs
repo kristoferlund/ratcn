@@ -173,10 +173,7 @@ impl EventCtx<'_> {
     ///
     /// # Panics
     ///
-    /// Panics outside a [`Ratcn`](super::Ratcn) event dispatch, or if this path
-    /// already stores a transient of another type — the helper uses
-    /// [`EventCtx::transient`] internally, so one path cannot both drag and
-    /// keep an unrelated transient.
+    /// Panics outside a [`Ratcn`](super::Ratcn) event dispatch.
     pub fn drag(&mut self, mouse: &MouseEvent, options: DragOptions) -> DragPhase {
         let position = Position::new(mouse.column, mouse.row);
         let screen = self.pointer.screen_mouse.unwrap_or(*mouse);
