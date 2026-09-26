@@ -1120,6 +1120,12 @@ pub(crate) struct Canvas {
     painted: Vec<Rect>,
 }
 
+/// A layer's canvas and the overlays that must finish before it composites.
+struct LayerPaint<State> {
+    canvas: Canvas,
+    deferred: Vec<QueuedPaint<State>>,
+}
+
 impl Canvas {
     fn new(area: Rect) -> Self {
         Self {
@@ -1203,12 +1209,8 @@ pub(crate) struct RenderPass<State, Msg> {
     /// The identity path of the open declaration chain, maintained in step
     /// with `parent_stack` by [`Self::enter_node`] and [`Self::leave_node`].
     path_cursor: Vec<ChildId>,
-    /// Deferred paint thunks, each tagged with the layer it was registered
-    /// in. [`Self::finish_frame`] flushes a layer's thunks onto its canvas
-    /// just before that canvas composites, so they cover everything the layer
-    /// declared, and the base layer's onto the frame after every canvas has
-    /// composited, which is what makes root-level `defer_paint` the topmost
-    /// slot.
+    /// Root overlays flush after every layer has composited. Layer overlays
+    /// live with their canvas and flush immediately before its composite.
     deferred: Vec<QueuedPaint<State>>,
     /// Every paint this frame owes, in the order the declaration walk reached
     /// it, replayed by [`Self::replay_paint`] once the walk is over.
@@ -1226,7 +1228,7 @@ pub(crate) struct RenderPass<State, Msg> {
     /// poisoned pass can never commit.
     failed: bool,
     /// One canvas per declared layer, in discovery order.
-    canvases: Vec<Canvas>,
+    canvases: Vec<LayerPaint<State>>,
     /// The open viewport, indexing [`Surface::viewports`]. A viewport
     /// declared while one is open panics, so there is at most one.
     open_viewport: Option<usize>,
@@ -1430,7 +1432,10 @@ impl<State, Msg> RenderPass<State, Msg> {
                 viewport.project_rect(env.area, self.frame_area)
             })
         };
-        self.canvases.push(Canvas::new(canvas_area));
+        self.canvases.push(LayerPaint {
+            canvas: Canvas::new(canvas_area),
+            deferred: Vec::new(),
+        });
         let canvas = self.canvases.len() - 1;
         self.layer_stack.push(canvas);
 
@@ -1686,13 +1691,17 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// whole surface it writes to.
     pub(crate) fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
         let slot = self.escaped_slot();
-        let surface = slot
-            .layer
-            .map_or(self.frame_area, |index| self.canvases[index].buffer.area);
+        let surface = slot.layer.map_or(self.frame_area, |index| {
+            self.canvases[index].canvas.buffer.area
+        });
         let area = slot
             .projection
             .map_or(surface, |projection| projection.allocation(surface));
-        self.deferred.push(QueuedPaint {
+        let queue = match slot.layer {
+            Some(index) => &mut self.canvases[index].deferred,
+            None => &mut self.deferred,
+        };
+        queue.push(QueuedPaint {
             slot,
             paint: DeclaredPaint::Thunk {
                 node: None,
@@ -1736,7 +1745,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         let target = match slot.layer {
             None => PaintTarget::frame(buffer, slot.projection, &mut self.scratch),
             Some(index) => PaintTarget::canvas(
-                &mut self.canvases[index],
+                &mut self.canvases[index].canvas,
                 slot.projection,
                 &mut self.scratch,
             ),
@@ -1772,45 +1781,38 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// the one that has taken the screen over composites before it: what the
     /// takeover covers is inert, and so must not paint above it either.
     fn finish_frame(&mut self, buffer: &mut Buffer, state: &State, theme: &Theme) {
-        let mut deferred = std::mem::take(&mut self.deferred);
         let takeover = self.surface.takeover_root();
         for index in 0..self.canvases.len() {
             if self.surface.covered_by_takeover(index, takeover) {
-                self.composite_layer(index, &mut deferred, buffer, state, theme);
+                self.composite_layer(index, buffer, state, theme);
             }
         }
         for index in 0..self.canvases.len() {
             if !self.surface.covered_by_takeover(index, takeover) {
-                self.composite_layer(index, &mut deferred, buffer, state, theme);
+                self.composite_layer(index, buffer, state, theme);
             }
         }
-        self.flush_deferred(&mut deferred, None, buffer, state, theme);
+        self.flush_deferred(None, buffer, state, theme);
     }
 
     /// Copy one layer's canvas onto the frame — dimming beneath it first when
     /// it takes the screen over — and flush the deferred thunks that belong
     /// to it.
-    fn composite_layer(
-        &mut self,
-        index: usize,
-        deferred: &mut Vec<QueuedPaint<State>>,
-        buffer: &mut Buffer,
-        state: &State,
-        theme: &Theme,
-    ) {
+    fn composite_layer(&mut self, index: usize, buffer: &mut Buffer, state: &State, theme: &Theme) {
         if self.surface.policy(Some(index)).takes_over {
             dim_background(
                 buffer,
                 self.canvases[index]
+                    .canvas
                     .buffer
                     .area
                     .intersection(self.frame_area),
                 theme.background,
             );
         }
-        self.flush_deferred(deferred, Some(index), buffer, state, theme);
+        self.flush_deferred(Some(index), buffer, state, theme);
         let frame_area = self.frame_area;
-        let canvas = &self.canvases[index];
+        let canvas = &self.canvases[index].canvas;
         let clip = frame_area.intersection(canvas.buffer.area);
         for &rect in &canvas.painted {
             super::buffer::copy_cells(
@@ -1824,26 +1826,25 @@ impl<State, Msg> RenderPass<State, Msg> {
         }
     }
 
-    /// Run the thunks `deferred` holds for `layer`, in registration order,
-    /// and leave the rest for the layer they belong to.
+    /// Drain the owning layer's thunks in registration order.
     fn flush_deferred(
         &mut self,
-        deferred: &mut Vec<QueuedPaint<State>>,
         layer: Option<usize>,
         buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
     ) {
-        let (theirs, rest): (Vec<_>, Vec<_>) = std::mem::take(deferred)
-            .into_iter()
-            .partition(|entry| entry.slot.layer == layer);
-        *deferred = rest;
+        let queue = match layer {
+            Some(index) => &mut self.canvases[index].deferred,
+            None => &mut self.deferred,
+        };
+        let deferred = std::mem::take(queue);
         // Deferred thunks carry `node: None`, so no flag is ever read from this.
         let resolved = Resolved {
             focus: &[],
             hover: &[],
         };
-        for QueuedPaint { slot, paint } in theirs {
+        for QueuedPaint { slot, paint } in deferred {
             self.paint_op(paint, slot, buffer, state, theme, resolved);
         }
     }

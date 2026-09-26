@@ -150,6 +150,29 @@ mod frame {
         group.finish();
     }
 
+    fn layer_overlays(c: &mut Criterion) {
+        let mut group = c.benchmark_group("layer_overlays");
+        let area = Rect::new(0, 0, 1, 1);
+        let theme = Theme::default_dark();
+        for count in [10, 100, 1_000] {
+            let ids: Vec<ChildId> = (0..count).map(|i| format!("layer-{i}").into()).collect();
+            let mut runtime = Ratcn::<(), ()>::new();
+            let mut buffer = Buffer::empty(area);
+            group.bench_with_input(BenchmarkId::from_parameter(count), &ids, |b, ids| {
+                b.iter(|| {
+                    runtime.render_into(&mut buffer, area, &(), &theme, |ctx| {
+                        for id in ids {
+                            ctx.hint(id, area, ScopeOptions::default(), |ctx| {
+                                ctx.defer_paint(|_| {});
+                            });
+                        }
+                    })
+                });
+            });
+        }
+        group.finish();
+    }
+
     fn route_click(c: &mut Criterion) {
         let (mut ratcn, mut terminal, state, theme) = surface();
         terminal
@@ -220,6 +243,7 @@ mod frame {
         render,
         sibling_scaling,
         wrapping_scaling,
+        layer_overlays,
         route_click,
         render_list_1000,
         render_dialog_wrapped
