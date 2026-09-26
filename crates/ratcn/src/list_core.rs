@@ -548,6 +548,7 @@ pub fn assert_unique_values<'a, T: PartialEq + 'a>(
 pub struct RowViewport {
     rows_per_item: u16,
     painted_offset: usize,
+    pending_offset: Option<usize>,
 }
 
 impl RowViewport {
@@ -558,6 +559,7 @@ impl RowViewport {
         Self {
             rows_per_item: if row_height == 0 { 1 } else { row_height },
             painted_offset: 0,
+            pending_offset: None,
         }
     }
 
@@ -579,6 +581,7 @@ impl RowViewport {
     /// hit-test against it.
     pub const fn record_painted_offset(&mut self, offset: usize) {
         self.painted_offset = offset;
+        self.pending_offset = None;
     }
 
     /// How many whole items fit in `area`. This is the unit paging and
@@ -607,11 +610,11 @@ impl RowViewport {
         linear_nav::index_at_row(len, self.painted_offset, local_row / rows_per_item)
     }
 
-    /// Scroll one wheel notch in `direction`: the view moves [`SCROLL_STEP`]
-    /// items from the painted offset and is held there against `items` as the
-    /// `cursor` sits in them (see [`WheelHold::hold`]), and this viewport
-    /// records the new offset so hit-testing stays aligned with the next
-    /// paint. Answers the held offset, or `None` for a horizontal notch, which
+    /// Scroll one wheel notch in `direction`: the pending view moves
+    /// [`SCROLL_STEP`] items and is held there against `items` as the `cursor`
+    /// sits in them (see [`WheelHold::hold`]). Successive notches accumulate,
+    /// but hit-testing keeps using the painted offset until the next render.
+    /// Answers the held offset, or `None` for a horizontal notch, which
     /// a column of rows leaves alone.
     ///
     /// The cursor never moves on the wheel; what the control emits about the
@@ -627,12 +630,12 @@ impl RowViewport {
         let next = linear_nav::wheel_offset(
             items.len(),
             self.visible_items(area),
-            self.painted_offset,
+            self.pending_offset.unwrap_or(self.painted_offset),
             direction,
             SCROLL_STEP,
         )?;
         ctx.transient::<WheelHold<T>>().hold(next, items, cursor);
-        self.painted_offset = next;
+        self.pending_offset = Some(next);
         Some(next)
     }
 

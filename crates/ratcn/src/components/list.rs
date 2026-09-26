@@ -1106,6 +1106,37 @@ mod tests {
         ListItem::new(value, label)
     }
 
+    #[test]
+    fn wheel_accumulates_without_retargeting_clicks_before_redraw() {
+        let mut driver = Driver::<(), usize>::new(12, 2);
+        let area = driver.area();
+        let render = |driver: &mut Driver<(), usize>| {
+            driver.render(&(), |ctx| {
+                ctx.component(
+                    "list",
+                    List::new((0..10).map(|i| ListItem::new(i, format!("row {i}"))))
+                        .selection(|_: &()| None, |i| i),
+                    area,
+                );
+            });
+        };
+        render(&mut driver);
+        for _ in 0..2 {
+            driver.event(mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 0), &());
+        }
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0), &()),
+            EventResult::Emit(0),
+            "clicks address what is still painted"
+        );
+        render(&mut driver);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0), &()),
+            EventResult::Emit(6),
+            "both wheel notches are published together on redraw"
+        );
+    }
+
     /// The rows one item of a two-row-per-item list occupies, so a click's
     /// screen row and its item index differ.
     const TALL_ROW_HEIGHT: u16 = 2;

@@ -1616,6 +1616,11 @@ mod tests {
             EventResult::Consumed,
             "the wheel scrolls the view without emitting a cursor move"
         );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 3, 1), &state),
+            EventResult::Emit(Msg::Selected(Fruit::Mango)),
+            "a wheel event cannot change the identity of an option still on screen"
+        );
         render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
         assert!(
             driver.row(1).contains("Lychee") && driver.row(2).contains("Durian"),
