@@ -185,9 +185,10 @@ impl TabsStyle {
 /// Inputs are parallel to the labels by index — which tab is selected
 /// ([`selected_item`](Self::selected_item)), which tab the cursor is on
 /// ([`focused_item`](Self::focused_item)), and which tabs are disabled
-/// ([`disabled_items`](Self::disabled_items)). When the tabs are wider than the
-/// row, the widget shows the group around the selected/focused tab and adds
-/// `‹`/`›` markers on sides that have hidden tabs.
+/// ([`disabled_items`](Self::disabled_items)) — the same shape as
+/// [`ListWidget`](crate::ListWidget). When the tabs are wider than the row, the
+/// widget shows the group around the selected/focused tab and adds `‹`/`›`
+/// markers on sides that have hidden tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TabsWidget<'a> {
     labels: &'a [&'a str],
@@ -260,7 +261,7 @@ impl<'a> TabsWidget<'a> {
     }
 
     /// A disabled mask parallel to the labels; a missing entry reads as
-    /// enabled.
+    /// enabled. Matches [`ListWidget::disabled_items`](crate::ListWidget::disabled_items).
     #[must_use]
     pub const fn disabled_items(mut self, disabled_items: &'a [bool]) -> Self {
         self.disabled_items = disabled_items;

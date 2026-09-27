@@ -320,18 +320,20 @@ pub fn fit_to_height(mut text: Text<'static>, height: u16) -> Text<'static> {
     text
 }
 
-/// One row as a list-shaped widget paints it: its lines, and the state its
-/// colors come from.
+/// One row as a list-shaped widget paints it: its lines, the terminal rows it
+/// occupies, and the state its colors come from.
 ///
 /// [`ListWidget`](crate::ListWidget) and [`SelectWidget`](crate::SelectWidget)
-/// take the rows on screen as these, and [`windowed_rows`] builds them from
-/// items. The flags describe this row alone, so a scrolled caller hands over
-/// its window without lining any index up with the list it came from.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ListRow {
+/// turn their index-addressed inputs into these for the rows on screen and
+/// hand them to [`paint_rows`], so both resolve a row's state the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListRow<'a> {
     /// What the row shows. Explicit colors in it are preserved; everything
     /// else inherits the row's state colors.
-    pub text: Text<'static>,
+    pub text: &'a Text<'static>,
+    /// Terminal rows the row occupies. Text taller than this is cut off;
+    /// shorter text leaves the rest of the row in its state colors.
+    pub height: u16,
     /// The cursor is on this row, and shown.
     pub focused: bool,
     /// This row is part of the current selection.
@@ -340,45 +342,7 @@ pub struct ListRow {
     pub disabled: bool,
 }
 
-impl ListRow {
-    /// An ordinary row showing `text`: not focused, selected, or disabled.
-    #[must_use]
-    pub fn new(text: impl Into<Text<'static>>) -> Self {
-        Self {
-            text: text.into(),
-            ..Self::default()
-        }
-    }
-
-    /// Mark this row as the one the cursor is on.
-    #[must_use]
-    pub const fn focused(mut self, focused: bool) -> Self {
-        self.focused = focused;
-        self
-    }
-
-    /// Mark this row selected.
-    #[must_use]
-    pub const fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
-        self
-    }
-
-    /// Mark this row disabled.
-    #[must_use]
-    pub const fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-
-    /// Terminal rows this row paints at: its line count, and at least one.
-    #[must_use]
-    pub fn height(&self) -> u16 {
-        u16::try_from(self.text.lines.len().max(1)).unwrap_or(u16::MAX)
-    }
-}
-
-/// Map the window `rows` of `items` to the rows a widget paints, each forced to
+/// Map the window `rows` of `items` to the lines a widget paints, each forced to
 /// `row_height` lines.
 ///
 /// `row` is handed each item's [`ListItemState`] with its index *in the whole
@@ -387,9 +351,7 @@ impl ListRow {
 /// list, so a windowed paint that renumbered its rows would light up and
 /// answer for the wrong one. `cursor` is the row that paints as focused,
 /// `selected` is asked per painted row, and `disabled` marks every row
-/// disabled on top of the items' own flags. Each [`ListRow`] carries the same
-/// flags its closure was handed, so what a row says about itself and how it is
-/// colored cannot disagree.
+/// disabled on top of the items' own flags.
 ///
 /// The result is one row per item in `rows`, each exactly `row_height` lines
 /// tall — see [`fit_to_height`] for why that is not the closure's choice.
@@ -406,7 +368,7 @@ pub fn windowed_rows<T>(
     disabled: bool,
     mut selected: impl FnMut(usize, &T) -> bool,
     mut row: impl FnMut(ListItemState<'_, T>) -> Text<'static>,
-) -> Vec<ListRow> {
+) -> Vec<Text<'static>> {
     let first = rows.start;
     items[rows]
         .iter()
@@ -421,12 +383,7 @@ pub fn windowed_rows<T>(
                 selected: selected(index, &item.value),
                 disabled: disabled || item.disabled,
             };
-            ListRow {
-                focused: state.focused,
-                selected: state.selected,
-                disabled: state.disabled,
-                text: fit_to_height(row(state), row_height),
-            }
+            fit_to_height(row(state), row_height)
         })
         .collect()
 }
@@ -490,15 +447,13 @@ impl RowStyle {
 /// inherits the row's state. `focus_symbol` is drawn in front of the focused
 /// row, and its width is reserved in front of every row whether or not the
 /// focused one is among them — a cursor scrolled out of the window must not
-/// shift the text. Pass `""` for no symbol and no gutter. `disabled` paints
-/// every row disabled, whatever its own flag says.
-pub fn paint_rows(
-    rows: &[ListRow],
+/// shift the text. Pass `""` for no symbol and no gutter.
+pub fn paint_rows<'a>(
+    rows: impl IntoIterator<Item = ListRow<'a>>,
     area: Rect,
     buf: &mut Buffer,
     style: &RowStyle,
     focus_symbol: &str,
-    disabled: bool,
 ) {
     let symbol_width = u16::try_from(display_width(focus_symbol)).unwrap_or(u16::MAX);
     let text_x = area.x.saturating_add(symbol_width).min(area.right());
@@ -508,16 +463,17 @@ pub fn paint_rows(
         if y >= area.bottom() {
             break;
         }
-        let height = row.height().min(area.bottom() - y);
+        let height = row.height.min(area.bottom() - y);
         let row_area = Rect::new(area.x, y, area.width, height);
         buf.set_style(
             row_area,
-            style.resolve(row.focused, row.selected, disabled || row.disabled),
+            style.resolve(row.focused, row.selected, row.disabled),
         );
         if row.focused {
             Span::raw(focus_symbol).render(row_area, buf);
         }
-        (&row.text).render(Rect::new(text_x, y, text_width, height), buf);
+        row.text
+            .render(Rect::new(text_x, y, text_width, height), buf);
         y = y.saturating_add(height);
     }
 }
@@ -1124,26 +1080,15 @@ mod tests {
 
         assert_eq!(rows.len(), 3);
         assert!(
-            rows.iter().all(|row| row.text.lines.len() == 2),
+            rows.iter().all(|row| row.lines.len() == 2),
             "every row is padded to the declared height"
         );
         assert_eq!(
             rows.iter()
-                .map(|row| row.text.lines[0].to_string())
+                .map(|row| row.lines[0].to_string())
                 .collect::<Vec<_>>(),
             ["2:2 s", "3:3 f", "4:4 d"],
             "the window's third item is item 4, not item 2, and each row carries its own state"
-        );
-        assert_eq!(
-            rows.iter()
-                .map(|row| (row.focused, row.selected, row.disabled))
-                .collect::<Vec<_>>(),
-            [
-                (false, true, false),
-                (true, false, false),
-                (false, false, true)
-            ],
-            "each painted row is flagged with the state its closure was handed"
         );
     }
 

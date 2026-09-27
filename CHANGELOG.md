@@ -22,8 +22,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `transient_mut` is removed.
 - `PaintCtx::with_buffer(area, |area, buf| …)` takes the area it writes;
   `stateful_widget` is removed.
-- `ListWidget` and `SelectWidget` take `ListRow`s that carry their own state,
-  and `TabsStyle` is two `FilledStyle`s (`style.selected.background`).
+- `TabsStyle` is two `FilledStyle`s (`style.selected.background`).
 - `Cycle::width()` includes its padding and grows by 2.
 - `Ratcn::has_rendered` and `BrowserEventError` are removed.
 
@@ -31,8 +30,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `runtime::BrowserPasteListener` (`ratzilla` feature) forwards browser pastes
   as `Event::Paste`.
-- `ListRow`, `list_core::paint_rows`, and `button_shape::FilledStyle` expose
-  the row and button painters for copied-out components.
+- `list_core::{ListRow, RowStyle, paint_rows}` and `button_shape::FilledStyle`
+  expose the row and button painters for copied-out components.
 
 ### Fixed
 

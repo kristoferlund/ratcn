@@ -187,24 +187,24 @@ impl ListStyle {
 /// [`Ratcn`](crate::runtime::Ratcn) or the component layer: render it directly
 /// and keep driving selection and scrolling however you already do.
 ///
-/// Rows are [`ListRow`]s: a pre-rendered [`Text`], free to span several lines,
-/// and the row's own state — whether the cursor is on it, whether it is
-/// selected, whether it is disabled. Explicit colors in the text are
-/// preserved; row styles provide the colors for text that does not set its
-/// own. That makes it easy to drive from any data you like, but it also means
-/// the widget has no idea what a row means — which rows are flagged is yours
-/// to keep straight.
+/// Rows are pre-rendered [`Text`]s, each free to span several lines, and
+/// everything else is addressed by *item index*: which item the cursor is on,
+/// which are selected, which are disabled.
+/// Explicit colors in the supplied text are preserved; row styles provide the
+/// colors for text that does not set its own.
+/// That makes it easy to drive from any data you like, but it also means the
+/// widget has no idea what a row means — reorder your data and the indices refer
+/// to different things.
 ///
 /// Use [`List`] instead when you want that handled: it keys focus and selection
 /// by a value you choose, and adds keyboard and mouse handling. It paints
 /// through this widget internally.
 ///
-/// Scrolling is the caller's: hand over the rows that are on screen. The
-/// widget holds no scroll position and never adjusts one, so the scroll policy
-/// stays with whatever owns it — your app, or the [`List`] component — and you
-/// build rows only for what is on screen.
-/// [`windowed_rows`](crate::list_core::windowed_rows) builds that window from
-/// [`ListItem`]s, flags and all.
+/// Scrolling is the caller's: hand over the rows that are on screen and say
+/// where they start with [`first_item`](Self::first_item). The widget holds no
+/// scroll position and never adjusts one, so the scroll policy stays with
+/// whatever owns it — your app, or the [`List`] component — and you build
+/// [`Text`]s for the rows you hand over.
 ///
 /// # Sizing and row heights
 ///
@@ -214,8 +214,8 @@ impl ListStyle {
 /// question the caller answers with a ratatui `Constraint`, not something the
 /// list can answer from its items.
 ///
-/// Rows may be any height — each row's text is a [`Text`], so one row may be
-/// one line and the next three, and the widget paints each at its own height.
+/// Rows may be any height — each item is a [`Text`], so one item may be one
+/// line and the next three, and the widget paints each at its own height.
 /// Keeping them uniform is the caller's job whenever anything maps a screen row
 /// back to an item, because the arithmetic that does so counts *items*, not
 /// lines: with mixed heights, the row a click lands on names a different item.
@@ -226,7 +226,11 @@ impl ListStyle {
 /// are exact there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListWidget<'a> {
-    rows: &'a [ListRow],
+    items: &'a [Text<'static>],
+    first_item: usize,
+    focused_item: Option<usize>,
+    selected_items: &'a [usize],
+    disabled_items: &'a [bool],
     focused: bool,
     hovered: bool,
     disabled: bool,
@@ -235,14 +239,20 @@ pub struct ListWidget<'a> {
 }
 
 impl<'a> ListWidget<'a> {
-    /// The rows to paint, top to bottom, using [`ListStyle::fallback`].
+    /// The rows to paint, top to bottom, nothing focused or selected, using
+    /// [`ListStyle::fallback`].
     ///
-    /// These are the rows on screen, not a whole list to scroll through: a
-    /// scrolled caller passes the window.
+    /// These are the rows on screen, not a whole list to scroll through:
+    /// a scrolled caller passes the window and names its position with
+    /// [`first_item`](Self::first_item).
     #[must_use]
-    pub const fn new(rows: &'a [ListRow]) -> Self {
+    pub const fn new(items: &'a [Text<'static>]) -> Self {
         Self {
-            rows,
+            items,
+            first_item: 0,
+            focused_item: None,
+            selected_items: &[],
+            disabled_items: &[],
             focused: false,
             hovered: false,
             disabled: false,
@@ -265,12 +275,67 @@ impl<'a> ListWidget<'a> {
         self
     }
 
-    /// Paint as the focused control: the focus backdrop, and the
-    /// [`focus_symbol`](Self::focus_symbol) shown. This is "the cursor is
-    /// shown" rather than keyboard focus alone — [`List`] passes focused *or*
-    /// hovered, and lets [`hovered`](Self::hovered) pick the backdrop. Which
-    /// row the cursor highlights is the row's own
-    /// [`focused`](ListRow::focused) flag.
+    /// The index the first row given to [`new`](Self::new) has in the whole
+    /// list. Defaults to 0.
+    ///
+    /// It is what lines the painted window up with the index-addressed state:
+    /// [`focused_item`](Self::focused_item), [`selected_items`](Self::selected_items),
+    /// and [`disabled_items`](Self::disabled_items) all count from the start of
+    /// the list, not from the top of the window, so scrolling changes only this
+    /// number and the rows. The widget never adjusts it — keep-visible and
+    /// clamping policy belong to the caller (see
+    /// [`linear_nav`](crate::linear_nav) for the arithmetic [`List`] uses).
+    #[must_use]
+    pub const fn first_item(mut self, first_item: usize) -> Self {
+        self.first_item = first_item;
+        self
+    }
+
+    /// Which row the cursor is on, by index.
+    ///
+    /// Only highlighted while the list is also [`focused`](Self::focused) — an
+    /// unfocused list shows no cursor, so two lists side by side cannot both
+    /// look active.
+    #[must_use]
+    pub const fn focused_item(mut self, focused_item: Option<usize>) -> Self {
+        self.focused_item = focused_item;
+        self
+    }
+
+    /// Indices of the selected rows, counting from the start of the list. Pass
+    /// one index for single selection, or several for multi-selection; the
+    /// widget does not care which you mean. Only rows it paints are consulted,
+    /// so a windowed caller need only name the selected rows in its window.
+    ///
+    /// This is an index list, not a mask: selection is sparse — usually zero or
+    /// one row, any number under multi-selection — so you name the selected
+    /// rows rather than flag every row. Contrast
+    /// [`disabled_items`](Self::disabled_items), which describes every row and is
+    /// therefore a positional mask.
+    #[must_use]
+    pub const fn selected_items(mut self, selected_items: &'a [usize]) -> Self {
+        self.selected_items = selected_items;
+        self
+    }
+
+    /// A disabled flag per item, counting from the start of the list. Entries
+    /// past the end of the slice read as enabled, so a short slice is fine.
+    ///
+    /// This is a positional mask, not an index list: disabledness is a property
+    /// of every row, usually derived straight from the items, so one flag per
+    /// item lines up without a lookup. It matches
+    /// [`TabsWidget::disabled_items`](crate::TabsWidget::disabled_items), while
+    /// sparse [`selected_items`](Self::selected_items) stays an index list.
+    #[must_use]
+    pub const fn disabled_items(mut self, disabled_items: &'a [bool]) -> Self {
+        self.disabled_items = disabled_items;
+        self
+    }
+
+    /// Paint as the focused control: the focus backdrop, the cursor row
+    /// highlighted, and the focus symbol shown. This is "the cursor is shown"
+    /// rather than keyboard focus alone — [`List`] passes focused *or*
+    /// hovered, and lets [`hovered`](Self::hovered) pick the backdrop.
     #[must_use]
     pub const fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
@@ -278,7 +343,8 @@ impl<'a> ListWidget<'a> {
     }
 
     /// Paint the list's hovered backdrop. Hover wins when the list is also
-    /// focused.
+    /// focused, while cursor-row visibility remains controlled by
+    /// [`focused`](Self::focused).
     #[must_use]
     pub const fn hovered(mut self, hovered: bool) -> Self {
         self.hovered = hovered;
@@ -295,9 +361,8 @@ impl<'a> ListWidget<'a> {
     /// A marker drawn in front of the cursor row, such as `"> "`. Empty by
     /// default. Only shown while the list is focused and enabled.
     ///
-    /// While shown, it occupies columns to the left of every row — even when
-    /// the cursor row is scrolled out of the window, so the text does not
-    /// shift — and a wide symbol narrows the space available for labels.
+    /// It occupies columns to the left of every row, so a wide symbol narrows
+    /// the space available for labels.
     #[must_use]
     pub const fn focus_symbol(mut self, focus_symbol: &'a str) -> Self {
         self.focus_symbol = focus_symbol;
@@ -320,19 +385,22 @@ impl Widget for ListWidget<'_> {
             area,
             Style::default().fg(self.style.foreground).bg(backdrop),
         );
-        let focus_symbol = if self.focused && !self.disabled {
-            self.focus_symbol
-        } else {
-            ""
-        };
-        list_core::paint_rows(
-            self.rows,
-            area,
-            buf,
-            &self.style.rows(backdrop),
-            focus_symbol,
-            self.disabled,
-        );
+        // The focus symbol occupies a column in front of every row, reserved
+        // only while there is a cursor to point at — the same frames the
+        // cursor row is highlighted.
+        let cursor_shown = self.focused && !self.disabled && self.focused_item.is_some();
+        let focus_symbol = if cursor_shown { self.focus_symbol } else { "" };
+        let rows = self.items.iter().enumerate().map(|(row, text)| {
+            let index = self.first_item.saturating_add(row);
+            ListRow {
+                text,
+                height: u16::try_from(text.lines.len().max(1)).unwrap_or(u16::MAX),
+                focused: self.focused && self.focused_item == Some(index),
+                selected: self.selected_items.contains(&index),
+                disabled: self.disabled || self.disabled_items.get(index).copied().unwrap_or(false),
+            }
+        });
+        list_core::paint_rows(rows, area, buf, &self.style.rows(backdrop), focus_symbol);
     }
 }
 
@@ -779,12 +847,13 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let area = ctx.area();
         let state = ctx.state();
+        let focused_item = self.focused_index(state);
         let selected_row = self.selected_index(state);
+        let disabled_items: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
         let style = resolve_style(self.style.as_deref(), ctx.theme, ListStyle::from_theme);
         // One cursor, shown while the list is either focused or under the
         // pointer; where it sits was decided during declaration.
         let cursor_visible = ctx.focused() || ctx.hovered();
-        let cursor = self.focused_index(state).filter(|_| cursor_visible);
         let selection_mode = if self.selected_many.is_some() {
             Some(true)
         } else if self.selected.is_some() {
@@ -819,11 +888,12 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         let last_item = first_item
             .saturating_add(usize::from(area.height.div_ceil(rows_per_item)))
             .min(self.items.len());
-        let rows = list_core::windowed_rows(
+        let mut selected_items: Vec<usize> = Vec::new();
+        let items = list_core::windowed_rows(
             &self.items,
             first_item..last_item,
             rows_per_item,
-            cursor,
+            cursor_visible.then_some(focused_item).flatten(),
             self.disabled,
             // Asked per painted row rather than looked up in a list of every
             // selected index, which would make painting quadratic.
@@ -831,25 +901,27 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                 Some((selected_many, _)) => selected_many(state, value),
                 None => selected_row == Some(index),
             },
-            |row| match &self.paint_item {
-                Some(paint_item) => paint_item(state, row),
-                None => default_item_line(&row, glyphs, &style),
+            |row| {
+                if row.selected {
+                    selected_items.push(row.index);
+                }
+                match &self.paint_item {
+                    Some(paint_item) => paint_item(state, row),
+                    None => default_item_line(&row, glyphs, &style),
+                }
             },
         );
-        // The symbol's gutter is reserved while there is a cursor to point
-        // at, wherever it has scrolled — the same frames it is highlighted.
-        let focus_symbol = if cursor.is_some() {
-            self.focus_symbol.as_str()
-        } else {
-            ""
-        };
         ctx.widget(
-            ListWidget::new(&rows)
+            ListWidget::new(&items)
+                .first_item(first_item)
+                .focused_item(focused_item)
+                .selected_items(&selected_items)
+                .disabled_items(&disabled_items)
                 .style(style)
                 .focused(cursor_visible)
                 .hovered(ctx.hovered())
                 .disabled(self.disabled)
-                .focus_symbol(focus_symbol),
+                .focus_symbol(&self.focus_symbol),
             area,
         );
     }
@@ -1150,11 +1222,7 @@ mod tests {
     // focused, or hovered — and shows the selection in its foreground.
     #[test]
     fn a_selected_row_keeps_the_rest_focus_or_hover_backdrop() {
-        // Row 1 is the cursor, so row 0 is selected but not focused.
-        let items = [
-            ListRow::new("selected").selected(true),
-            ListRow::new("other").focused(true),
-        ];
+        let items = [Text::from("selected"), Text::from("other")];
         let mut style = ListStyle::fallback();
         style.background = Color::Blue;
         style.focused_background = Color::Green;
@@ -1171,6 +1239,9 @@ mod tests {
             let mut buffer = Buffer::empty(area);
             Widget::render(
                 ListWidget::new(&items)
+                    .selected_items(&[0])
+                    // Row 1 is the cursor, so row 0 is selected but not focused.
+                    .focused_item(Some(1))
                     .focused(focused)
                     .hovered(hovered)
                     .style(style),
@@ -1190,22 +1261,20 @@ mod tests {
     #[test]
     fn list_widget_preserves_explicit_text_colors_and_modifiers() {
         let items = [
-            ListRow::new(Span::styled(
+            Text::from(Span::styled(
                 "selected",
                 Style::default()
                     .fg(Color::Magenta)
                     .bg(Color::Green)
                     .add_modifier(Modifier::BOLD),
-            ))
-            .selected(true),
-            ListRow::new(Span::styled(
+            )),
+            Text::from(Span::styled(
                 "disabled",
                 Style::default()
                     .fg(Color::Cyan)
                     .bg(Color::White)
                     .add_modifier(Modifier::ITALIC),
-            ))
-            .disabled(true),
+            )),
         ];
         let mut style = ListStyle::fallback();
         style.selected_foreground = Color::Yellow;
@@ -1215,7 +1284,14 @@ mod tests {
         let area = Rect::new(0, 0, 10, 2);
         let mut buffer = Buffer::empty(area);
 
-        Widget::render(ListWidget::new(&items).style(style), area, &mut buffer);
+        Widget::render(
+            ListWidget::new(&items)
+                .selected_items(&[0])
+                .disabled_items(&[false, true])
+                .style(style),
+            area,
+            &mut buffer,
+        );
 
         let selected = buffer.cell((0, 0)).expect("selected custom span");
         assert_eq!(selected.fg, Color::Magenta);
@@ -1317,19 +1393,21 @@ mod tests {
     #[test]
     fn hidden_cursor_paints_the_caller_owned_window() {
         let items = [
-            ListRow::new("Alpha"),
-            ListRow::new("Bravo"),
-            ListRow::new("Charlie"),
-            ListRow::new("Delta").focused(true),
+            Text::from("Alpha"),
+            Text::from("Bravo"),
+            Text::from("Charlie"),
+            Text::from("Delta"),
         ];
         let area = Rect::new(0, 0, 10, 2);
 
-        // An unfocused or disabled list reserves no focus symbol column, but
-        // still paints the window it was given.
+        // An unfocused or disabled list shows no cursor and reserves no focus
+        // symbol column, but still paints the window it was given.
         for (focused, disabled) in [(false, false), (true, true)] {
             let mut buffer = Buffer::empty(area);
 
             ListWidget::new(&items[2..])
+                .first_item(2)
+                .focused_item(Some(3))
                 .focused(focused)
                 .disabled(disabled)
                 .focus_symbol("> ")
@@ -2258,10 +2336,10 @@ mod tests {
         );
     }
 
-    /// The recorded frames below were captured before `ListWidget` took rows
-    /// with their own state flags. That change was a refactor of how rows reach
-    /// the painter, not of what a list looks like, so every one of these frames
-    /// must stay exactly as recorded.
+    /// The recorded frames below were captured before `ListWidget` painted
+    /// through the row painter it shares with `Select`. That change was a
+    /// refactor of how rows reach the painter, not of what a list looks like,
+    /// so every one of these frames must stay exactly as recorded.
     fn painted_list_frames() -> [String; 3] {
         use crate::runtime::FocusState;
         use crate::test_support::styled_snapshot;
@@ -2390,23 +2468,24 @@ mod tests {
     /// same window disabled.
     fn standalone_widgets(theme: &Theme, buffer: &mut Buffer) {
         let rows = [
-            ListRow::new("two").selected(true),
-            ListRow::new("three").focused(true),
-            ListRow::new("four").selected(true).disabled(true),
-            ListRow::new("five"),
+            Text::from("two"),
+            Text::from("three"),
+            Text::from("four"),
+            Text::from("five"),
         ];
         ListWidget::new(&rows)
+            .first_item(2)
+            .focused_item(Some(3))
+            .selected_items(&[2, 4])
+            .disabled_items(&[false, false, false, false, true])
             .focused(true)
             .focus_symbol("> ")
             .themed(theme)
             .render(Rect::new(0, 0, 12, 4), buffer);
-        let rows = [
-            ListRow::new("two").selected(true),
-            ListRow::new("three").focused(true),
-            ListRow::new("four"),
-            ListRow::new("five"),
-        ];
         ListWidget::new(&rows)
+            .first_item(2)
+            .focused_item(Some(3))
+            .selected_items(&[2])
             .focused(true)
             .focus_symbol("> ")
             .disabled(true)

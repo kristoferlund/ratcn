@@ -144,23 +144,23 @@ render on any terminal.
 `SelectWidget` paints a Select without focus or events. It is an ordinary
 Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime.
 Unlike the interactive component's overlaid popup, its open panel paints below
-the trigger inside the area passed to the widget. Options are `ListRow`s, each
-carrying its own cursor, selection, and disabled state:
+the trigger inside the area passed to the widget. Options and state are
+addressed by index:
 
 ```rust
-use ratcn::{ListRow, SelectWidget};
+use ratcn::SelectWidget;
 
-let options = [
-    ListRow::new("Mango").selected(true),
-    ListRow::new("Papaya").focused(true),
-    ListRow::new("Lychee").disabled(true),
-];
+let options = ["Mango", "Papaya", "Lychee", "Durian"];
 
 frame.render_widget(
     SelectWidget::new(selected_label)
         .placeholder("Pick a fruit...")
         .open(true)
         .options(&options)
+        .focused_item(Some(cursor_index))
+        .selected_item(selected_index)
+        .disabled_items(&[false, false, true, false])
+        .first_item(first_item)
         .focused(select_has_focus)
         .hovered(pointer_is_over_select)
         .disabled(select_is_disabled)
@@ -169,13 +169,12 @@ frame.render_widget(
 );
 ```
 
-Pass only the options on screen; the panel shows as many whole rows as fit
-below the trigger. Each row paints at its own height, so keep them uniform for
-multi-line options. `selection_indicator::marker_line` builds the
-marker-and-label line the interactive Select paints, and
-`list_core::windowed_rows` builds a window of rows from `ListItem`s — together
-the paint-only counterpart of the component's `.paint_item(...)`. Replace
-`.themed(...)` with `.style(...)` to supply exact widget colors.
+`.visible_item_rows(...)` accepts screen rows you build for the options
+actually painted — the ones from `first_item` on, in paint order — while
+`.options(...)` takes every option, because the panel's height is measured
+from their count. Pair it with `.row_height(...)` for multi-line rows. Together
+they are the paint-only counterpart of the component's `.paint_item(...)`.
+Replace `.themed(...)` with `.style(...)` to supply exact widget colors.
 
 ## Full API
 

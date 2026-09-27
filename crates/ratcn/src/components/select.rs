@@ -9,9 +9,9 @@
 //! - A **row** is terminal geometry: the one or more screen rows used to paint
 //!   an option.
 //!
-//! For example, [`SelectWidget::options`] accepts the rows for the options on
-//! screen, while [`Select::paint_item`] receives the shared item state used by
-//! List.
+//! For example, [`SelectWidget::visible_item_rows`] accepts the screen rows for
+//! the items on screen, while [`Select::paint_item`] receives the shared item
+//! state used by List.
 
 use std::{fmt, rc::Rc};
 
@@ -210,10 +210,21 @@ pub struct SelectWidget<'a> {
     value: Option<&'a str>,
     placeholder: &'a str,
     open: bool,
-    options: &'a [ListRow],
+    options: &'a [&'a str],
+    item_rows: Option<&'a [Text<'static>]>,
+    row_height: u16,
+    focused_item: Option<usize>,
+    selected_item: Option<usize>,
+    disabled_items: &'a [bool],
+    first_item: usize,
     focused: bool,
     hovered: bool,
     disabled: bool,
+    /// The marker shown on a selected option, when the panel paints its own
+    /// rows.
+    selected_marker: &'a str,
+    /// The marker shown on an unselected option.
+    unselected_marker: &'a str,
     style: SelectStyle,
 }
 
@@ -221,16 +232,42 @@ impl<'a> SelectWidget<'a> {
     /// Construct a closed select showing `value`, or an empty placeholder.
     #[must_use]
     pub const fn new(value: Option<&'a str>) -> Self {
+        let radio = selection_indicator::MarkerGlyphs::radio();
         Self {
             value,
             placeholder: "",
             open: false,
             options: &[],
+            item_rows: None,
+            row_height: 1,
+            focused_item: None,
+            selected_item: None,
+            disabled_items: &[],
+            first_item: 0,
             focused: false,
             hovered: false,
             disabled: false,
+            selected_marker: radio.selected,
+            unselected_marker: radio.unselected,
             style: SelectStyle::fallback(),
         }
+    }
+
+    /// The marker shown on a selected option.
+    ///
+    /// Any string works, including multi-character pairs like `[x]`; the row
+    /// indents the label by the marker's width plus one space.
+    #[must_use]
+    pub const fn selected_marker(mut self, marker: &'a str) -> Self {
+        self.selected_marker = marker;
+        self
+    }
+
+    /// The marker shown on an unselected option.
+    #[must_use]
+    pub const fn unselected_marker(mut self, marker: &'a str) -> Self {
+        self.unselected_marker = marker;
+        self
     }
 
     /// Take colors from `theme`.
@@ -262,24 +299,70 @@ impl<'a> SelectWidget<'a> {
         self
     }
 
-    /// The options the open panel paints, top to bottom: the ones on screen,
-    /// each flagged with its own cursor, selection, and disabled state.
-    ///
-    /// The panel is as tall as the whole rows that fit below the trigger, so a
-    /// scrolled caller passes its window and nothing else.
-    /// [`windowed_rows`](crate::list_core::windowed_rows) builds that window
-    /// from [`ListItem`]s, and
-    /// [`marker_line`](crate::selection_indicator::marker_line) is the default
-    /// marker-and-label line the interactive [`Select`] paints.
-    ///
-    /// Each row paints at its own height; keep them uniform, as the
-    /// interactive [`Select`] does, so a caller's hit-testing can divide by
-    /// one height. The [`SelectStyle`] option-state colors are painted beneath
-    /// each row's text, so unstyled text inherits them while explicit colors
-    /// remain intact.
+    /// The labels of every option, painted in the panel while
+    /// [`open`](Self::open).
     #[must_use]
-    pub const fn options(mut self, options: &'a [ListRow]) -> Self {
+    pub const fn options(mut self, options: &'a [&'a str]) -> Self {
         self.options = options;
+        self
+    }
+
+    /// Pre-rendered screen rows to paint instead of the default
+    /// marker-and-label line — one per *painted* option, in paint order,
+    /// starting at [`first_item`](Self::first_item).
+    ///
+    /// [`options`](Self::options) still takes every option, because the
+    /// panel's height is measured from their count; these are only the rows
+    /// that appear, so a long option list costs a long list's worth of
+    /// [`Text`] only if you build one.
+    ///
+    /// Each `Text` may span several lines; pair this with
+    /// [`row_height`](Self::row_height) so every option occupies the same
+    /// number of rows. The [`SelectStyle`] option-state colors are painted
+    /// beneath the supplied text, so unstyled text inherits them while
+    /// explicit colors remain intact.
+    #[must_use]
+    pub const fn visible_item_rows(mut self, item_rows: &'a [Text<'static>]) -> Self {
+        self.item_rows = Some(item_rows);
+        self
+    }
+
+    /// How many terminal rows each option occupies. Defaults to 1; 0 is
+    /// treated as 1.
+    ///
+    /// Every option gets the same height, which is what keeps the panel's
+    /// height math and a caller's hit-testing exact.
+    #[must_use]
+    pub const fn row_height(mut self, rows: u16) -> Self {
+        self.row_height = if rows == 0 { 1 } else { rows };
+        self
+    }
+
+    /// Set the cursor option by index.
+    #[must_use]
+    pub const fn focused_item(mut self, focused: Option<usize>) -> Self {
+        self.focused_item = focused;
+        self
+    }
+
+    /// Set the chosen option by index.
+    #[must_use]
+    pub const fn selected_item(mut self, selected: Option<usize>) -> Self {
+        self.selected_item = selected;
+        self
+    }
+
+    /// Set the disabled mask, positionally matched to the options.
+    #[must_use]
+    pub const fn disabled_items(mut self, disabled: &'a [bool]) -> Self {
+        self.disabled_items = disabled;
+        self
+    }
+
+    /// Set the index of the first visible item.
+    #[must_use]
+    pub const fn first_item(mut self, first: usize) -> Self {
+        self.first_item = first;
         self
     }
 
@@ -323,18 +406,20 @@ impl Widget for SelectWidget<'_> {
         if !self.open || self.disabled {
             return;
         }
-        // The standalone widget reserves one trigger row and two border rows,
-        // and shows only options that fit whole.
-        let available = area.height.saturating_sub(TRIGGER_HEIGHT + 2);
-        let mut height: u16 = 0;
-        for row in self.options {
-            match height.checked_add(row.height()) {
-                Some(next) if next <= available => height = next,
-                _ => break,
-            }
-        }
-        if height > 0 {
-            let panel = Rect::new(area.x, area.y + 1, area.width, height + 2);
+        // The standalone widget reserves one trigger row and two border rows.
+        let visible = visible_count(
+            self.options.len(),
+            u16::MAX,
+            area.height.saturating_sub(TRIGGER_HEIGHT + 2),
+            self.row_height,
+        );
+        if visible > 0 {
+            let panel = Rect::new(
+                area.x,
+                area.y + 1,
+                area.width,
+                visible * self.row_height + 2,
+            );
             SelectPanelWidget(self).render(panel, buf);
         }
     }
@@ -397,7 +482,45 @@ impl Widget for SelectPanelWidget<'_> {
             .style(Style::new().bg(widget.style.panel_background));
         let inner = block.inner(area);
         block.render(area, buf);
-        list_core::paint_rows(widget.options, inner, buf, &widget.style.rows(), "", false);
+        let row_height = widget.row_height.max(1);
+        let visible =
+            (widget.first_item..widget.options.len()).take(usize::from(inner.height / row_height));
+        // The default marker-and-label lines, built only when the caller did
+        // not hand over its own rows.
+        let marker_lines: Vec<Text<'static>> = match widget.item_rows {
+            Some(_) => Vec::new(),
+            None => visible
+                .clone()
+                .map(|index| {
+                    Text::from(selection_indicator::marker_line(
+                        widget.options[index],
+                        widget.selected_item == Some(index),
+                        widget.disabled_items.get(index).copied().unwrap_or(false),
+                        selection_indicator::MarkerColors {
+                            disabled: widget.style.disabled_foreground,
+                            selected: widget.style.selected_marker,
+                            unselected: widget.style.unselected_marker,
+                        },
+                        selection_indicator::MarkerGlyphs {
+                            selected: widget.selected_marker,
+                            unselected: widget.unselected_marker,
+                        },
+                    ))
+                })
+                .collect(),
+        };
+        let texts = widget.item_rows.unwrap_or(&marker_lines);
+        // A caller's rows may run out before the options do; those options
+        // still paint their state colors.
+        let blank = Text::default();
+        let rows = visible.enumerate().map(|(row, index)| ListRow {
+            text: texts.get(row).unwrap_or(&blank),
+            height: row_height,
+            focused: widget.focused_item == Some(index),
+            selected: widget.selected_item == Some(index),
+            disabled: widget.disabled_items.get(index).copied().unwrap_or(false),
+        });
+        list_core::paint_rows(rows, inner, buf, &widget.style.rows(), "");
     }
 }
 
@@ -993,40 +1116,39 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         let last_option = first_option
             .saturating_add(self.viewport.visible_items(self.inner))
             .min(self.items.len());
-        let radio = selection_indicator::MarkerGlyphs::radio();
-        let glyphs = selection_indicator::MarkerGlyphs {
-            selected: self.selected_marker.as_deref().unwrap_or(radio.selected),
-            unselected: self
-                .unselected_marker
-                .as_deref()
-                .unwrap_or(radio.unselected),
-        };
-        let rows = list_core::windowed_rows(
-            &self.items,
-            first_option..last_option,
-            rows_per_item,
-            cursor,
-            false,
-            |index, _| selected == Some(index),
-            |row| match &self.paint_item {
-                Some(paint_item) => paint_item(state, row),
-                None => Text::from(selection_indicator::marker_line(
-                    row.label,
-                    row.selected,
-                    row.disabled,
-                    selection_indicator::MarkerColors {
-                        disabled: self.style.disabled_foreground,
-                        selected: self.style.selected_marker,
-                        unselected: self.style.unselected_marker,
-                    },
-                    glyphs,
-                )),
-            },
-        );
-        let widget = SelectWidget::new(None)
+        // Adapt only the painted window, with widget-local indices. The row
+        // callback above the widget boundary keeps its whole-list identity.
+        let visible = &self.items[first_option..last_option];
+        let labels: Vec<&str> = visible.iter().map(ListItem::label).collect();
+        let disabled: Vec<bool> = visible.iter().map(ListItem::is_disabled).collect();
+        let rows: Option<Vec<Text<'static>>> = self.paint_item.as_ref().map(|paint_item| {
+            list_core::windowed_rows(
+                &self.items,
+                first_option..last_option,
+                rows_per_item,
+                cursor,
+                false,
+                |index, _| selected == Some(index),
+                |row| paint_item(state, row),
+            )
+        });
+        let mut widget = SelectWidget::new(None)
             .open(true)
-            .options(&rows)
+            .options(&labels)
+            .row_height(rows_per_item)
+            .focused_item(cursor.and_then(|index| index.checked_sub(first_option)))
+            .selected_item(selected.and_then(|index| index.checked_sub(first_option)))
+            .disabled_items(&disabled)
             .style(self.style);
+        if let Some(marker) = self.selected_marker.as_deref() {
+            widget = widget.selected_marker(marker);
+        }
+        if let Some(marker) = self.unselected_marker.as_deref() {
+            widget = widget.unselected_marker(marker);
+        }
+        if let Some(rows) = &rows {
+            widget = widget.visible_item_rows(rows);
+        }
         // Layers are transparent: the panel clears its footprint so nothing
         // beneath shows through.
         let area = ctx.area();
@@ -1185,7 +1307,7 @@ mod tests {
 
     #[test]
     fn disabled_open_widget_paints_only_the_closed_trigger() {
-        let options = [ListRow::new("Mango"), ListRow::new("Papaya")];
+        let options = ["Mango", "Papaya"];
         let widget = SelectWidget::new(None)
             .open(true)
             .options(&options)
@@ -2108,8 +2230,8 @@ mod tests {
         );
     }
 
-    /// The recorded frames below were captured before the panel took rows with
-    /// their own state flags from the shared row painter. That change was a
+    /// The recorded frames below were captured before the panel painted
+    /// through the row painter it shares with `List`. That change was a
     /// refactor of how rows reach the painter, not of what a select looks
     /// like, so every one of these frames must stay exactly as recorded.
     fn painted_select_frames() -> [String; 3] {
@@ -2202,39 +2324,28 @@ mod tests {
     /// The paint-only widget on its own: a scrolled panel with the default
     /// markers, and a panel of custom two-row options too tall to show both.
     fn standalone_widgets(theme: &Theme, buffer: &mut Buffer) {
-        let glyphs = selection_indicator::MarkerGlyphs::radio();
-        let style = SelectStyle::from_theme(theme);
-        let colors = selection_indicator::MarkerColors {
-            disabled: style.disabled_foreground,
-            selected: style.selected_marker,
-            unselected: style.unselected_marker,
-        };
-        let option = |label, selected, disabled| {
-            ListRow::new(selection_indicator::marker_line(
-                label, selected, disabled, colors, glyphs,
-            ))
-            .selected(selected)
-            .disabled(disabled)
-        };
-        let options = [
-            option("Papaya", true, false),
-            option("Lychee", false, false).focused(true),
-            option("Durian", false, true),
-        ];
+        let options = ["Mango", "Papaya", "Lychee", "Durian"];
         SelectWidget::new(Some("Papaya"))
             .open(true)
             .options(&options)
+            .first_item(1)
+            .focused_item(Some(2))
+            .selected_item(Some(1))
+            .disabled_items(&[false, false, false, true])
             .focused(true)
             .themed(theme)
             .render(Rect::new(0, 0, 16, 6), buffer);
-        let options = [
-            ListRow::new(vec![Line::from("Mango"), Line::from(" sweet")]).focused(true),
-            ListRow::new(vec![Line::from("Papaya"), Line::from(" soft")]),
+        let rows = [
+            Text::from(vec![Line::from("Mango"), Line::from(" sweet")]),
+            Text::from(vec![Line::from("Papaya"), Line::from(" soft")]),
         ];
         SelectWidget::new(None)
             .placeholder("Pick")
             .open(true)
-            .options(&options)
+            .options(&options[..2])
+            .visible_item_rows(&rows)
+            .row_height(2)
+            .focused_item(Some(0))
             .themed(theme)
             .render(Rect::new(16, 0, 16, 6), buffer);
     }
