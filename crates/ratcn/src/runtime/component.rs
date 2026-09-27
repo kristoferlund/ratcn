@@ -250,13 +250,25 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// must isolate what the declaration changes: a write through shared
     /// interior state cannot be taken back.
     ///
-    /// `None` until an event handler has stored a value: this never inserts
-    /// one, which is what keeps a transient's lifetime tied to the events
-    /// that created it.
-    pub fn transient_mut<T: Clone + 'static>(&mut self) -> Option<&mut T> {
-        let path = self.pass.current_path()?.to_vec();
+    /// A declaration that finds nothing stored starts from `T::default()`,
+    /// published like any other settlement: a value settled every frame —
+    /// an offset the component owns itself — has to carry over to the next
+    /// one even before any event has written it.
+    ///
+    /// # Panics
+    ///
+    /// When called from the root declaration, which has no identity to keep a
+    /// transient at.
+    pub fn transient_mut<T: Clone + Default + 'static>(&mut self) -> &mut T {
+        let path = self
+            .pass
+            .current_path()
+            .expect("a transient is kept at a component's identity; the root declaration has none")
+            .to_vec();
         if slot_ref::<T>(&self.pass.settled_transients, &path).is_none() {
-            let value = slot_ref::<T>(self.transients, &path)?.clone();
+            let value = slot_ref::<T>(self.transients, &path)
+                .cloned()
+                .unwrap_or_default();
             self.pass
                 .settled_transients
                 .entry(path.clone())
@@ -264,6 +276,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
                 .insert(TypeId::of::<T>(), Box::new(value));
         }
         slot_mut(&mut self.pass.settled_transients, &path)
+            .expect("the settled value was staged just above")
     }
 
     /// The app state supplied to the current declaration pass.

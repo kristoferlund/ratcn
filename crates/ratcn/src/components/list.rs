@@ -1823,6 +1823,35 @@ mod tests {
         );
     }
 
+    /// Left unbound, the list keeps its own offset between frames, so a cursor
+    /// that moves within the visible window leaves the view where it is —
+    /// exactly as a bound list does. Recomputing from the top every frame
+    /// would drag the view along with each step back up.
+    #[test]
+    fn an_unbound_list_keeps_its_view_while_the_cursor_stays_visible() {
+        let mut driver = Driver::<Option<usize>, (usize, usize)>::new(12, 5);
+        let area = driver.area();
+        let draw = |driver: &mut Driver<Option<usize>, (usize, usize)>, cursor: Option<usize>| {
+            driver.render(&cursor, |ctx| {
+                ctx.component(
+                    "list",
+                    List::new((0..20).map(|i| ListItem::new(i, format!("row {i}"))))
+                        .item_focus(|cursor: &Option<usize>| *cursor, |i, offset| (i, offset)),
+                    area,
+                );
+            });
+        };
+        draw(&mut driver, Some(9));
+        assert!(driver.row(0).contains("row 5"), "{}", driver.row(0));
+
+        draw(&mut driver, Some(8));
+        assert!(
+            driver.row(0).contains("row 5"),
+            "the cursor is still visible, so the view stays put: {}",
+            driver.row(0)
+        );
+    }
+
     /// Returning the cursor to where the wheel left it must not revive the
     /// held view: the cursor the user just moved has to stay on screen.
     #[test]

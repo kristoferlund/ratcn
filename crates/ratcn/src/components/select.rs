@@ -1634,6 +1634,29 @@ mod tests {
         );
     }
 
+    /// The panel owns its offset, so a cursor moving within the visible
+    /// options must not drag the view back toward the top.
+    #[test]
+    fn the_panel_keeps_its_view_while_the_cursor_stays_visible() {
+        let mut driver = driver(20, 4);
+        let mut state = State {
+            open: true,
+            cursor: Some(Fruit::Durian),
+            ..State::default()
+        };
+        let area = Rect::new(0, 0, 20, 1);
+        render_select(&mut driver, &state, area, &items());
+        assert!(driver.row(1).contains("Lychee"), "{}", driver.row(1));
+
+        state.cursor = Some(Fruit::Lychee);
+        render_select(&mut driver, &state, area, &items());
+        assert!(
+            driver.row(1).contains("Lychee"),
+            "the cursor is still visible, so the view stays put: {}",
+            driver.row(1)
+        );
+    }
+
     #[test]
     fn a_released_wheel_hold_never_revives() {
         let mut driver = driver(20, 4);

@@ -9,7 +9,7 @@ fn failed_declaration_discards_staged_transient_settlement() {
     impl Component<(), u32> for Probe {
         fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
             if self.0 {
-                *ctx.transient_mut::<u32>().unwrap() = 99;
+                *ctx.transient_mut::<u32>() = 99;
                 assert_eq!(
                     ctx.transient::<u32>(),
                     Some(&99),
@@ -65,9 +65,7 @@ fn repeated_settlement_in_one_declaration_accumulates() {
     impl Component<(), u32> for Probe {
         fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
             for _ in 0..2 {
-                if let Some(value) = ctx.transient_mut::<u32>() {
-                    *value += 1;
-                }
+                *ctx.transient_mut::<u32>() += 1;
             }
         }
         fn scope_options(&self) -> ScopeOptions {
@@ -81,9 +79,13 @@ fn repeated_settlement_in_one_declaration_accumulates() {
     let area = driver.area();
     driver.render(&(), |ctx| ctx.component("probe", Probe, area));
     let key = Event::Key(KeyEvent::new(KeyCode::Enter));
-    assert_eq!(driver.event(key.clone(), &()), EventResult::Emit(0));
+    assert_eq!(
+        driver.event(key.clone(), &()),
+        EventResult::Emit(2),
+        "a declaration that finds nothing stored settles from the default"
+    );
     driver.render(&(), |ctx| ctx.component("probe", Probe, area));
-    assert_eq!(driver.event(key, &()), EventResult::Emit(2));
+    assert_eq!(driver.event(key, &()), EventResult::Emit(4));
 }
 
 struct ContextProbe {

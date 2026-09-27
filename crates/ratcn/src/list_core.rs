@@ -167,13 +167,13 @@ impl<T: Clone + PartialEq> WheelHold<T> {
 
 impl<T: Clone + PartialEq + 'static> WheelHold<T> {
     /// [`settle`](Self::settle) the hold stored at the current declaration's
-    /// identity, or an unheld view when nothing is stored there.
+    /// identity, starting from an unheld view at the top when nothing is
+    /// stored there yet.
     ///
-    /// A hold is written by a wheel event and read back by the next declaration,
-    /// so a declaration that has never been wheeled finds nothing — and must
-    /// still resolve the offset it paints from. Settling through here is what
-    /// makes the absent hold mean "unheld" rather than "no offset", in the one
-    /// place both list-shaped components reach for it.
+    /// The settled offset is stored back even when nothing holds the view: a
+    /// component that owns its scrolling resumes from it next frame, so a
+    /// cursor moving within the visible rows leaves the view where it is —
+    /// the same view a bound offset would keep.
     pub fn settle_transient<S, M>(
         ctx: &mut DeclareCtx<'_, S, M>,
         items: &[ListItem<T>],
@@ -182,9 +182,7 @@ impl<T: Clone + PartialEq + 'static> WheelHold<T> {
         viewport: &mut RowViewport,
         area: Rect,
     ) {
-        let mut unheld = Self::default();
         ctx.transient_mut::<Self>()
-            .unwrap_or(&mut unheld)
             .settle(items, cursor, requested, viewport, area);
     }
 }

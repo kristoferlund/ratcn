@@ -12,8 +12,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Ratcn::render` and `render_into` take `FnMut`. The closure runs a second time
   on a frame where focus lands on content a viewport clips, so build what it
   consumes inside it.
-- `DeclareCtx::transient_mut` requires `T: Clone` and stages its write until the
-  render commits; a rejected pass leaves the stored value unchanged.
+- `DeclareCtx::transient_mut` requires `T: Clone + Default` and returns `&mut T`,
+  starting from the default when nothing is stored. It stages its write until
+  the render commits; a rejected pass leaves the stored value unchanged.
 
 ### Fixed
 
@@ -26,6 +27,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Viewport clipping blanks a wide glyph cut by its edge instead of leaving it
   over host cells.
 - Declaring many siblings and wrapping long text no longer scale quadratically.
+- A List without a `scroll` binding, and Select's panel, keep their view while
+  the cursor moves within it instead of dragging it toward the top.
 
 ## [0.0.4] - 2026-09-26
 

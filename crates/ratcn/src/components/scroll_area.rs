@@ -218,8 +218,7 @@ impl<S, M> ScrollArea<S, M> {
     /// where a bound offset is read; and it is permanent, so an app that
     /// returns to the offset a hold was taken at does not revive it.
     fn settle(&self, ctx: &mut DeclareCtx<'_, S, M>, area: Rect, bound: Option<u16>) -> u16 {
-        let mut unheld = ScrollHold::Released;
-        let hold = ctx.transient_mut::<ScrollHold>().unwrap_or(&mut unheld);
+        let hold = ctx.transient_mut::<ScrollHold>();
         if matches!(*hold, ScrollHold::Held { base, .. } if base != bound) {
             *hold = ScrollHold::Released;
         }
