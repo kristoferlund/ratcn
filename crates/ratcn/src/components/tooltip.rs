@@ -505,8 +505,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
         let text = self.text.clone();
         // A hint layer: painted above everything, and inert. The press it
         // floats over still reaches the trigger underneath.
+        // The layer declares in screen coordinates, so the bubble paints at
+        // the area it opened at rather than the one placed above.
         ctx.hint(BUBBLE_ID, area, ScopeOptions::default(), move |ctx| {
             ctx.paint(move |ctx| {
+                let area = ctx.area();
                 ctx.widget(TooltipWidget::new(&text).style(style), area);
             });
         });
@@ -943,6 +946,25 @@ mod tests {
             ..State::default()
         };
         render_tooltip(&mut driver, &state, Rect::new(2, 5, 8, 1), TooltipSide::Top);
+        assert!(driver.row(3).contains(TIP), "{}", driver.row(3));
+        assert!(driver.row(2).contains('╭'), "{}", driver.row(2));
+    }
+
+    /// Inside a scrolled viewport the bubble is placed against the trigger
+    /// where the viewport shows it, and paints there.
+    #[test]
+    fn the_bubble_follows_a_trigger_scrolled_inside_a_viewport() {
+        let mut driver = driver(30, 10);
+        let state = State {
+            open: true,
+            ..State::default()
+        };
+        driver.render(&state, |ctx| {
+            ctx.viewport(Rect::new(0, 0, 30, 10), 20, 4, |ctx| {
+                ctx.component("tip", tooltip(TooltipSide::Top), Rect::new(2, 9, 8, 1));
+            });
+        });
+        assert!(driver.row(5).contains("Save"), "{}", driver.row(5));
         assert!(driver.row(3).contains(TIP), "{}", driver.row(3));
         assert!(driver.row(2).contains('╭'), "{}", driver.row(2));
     }

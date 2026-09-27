@@ -219,40 +219,6 @@ fn a_paint_inside_a_viewport_reads_blanks_where_it_has_not_written() {
     assert_eq!(*seen.borrow(), " ");
 }
 
-/// Paint that escaped a viewport's clip addresses the surface it lands on,
-/// read in logical coordinates: the frame shifted down by the scroll offset.
-/// A popup declared inside a viewport therefore reaches every row of its own
-/// canvas, including the rows the viewport itself does not show — the
-/// viewport's content rectangle is the allocation of the content it clips,
-/// and says nothing about what left the clip.
-#[test]
-fn escaped_paint_is_allocated_the_whole_surface_in_logical_coordinates() {
-    let mut driver = Driver::<State, Msg>::new(10, 4);
-    driver.render(&State, |ctx| {
-        ctx.viewport(Rect::new(0, 0, 6, 2), 8, 3, |ctx| {
-            ctx.popup(
-                "pop",
-                Rect::new(0, 3, 10, 4),
-                PopupOptions::default(),
-                |ctx| {
-                    ctx.defer_paint(|ctx| {
-                        let area = ctx.area();
-                        ctx.with_buffer(move |buffer| {
-                            buffer.set_string(area.x, area.y, "T", Style::default());
-                            buffer.set_string(area.x, area.bottom() - 1, "B", Style::default());
-                        });
-                    });
-                },
-            );
-        });
-    });
-
-    // Logical row 3 is the frame's first row at offset 3, and logical row 6
-    // its last.
-    assert_eq!(driver.row(0), "T         ");
-    assert_eq!(driver.row(3), "B         ");
-}
-
 struct PanicWidget;
 
 impl Widget for PanicWidget {
@@ -467,20 +433,23 @@ fn a_captured_drag_reports_travel_at_the_coordinate_limit() {
     );
 }
 
+/// Deferred paint escapes the viewport it was registered in the way a layer
+/// does, and paints in screen coordinates.
 #[test]
-fn deferred_paint_inside_a_viewport_projects_onto_the_frame() {
+fn deferred_paint_inside_a_viewport_paints_in_screen_coordinates() {
     let mut driver = Driver::<State, Msg>::new(2, 6);
     driver.render(&State, |ctx| {
         ctx.viewport(Rect::new(0, 0, 2, 3), u16::MAX, u16::MAX, |ctx| {
             ctx.defer_paint(|ctx| {
+                assert_eq!(ctx.area(), Rect::new(0, 0, 2, 6));
                 ctx.with_buffer(|buffer| {
-                    buffer.set_string(0, u16::MAX - 3, "D", Style::default());
+                    buffer.set_string(0, 5, "D", Style::default());
                 });
             });
         });
     });
 
-    assert_eq!(&driver.row(0)[..1], "D");
+    assert_eq!(&driver.row(5)[..1], "D");
 }
 
 /// A viewport's clip travels with its content's paint: rows declared
@@ -603,13 +572,13 @@ fn a_modal_declared_from_a_scrolled_off_row_opens_on_the_screen() {
     assert_eq!(driver.row(0), "MODAL ");
 }
 
-/// The edge a scrolled-past row is held against is the viewport's own top, so
-/// a viewport that starts partway down the screen keeps the modal inside it.
+/// A modal translates by the offset like every layer: a row the scroll
+/// carries above the viewport's top edge lands above it, not held against it.
 #[test]
-fn a_modal_held_against_the_top_lands_on_the_viewport_not_the_screen() {
+fn a_modal_above_its_viewport_top_sits_where_the_offset_puts_it() {
     let mut driver = Driver::<State, Msg>::new(6, 5);
     driver.render(&State, |ctx| {
-        ctx.viewport(Rect::new(0, 2, 6, 3), 20, 17, |ctx| {
+        ctx.viewport(Rect::new(0, 2, 6, 3), 20, 2, |ctx| {
             ctx.modal_scope(
                 "dialog",
                 Rect::new(0, 3, 6, 1),
@@ -622,16 +591,8 @@ fn a_modal_held_against_the_top_lands_on_the_viewport_not_the_screen() {
         });
     });
 
-    assert_eq!(
-        driver.row(2),
-        "MODAL ",
-        "held against the viewport's top row"
-    );
-    assert_eq!(
-        driver.row(0),
-        "      ",
-        "the rows above the viewport are free"
-    );
+    assert_eq!(driver.row(1), "MODAL ", "translated by the offset");
+    assert_eq!(driver.row(2), "      ", "not held against the top edge");
 }
 
 /// A modal leaves its viewport only while it is being declared. The offset is
@@ -688,34 +649,100 @@ fn a_viewport_inside_a_modal_inside_a_viewport_declares_and_paints() {
     assert_eq!(driver.row(2), "BBB   ");
 }
 
-/// A popup escapes the clip and keeps the coordinates: it is projected out of
-/// its viewport once, and what it declares is still in that viewport's
-/// logical space. A viewport declared inside one is therefore a viewport
-/// inside a viewport, and says so.
+/// A popup leaves its viewport the way a modal does, so a scroll area inside
+/// a popup inside a scroll area is ordinary nesting: it declares, paints
+/// through its own clip, and routes the pointer through its own offset.
 #[test]
-fn a_viewport_inside_a_popup_inside_a_viewport_is_still_nested() {
+fn a_viewport_inside_a_popup_inside_a_viewport_declares_paints_and_hits() {
     let mut driver = Driver::<State, Msg>::new(6, 4);
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        driver.render(&State, |ctx| {
-            ctx.viewport(Rect::new(0, 0, 6, 2), 10, 0, |ctx| {
-                ctx.popup(
-                    "panel",
-                    Rect::new(0, 0, 6, 4),
-                    PopupOptions::default(),
-                    |ctx| {
-                        ctx.viewport(Rect::new(0, 1, 6, 2), 4, 2, |_| {});
-                    },
-                );
-            });
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 0, 6, 2), 10, 4, |ctx| {
+            ctx.popup(
+                "panel",
+                Rect::new(0, 4, 6, 4),
+                PopupOptions::default(),
+                |ctx| {
+                    ctx.viewport(Rect::new(0, 1, 6, 2), 4, 2, |ctx| {
+                        ctx.paint_widget(
+                            Paragraph::new("top\nhid\nAAA\nBBB"),
+                            Rect::new(0, 1, 3, 4),
+                        );
+                        ctx.component("leaf", Leaf, Rect::new(0, 4, 6, 1));
+                    });
+                },
+            );
         });
-    }));
-    let panic = result.expect_err("a nested viewport must panic");
-    assert!(
-        panic_message(panic.as_ref()).contains("a viewport cannot be declared inside another"),
-        "{}",
-        panic_message(panic.as_ref())
+    });
+
+    assert_eq!(driver.row(1), "AAA   ");
+    assert_eq!(driver.row(2), "stable");
+    assert_eq!(
+        driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 2), &State),
+        EventResult::Emit(Msg::Pressed),
+        "the inner viewport's offset maps the press onto its logical row"
     );
 }
+
+/// Every layer belongs to the screen, whatever its kind. A layer opened
+/// inside a scrolled viewport takes its area with the scroll undone and
+/// declares in screen coordinates from there, the frame included — so
+/// content that paints at the area it was given lands where the layer is.
+#[test]
+fn every_layer_kind_declares_in_screen_coordinates() {
+    for kind in ["modal", "popup", "hint"] {
+        let seen = Rc::new(Cell::new((Rect::ZERO, Rect::ZERO)));
+        let record = Rc::clone(&seen);
+        let mut driver = Driver::<State, Msg>::new(6, 4);
+        driver.render(&State, move |ctx| {
+            let record = Rc::clone(&record);
+            ctx.viewport(Rect::new(0, 0, 6, 4), 10, 3, move |ctx| {
+                let layer = Rect::new(0, 5, 5, 1);
+                let content = move |ctx: &mut DeclareCtx<'_, State, Msg>| {
+                    record.set((ctx.area(), ctx.frame_area()));
+                    let area = ctx.area();
+                    ctx.paint_widget(Paragraph::new("LAYER"), area);
+                };
+                match kind {
+                    "modal" => ctx.modal_scope("layer", layer, ScopeOptions::default(), content),
+                    "popup" => ctx.popup("layer", layer, PopupOptions::default(), content),
+                    _ => ctx.hint("layer", layer, ScopeOptions::default(), content),
+                }
+            });
+        });
+
+        assert_eq!(
+            seen.get(),
+            (Rect::new(0, 2, 5, 1), Rect::new(0, 0, 6, 4)),
+            "a {kind} declares in screen coordinates"
+        );
+        assert_eq!(driver.row(2), "LAYER ", "a {kind} paints at its own area");
+    }
+}
+
+/// A layer whose anchor is scrolled partly above its viewport sits where the
+/// offset puts it, above the viewport's top edge, rather than being pushed
+/// down onto content it does not belong to.
+#[test]
+fn a_layer_above_its_viewport_top_sits_where_the_offset_puts_it() {
+    let mut driver = Driver::<State, Msg>::new(6, 5);
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 2, 6, 3), 20, 3, |ctx| {
+            ctx.popup(
+                "pop",
+                Rect::new(0, 4, 6, 1),
+                PopupOptions::default(),
+                |ctx| {
+                    let area = ctx.area();
+                    ctx.paint_widget(Paragraph::new("POPUP"), area);
+                },
+            );
+        });
+    });
+
+    assert_eq!(driver.row(1), "POPUP ", "translated by the offset");
+    assert_eq!(driver.row(2), "      ", "not held against the top edge");
+}
+
 #[derive(Default)]
 struct RevealState {
     focus: FocusState,

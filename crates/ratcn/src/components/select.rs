@@ -979,27 +979,38 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         ) else {
             return;
         };
-        let inner = Block::new().borders(Borders::ALL).inner(panel_area);
-        self.page_size = viewport.visible_items(inner).max(1);
-        let panel = SelectPanel {
-            items: Rc::clone(&self.items),
-            open: Rc::clone(open),
-            focused_item: self.focused_item.clone(),
-            selected: self.selected.clone(),
-            paint_item: self.paint_item.clone(),
-            selected_marker: self.selected_marker.clone(),
-            unselected_marker: self.unselected_marker.clone(),
-            style,
-            panel_area,
-            inner,
-            viewport,
-        };
+        self.page_size = viewport.visible_items(panel_inner(panel_area)).max(1);
+        let items = Rc::clone(&self.items);
+        let open = Rc::clone(open);
+        let focused_item = self.focused_item.clone();
+        let selected = self.selected.clone();
+        let paint_item = self.paint_item.clone();
+        let selected_marker = self.selected_marker.clone();
+        let unselected_marker = self.unselected_marker.clone();
         let on_open_change = Rc::clone(on_open_change);
         ctx.popup(
             "panel",
             panel_area,
             PopupOptions::default().on_dismiss(move || on_open_change(false)),
-            move |ctx| ctx.component("options", panel, panel_area),
+            move |ctx| {
+                // The popup declares in screen coordinates, so the panel is
+                // measured against the area it opened at, not the one laid
+                // out above in the declaring viewport's.
+                let area = ctx.area();
+                let panel = SelectPanel {
+                    items,
+                    open,
+                    focused_item,
+                    selected,
+                    paint_item,
+                    selected_marker,
+                    unselected_marker,
+                    style,
+                    inner: panel_inner(area),
+                    viewport,
+                };
+                ctx.component("options", panel, area);
+            },
         );
     }
 
@@ -1049,6 +1060,11 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
     }
 }
 
+/// `panel` inside its border.
+fn panel_inner(panel: Rect) -> Rect {
+    Block::new().borders(Borders::ALL).inner(panel)
+}
+
 struct SelectPanel<T, S, M> {
     items: Rc<[ListItem<T>]>,
     open: ReadOpenFn<S>,
@@ -1058,8 +1074,7 @@ struct SelectPanel<T, S, M> {
     selected_marker: Option<String>,
     unselected_marker: Option<String>,
     style: SelectStyle,
-    panel_area: Rect,
-    /// `panel_area` inside its border: the rows the options themselves occupy.
+    /// The panel inside its border: the rows the options themselves occupy.
     /// Carried rather than re-derived so declaration, paint, hit-testing, and
     /// wheel arithmetic all measure the panel's capacity against one rect.
     inner: Rect,
@@ -1145,7 +1160,8 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         if let Some(rows) = &rows {
             widget = widget.visible_item_rows(rows);
         }
-        ctx.widget(SelectPanelWidget(widget), self.panel_area);
+        let area = ctx.area();
+        ctx.widget(SelectPanelWidget(widget), area);
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {

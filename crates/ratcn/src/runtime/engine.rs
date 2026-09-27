@@ -10,9 +10,8 @@
 //! committed surface, holds the app's focus and modal bindings, and routes
 //! input against it.
 //!
-//! Supporting types sit with the one that uses them: viewports and
-//! projections before [`Surface`], and the paint queue and its canvases
-//! before [`RenderPass`]. What the pointer is doing between a press and its
+//! Supporting types sit with the one that uses them: viewports before
+//! [`Surface`], and the paint queue and its canvases before [`RenderPass`]. What the pointer is doing between a press and its
 //! release lives in [`gesture`](super::gesture), which [`Ratcn`] drives.
 
 use std::{collections::HashMap, fmt};
@@ -77,7 +76,7 @@ enum ViewportVisibility {
 
 impl Viewport {
     /// The full logical allocation descendants are declared against.
-    fn content(self) -> Rect {
+    pub(crate) fn content(self) -> Rect {
         Rect::new(
             self.screen.x,
             self.screen.y,
@@ -88,7 +87,7 @@ impl Viewport {
 
     /// The part of the screen rectangle the content covers. Content shorter
     /// than the rectangle leaves the rows past its end to what is beneath.
-    fn visible_screen(self) -> Rect {
+    pub(crate) fn visible_screen(self) -> Rect {
         Rect::new(
             self.screen.x,
             self.screen.y,
@@ -150,9 +149,9 @@ impl Viewport {
         }
     }
 
-    /// A logical rectangle in screen coordinates, clipped to `clip`. Rows that
-    /// project above the screen are dropped.
-    fn project_rect(self, area: Rect, clip: Rect) -> Rect {
+    /// A logical rectangle in screen coordinates, clipped to the rows this
+    /// viewport shows.
+    pub(crate) fn project_rect(self, area: Rect) -> Rect {
         let above = self.offset.saturating_sub(area.y);
         if above >= area.height {
             return Rect::ZERO;
@@ -164,7 +163,7 @@ impl Viewport {
             area.width,
             area.height - above,
         )
-        .intersection(clip);
+        .intersection(self.visible_screen());
         if projected.is_empty() {
             Rect::ZERO
         } else {
@@ -173,13 +172,29 @@ impl Viewport {
     }
 
     /// `area` with this viewport's scroll undone: the screen rectangle those
-    /// logical rows sit at, held against the viewport's top edge where the
-    /// offset would carry them above it.
+    /// logical rows sit at, unclipped — above or below the viewport's own
+    /// rows included. Only the coordinate origin holds a row the offset would
+    /// carry past it.
     fn unscrolled(self, area: Rect) -> Rect {
         Rect {
-            y: area.y.saturating_sub(self.offset).max(self.screen.y),
+            y: area.y.saturating_sub(self.offset),
             ..area
         }
+    }
+
+    /// Every cell of `logical` this viewport shows, paired with the screen
+    /// cell it lands on.
+    pub(crate) fn projected_positions(
+        self,
+        logical: Rect,
+    ) -> impl Iterator<Item = (Position, Position)> {
+        let offset = self.offset;
+        self.project_rect(logical).positions().map(move |screen| {
+            (
+                Position::new(screen.x, screen.y.saturating_add(offset)),
+                screen,
+            )
+        })
     }
 
     /// The frame rectangle in this viewport's logical coordinates.
@@ -191,103 +206,12 @@ impl Viewport {
     }
 }
 
-/// A viewport as one paint carries it: whether the viewport's clip still
-/// applies to that paint.
-///
-/// The rectangle escaped paint addresses is the surface it lands on — the
-/// frame, or a layer's canvas — so the methods that need it take it as
-/// `surface` from whoever holds that surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Projection {
-    /// Content declared inside the viewport. It addresses the whole logical
-    /// content and reaches the rows the viewport shows.
-    Clipped(Viewport),
-    /// Paint that escaped the clip — a layer opened inside the viewport, or a
-    /// closure deferred from inside it. It addresses the surface it paints
-    /// on, read in logical coordinates, and reaches all of it.
-    Escaped(Viewport),
-}
-
-impl Projection {
-    const fn viewport(self) -> Viewport {
-        match self {
-            Self::Clipped(viewport) | Self::Escaped(viewport) => viewport,
-        }
-    }
-
-    /// The screen rectangle paint carrying this reaches, given the `surface`
-    /// it lands on.
-    pub(crate) fn clip(self, surface: Rect) -> Rect {
-        match self {
-            Self::Clipped(viewport) => viewport.visible_screen(),
-            Self::Escaped(_) => surface,
-        }
-    }
-
-    /// The whole logical rectangle paint carrying this may write in, given
-    /// the `surface` it lands on.
-    pub(crate) fn allocation(self, surface: Rect) -> Rect {
-        match self {
-            Self::Clipped(viewport) => viewport.content(),
-            Self::Escaped(viewport) => viewport.logical_frame(surface),
-        }
-    }
-
-    /// A logical rectangle in screen coordinates, clipped.
-    pub(crate) fn project_rect(self, area: Rect, surface: Rect) -> Rect {
-        self.viewport().project_rect(area, self.clip(surface))
-    }
-
-    /// `point` in logical coordinates. Content counts only where the viewport
-    /// shows it; paint that escaped the clip counts wherever the pointer is.
-    fn to_logical(self, point: Position) -> Option<Position> {
-        match self {
-            Self::Clipped(viewport) => viewport.visible_to_logical(point),
-            Self::Escaped(viewport) => viewport.to_logical(point),
-        }
-    }
-
-    /// Every cell of `logical` this projection carries, paired with the
-    /// screen cell it lands on.
-    pub(crate) fn projected_positions(
-        self,
-        logical: Rect,
-        surface: Rect,
-    ) -> impl Iterator<Item = (Position, Position)> {
-        let offset = self.viewport().offset;
-        self.project_rect(logical, surface)
-            .positions()
-            .map(move |screen| {
-                (
-                    Position::new(screen.x, screen.y.saturating_add(offset)),
-                    screen,
-                )
-            })
-    }
-}
-
 /// One declared viewport, and where it sits in the tree being built.
 struct ViewportRecord {
     viewport: Viewport,
     /// The declaration that opened it. `None` when the root closure declared
     /// it, which no component owns and so nothing can be asked to scroll.
     owner: Option<usize>,
-    /// The layer open at declaration. A descendant on another layer escaped
-    /// the clip.
-    layer: Option<usize>,
-}
-
-impl ViewportRecord {
-    /// How a node or a paint on `layer` reads this viewport. A viewport clips
-    /// what was declared on its own layer; a layer opened inside it carries
-    /// its content past the clip. The one place that rule is stated.
-    fn projection(&self, layer: Option<usize>) -> Projection {
-        if self.layer == layer {
-            Projection::Clipped(self.viewport)
-        } else {
-            Projection::Escaped(self.viewport)
-        }
-    }
 }
 
 /// What the finished tree resolved this frame: the focus path paint styles
@@ -322,20 +246,20 @@ enum FocusAdvance {
 /// What kind of layer a node roots, when it roots one.
 ///
 /// A layer is a subtree painted above everything declared outside it. Every
-/// kind shares that mechanism — a tag, a canvas, compositing order — and
-/// differs only in what it does to interaction.
+/// kind shares that mechanism — a tag, a canvas, compositing order, and
+/// screen coordinates: a layer undoes the scroll of the viewport that
+/// declared it once, over its own area, and declares from there in screen
+/// coordinates. The kinds differ only in what they do to interaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LayerKind {
     /// Takes the screen over: what lies beneath it dims, events landing
     /// outside it are consumed, focus resolves into it, Tab is trapped at its
-    /// root, and keys stop there too. It belongs to the screen rather than to
-    /// the viewport that declared it: it undoes that viewport's scroll once,
-    /// over its own area, and declares from there in screen coordinates.
+    /// root, and keys stop there too.
     Modal,
     /// Occludes its own footprint and, when it carries a dismiss hook, emits
     /// it on a press outside itself — but never steals focus and lets keys
-    /// reach its declarer. Anchored: it keeps the declaring viewport's
-    /// coordinates and is projected out of it once.
+    /// reach its declarer. Anchored: skipped while its declaration is
+    /// scrolled out of sight.
     Popup,
     /// Says something and takes nothing: not a pointer target, so a press
     /// goes to whatever it covers, and not a focus target, so Tab passes it by
@@ -880,19 +804,16 @@ impl<State, Msg> Surface<State, Msg> {
             })
     }
 
-    /// The viewport that clips `index`, if one does. A node declared on a
-    /// layer opened inside a viewport escaped that clip and has none.
+    /// The viewport that clips `index`, if one does. A layer leaves the
+    /// viewport it was opened in, so what it declares is clipped only by a
+    /// viewport of its own.
     fn clipping_viewport(&self, index: usize) -> Option<&ViewportRecord> {
-        let node = &self.nodes[index];
-        let record = &self.viewports[node.viewport?];
-        matches!(record.projection(node.layer), Projection::Clipped(_)).then_some(record)
+        Some(&self.viewports[self.nodes[index].viewport?])
     }
 
-    /// The projection `index` was declared through, and `None` where no
-    /// viewport carries it.
-    fn projection_of(&self, index: usize) -> Option<Projection> {
-        let node = &self.nodes[index];
-        Some(self.viewports[node.viewport?].projection(node.layer))
+    /// The viewport `index` was declared inside, and `None` where none is.
+    fn viewport_of(&self, index: usize) -> Option<Viewport> {
+        self.clipping_viewport(index).map(|record| record.viewport)
     }
 
     /// How much of `index` its viewport shows. The one answer behind pointer
@@ -906,8 +827,8 @@ impl<State, Msg> Surface<State, Msg> {
 
     /// `point` in the coordinate space `index` was declared with.
     fn logical_point(&self, index: usize, point: Position) -> Option<Position> {
-        self.projection_of(index)
-            .map_or(Some(point), |projection| projection.to_logical(point))
+        self.viewport_of(index)
+            .map_or(Some(point), |viewport| viewport.visible_to_logical(point))
     }
 
     fn next_focus(
@@ -1017,7 +938,7 @@ struct QueuedPaint<State> {
     paint: DeclaredPaint<State>,
 }
 
-/// The surface an op paints onto, and the projection it paints through.
+/// The surface an op paints onto, and the viewport it paints through.
 ///
 /// Both are fixed where the op was queued, so an op belongs to the layer that
 /// was open at its declaration whatever is open at replay.
@@ -1025,7 +946,7 @@ struct QueuedPaint<State> {
 struct PaintSlot {
     /// The layer canvas the op paints onto, `None` for the frame.
     layer: Option<usize>,
-    projection: Option<Projection>,
+    viewport: Option<Viewport>,
 }
 
 /// One declaration's own paint.
@@ -1270,38 +1191,24 @@ impl<State, Msg> RenderPass<State, Msg> {
         });
     }
 
-    /// The slot the layer currently being declared into paints in.
-    /// Content declared inside the open viewport is clipped to what the
-    /// viewport shows; a layer opened inside one escaped that clip and paints
-    /// where the offset puts it.
+    /// The slot the declaration currently open paints in: the layer being
+    /// declared into, and the open viewport, which clips its content to what
+    /// it shows.
     fn active_slot(&self) -> PaintSlot {
-        let layer = self.current_layer();
-        PaintSlot {
-            layer,
-            projection: self
-                .open_viewport
-                .map(|index| self.surface.viewports[index].projection(layer)),
-        }
-    }
-
-    /// The slot paint registered through [`DeclareCtx::defer_paint`] runs in:
-    /// the layer being declared into, and a projection that escapes the open
-    /// viewport's clip.
-    fn escaped_slot(&self) -> PaintSlot {
         PaintSlot {
             layer: self.current_layer(),
-            projection: self
+            viewport: self
                 .open_viewport
-                .map(|index| Projection::Escaped(self.surface.viewports[index].viewport)),
+                .map(|index| self.surface.viewports[index].viewport),
         }
     }
 
     /// Where the pointer is in the coordinates `slot` paints in, and `None`
-    /// where the projection it carries does not reach it.
+    /// where the viewport it carries does not show it.
     fn hover_in(&self, slot: PaintSlot) -> Option<Position> {
         let position = self.hover_position?;
-        match slot.projection {
-            Some(projection) => projection.to_logical(position),
+        match slot.viewport {
+            Some(viewport) => viewport.visible_to_logical(position),
             None => Some(position),
         }
     }
@@ -1350,7 +1257,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             pass.surface.viewports.push(ViewportRecord {
                 viewport,
                 owner: pass.parent_stack.last().copied(),
-                layer: pass.current_layer(),
             });
             env.area = viewport.content();
             env.frame_area = viewport.logical_frame(pass.frame_area);
@@ -1363,14 +1269,12 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// close it.
     ///
     /// The single place the layer lifecycle is written, coordinates included.
-    /// An anchored layer keeps the coordinates of the viewport it was declared
-    /// in, and takes that viewport's projection of `env.area` as its canvas. A
-    /// layer that takes the screen over belongs to it instead: it undoes the
-    /// viewport's scroll once — over its own area, and over the frame its
-    /// subtree reads — and then declares with no viewport open at all, so what
-    /// it declares is in screen coordinates and may open a viewport of its
-    /// own. Either way the viewport is back for
-    /// whatever the declaration goes on to say after the layer.
+    /// Every layer belongs to the screen, whatever its kind: it undoes the
+    /// open viewport's scroll once — over its own area, and over the frame
+    /// its subtree reads — and then declares with no viewport open at all, so
+    /// what it declares is in screen coordinates and may open a viewport of
+    /// its own. The viewport is back for whatever the declaration goes on to
+    /// say after the layer.
     ///
     /// The layer is recorded before `declare_root` opens its root node, so
     /// the subtree beneath declares with the layer already in place.
@@ -1381,20 +1285,13 @@ impl<State, Msg> RenderPass<State, Msg> {
         mut env: DeclarationEnv<'a, State>,
         declare_root: impl FnOnce(&mut Self, DeclarationEnv<'a, State>),
     ) {
-        let enclosing = self.open_viewport;
-        let viewport = enclosing.map(|index| self.surface.viewports[index].viewport);
-        let canvas_area = if kind.takes_over() {
-            self.open_viewport = None;
-            env.frame_area = self.frame_area;
-            env.area = viewport.map_or(env.area, |viewport| viewport.unscrolled(env.area));
-            env.area
-        } else {
-            viewport.map_or(env.area, |viewport| {
-                viewport.project_rect(env.area, self.frame_area)
-            })
-        };
+        let enclosing = self.open_viewport.take();
+        if let Some(index) = enclosing {
+            env.area = self.surface.viewports[index].viewport.unscrolled(env.area);
+        }
+        env.frame_area = self.frame_area;
         self.canvases.push(LayerPaint {
-            canvas: Canvas::new(canvas_area),
+            canvas: Canvas::new(env.area),
             deferred: Vec::new(),
         });
         let canvas = self.canvases.len() - 1;
@@ -1648,15 +1545,16 @@ impl<State, Msg> RenderPass<State, Msg> {
     }
 
     /// Register a deferred closure. It has no identity, so its area is the
-    /// whole surface it writes to.
+    /// whole surface it writes to. It escapes the open viewport the way a
+    /// layer does, and paints in screen coordinates.
     pub(crate) fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
-        let slot = self.escaped_slot();
-        let surface = slot.layer.map_or(self.frame_area, |index| {
+        let slot = PaintSlot {
+            layer: self.current_layer(),
+            viewport: None,
+        };
+        let area = slot.layer.map_or(self.frame_area, |index| {
             self.canvases[index].canvas.buffer.area
         });
-        let area = slot
-            .projection
-            .map_or(surface, |projection| projection.allocation(surface));
         let queue = match slot.layer {
             Some(index) => &mut self.canvases[index].deferred,
             None => &mut self.deferred,
@@ -1703,10 +1601,10 @@ impl<State, Msg> RenderPass<State, Msg> {
         });
         let hover_position = self.hover_in(slot);
         let target = match slot.layer {
-            None => PaintTarget::frame(buffer, slot.projection, &mut self.scratch),
+            None => PaintTarget::frame(buffer, slot.viewport, &mut self.scratch),
             Some(index) => PaintTarget::canvas(
                 &mut self.canvases[index].canvas,
-                slot.projection,
+                slot.viewport,
                 &mut self.scratch,
             ),
         };
@@ -2813,7 +2711,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             }
             let path = full_path[..=outermost_depth + position].to_vec();
             let area = self.surface.nodes[index].area;
-            let viewport = self.surface.projection_of(index).map(Projection::viewport);
+            let viewport = self.surface.viewport_of(index);
             // Declaration-space for the component, screen-absolute for the
             // gesture tracker `EventCtx::drag` keeps.
             let projected = match (event, viewport) {

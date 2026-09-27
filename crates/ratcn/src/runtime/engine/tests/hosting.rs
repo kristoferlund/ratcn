@@ -251,7 +251,7 @@ fn oversized_modal_dims_and_copies_only_inside_the_root() {
 }
 
 #[test]
-fn viewport_popup_keeps_logical_root_bounds_and_projects_once() {
+fn viewport_popup_restores_screen_root_bounds_and_projects_once() {
     let mut driver = render_hosted(|ctx| {
         ctx.viewport(Rect::new(10, 6, 12, 3), 12, 3, |ctx| {
             let logical_root = Rect::new(8, 7, 18, 7);
@@ -264,17 +264,17 @@ fn viewport_popup_keeps_logical_root_bounds_and_projects_once() {
                 |ctx| {
                     assert_eq!(ctx.frame_area(), logical_root);
                     ctx.popup("popup", logical_root, PopupOptions::default(), |ctx| {
-                        assert_eq!(ctx.area(), logical_root);
-                        assert_eq!(ctx.frame_area(), logical_root);
+                        assert_eq!(ctx.area(), ROOT);
+                        assert_eq!(ctx.frame_area(), ROOT);
                         ctx.component(
                             "button",
                             Button::new("Go").on_press(|| "popup"),
-                            Rect::new(10, 9, 6, 1),
+                            Rect::new(10, 6, 6, 1),
                         );
                         ctx.defer_paint(move |ctx| {
-                            assert_eq!(ctx.area(), logical_root);
-                            ctx.widget(Line::from("T"), Rect::new(8, 7, 1, 1));
-                            ctx.widget(Line::from("B"), Rect::new(8, 13, 1, 1));
+                            assert_eq!(ctx.area(), ROOT);
+                            ctx.widget(Line::from("T"), Rect::new(8, 4, 1, 1));
+                            ctx.widget(Line::from("B"), Rect::new(8, 10, 1, 1));
                         });
                     });
                 },
@@ -288,7 +288,7 @@ fn viewport_popup_keeps_logical_root_bounds_and_projects_once() {
     assert_eq!(
         driver.event(mouse(MouseKind::Click(MouseButton::Left), 11, 6), &()),
         EventResult::Emit("popup"),
-        "popup input is translated once, just like its paint"
+        "popup input is in the same screen coordinates as its paint"
     );
 }
 

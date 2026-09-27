@@ -1846,7 +1846,8 @@ mod tests {
             ctx.paint_widget(Paragraph::new("OWNER"), anchor);
             if ctx.pointer_within() {
                 let popup = Rect::new(anchor.x, anchor.y + 2, 5, 1);
-                ctx.popup("popup", popup, PopupOptions::default(), move |ctx| {
+                ctx.popup("popup", popup, PopupOptions::default(), |ctx| {
+                    let popup = ctx.area();
                     ctx.paint_widget(Paragraph::new("POPUP"), popup);
                     ctx.component("item", Probe::focusable("popup-item"), popup);
                 });
@@ -1867,14 +1868,16 @@ mod tests {
             let escaped = Rect::new(anchor.x, anchor.y + 2, 5, 1);
             match self.layer {
                 LayerExample::Hint => {
-                    ctx.hint("layer", escaped, ScopeOptions::default(), move |ctx| {
-                        ctx.paint_widget(Paragraph::new("HINT"), escaped);
+                    ctx.hint("layer", escaped, ScopeOptions::default(), |ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(Paragraph::new("HINT"), area);
                     });
                 }
                 LayerExample::Popup => {
-                    ctx.popup("layer", escaped, PopupOptions::default(), move |ctx| {
-                        ctx.paint_widget(Paragraph::new("POPUP"), escaped);
-                        ctx.component("item", Probe::focusable("item"), escaped);
+                    ctx.popup("layer", escaped, PopupOptions::default(), |ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(Paragraph::new("POPUP"), area);
+                        ctx.component("item", Probe::focusable("item"), area);
                     });
                 }
                 LayerExample::Modal => {
@@ -2168,13 +2171,15 @@ mod tests {
             let escaped = self.escaped;
             match self.layer {
                 LayerExample::Hint => {
-                    ctx.hint("layer", escaped, ScopeOptions::default(), move |ctx| {
-                        ctx.paint_widget(Paragraph::new("LAYER"), escaped);
+                    ctx.hint("layer", escaped, ScopeOptions::default(), |ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(Paragraph::new("LAYER"), area);
                     });
                 }
                 LayerExample::Popup => {
-                    ctx.popup("layer", escaped, PopupOptions::default(), move |ctx| {
-                        ctx.paint_widget(Paragraph::new("LAYER"), escaped);
+                    ctx.popup("layer", escaped, PopupOptions::default(), |ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(Paragraph::new("LAYER"), area);
                     });
                 }
                 LayerExample::Modal => {}

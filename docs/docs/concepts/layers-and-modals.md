@@ -126,25 +126,20 @@ offset past the end is clamped to the last one that fills the rectangle.
 Everything a descendant sees is in that logical space — its area, its paint,
 and the pointer coordinates its events carry — so a component inside a viewport
 needs to know nothing about the scrolling around it. A viewport declared inside
-another viewport panics, unless a modal opens between them.
+another viewport panics, unless a layer opens between them.
 
-Layers escape the clip. A `hint`, `popup`, or `defer_paint` closure declared
-inside a viewport keeps the viewport's logical coordinates, is projected into
-screen coordinates once, and lands above everything, so a dropdown near the
-bottom edge stays whole. Each of those anchors to the declaration it was
-reached from, and follows it out of sight: once the viewport has scrolled that
-declaration off screen the layer is skipped for the frame, and it comes back
-with its anchor.
-
-A modal escapes the viewport entirely. Its area is in the coordinates of the
-declaration that gave it, as every layer's is, and the modal opens at the place
-on screen those coordinates name; a row the viewport has scrolled past the top
-names the viewport's top edge, so a dialog opened from content that has
-scrolled away is still on screen and still the layer holding focus. From there
-the modal is screen-level: its frame area and everything it declares are in
-screen coordinates, which is what makes a scroll area inside a dialog inside a
-scroll area ordinary nesting. A popup or a hint keeps the viewport it was
-declared in, so a viewport declared inside one of those panics.
+Layers escape the viewport entirely. A `modal`, `popup`, or `hint` takes its
+area in the coordinates of the declaration that gave it, opens at the place on
+screen those coordinates name, and declares in screen coordinates from there:
+its `ctx.area()`, its frame area, and everything it declares. Content inside a
+layer therefore paints at `ctx.area()`, not at a rectangle captured before the
+layer opened. A dropdown near the bottom edge of a scroll area stays whole, a
+dialog opened from content that has scrolled away is still on screen, and a
+scroll area inside a dialog or a popup inside a scroll area is ordinary
+nesting. A `defer_paint` closure escapes the same way. A popup or hint anchors
+to the declaration it was reached from, and follows it out of sight: once the
+viewport has scrolled that declaration off screen the layer is skipped for the
+frame, and it comes back with its anchor.
 
 When focus reaches a descendant the viewport is clipping, the runtime calls
 `Component::reveal_in_viewport` on the component that opened the viewport, with

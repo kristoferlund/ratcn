@@ -166,7 +166,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Unlike [`area`](Self::area), this is not changed by component, scope,
     /// or popup declarations. Inside a [`viewport`](Self::viewport), it is
     /// the root area shifted into logical coordinates by the scroll offset,
-    /// not the viewport's visible or content rectangle. A modal leaves the
+    /// not the viewport's visible or content rectangle. A layer leaves the
     /// viewport and reads the root area in screen coordinates again.
     ///
     /// Floating components use these bounds to stay within their host's pane
@@ -311,17 +311,15 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// in the same logical coordinates, and paint outside the logical content
     /// is clipped away.
     ///
-    /// A [`popup`](Self::popup), [`hint`](Self::hint), or
-    /// [`defer_paint`](Self::defer_paint) closure declared inside escapes the
-    /// clip and keeps these logical coordinates, projected into screen
-    /// coordinates once. A popup or hint anchored to a declaration the
-    /// viewport has scrolled out of sight is skipped for the frame, and comes
-    /// back with its anchor.
-    ///
-    /// A [`modal`](Self::modal) goes further and leaves the viewport behind:
-    /// it takes its area in these coordinates like any other layer, opens at
-    /// the place on screen they name, and declares in screen coordinates from
-    /// there — so it may hold a viewport of its own.
+    /// A layer — [`modal`](Self::modal), [`popup`](Self::popup), or
+    /// [`hint`](Self::hint) — declared inside leaves the viewport behind: it
+    /// takes its area in these coordinates, opens at the place on screen they
+    /// name, and declares in screen coordinates from there. Its content
+    /// therefore paints at its own [`area`](Self::area), not at a rectangle
+    /// captured before it opened, and it may hold a viewport of its own. A
+    /// [`defer_paint`](Self::defer_paint) closure escapes the same way. A
+    /// popup or hint anchored to a declaration the viewport has scrolled out
+    /// of sight is skipped for the frame, and comes back with its anchor.
     ///
     /// This is the mechanism behind [`ScrollArea`](crate::ScrollArea), and
     /// what a component of your own builds a viewport from. The offset such a
@@ -331,11 +329,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// # Panics
     ///
     /// Panics when a viewport is declared inside another, and when the
-    /// logical content exceeds 262,144 cells. A [`modal`](Self::modal)
-    /// declared between the two ends the enclosing viewport, so a scroll area
-    /// inside a dialog inside a scroll area is ordinary nesting; a
-    /// [`popup`](Self::popup) or [`hint`](Self::hint) keeps the viewport it
-    /// was declared in, and a viewport inside one of those is nested.
+    /// logical content exceeds 262,144 cells. A layer declared between the
+    /// two ends the enclosing viewport, so a scroll area inside a dialog or a
+    /// popup inside a scroll area is ordinary nesting.
     pub fn viewport(
         &mut self,
         screen: Rect,
@@ -449,11 +445,10 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// An empty interaction area retains the modal path but excludes the modal
     /// and its descendants from focus, hit-testing, and event routing.
     ///
-    /// A modal escapes a [`viewport`](Self::viewport) it is declared inside.
-    /// `area` is in the coordinates of the declaration that gave it, as every
-    /// layer's is, and the modal opens at the place on screen those
-    /// coordinates name; a row the viewport has scrolled past the top names
-    /// the viewport's top edge. From there the modal is screen-level: its
+    /// A modal escapes a [`viewport`](Self::viewport) it is declared inside,
+    /// as every layer does. `area` is in the coordinates of the declaration
+    /// that gave it, and the modal opens at the place on screen those
+    /// coordinates name. From there the modal is screen-level: its
     /// [`area`](Self::area), its [`frame_area`](Self::frame_area), and
     /// anything it declares are in screen coordinates, and it may open a
     /// viewport of its own.
@@ -494,7 +489,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// A hint anchors to the declaration it was reached from, and follows it
     /// out of sight: when a [`viewport`](Self::viewport) has scrolled that
     /// declaration off screen, the hint is skipped for the frame and returns
-    /// when its anchor does.
+    /// when its anchor does. Like every layer it leaves that viewport and
+    /// declares in screen coordinates.
     ///
     /// Because it takes no input, a hint has no dismissal of its own: whatever
     /// opened it — hover, focus — is what closes it, through your own state.
@@ -542,7 +538,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// A popup anchors to the declaration it was reached from, and follows it
     /// out of sight: when a [`viewport`](Self::viewport) has scrolled that
     /// declaration off screen, the popup is skipped for the frame and returns
-    /// when its anchor does.
+    /// when its anchor does. Like every layer it leaves that viewport and
+    /// declares in screen coordinates.
     ///
     /// # Panics
     ///
@@ -706,7 +703,7 @@ impl PaintSurface<'_> {
 /// only thing they do that [`PaintCtx`] does not.
 pub(crate) struct PaintTarget<'a> {
     surface: PaintSurface<'a>,
-    projection: Option<super::engine::Projection>,
+    viewport: Option<super::engine::Viewport>,
     /// Where projected paint lays out before it is copied back. One buffer
     /// serves the whole frame's paint calls, resized and blanked per call.
     scratch: &'a mut Buffer,
@@ -715,24 +712,24 @@ pub(crate) struct PaintTarget<'a> {
 impl<'a> PaintTarget<'a> {
     pub(crate) fn frame(
         buffer: &'a mut Buffer,
-        projection: Option<super::engine::Projection>,
+        viewport: Option<super::engine::Viewport>,
         scratch: &'a mut Buffer,
     ) -> Self {
         Self {
             surface: PaintSurface::Frame(buffer),
-            projection,
+            viewport,
             scratch,
         }
     }
 
     pub(crate) fn canvas(
         canvas: &'a mut super::engine::Canvas,
-        projection: Option<super::engine::Projection>,
+        viewport: Option<super::engine::Viewport>,
         scratch: &'a mut Buffer,
     ) -> Self {
         Self {
             surface: PaintSurface::Canvas(canvas),
-            projection,
+            viewport,
             scratch,
         }
     }
@@ -744,11 +741,10 @@ impl<'a> PaintTarget<'a> {
     /// routing — which buffer, which clip, which projection, what counts as
     /// painted — is settled once, here.
     fn paint_at<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
-        let surface = self.surface.area();
-        match (&mut self.surface, self.projection) {
+        match (&mut self.surface, self.viewport) {
             (PaintSurface::Frame(buffer), None) => paint(area, buffer),
-            (PaintSurface::Frame(buffer), Some(projection)) => {
-                with_projected_buffer(buffer, self.scratch, projection, surface, area, |buffer| {
+            (PaintSurface::Frame(buffer), Some(viewport)) => {
+                with_projected_buffer(buffer, self.scratch, viewport, area, |buffer| {
                     paint(area, buffer)
                 })
             }
@@ -758,13 +754,12 @@ impl<'a> PaintTarget<'a> {
                 canvas.mark_painted(clipped);
                 result
             }
-            (PaintSurface::Canvas(canvas), Some(projection)) => {
-                let painted = projection.project_rect(area, surface);
+            (PaintSurface::Canvas(canvas), Some(viewport)) => {
+                let painted = viewport.project_rect(area);
                 let result = with_projected_buffer(
                     &mut canvas.buffer,
                     self.scratch,
-                    projection,
-                    surface,
+                    viewport,
                     area,
                     |buffer| paint(area, buffer),
                 );
@@ -777,9 +772,8 @@ impl<'a> PaintTarget<'a> {
     /// The whole of what this target writes, in the coordinates its paint
     /// closure uses — the allocation a free-form [`Self::with_buffer`] covers.
     pub(crate) fn whole_area(&mut self) -> Rect {
-        let surface = self.surface.area();
-        self.projection
-            .map_or(surface, |projection| projection.allocation(surface))
+        self.viewport
+            .map_or_else(|| self.surface.area(), super::engine::Viewport::content)
     }
 
     fn widget(&mut self, widget: impl Widget, area: Rect) {
@@ -796,7 +790,7 @@ impl<'a> PaintTarget<'a> {
     }
 }
 
-/// Paint `logical` into `target` through `projection`.
+/// Paint `logical` into `target` through `viewport`.
 ///
 /// The closure sees `scratch` covering exactly the logical rectangle, so a
 /// widget lays out against its declared allocation. `scratch` is blanked
@@ -808,8 +802,7 @@ impl<'a> PaintTarget<'a> {
 fn with_projected_buffer<R>(
     target: &mut Buffer,
     scratch: &mut Buffer,
-    projection: super::engine::Projection,
-    surface: Rect,
+    viewport: super::engine::Viewport,
     logical: Rect,
     paint: impl FnOnce(&mut Buffer) -> R,
 ) -> R {
@@ -821,7 +814,7 @@ fn with_projected_buffer<R>(
     );
     scratch.resize(logical);
     scratch.reset();
-    for (logical_position, screen_position) in projection.projected_positions(logical, surface) {
+    for (logical_position, screen_position) in viewport.projected_positions(logical) {
         if let (Some(source), Some(destination)) = (
             target.cell(screen_position),
             scratch.cell_mut(logical_position),
@@ -835,8 +828,8 @@ fn with_projected_buffer<R>(
     super::buffer::copy_cells(
         scratch,
         target,
-        projection.projected_positions(logical, surface),
-        projection.clip(surface),
+        viewport.projected_positions(logical),
+        viewport.visible_screen(),
     );
     result
 }

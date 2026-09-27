@@ -115,16 +115,13 @@ scrolling under a held pointer leaves the travel it measures alone.
 
 ## Layers
 
-Hints, popups, and `defer_paint` keep their normal layer behavior. They are
-translated from logical coordinates once and escape the viewport clip. A popup
-or hint follows its declaring anchor out of sight: once the scroll has carried
+Hints, popups, modals, and `defer_paint` keep their normal layer behavior. Each
+opens at the place on screen its area names and declares in screen coordinates
+from there, so layer content paints at its own `ctx.area()`, and a scroll area
+inside a dialog or popup inside a scroll area is ordinary nesting. A popup or
+hint follows its declaring anchor out of sight: once the scroll has carried
 that anchor off screen the layer is skipped for the frame, and it comes back
 with its anchor.
-
-A modal escapes the scroll area entirely. It opens at the place on screen its
-area names, holding at the viewport's top edge for a row scrolled past it, and
-everything it declares from there is in screen coordinates — so a scroll area
-inside a dialog inside a scroll area is ordinary nesting.
 
 ## Styling
 

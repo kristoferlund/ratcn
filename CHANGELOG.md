@@ -17,6 +17,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `DeclareCtx::transient_mut` requires `T: Clone + Default` and returns `&mut T`,
   starting from the default when nothing is stored. It stages its write until
   the render commits; a rejected pass leaves the stored value unchanged.
+- A popup or hint declared inside a viewport now declares in screen
+  coordinates, as a modal does: paint at the layer's `ctx.area()`, not at a
+  rectangle captured before opening it. A modal above its viewport's top edge
+  is no longer pushed down onto it.
 
 ### Fixed
 
@@ -39,6 +43,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   writes mode resets to the terminal.
 - A popup without `on_dismiss` layered above one with it no longer swallows the
   outer popup's dismissal on an outside press.
+- A viewport inside a popup or hint inside a viewport no longer panics.
 
 ## [0.0.4] - 2026-09-26
 
