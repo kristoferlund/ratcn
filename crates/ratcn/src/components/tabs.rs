@@ -2413,4 +2413,137 @@ mod tests {
             EventResult::Emit(RoutedMsg::Pressed)
         );
     }
+
+    /// A tab is painted as a button: in every shipped theme, the selected tab
+    /// is a `Default` button and the others `Secondary` ones, in every state
+    /// and at both sizes — fill, label, and caps.
+    #[test]
+    fn every_tab_state_paints_as_the_matching_button_in_every_theme() {
+        use crate::{ButtonSize, ButtonVariant, ButtonWidget};
+
+        let labels = ["Tab"];
+        for theme in Theme::presets() {
+            for (tabs_size, button_size) in [
+                (TabsSize::Small, ButtonSize::Small),
+                (TabsSize::Large, ButtonSize::Large),
+            ] {
+                for (selected, variant) in [
+                    (true, ButtonVariant::Default),
+                    (false, ButtonVariant::Secondary),
+                ] {
+                    // Rest, focused, hovered, disabled — and hovered over
+                    // focused, which hover wins.
+                    for (focused, hovered, disabled) in [
+                        (false, false, false),
+                        (true, false, false),
+                        (false, true, false),
+                        (true, true, false),
+                        (false, false, true),
+                    ] {
+                        let area = Rect::new(0, 0, shape_width("Tab"), tabs_size.height());
+                        let mut tab = Buffer::empty(area);
+                        TabsWidget::new(&labels)
+                            .selected_item(selected.then_some(0))
+                            .focused_item(Some(0))
+                            .focused(focused)
+                            .hovered_item(hovered.then_some(0))
+                            .disabled(disabled)
+                            .size(tabs_size)
+                            .themed(theme)
+                            .render(area, &mut tab);
+                        let mut button = Buffer::empty(area);
+                        ButtonWidget::new("Tab")
+                            .variant(variant)
+                            .focused(focused)
+                            .hovered(hovered)
+                            .disabled(disabled)
+                            .size(button_size)
+                            .themed(theme)
+                            .render(area, &mut button);
+                        assert_eq!(
+                            tab, button,
+                            "{} {tabs_size:?} selected={selected} focused={focused} \
+                             hovered={hovered} disabled={disabled}",
+                            theme.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Recorded before tabs and buttons shared one filled-shape painter. That
+    /// change moved code, not pixels, so the frame must stay as recorded.
+    fn painted_tabs_and_buttons() -> String {
+        use crate::{ButtonSize, ButtonWidget};
+
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 44, 8));
+        let labels = ["One", "Two", "Three", "Four"];
+        for (size, y) in [(TabsSize::Small, 0), (TabsSize::Large, 1)] {
+            TabsWidget::new(&labels)
+                .selected_item(Some(0))
+                .focused_item(Some(1))
+                .focused(true)
+                .hovered_item(Some(2))
+                .disabled_items(&[false, false, false, true])
+                .size(size)
+                .themed(&theme)
+                .render(Rect::new(0, y, 44, size.height()), &mut buffer);
+        }
+        // Too narrow for every tab: the selected one stays, with markers.
+        TabsWidget::new(&labels)
+            .selected_item(Some(3))
+            .themed(&theme)
+            .render(Rect::new(0, 4, 14, 1), &mut buffer);
+        for (x, button) in [
+            (0, ButtonWidget::new("Go").focused(true)),
+            (10, ButtonWidget::new("Go").secondary().hovered(true)),
+            (20, ButtonWidget::new("Go").destructive().disabled(true)),
+            (30, ButtonWidget::new("Go")),
+        ] {
+            button
+                .size(ButtonSize::Large)
+                .themed(&theme)
+                .render(Rect::new(x, 5, 8, 3), &mut buffer);
+        }
+        crate::test_support::styled_snapshot(&buffer)
+    }
+
+    const RECORDED_TABS_AND_BUTTONS: &str = r"  One     Two     Three     Four            |
+▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄▄          |
+  One     Two     Three     Four            |
+▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀▀          |
+‹   Four                                    |
+▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄      |
+   Go        Go        Go        Go         |
+▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀      |
+aaaaaaabcccccccbdddddddddbeeeeeeeebbbbbbbbbb
+fffffffbgggggggbhhhhhhhhhbiiiiiiiibbbbbbbbbb
+aaaaaaabcccccccbdddddddddbeeeeeeeebbbbbbbbbb
+fffffffbgggggggbhhhhhhhhhbiiiiiiiibbbbbbbbbb
+jbaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+kkkkkkkkbbhhhhhhhhbbllllllllbbffffffffbbbbbb
+mmmmmmmmbbddddddddbbnnnnnnnnbbaaaaaaaabbbbbb
+kkkkkkkkbbhhhhhhhhbbllllllllbbffffffffbbbbbb
+a: #171717 on #E5E5E5 NONE
+b: Reset on Reset NONE
+c: #FAFAFA on #333333 NONE
+d: #FAFAFA on #404040 NONE
+e: #A1A1A1 on #1C1C1C NONE
+f: #E5E5E5 on Reset NONE
+g: #333333 on Reset NONE
+h: #404040 on Reset NONE
+i: #1C1C1C on Reset NONE
+j: #FAFAFA on Reset NONE
+k: #D7D7D7 on Reset NONE
+l: #893B3D on Reset NONE
+m: #171717 on #D7D7D7 NONE
+n: #A1A1A1 on #893B3D NONE
+";
+
+    #[test]
+    fn tabs_and_buttons_paint_exactly_as_recorded() {
+        assert_eq!(painted_tabs_and_buttons(), RECORDED_TABS_AND_BUTTONS);
+    }
 }
