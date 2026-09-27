@@ -706,12 +706,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
     }
 
     fn interaction_area(&self, area: Rect) -> Rect {
-        let base = dialog_box_base(area, &self.dims());
-        if base.is_empty() {
-            base
-        } else {
-            offset_rect(area, base, self.offset)
-        }
+        dialog_layout(area, self.offset, &self.dims()).box_area
     }
 
     fn handle_event(

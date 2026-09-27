@@ -241,8 +241,6 @@ pub struct ListWidget<'a> {
     focused_item: Option<usize>,
     selected_items: &'a [usize],
     disabled_items: &'a [bool],
-    /// Origin of a component's windowed mask; public masks start at zero.
-    disabled_item_base: usize,
     focused: bool,
     hovered: bool,
     disabled: bool,
@@ -265,7 +263,6 @@ impl<'a> ListWidget<'a> {
             focused_item: None,
             selected_items: &[],
             disabled_items: &[],
-            disabled_item_base: 0,
             focused: false,
             hovered: false,
             disabled: false,
@@ -342,13 +339,6 @@ impl<'a> ListWidget<'a> {
     #[must_use]
     pub const fn disabled_items(mut self, disabled_items: &'a [bool]) -> Self {
         self.disabled_items = disabled_items;
-        self.disabled_item_base = 0;
-        self
-    }
-
-    fn disabled_window(mut self, first_item: usize, disabled_items: &'a [bool]) -> Self {
-        self.disabled_items = disabled_items;
-        self.disabled_item_base = first_item;
         self
     }
 
@@ -446,12 +436,7 @@ impl ListWidget<'_> {
         self.style.resolve_row(
             self.focused && self.focused_item == Some(index),
             self.selected_items.contains(&index),
-            self.disabled
-                || index
-                    .checked_sub(self.disabled_item_base)
-                    .and_then(|index| self.disabled_items.get(index))
-                    .copied()
-                    .unwrap_or(false),
+            self.disabled || self.disabled_items.get(index).copied().unwrap_or(false),
             self.style
                 .resolve_surface(self.focused, self.hovered, self.disabled),
         )
@@ -906,6 +891,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         let state = ctx.state();
         let focused_item = self.focused_index(state);
         let selected_row = self.selected_index(state);
+        let disabled_items: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
         let style = resolve_style(self.style.as_deref(), ctx.theme, ListStyle::from_theme);
         // One cursor, shown while the list is either focused or under the
         // pointer; where it sits was decided during declaration.
@@ -944,11 +930,6 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         let last_item = first_item
             .saturating_add(usize::from(area.height.div_ceil(rows_per_item)))
             .min(self.items.len());
-        // Only adapt flags for painted rows; all item identities stay global.
-        let disabled_items: Vec<bool> = self.items[first_item..last_item]
-            .iter()
-            .map(ListItem::is_disabled)
-            .collect();
         let mut selected_items: Vec<usize> = Vec::new();
         let items = list_core::windowed_rows(
             &self.items,
@@ -977,7 +958,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                 .first_item(first_item)
                 .focused_item(focused_item)
                 .selected_items(&selected_items)
-                .disabled_window(first_item, &disabled_items)
+                .disabled_items(&disabled_items)
                 .style(style)
                 .focused(cursor_visible)
                 .hovered(ctx.hovered())
