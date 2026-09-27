@@ -216,7 +216,7 @@ impl demo_shared::Demo for App {
         // frame's theme reaches the state before anything reads it.
         self.state.resolved_theme = *theme;
         let now = demo_shared::monotonic_time();
-        let _ = self.state.toasts.prune_expired(now);
+        self.state.toasts.prune_expired(now);
 
         let theme = self.state.theme();
         buffer.set_style(area, Style::default().bg(theme.background));

@@ -56,7 +56,7 @@ impl App {
 
     fn draw(&mut self, frame: &mut ratatui::Frame, theme: &Theme, now: Duration) {
         // Ratcn never reads a clock; the app says what time it is.
-        let _ = self.state.toasts.prune_expired(now);
+        self.state.toasts.prune_expired(now);
 
         let area = frame.area();
         self.ratcn.render(frame, area, &self.state, theme, |ctx| {

@@ -1645,6 +1645,8 @@ impl<State, Msg> RenderPass<State, Msg> {
 /// the pass had already been accepted.
 pub struct Ratcn<State, Msg> {
     surface: Surface<State, Msg>,
+    /// Whether a declaration pass has ever committed. Until one has there is
+    /// no surface to route through, and every event is ignored.
     has_rendered: bool,
     focus_binding: Option<FocusBinding<State, Msg>>,
     modal_binding: Option<ModalRead<State>>,
@@ -1733,20 +1735,6 @@ impl<State, Msg> Ratcn<State, Msg> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Whether at least one declaration pass has completed successfully.
-    ///
-    /// Ask this before handing the runtime an event you would otherwise have to
-    /// swallow: a browser paste listener, say, can decline the paste and let the
-    /// page keep it rather than dropping it on a runtime with nothing to route
-    /// through. Events sent before this is `true` are ignored.
-    ///
-    /// A failed first render leaves it `false`. Once it is `true` it stays true —
-    /// a later failed render keeps the previous surface rather than clearing it.
-    #[must_use]
-    pub const fn has_rendered(&self) -> bool {
-        self.has_rendered
     }
 
     /// Tell the runtime where focus lives in app state, and how to ask for a

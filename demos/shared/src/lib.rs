@@ -290,9 +290,6 @@ mod web_host {
         requested: Cell<bool>,
         /// The pending [`Demo::wake`] deadline. Dropping it cancels the timer.
         timer: RefCell<Option<Timeout>>,
-        /// Whether a frame has been drawn. Before the first one the runtime has
-        /// no geometry and ignores every event.
-        rendered: Cell<bool>,
         /// The document paste listener, held for its `Drop`: the host owns it for
         /// as long as it drives the demo, and letting go of it uninstalls it.
         _paste: RefCell<Option<BrowserPasteListener>>,
@@ -313,7 +310,6 @@ mod web_host {
             frame: RefCell::new(None),
             requested: Cell::new(false),
             timer: RefCell::new(None),
-            rendered: Cell::new(false),
             _paste: RefCell::new(None),
             _resize: RefCell::new(None),
         });
@@ -367,7 +363,6 @@ mod web_host {
                 &D::THEME,
             )
             .expect("the canvas backend refused a frame");
-            self.rendered.set(true);
             // The canvas adopted a resize while this frame was flushed, so the
             // frame that settles on the new grid is the next one.
             if outgrew {
@@ -415,11 +410,6 @@ mod web_host {
         /// is what a paste listener needs to know to leave the page's own
         /// handling alone.
         fn on_event(self: &Rc<Self>, event: impl TryInto<Event>) -> bool {
-            // Before the first frame there is no surface to route through: the
-            // runtime would ignore the event, so claiming it would be a lie.
-            if !self.rendered.get() {
-                return false;
-            }
             let Ok(event) = event.try_into() else {
                 return false;
             };

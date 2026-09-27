@@ -43,6 +43,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `BrowserEventError` and `Event`'s `TryFrom<ClipboardEvent>` are removed. With
   the `ratzilla` feature, `runtime::BrowserPasteListener` installs the document
   paste listener and forwards `text/plain` as `Event::Paste`.
+- `Ratcn::has_rendered` is removed: `handle_event` already returns `Ignored`
+  before the first render, which is the answer a host needs.
 
 ### Fixed
 

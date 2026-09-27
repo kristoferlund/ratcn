@@ -100,7 +100,7 @@ with time gets its frame. Toast expiry is the common case:
 ```rust
 loop {
     let now = app_time();
-    let _ = app.state.toasts.prune_expired(now);
+    app.state.toasts.prune_expired(now);
     let theme = session.theme();
     session.terminal_mut().draw(|frame| app.draw(frame, &theme, now))?;
 

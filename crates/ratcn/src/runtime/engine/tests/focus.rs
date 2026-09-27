@@ -888,7 +888,7 @@ fn events_before_the_first_render_are_ignored() {
     let state = FocusTestState::default();
     let mut driver = focus_driver(10, 3);
 
-    assert!(!driver.ratcn.has_rendered());
+    assert!(!driver.ratcn.has_rendered);
 
     assert_eq!(
         driver.event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state),
@@ -899,11 +899,11 @@ fn events_before_the_first_render_are_ignored() {
         driver.render(&state, |_| panic!("first render failed"));
     }));
     assert!(failed.is_err());
-    assert!(!driver.ratcn.has_rendered());
+    assert!(!driver.ratcn.has_rendered);
 
     driver.render(&state, |_| {});
 
-    assert!(driver.ratcn.has_rendered());
+    assert!(driver.ratcn.has_rendered);
 }
 
 #[test]
