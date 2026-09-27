@@ -1533,10 +1533,20 @@ pub trait Component<State, Msg> {
     /// revealed by the same frame.
     ///
     /// The offset the component chooses belongs in an
-    /// [`EventCtx::transient`]. The frame then declares once more, and that
-    /// declaration reads it. The reveal is a channel of its own: the app's
-    /// focus message is emitted whatever happens here.
-    fn reveal_in_viewport(&mut self, _target: Rect, _state: &State, _ctx: &mut EventCtx<'_>) {}
+    /// [`EventCtx::transient`]. Return whether it moved: when it did, the
+    /// frame declares once more, and that declaration reads it; when it did
+    /// not, the declaration already built stands. The reveal is a channel of
+    /// its own: the app's focus message is emitted whatever happens here.
+    ///
+    /// The default moves nothing and returns `false`.
+    fn reveal_in_viewport(
+        &mut self,
+        _target: Rect,
+        _state: &State,
+        _ctx: &mut EventCtx<'_>,
+    ) -> bool {
+        false
+    }
 }
 
 /// A [`Component`] that can report its preferred size before it is declared.

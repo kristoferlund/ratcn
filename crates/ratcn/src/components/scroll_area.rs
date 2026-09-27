@@ -484,10 +484,11 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
         }
     }
 
-    fn reveal_in_viewport(&mut self, target: Rect, state: &S, ctx: &mut EventCtx<'_>) {
+    fn reveal_in_viewport(&mut self, target: Rect, state: &S, ctx: &mut EventCtx<'_>) -> bool {
         let area = ctx.area();
         let current = self.current(state, ctx);
-        self.hold(self.reveal_offset(target, area, current), state, ctx);
+        self.hold(self.reveal_offset(target, area, current), state, ctx)
+            .is_some()
     }
 
     fn scope_options(&self) -> ScopeOptions {
@@ -877,6 +878,45 @@ mod tests {
         );
         state.focus = FocusState::intent(["scroll", "last"]);
         render(&mut driver, &state);
+        assert_eq!(&driver.row(2)[..4], "last");
+    }
+
+    /// The render closure runs a second time only to rebuild the tree at the
+    /// offset a reveal moved to — a reveal that leaves the offset where it was
+    /// has nothing for a second run to change, and costs one run.
+    #[test]
+    fn the_frame_is_declared_again_only_when_the_reveal_scrolls() {
+        let mut driver = driver(8, 3);
+        let mut state = State {
+            focus: FocusState::none(),
+            ..State::default()
+        };
+        let runs = Cell::new(0);
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            runs.set(0);
+            driver.render(state, |ctx| {
+                runs.set(runs.get() + 1);
+                ctx.component(
+                    "scroll",
+                    ScrollArea::new(9).content(|ctx| {
+                        // Taller than the viewport and already at its top:
+                        // clipped, yet as revealed as it can be.
+                        ctx.component("tall", Probe::focusable("tall"), Rect::new(0, 0, 7, 5));
+                        ctx.component("last", Probe::focusable("last"), Rect::new(0, 6, 7, 1));
+                    }),
+                    Rect::new(0, 0, 8, 3),
+                );
+            });
+            runs.get()
+        };
+        render(&mut driver, &state);
+
+        state.focus = FocusState::intent(["scroll", "tall"]);
+        assert_eq!(render(&mut driver, &state), 1, "top-aligned: nothing moved");
+        assert_eq!(&driver.row(0)[..4], "tall");
+
+        state.focus = FocusState::intent(["scroll", "last"]);
+        assert_eq!(render(&mut driver, &state), 2, "the reveal scrolled");
         assert_eq!(&driver.row(2)[..4], "last");
     }
 

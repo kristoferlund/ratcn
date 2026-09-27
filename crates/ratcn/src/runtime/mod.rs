@@ -38,8 +38,9 @@
 //! and queues the paint each declaration owes. Focus resolves against the
 //! finished tree, and only then does the queue run — which is why
 //! [`PaintCtx`] carries the interaction flags and [`DeclareCtx`] does not. A
-//! frame whose focus lands on content a viewport clips declares twice and
-//! paints the second, so keep side effects out of the closure.
+//! frame whose focus lands on content a viewport clips, and whose viewport
+//! scrolls to reveal it, declares twice and paints the second, so keep side
+//! effects out of the closure.
 //!
 //! # Who owns what
 //!

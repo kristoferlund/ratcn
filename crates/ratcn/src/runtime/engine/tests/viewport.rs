@@ -1,6 +1,8 @@
 //! The contract [`DeclareCtx::viewport`] holds to, independent of any
 //! component that opens one.
 
+use std::cell::Cell;
+
 use ratatui::{
     style::Style,
     widgets::{Paragraph, StatefulWidget, Widget},
@@ -763,8 +765,14 @@ impl Component<RevealState, RevealMsg> for RevealArea {
         });
     }
 
-    fn reveal_in_viewport(&mut self, target: Rect, _state: &RevealState, _ctx: &mut EventCtx<'_>) {
+    fn reveal_in_viewport(
+        &mut self,
+        target: Rect,
+        _state: &RevealState,
+        _ctx: &mut EventCtx<'_>,
+    ) -> bool {
         self.log.borrow_mut().push(target);
+        false
     }
 }
 
@@ -989,6 +997,44 @@ fn focus_returned_as_a_modal_closes_reveals_in_that_frame() {
     state.focus = FocusState::intent(["area", "bottom"]);
     render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
+}
+
+/// A viewport owner that keeps the trait's default reveal: it never scrolls.
+struct StillArea;
+
+impl Component<RevealState, RevealMsg> for StillArea {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, RevealState, RevealMsg>) {
+        let area = ctx.area();
+        ctx.viewport(area, 6, 0, |ctx| {
+            ctx.component("top", RevealLeaf, Rect::new(0, 0, 4, 1));
+            ctx.component("bottom", RevealLeaf, Rect::new(0, 5, 4, 1));
+        });
+    }
+}
+
+/// The second run of the render closure exists to rebuild the tree at a new
+/// offset. An owner that did not move its offset leaves nothing to rebuild,
+/// so focus onto content it clips costs the frame one run, not two.
+#[test]
+fn an_owner_that_does_not_scroll_is_declared_once() {
+    let runs = Cell::new(0);
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["area", "top"]),
+        ..RevealState::default()
+    };
+    let render = |driver: &mut Driver<RevealState, RevealMsg>, state: &RevealState| {
+        runs.set(0);
+        driver.render(state, |ctx| {
+            runs.set(runs.get() + 1);
+            ctx.component("area", StillArea, Rect::new(0, 0, 4, 3));
+        });
+        runs.get()
+    };
+    render(&mut driver, &state);
+
+    state.focus = FocusState::intent(["area", "bottom"]);
+    assert_eq!(render(&mut driver, &state), 1);
 }
 
 /// A stored path whose target cannot take focus is kept, but it is not

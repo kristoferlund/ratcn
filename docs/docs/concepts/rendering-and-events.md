@@ -63,9 +63,9 @@ call adds or removes that component for the frame. There is no separate
 mount/unmount step.
 
 The closure is `FnMut`. It usually runs once per frame, and runs a second
-time on a frame where focus lands on content a viewport has scrolled away: the
-first declaration is discarded whole and the second one, built with the
-revealed offset, is painted. Build what the declaration consumes inside the
+time on a frame where focus lands on content a viewport has scrolled away and
+the viewport scrolls to reveal it: the first declaration is discarded whole and
+the second one, built with the revealed offset, is painted. Build what the declaration consumes inside the
 closure, and keep side effects out of it. What it cannot read is a focus flag — whether a declaration is
 focused, or contains focus, is offered to `PaintCtx`, once the tree is complete
 and focus has resolved. Hover is the exception: `DeclareCtx::pointer_within()`

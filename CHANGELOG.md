@@ -12,6 +12,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Ratcn::render` and `render_into` take `FnMut`. The closure runs a second time
   on a frame where focus lands on content a viewport clips, so build what it
   consumes inside it.
+- `Component::reveal_in_viewport` returns whether it moved the view; the frame
+  is declared a second time only when it did.
 - `DeclareCtx::transient_mut` requires `T: Clone + Default` and returns `&mut T`,
   starting from the default when nothing is stored. It stages its write until
   the render commits; a rejected pass leaves the stored value unchanged.

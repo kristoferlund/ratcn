@@ -46,7 +46,7 @@ impl Component<AppState, Msg> for MyComponent {
         target: Rect,
         state: &AppState,
         ctx: &mut EventCtx<'_>,
-    ) { ... }
+    ) -> bool { ... }
 }
 ```
 
@@ -82,7 +82,8 @@ Every method except `declare` has a default:
   ignores the event, letting it bubble to the parent.
 - [`reveal_in_viewport`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.reveal_in_viewport)
   is called on the component that declared a viewport when focus lands on a
-  descendant the viewport clips, so it can scroll that descendant into view.
+  descendant the viewport clips, so it can scroll that descendant into view;
+  it returns whether it moved.
   [Layers and modals](./layers-and-modals) covers when the call arrives.
 
 [`MeasuredComponent`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.MeasuredComponent.html)

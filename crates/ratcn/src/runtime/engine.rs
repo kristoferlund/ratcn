@@ -306,10 +306,11 @@ struct Resolved<'a> {
 enum Reveal {
     /// The tree does not declare the focused path; a later one may.
     Absent,
-    /// Nothing to scroll: no focus, a target on screen, or no owner to ask.
+    /// Nothing scrolled: no focus, a target on screen, no owner to ask, or
+    /// an owner that left its offset where it was.
     Settled,
-    /// The viewport's owner was asked, and may have moved its offset.
-    Delivered,
+    /// The viewport's owner moved its offset.
+    Scrolled,
 }
 
 enum FocusAdvance {
@@ -2145,9 +2146,9 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// # Declaring, then drawing
     ///
     /// Nothing draws while the closure runs. It runs once, or twice when focus
-    /// lands on content a viewport clips: the component that declared the
-    /// viewport is asked to scroll, and the first declaration is discarded
-    /// for one built with the new offset. Keep side effects out of it.
+    /// lands on content a viewport clips and the component that declared the
+    /// viewport scrolls to reveal it: the first declaration is discarded for
+    /// one built with the new offset. Keep side effects out of it.
     /// Declaration records what exists and where; [`Component::paint`] and the closures
     /// [`DeclareCtx::paint`] queues are replayed afterwards, in the order the
     /// declaration reached them. Focus and hover resolve in between, against
@@ -2242,14 +2243,14 @@ impl<State, Msg> Ratcn<State, Msg> {
         // where the focused target sits, even when this frame declared it for
         // the first time. The answer is a transient the declaration reads, and
         // the offset it changes has already placed this tree's layers and
-        // paint, so a delivered reveal declares the frame once more. Focus
+        // paint, so a reveal that scrolls declares the frame once more. Focus
         // parked on a path this tree lacks stays pending for one that has it.
         let mut reveal_pending = false;
         if self.reveal_pending || resolved_focus != self.resolved_focus {
             match self.reveal_focus(&mut pass.surface, &resolved_focus, state) {
                 Reveal::Absent => reveal_pending = true,
                 Reveal::Settled => {}
-                Reveal::Delivered => {
+                Reveal::Scrolled => {
                     pass = self.declare_pass(area, state, theme, &mut declare);
                     resolved_focus = pass.surface.resolve_focus(focus_snapshot);
                     reveal_pending = pass.surface.leaf_of(resolved_focus.path()).is_none();
@@ -3082,8 +3083,11 @@ impl<State, Msg> Ratcn<State, Msg> {
             return Reveal::Settled;
         };
         let mut ctx = EventCtx::at(path, area, &mut self.transients, PointerInputs::default());
-        component.reveal_in_viewport(reveal, state, &mut ctx);
-        Reveal::Delivered
+        if component.reveal_in_viewport(reveal, state, &mut ctx) {
+            Reveal::Scrolled
+        } else {
+            Reveal::Settled
+        }
     }
 
     /// The result of a focus step that resolved to `next`.

@@ -148,10 +148,10 @@ declared in, so a viewport declared inside one of those panics.
 
 When focus reaches a descendant the viewport is clipping, the runtime calls
 `Component::reveal_in_viewport` on the component that opened the viewport, with
-that descendant's logical area. The call comes at the start of a frame, and it
-covers every way focus moves: Tab, a press, and a path the app stores from its
-own update function. That is how a scrolled-away control comes into view as
-focus arrives at it.
+that descendant's logical area, and it returns whether it moved its offset.
+The call comes at the start of a frame, and it covers every way focus moves:
+Tab, a press, and a path the app stores from its own update function. That is
+how a scrolled-away control comes into view as focus arrives at it.
 
 The reveal is answered against the tree the frame just declared, so it also
 covers a target that frame declares for the first time: startup focus, focus
