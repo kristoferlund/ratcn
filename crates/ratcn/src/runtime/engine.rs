@@ -15,7 +15,7 @@
 //! What the pointer is doing between a press and its release lives in
 //! [`gesture`](super::gesture), which [`Ratcn`] drives.
 
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, ops::Range};
 
 use ratatui::{
     Frame,
@@ -257,16 +257,17 @@ struct ViewportRecord {
     owner: Option<usize>,
 }
 
-/// What the finished tree resolved this frame: the focus path paint styles
-/// from, and the path the pointer rests on.
+/// What the finished tree resolved this frame: the node paint styles as
+/// focused, and the node the pointer rests on, each `None` where there is
+/// none.
 ///
 /// Both are answered once declaring has ended, from the tree the pass built,
 /// and both travel into the replay together because every paint reads them
 /// together.
 #[derive(Debug, Clone, Copy)]
-struct Resolved<'a> {
-    focus: &'a [ChildId],
-    hover: &'a [ChildId],
+struct Resolved {
+    focus: Option<usize>,
+    hover: Option<usize>,
 }
 
 /// What asking to reveal focus in a tree came to.
@@ -324,11 +325,14 @@ impl LayerKind {
 }
 
 pub(crate) struct Node<State, Msg> {
-    /// This node's own segment of its identity path; [`Surface::path_of`]
-    /// derives the whole path from the parent chain.
-    id: ChildId,
+    /// Where this node's identity path sits in [`Surface::path_ids`]: the
+    /// whole path, outermost first, ending in the node's own id.
+    path: Range<usize>,
     parent: Option<usize>,
     children: Vec<usize>,
+    /// One past the last index of this node's subtree. Declaration order is
+    /// pre-order, so the subtree is exactly `index..subtree_end`.
+    subtree_end: usize,
     area: Rect,
     /// Index into [`Surface::viewports`] of the innermost viewport this node
     /// was declared inside.
@@ -339,20 +343,31 @@ pub(crate) struct Node<State, Msg> {
     /// The layer this node was declared on, indexing [`Surface::layers`].
     /// `None` outside any layer.
     layer: Option<usize>,
+    /// Whether this node takes part in the frame's interaction at all: every
+    /// ancestor does, and it is a scope or has geometry to occupy. Settled by
+    /// [`Surface::finish`], like `focusable`.
+    live: bool,
+    /// Whether focus can land anywhere in this subtree — on the node itself
+    /// or on any descendant. [`Surface::takes_focus`] answers for the node
+    /// alone.
+    focusable: bool,
 }
 
 impl<State, Msg> fmt::Debug for Node<State, Msg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
-            .field("id", &self.id)
+            .field("path", &self.path)
             .field("parent", &self.parent)
             .field("children", &self.children)
+            .field("subtree_end", &self.subtree_end)
             .field("area", &self.area)
             .field("viewport", &self.viewport)
             .field("options", &self.options)
             .field("is_scope", &self.is_scope)
             .field("component", &self.component.is_some())
             .field("layer", &self.layer)
+            .field("live", &self.live)
+            .field("focusable", &self.focusable)
             .finish()
     }
 }
@@ -381,6 +396,13 @@ pub(crate) struct Surface<State, Msg> {
     layers: Vec<Layer<Msg>>,
     /// Every viewport declared this pass, in declaration order.
     viewports: Vec<ViewportRecord>,
+    /// Every node's identity path, laid end to end, each indexed by its
+    /// node's `path`.
+    path_ids: Vec<ChildId>,
+    /// The root of the layer that has taken the screen over, if one is open:
+    /// everything outside it is inert, unfocusable, and unreachable by a key.
+    /// Settled by [`Self::finish`].
+    takeover: Option<usize>,
 }
 
 impl<State, Msg> Default for Surface<State, Msg> {
@@ -391,6 +413,8 @@ impl<State, Msg> Default for Surface<State, Msg> {
             roots: Vec::new(),
             layers: Vec::new(),
             viewports: Vec::new(),
+            path_ids: Vec::new(),
+            takeover: None,
         }
     }
 }
@@ -403,68 +427,60 @@ impl<State, Msg> fmt::Debug for Surface<State, Msg> {
             .field("roots", &self.roots.len())
             .field("layers", &self.layers.len())
             .field("viewports", &self.viewports.len())
+            .field("path_ids", &self.path_ids.len())
+            .field("takeover", &self.takeover)
             .finish()
     }
 }
 
 impl<State, Msg> Surface<State, Msg> {
-    /// The identity path of `index`, outermost first. [`Self::inside`] and
-    /// [`Self::path_is_prefix_of`] answer structural questions without
-    /// building one.
-    fn path_of(&self, index: usize) -> Vec<ChildId> {
-        let mut path = Vec::with_capacity(self.depth(index));
-        let mut current = Some(index);
-        while let Some(node) = current {
-            path.push(self.nodes[node].id.clone());
-            current = self.nodes[node].parent;
+    /// Answer, once the tree is complete, every per-node question that needs
+    /// the whole of it: which nodes are live, which subtrees focus can land
+    /// in, and which layer has taken the screen over. The predicates below
+    /// then read these facts instead of walking the tree.
+    fn finish(&mut self) {
+        self.takeover = self
+            .top_layer(|layer| layer.kind.takes_over())
+            .map(|layer| layer.root);
+        // Every parent precedes its children, so one forward walk settles
+        // liveness down the tree and one reverse walk settles focusability up
+        // it.
+        for index in 0..self.nodes.len() {
+            let node = &self.nodes[index];
+            let live = (node.is_scope || !node.area.is_empty())
+                && node.parent.is_none_or(|parent| self.nodes[parent].live);
+            self.nodes[index].live = live;
         }
-        path.reverse();
-        path
-    }
-
-    /// How many ids `index`'s identity path has.
-    fn depth(&self, index: usize) -> usize {
-        let mut depth = 0;
-        let mut current = Some(index);
-        while let Some(node) = current {
-            depth += 1;
-            current = self.nodes[node].parent;
-        }
-        depth
-    }
-
-    /// Whether `index`'s identity path is exactly `path`.
-    ///
-    /// It walks the parent chain against `path` back to front, so neither
-    /// side is materialized. [`Self::path_is_prefix_of`] is the same walk
-    /// with the prefix trimmed to the node's own depth first.
-    fn path_is(&self, index: usize, path: &[ChildId]) -> bool {
-        let mut current = Some(index);
-        let mut rest = path;
-        while let Some(node) = current {
-            let Some((last, head)) = rest.split_last() else {
-                return false;
-            };
-            if self.nodes[node].id != *last {
-                return false;
+        for index in (0..self.nodes.len()).rev() {
+            // So far `focusable` holds whether any child is.
+            let focusable = self.nodes[index].focusable || self.takes_focus(index);
+            self.nodes[index].focusable = focusable;
+            if let (true, Some(parent)) = (focusable, self.nodes[index].parent) {
+                self.nodes[parent].focusable = true;
             }
-            current = self.nodes[node].parent;
-            rest = head;
         }
-        rest.is_empty()
     }
 
-    /// Whether `index`'s identity path is `path` or a prefix of it — the
-    /// question `path.starts_with(node_path)` asks, without building either.
+    /// The identity path of `index`, outermost first.
+    fn path_of(&self, index: usize) -> &[ChildId] {
+        &self.path_ids[self.nodes[index].path.clone()]
+    }
+
+    /// `index`'s own segment of its identity path.
+    fn id_of(&self, index: usize) -> &ChildId {
+        &self.path_ids[self.nodes[index].path.end - 1]
+    }
+
+    /// Whether `index`'s identity path is `path` or a prefix of it.
     fn path_is_prefix_of(&self, index: usize, path: &[ChildId]) -> bool {
-        self.path_match(index, path).1
+        path.starts_with(self.path_of(index))
     }
 
     /// Where `index` sits in this frame's resolved focus and hover — the four
     /// flags [`PaintCtx`] reports.
-    fn interaction_flags(&self, index: usize, resolved: Resolved<'_>) -> InteractionFlags {
-        let (focused, contains_focus) = self.path_match(index, resolved.focus);
-        let (hovered, contains_hover) = self.path_match(index, resolved.hover);
+    fn interaction_flags(&self, index: usize, resolved: Resolved) -> InteractionFlags {
+        let (focused, contains_focus) = self.leaf_match(index, resolved.focus);
+        let (hovered, contains_hover) = self.leaf_match(index, resolved.hover);
         InteractionFlags {
             focused,
             contains_focus,
@@ -473,31 +489,18 @@ impl<State, Msg> Surface<State, Msg> {
         }
     }
 
-    /// Whether `index`'s identity path *is* `path`, and whether it is a
-    /// prefix of it — the leaf question and the within question, as a pair.
-    fn path_match(&self, index: usize, path: &[ChildId]) -> (bool, bool) {
-        let depth = self.depth(index);
-        if depth > path.len() {
-            return (false, false);
-        }
-        let within = self.path_is(index, &path[..depth]);
-        (within && depth == path.len(), within)
-    }
-
-    fn has_hit_geometry(&self, index: usize) -> bool {
-        !self.nodes[index].area.is_empty()
-    }
-
-    fn participates(&self, index: usize) -> bool {
-        let node = &self.nodes[index];
-        (node.is_scope || self.has_hit_geometry(index))
-            && node.parent.is_none_or(|parent| self.participates(parent))
+    /// Whether `leaf` *is* `index`, and whether it lies in `index`'s subtree
+    /// — the leaf question and the within question, as a pair.
+    fn leaf_match(&self, index: usize, leaf: Option<usize>) -> (bool, bool) {
+        leaf.map_or((false, false), |leaf| {
+            (leaf == index, self.inside(leaf, index))
+        })
     }
 
     /// Whether `index` takes part in this frame's interaction at all: it and
     /// every ancestor are still declared, and it has geometry to occupy.
     fn present(&self, index: usize) -> bool {
-        self.participates(index) && self.has_hit_geometry(index)
+        self.nodes[index].live && !self.nodes[index].area.is_empty()
     }
 
     /// Whether the pointer can land on `index`: present, inside whatever layer
@@ -528,8 +531,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// interaction targets (hit, focus leaves), not on ancestors: a nested
     /// layer root's ancestors provide identity and structure, not interaction.
     fn interactive(&self, index: usize) -> bool {
-        self.takeover_root()
-            .is_none_or(|root| self.inside(index, root))
+        self.takeover.is_none_or(|root| self.inside(index, root))
     }
 
     /// Whether `index` was declared on an inert layer, which neither the
@@ -543,13 +545,6 @@ impl<State, Msg> Surface<State, Msg> {
     /// The topmost open layer that satisfies `wants`.
     fn top_layer(&self, wants: impl Fn(&Layer<Msg>) -> bool) -> Option<&Layer<Msg>> {
         self.layers.iter().rev().find(|layer| wants(layer))
-    }
-
-    /// The layer that has taken the screen over, if one is open: everything
-    /// outside it is inert, unfocusable, and unreachable by a key.
-    fn takeover_root(&self) -> Option<usize> {
-        self.top_layer(|layer| layer.kind.takes_over())
-            .map(|layer| layer.root)
     }
 
     /// Whether layer `index` lies beneath the layer that has taken the screen
@@ -569,20 +564,13 @@ impl<State, Msg> Surface<State, Msg> {
 
     /// Whether `index` is `root` or one of its descendants.
     ///
-    /// The one containment test, answered by walking parent indices: identity
-    /// paths are unique, so this is what comparing paths would say, without
-    /// touching an id. Layer numbers order paint and must never be used to
-    /// answer it — a layer declared after another takes a higher number
-    /// without being inside it.
+    /// The one containment test, answered by the subtree's index range:
+    /// identity paths are unique, so this is what comparing paths would say,
+    /// without touching an id. Layer numbers order paint and must never be
+    /// used to answer it — a layer declared after another takes a higher
+    /// number without being inside it.
     fn inside(&self, index: usize, root: usize) -> bool {
-        let mut current = Some(index);
-        while let Some(node) = current {
-            if node == root {
-                return true;
-            }
-            current = self.nodes[node].parent;
-        }
-        false
+        (root..self.nodes[root].subtree_end).contains(&index)
     }
 
     /// The node `path` names, or `None` when this surface does not declare it
@@ -673,12 +661,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// is worth descending into; [`Self::takes_focus`] answers for the node
     /// alone.
     fn focusable(&self, index: usize) -> bool {
-        self.participates(index)
-            && (self.takes_focus(index)
-                || self.nodes[index]
-                    .children
-                    .iter()
-                    .any(|&child| self.focusable(child)))
+        self.nodes[index].focusable
     }
 
     /// The first focusable index among `candidates`, scanning declaration order
@@ -695,23 +678,17 @@ impl<State, Msg> Surface<State, Msg> {
     /// the candidates are the tree roots — or, while a layer has taken the
     /// screen over, that layer's root alone, which traps Tab inside it.
     fn edge_child(&self, parent: Option<usize>, direction: Step) -> Option<usize> {
-        match (parent, self.takeover_root()) {
+        match (parent, self.takeover) {
             (Some(index), _) => self.find_focusable(&self.nodes[index].children, direction),
             (None, Some(root)) => self.focusable(root).then_some(root),
             (None, None) => self.find_focusable(&self.roots, direction),
         }
     }
 
-    fn extend_to_edge(&self, index: usize, direction: Step, path: &mut Vec<ChildId>) -> bool {
-        path.push(self.nodes[index].id.clone());
-        if let Some(child) = self.edge_child(Some(index), direction) {
-            return self.extend_to_edge(child, direction, path);
-        }
-        if self.takes_focus(index) {
-            true
-        } else {
-            path.pop();
-            false
+    fn extend_to_edge(&self, index: usize, direction: Step) -> Option<usize> {
+        match self.edge_child(Some(index), direction) {
+            Some(child) => self.extend_to_edge(child, direction),
+            None => self.takes_focus(index).then_some(index),
         }
     }
 
@@ -731,11 +708,8 @@ impl<State, Msg> Surface<State, Msg> {
     /// a leaf this surface declares, walked to here on the surface's own
     /// terms.
     fn descend_focus(&self, index: usize, direction: Step) -> Option<FocusState> {
-        let mut path = self.nodes[index]
-            .parent
-            .map_or_else(Vec::new, |parent| self.path_of(parent));
-        self.extend_to_edge(index, direction, &mut path)
-            .then(|| FocusState::intent(path))
+        self.extend_to_edge(index, direction)
+            .map(|leaf| FocusState::intent(self.path_of(leaf).iter().cloned()))
     }
 
     /// Resolve an app-held focus path against this surface's actual structure
@@ -762,7 +736,7 @@ impl<State, Msg> Surface<State, Msg> {
         if stored.is_none() {
             return FocusState::none();
         }
-        if let Some(root) = self.takeover_root()
+        if let Some(root) = self.takeover
             && !self.path_is_prefix_of(root, stored.path())
         {
             // The layer steals focus from an empty path and from paths it
@@ -802,9 +776,9 @@ impl<State, Msg> Surface<State, Msg> {
         if matched.len() != path.len() {
             return None;
         }
-        // A descent that succeeds ends on a leaf that participates, and
-        // participation runs the whole parent chain, so every node along
-        // `path` is focusable whenever this answers with one at all.
+        // A descent that succeeds ends on a leaf that is live, and liveness
+        // runs the whole parent chain, so every node along `path` is
+        // focusable whenever this answers with one at all.
         self.descend_focus(*matched.last()?, Step::Forward)
     }
 
@@ -889,7 +863,7 @@ impl<State, Msg> Surface<State, Msg> {
         // consulting its `tab_wrap` would let a wrapping pane swallow Tab
         // forever with the layer unreachable. Start from that layer's own
         // edge instead.
-        if let Some(root) = self.takeover_root()
+        if let Some(root) = self.takeover
             && !self.path_is_prefix_of(root, focus.path())
         {
             return self
@@ -950,7 +924,7 @@ impl<State, Msg> Surface<State, Msg> {
 
             // The root of a layer holding the screen traps Tab regardless of
             // where it sits in the tree; otherwise the enclosing scope decides.
-            let tab_wrap = if self.takeover_root() == Some(current) {
+            let tab_wrap = if self.takeover == Some(current) {
                 TabWrap::Wrap
             } else {
                 parent.map_or(root_options.tab_wrap, |index| {
@@ -1091,9 +1065,6 @@ pub(crate) struct RenderPass<State, Msg> {
     pub(crate) settled_transients: TransientMap,
     surface: Surface<State, Msg>,
     parent_stack: Vec<usize>,
-    /// The identity path of the open declaration chain, maintained in step
-    /// with `parent_stack` by [`Self::enter_node`] and [`Self::leave_node`].
-    path_cursor: Vec<ChildId>,
     /// Every paint this frame owes, in the order the declaration walk reached
     /// it, replayed by [`Self::replay_paint`] once the walk is over.
     paint_queue: Vec<QueuedPaint<State>>,
@@ -1128,7 +1099,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             surface: Surface::default(),
             settled_transients: HashMap::new(),
             parent_stack: Vec::new(),
-            path_cursor: Vec::new(),
             paint_queue: Vec::new(),
             hover_position: None,
             hover_path: Vec::new(),
@@ -1148,7 +1118,8 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// The identity path of the declaration currently being declared into —
     /// the key [`DeclareCtx::transient`] reads the transient store with.
     pub(crate) fn current_path(&self) -> Option<&[ChildId]> {
-        (!self.path_cursor.is_empty()).then_some(self.path_cursor.as_slice())
+        let &index = self.parent_stack.last()?;
+        Some(self.surface.path_of(index))
     }
 
     /// Whether the hovered path runs through the declaration currently open.
@@ -1162,22 +1133,19 @@ impl<State, Msg> RenderPass<State, Msg> {
     }
 
     /// Open `index` as the parent of everything declared until the matching
-    /// [`Self::leave_node`], extending the path cursor by its id.
-    ///
-    /// The two stacks move together and only here, so
-    /// `path_cursor[i] == nodes[parent_stack[i]].id` holds unconditionally and
-    /// the cursor is the open chain's path by construction. That survives a
-    /// nested declaration panic a component catches: neither stack pops while
-    /// unwinding, so both stay equally deep.
+    /// [`Self::leave_node`].
     fn enter_node(&mut self, index: usize) {
-        self.path_cursor.push(self.surface.nodes[index].id.clone());
         self.parent_stack.push(index);
     }
 
-    /// Close the innermost open declaration.
+    /// Close the innermost open declaration: everything declared since it
+    /// opened is its subtree.
     fn leave_node(&mut self) {
-        self.parent_stack.pop();
-        self.path_cursor.pop();
+        let index = self
+            .parent_stack
+            .pop()
+            .expect("a declaration closes only after it opened");
+        self.surface.nodes[index].subtree_end = self.surface.nodes.len();
     }
 
     /// Queue one declaration's paint for the slot currently being declared
@@ -1341,18 +1309,28 @@ impl<State, Msg> RenderPass<State, Msg> {
                 .is_none(),
             "duplicate child id `{id}` in one declaration scope"
         );
+        let start = self.surface.path_ids.len();
+        if let Some(parent) = parent {
+            let parent_path = self.surface.nodes[parent].path.clone();
+            self.surface.path_ids.extend_from_within(parent_path);
+        }
+        self.surface.path_ids.push(id);
+        let path = start..self.surface.path_ids.len();
         let layer = self.current_layer();
         let viewport = self.open_viewport;
         self.surface.nodes.push(Node {
-            id,
+            path,
             parent,
             children: Vec::new(),
+            subtree_end: index + 1,
             area,
             viewport,
             options,
             is_scope,
             component: None,
             layer,
+            live: false,
+            focusable: false,
         });
         if let Some(parent) = parent {
             self.surface.nodes[parent].children.push(index);
@@ -1413,7 +1391,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             !self
                 .surface
                 .modal_roots()
-                .any(|index| &self.surface.nodes[index].id == id),
+                .any(|index| self.surface.id_of(index) == id),
             "duplicate modal root id `{id}`"
         );
     }
@@ -1555,7 +1533,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
-        resolved: Resolved<'_>,
+        resolved: Resolved,
     ) {
         let mut layers: Vec<Vec<QueuedPaint<State>>> =
             self.surface.layers.iter().map(|_| Vec::new()).collect();
@@ -1565,7 +1543,7 @@ impl<State, Msg> RenderPass<State, Msg> {
                 Some(layer) => layers[layer].push(op),
             }
         }
-        let takeover = self.surface.takeover_root();
+        let takeover = self.surface.takeover;
         let (covered, uncovered): (Vec<usize>, Vec<usize>) =
             (0..layers.len()).partition(|&index| self.surface.covered_by_takeover(index, takeover));
         for index in covered.into_iter().chain(uncovered) {
@@ -1592,7 +1570,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
-        resolved: Resolved<'_>,
+        resolved: Resolved,
     ) {
         // Read before the component borrow below, which needs the surface
         // mutably. The root declaration has no node, and so no flags.
@@ -2080,20 +2058,14 @@ impl<State, Msg> Ratcn<State, Msg> {
         // not moved, but what is under it may have — so paint reports this
         // frame's hover rather than the one the declaration was built from.
         let resolved_hover = self.resolve_hover(&pass.surface);
-        let effective_focus = pass
-            .surface
-            .leaf_of(resolved_focus.path())
-            .filter(|&target| pass.surface.takes_focus(target))
-            .map_or(&[][..], |_| resolved_focus.path());
-        pass.replay_paint(
-            buffer,
-            state,
-            theme,
-            Resolved {
-                focus: effective_focus,
-                hover: &resolved_hover,
-            },
-        );
+        let resolved = Resolved {
+            focus: pass
+                .surface
+                .leaf_of(resolved_focus.path())
+                .filter(|&target| pass.surface.takes_focus(target)),
+            hover: pass.surface.leaf_of(&resolved_hover),
+        };
+        pass.replay_paint(buffer, state, theme, resolved);
         for (path, slots) in pass.settled_transients {
             self.transients.entry(path).or_default().extend(slots);
         }
@@ -2125,6 +2097,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         // pass never reaches the screen at all. They also establish what
         // `resolve_focus` needs: a complete tree.
         pass.assert_valid();
+        pass.surface.finish();
         self.assert_modal_stack(&pass.surface, state);
         pass
     }
@@ -2155,7 +2128,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         self.pointer
             .and_then(|position| surface.hit_index(position))
-            .map(|index| surface.path_of(index))
+            .map(|index| surface.path_of(index).to_vec())
             .unwrap_or_default()
     }
 
@@ -2173,7 +2146,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             return;
         };
         let semantic = binding(state).ids();
-        let declared = surface.modal_roots().map(|index| &surface.nodes[index].id);
+        let declared = surface.modal_roots().map(|index| surface.id_of(index));
         assert!(
             semantic.clone().eq(declared),
             "declared modal roots do not match app-owned modal ids: expected {:?}",
@@ -2203,8 +2176,8 @@ impl<State, Msg> Ratcn<State, Msg> {
             .surface
             .modal_roots()
             .last()
-            .map(|index| &self.surface.nodes[index].id)
-            != next.modal_roots().last().map(|index| &next.nodes[index].id);
+            .map(|index| self.surface.id_of(index))
+            != next.modal_roots().last().map(|index| next.id_of(index));
 
         // Dropped at the end: the previous components drop only after the
         // bookkeeping below has let go of the paths they owned.
@@ -2219,7 +2192,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             } = self;
             gestures.cancel_lost_claims(|path| {
                 surface.leaf_of(path).is_some_and(|index| {
-                    surface.participates(index)
+                    surface.nodes[index].live
                         && surface.interactive(index)
                         && !surface.on_inert_layer(index)
                 })
@@ -2366,7 +2339,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         {
             matched.truncate(position);
         }
-        let Some(takeover) = self.surface.takeover_root() else {
+        let Some(takeover) = self.surface.takeover else {
             return matched;
         };
         match matched.iter().position(|&index| index == takeover) {
@@ -2405,7 +2378,8 @@ impl<State, Msg> Ratcn<State, Msg> {
                 if !binding.chord.matches(key) {
                     continue;
                 }
-                let mut path = scope.map_or_else(Vec::new, |index| self.surface.path_of(index));
+                let mut path =
+                    scope.map_or_else(Vec::new, |index| self.surface.path_of(index).to_vec());
                 path.extend(binding.path.iter().cloned());
                 let Some(next) = self.surface.focus_at_path(&path) else {
                     continue;
@@ -2455,7 +2429,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             let retained = self
                 .surface
                 .modal_roots()
-                .map(|index| &self.surface.nodes[index].id);
+                .map(|index| self.surface.id_of(index));
             binding(state).ids().eq(retained)
         })
     }
@@ -2592,7 +2566,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     fn hit_path(&self, point: Position) -> Option<Vec<ChildId>> {
         self.surface
             .hit_index(point)
-            .map(|index| self.surface.path_of(index))
+            .map(|index| self.surface.path_of(index).to_vec())
     }
 
     /// Offer `event` to each component in `chain`, deepest first, stopping at
@@ -2605,8 +2579,6 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// [`EventCtx::capture_pointer`] claim; the key path passes `&mut None`
     /// because there is no gesture to own.
     ///
-    /// `chain` is one ancestor line, innermost last, so every node's path is
-    /// a prefix of the last one's.
     fn dispatch_chain(
         &mut self,
         chain: &[usize],
@@ -2616,20 +2588,15 @@ impl<State, Msg> Ratcn<State, Msg> {
         capture_button: Option<MouseButton>,
         captured_press: Option<Press>,
     ) -> EventResult<Msg> {
-        let Some(&innermost) = chain.last() else {
-            return EventResult::Ignored;
-        };
-        let full_path = self.surface.path_of(innermost);
-        let outermost_depth = full_path.len() - chain.len();
         let capture_owner = match event {
             Event::Mouse(mouse) => self.gestures.capture_for(mouse.kind).map(ToOwned::to_owned),
             _ => None,
         };
-        for (position, &index) in chain.iter().enumerate().rev() {
-            if !self.surface.participates(index) {
+        for &index in chain.iter().rev() {
+            if !self.surface.nodes[index].live {
                 continue;
             }
-            let path = full_path[..=outermost_depth + position].to_vec();
+            let path = self.surface.path_of(index).to_vec();
             let area = self.surface.nodes[index].area;
             let viewport = self.surface.viewport_of(index);
             // Declaration-space for the component, screen-absolute for the
@@ -2831,7 +2798,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let top = self.surface.top_layer(|layer| {
             layer.on_dismiss.is_some()
                 && self.surface.interactive(layer.root)
-                && self.surface.participates(layer.root)
+                && self.surface.nodes[layer.root].live
                 && target.is_none_or(|hit| !self.surface.path_is_prefix_of(layer.root, hit))
         })?;
         top.on_dismiss.as_ref().map(|dismiss| dismiss())
@@ -2895,7 +2862,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             return Reveal::Settled;
         };
         let reveal = surface.nodes[target].area;
-        let path = surface.path_of(owner);
+        let path = surface.path_of(owner).to_vec();
         let area = surface.nodes[owner].area;
         let Some(component) = surface.nodes[owner].component.as_mut() else {
             return Reveal::Settled;
@@ -2936,7 +2903,7 @@ impl<State, Msg> Ratcn<State, Msg> {
 
     fn declared_paths(&self) -> Vec<Vec<ChildId>> {
         (0..self.surface.nodes.len())
-            .map(|index| self.surface.path_of(index))
+            .map(|index| self.surface.path_of(index).to_vec())
             .collect()
     }
 }
