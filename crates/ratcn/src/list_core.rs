@@ -18,22 +18,27 @@
 //! items stacked in a scrolling column of uniform-height rows. [`key_intent`]
 //! sits between: it takes the [`Axis`] the items run along.
 //!
-//! Nothing here paints or emits. [`row_intent`] and [`key_intent`] decide what
-//! a gesture or a key means, but not what to say about it: components own
-//! their look, their bindings, and their messages, and this module answers
-//! only the questions every one of them asks.
+//! Nothing here emits. [`row_intent`] and [`key_intent`] decide what a gesture
+//! or a key means, but not what to say about it: components own their
+//! bindings and their messages. What they share of their look is how a column
+//! of rows paints — [`paint_rows`], in the colors of a [`RowStyle`] — and each
+//! still decides those colors and everything around the rows.
 
 use std::ops::Range;
 
 use ratatui::{
+    buffer::Buffer,
     layout::{Position, Rect},
-    text::{Line, Text},
+    style::{Color, Style},
+    text::{Line, Span, Text},
+    widgets::Widget,
 };
 
 use crate::linear_nav::{self, Axis, NavOutcome};
 use crate::runtime::{
     DeclareCtx, EventCtx, KeyCode, KeyEvent, MouseButton, MouseKind, ScrollDirection,
 };
+use crate::text_width::display_width;
 
 /// Items a wheel notch moves the view by, shared so two list-shaped
 /// components can never scroll at different speeds.
@@ -315,7 +320,65 @@ pub fn fit_to_height(mut text: Text<'static>, height: u16) -> Text<'static> {
     text
 }
 
-/// Map the window `rows` of `items` to the lines a widget paints, each forced to
+/// One row as a list-shaped widget paints it: its lines, and the state its
+/// colors come from.
+///
+/// [`ListWidget`](crate::ListWidget) and [`SelectWidget`](crate::SelectWidget)
+/// take the rows on screen as these, and [`windowed_rows`] builds them from
+/// items. The flags describe this row alone, so a scrolled caller hands over
+/// its window without lining any index up with the list it came from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListRow {
+    /// What the row shows. Explicit colors in it are preserved; everything
+    /// else inherits the row's state colors.
+    pub text: Text<'static>,
+    /// The cursor is on this row, and shown.
+    pub focused: bool,
+    /// This row is part of the current selection.
+    pub selected: bool,
+    /// This row is dimmed and unselectable.
+    pub disabled: bool,
+}
+
+impl ListRow {
+    /// An ordinary row showing `text`: not focused, selected, or disabled.
+    #[must_use]
+    pub fn new(text: impl Into<Text<'static>>) -> Self {
+        Self {
+            text: text.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Mark this row as the one the cursor is on.
+    #[must_use]
+    pub const fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    /// Mark this row selected.
+    #[must_use]
+    pub const fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    /// Mark this row disabled.
+    #[must_use]
+    pub const fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    /// Terminal rows this row paints at: its line count, and at least one.
+    #[must_use]
+    pub fn height(&self) -> u16 {
+        u16::try_from(self.text.lines.len().max(1)).unwrap_or(u16::MAX)
+    }
+}
+
+/// Map the window `rows` of `items` to the rows a widget paints, each forced to
 /// `row_height` lines.
 ///
 /// `row` is handed each item's [`ListItemState`] with its index *in the whole
@@ -324,7 +387,9 @@ pub fn fit_to_height(mut text: Text<'static>, height: u16) -> Text<'static> {
 /// list, so a windowed paint that renumbered its rows would light up and
 /// answer for the wrong one. `cursor` is the row that paints as focused,
 /// `selected` is asked per painted row, and `disabled` marks every row
-/// disabled on top of the items' own flags.
+/// disabled on top of the items' own flags. Each [`ListRow`] carries the same
+/// flags its closure was handed, so what a row says about itself and how it is
+/// colored cannot disagree.
 ///
 /// The result is one row per item in `rows`, each exactly `row_height` lines
 /// tall — see [`fit_to_height`] for why that is not the closure's choice.
@@ -341,7 +406,7 @@ pub fn windowed_rows<T>(
     disabled: bool,
     mut selected: impl FnMut(usize, &T) -> bool,
     mut row: impl FnMut(ListItemState<'_, T>) -> Text<'static>,
-) -> Vec<Text<'static>> {
+) -> Vec<ListRow> {
     let first = rows.start;
     items[rows]
         .iter()
@@ -356,9 +421,105 @@ pub fn windowed_rows<T>(
                 selected: selected(index, &item.value),
                 disabled: disabled || item.disabled,
             };
-            fit_to_height(row(state), row_height)
+            ListRow {
+                focused: state.focused,
+                selected: state.selected,
+                disabled: state.disabled,
+                text: fit_to_height(row(state), row_height),
+            }
         })
         .collect()
+}
+
+/// The colors a column of rows paints in, one pair per row state.
+///
+/// A row is colored by two independent facts — whether the cursor is on it
+/// and whether it is selected — and disabled overrides both. Selection alone
+/// has no fill: a selected row keeps the `background` the rows sit on, so the
+/// cursor stays the only filled row. [`ListStyle`](crate::ListStyle) and
+/// [`SelectStyle`](crate::SelectStyle) each map their fields onto this, which
+/// is what keeps a list row and a select option resolving state the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowStyle {
+    /// Text color of an ordinary row.
+    pub foreground: Color,
+    /// The backdrop the rows sit on, kept by ordinary and selected rows.
+    pub background: Color,
+    /// Text color of a selected row the cursor is not on.
+    pub selected_foreground: Color,
+    /// Text color of the cursor row when it is not selected.
+    pub focused_foreground: Color,
+    /// Fill behind the cursor row when it is not selected.
+    pub focused_background: Color,
+    /// Text color of the cursor row when it is also selected.
+    pub selected_focused_foreground: Color,
+    /// Fill behind the cursor row when it is also selected.
+    pub selected_focused_background: Color,
+    /// Text color of a disabled row.
+    pub disabled_foreground: Color,
+    /// Fill behind a disabled row.
+    pub disabled_background: Color,
+}
+
+impl RowStyle {
+    /// The style a row paints in, from its state.
+    #[must_use]
+    pub const fn resolve(&self, focused: bool, selected: bool, disabled: bool) -> Style {
+        let (foreground, background) = if disabled {
+            (self.disabled_foreground, self.disabled_background)
+        } else {
+            match (focused, selected) {
+                (true, true) => (
+                    self.selected_focused_foreground,
+                    self.selected_focused_background,
+                ),
+                (true, false) => (self.focused_foreground, self.focused_background),
+                (false, true) => (self.selected_foreground, self.background),
+                (false, false) => (self.foreground, self.background),
+            }
+        };
+        Style::new().fg(foreground).bg(background)
+    }
+}
+
+/// Paint `rows` top to bottom from the top of `area`, each at its own
+/// [`height`](ListRow::height), stopping where `area` runs out.
+///
+/// Each row's state colors fill its full width first and its text is painted
+/// over them, so explicit colors in the text survive and everything else
+/// inherits the row's state. `focus_symbol` is drawn in front of the focused
+/// row, and its width is reserved in front of every row whether or not the
+/// focused one is among them — a cursor scrolled out of the window must not
+/// shift the text. Pass `""` for no symbol and no gutter. `disabled` paints
+/// every row disabled, whatever its own flag says.
+pub fn paint_rows(
+    rows: &[ListRow],
+    area: Rect,
+    buf: &mut Buffer,
+    style: &RowStyle,
+    focus_symbol: &str,
+    disabled: bool,
+) {
+    let symbol_width = u16::try_from(display_width(focus_symbol)).unwrap_or(u16::MAX);
+    let text_x = area.x.saturating_add(symbol_width).min(area.right());
+    let text_width = area.width.saturating_sub(symbol_width);
+    let mut y = area.y;
+    for row in rows {
+        if y >= area.bottom() {
+            break;
+        }
+        let height = row.height().min(area.bottom() - y);
+        let row_area = Rect::new(area.x, y, area.width, height);
+        buf.set_style(
+            row_area,
+            style.resolve(row.focused, row.selected, disabled || row.disabled),
+        );
+        if row.focused {
+            Span::raw(focus_symbol).render(row_area, buf);
+        }
+        (&row.text).render(Rect::new(text_x, y, text_width, height), buf);
+        y = y.saturating_add(height);
+    }
 }
 
 /// What a pointer gesture over a column of value-keyed rows asks for.
@@ -964,15 +1125,26 @@ mod tests {
 
         assert_eq!(rows.len(), 3);
         assert!(
-            rows.iter().all(|row| row.lines.len() == 2),
+            rows.iter().all(|row| row.text.lines.len() == 2),
             "every row is padded to the declared height"
         );
         assert_eq!(
             rows.iter()
-                .map(|row| row.lines[0].to_string())
+                .map(|row| row.text.lines[0].to_string())
                 .collect::<Vec<_>>(),
             ["2:2 s", "3:3 f", "4:4 d"],
             "the window's third item is item 4, not item 2, and each row carries its own state"
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.focused, row.selected, row.disabled))
+                .collect::<Vec<_>>(),
+            [
+                (false, true, false),
+                (true, false, false),
+                (false, false, true)
+            ],
+            "each painted row is flagged with the state its closure was handed"
         );
     }
 

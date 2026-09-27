@@ -30,6 +30,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `PaintCtx::with_buffer` takes the area it writes and hands it to the closure:
   `with_buffer(area, |area, buf| …)`. `PaintCtx::stateful_widget` is removed;
   render a `StatefulWidget` through `with_buffer`.
+- `ListWidget::new` and `SelectWidget::options` take `ListRow`s, each carrying
+  its own focused/selected/disabled flags; `first_item`, `focused_item`,
+  `selected_item(s)`, `disabled_items`, `visible_item_rows`, `row_height`, and
+  the markers leave both widgets. `list_core::windowed_rows` returns `ListRow`s.
 
 ### Fixed
 

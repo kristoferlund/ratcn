@@ -183,7 +183,7 @@ pub use components::{
     tooltip::{Tooltip, TooltipSide, TooltipStyle, TooltipWidget},
 };
 #[doc(inline)]
-pub use list_core::{ListItem, ListItemState};
+pub use list_core::{ListItem, ListItemState, ListRow};
 #[doc(inline)]
 pub use theme::{BorderStyle, Theme};
 #[doc(inline)]

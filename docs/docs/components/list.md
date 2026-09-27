@@ -219,21 +219,20 @@ List::new(items).style(|theme| {
 
 `ListWidget` paints a list without focus or events. It is an ordinary Ratatui
 widget, so it works in a plain Ratatui app with no `Ratcn` runtime. Rows are
-`Text`s you build yourself and everything else is addressed by index. Explicit
-colors in those `Text`s are preserved:
+`ListRow`s you build yourself: a `Text`, plus whether the cursor is on the row,
+whether it is selected, and whether it is disabled. Explicit colors in those
+`Text`s are preserved:
 
 ```rust
-use ratatui::text::Text;
-use ratcn::ListWidget;
+use ratcn::{ListRow, ListWidget};
 
-let rows = vec![Text::from("Inbox"), Text::from("Archive")];
+let rows = [
+    ListRow::new("Inbox").focused(list_has_focus),
+    ListRow::new("Archive").selected(true).disabled(true),
+];
 
 frame.render_widget(
-    ListWidget::new(&rows[scroll_offset.min(rows.len())..])
-        .first_item(scroll_offset)
-        .focused_item(Some(0))
-        .selected_items(&[1])
-        .disabled_items(&[false, true])
+    ListWidget::new(&rows)
         .focused(list_has_focus)
         .hovered(pointer_is_over_list)
         .focus_symbol("> ")
@@ -242,31 +241,23 @@ frame.render_widget(
 );
 ```
 
-Scrolling is yours: hand over the rows that are on screen and say where they
-start with `first_item`. Every other index — `focused_item`, `selected_items`,
-`disabled_items` — counts from the start of the list, so scrolling changes only
-that number and the rows. The widget holds no scroll position and never adjusts
-one, so your app stays the only scroll policy. Offscreen rows are free: you
-build `Text`s for the rows you hand over, and the widget allocates nothing per
-item it does not paint.
+Scrolling is yours: hand over the rows that are on screen. The widget holds no
+scroll position and never adjusts one, so your app stays the only scroll
+policy. Offscreen rows are free: you build rows only for what you hand over.
+`list_core::windowed_rows` builds that window from `ListItem`s, flags and all.
 
 The widget is area-driven — it fills the area you give it and has nothing to
-measure — and it paints each item at whatever height its `Text` is. Keeping
+measure — and it paints each row at whatever height its `Text` is. Keeping
 those heights uniform is yours to do here, because the arithmetic that maps a
 screen row back to an item counts items rather than lines; the `List` component
 does it for you.
 
-The two row inputs use different encodings: `selected_items` is a list of
-selected indices, since selection is sparse, while `disabled_items` is one flag
-per item. Both are read at the item's own index, and only for the rows
-the widget paints — so a windowed caller can name just the selected rows inside
-its window, but `disabled_items` is a positional mask and has to be padded up to
-the window: entry *n* describes item *n*, and entries past the end of the slice
-read as enabled.
-
-`.disabled(true)` dims the whole widget, as `.disabled_items(...)` does for
-single rows. Replace `.themed(...)` with `.style(...)` to supply exact widget
-colors instead of deriving them from a theme.
+A focused row is highlighted whatever the widget's own focus; `.focused(...)`
+picks the focus backdrop and shows the focus symbol, whose column is reserved
+in front of every row so the text does not shift when the cursor scrolls out
+of the window. `.disabled(true)` dims the whole widget, as a row's own
+`.disabled(true)` does for that row. Replace `.themed(...)` with `.style(...)`
+to supply exact widget colors instead of deriving them from a theme.
 
 ## Full API
 
@@ -274,6 +265,7 @@ Every method, with binding requirements and edge-case detail:
 [`List`](https://docs.rs/ratcn/latest/ratcn/struct.List.html),
 [`ListItem`](https://docs.rs/ratcn/latest/ratcn/struct.ListItem.html),
 [`ListItemState`](https://docs.rs/ratcn/latest/ratcn/struct.ListItemState.html),
+[`ListRow`](https://docs.rs/ratcn/latest/ratcn/struct.ListRow.html),
 [`ListWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ListWidget.html),
 [`ListStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ListStyle.html).
 
