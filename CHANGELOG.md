@@ -35,6 +35,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   either side of the value, so both grow by 2.
 - A panic after a `terminal::Session` has dropped, or failed to open, no longer
   writes mode resets to the terminal.
+- A popup without `on_dismiss` layered above one with it no longer swallows the
+  outer popup's dismissal on an outside press.
 
 ## [0.0.4] - 2026-09-26
 

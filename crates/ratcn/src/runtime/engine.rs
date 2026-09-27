@@ -321,93 +321,37 @@ enum FocusAdvance {
 /// What kind of layer a node roots, when it roots one.
 ///
 /// A layer is a subtree painted above everything declared outside it. Every
-/// kind shares the mechanism — a tag, a canvas, compositing order — and they
-/// differ only in policy: a modal dims what is beneath it, consumes events
-/// outside itself, and takes focus; a popup does none of that and instead
-/// observes outside presses through its dismiss hook; a hint takes no input at
-/// all. The differences live in [`LayerKind::policy`] and nowhere else.
+/// kind shares that mechanism — a tag, a canvas, compositing order — and
+/// differs only in what it does to interaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LayerKind {
+    /// Takes the screen over: what lies beneath it dims, events landing
+    /// outside it are consumed, focus resolves into it, Tab is trapped at its
+    /// root, and keys stop there too. It belongs to the screen rather than to
+    /// the viewport that declared it: it undoes that viewport's scroll once,
+    /// over its own area, and declares from there in screen coordinates.
     Modal,
+    /// Occludes its own footprint and, when it carries a dismiss hook, emits
+    /// it on a press outside itself — but never steals focus and lets keys
+    /// reach its declarer. Anchored: it keeps the declaring viewport's
+    /// coordinates and is projected out of it once.
     Popup,
+    /// Says something and takes nothing: not a pointer target, so a press
+    /// goes to whatever it covers, and not a focus target, so Tab passes it by
+    /// even if what is inside claims to be focusable. Anchored, like a popup.
     Hint,
 }
 
-/// What a layer does to interaction, as data rather than as branches.
-///
-/// A layer is one mechanism — a tagged subtree with its own canvas. This is
-/// the only thing that differs between kinds, so adding a kind means adding a
-/// row to [`LayerKind::policy`] and nothing else. The base layer everything
-/// else is declared into has [`LayerPolicy::base`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "a policy table: one column per behavior, one row per layer kind"
-)]
-struct LayerPolicy {
-    /// This layer takes the screen over: what lies beneath it dims, events
-    /// landing outside it are consumed, focus resolves into it, Tab is
-    /// trapped at its root, and keys stop there too. One decision with five
-    /// consequences, so they travel together.
-    takes_over: bool,
-    /// The pointer can hit this layer at all. A layer that cannot is inert
-    /// decoration: presses fall through to whatever is beneath it.
-    hit_testable: bool,
-    /// Anything inside this layer may hold focus. A layer that does not allow
-    /// it is skipped by Tab and by every explicit focus request, whatever its
-    /// contents claim through [`ScopeOptions::focusable`].
-    allows_focus: bool,
-    /// A press outside this layer emits its dismiss hook.
-    dismiss_on_outside_press: bool,
-    /// This layer's coordinates are the screen's. It undoes the scroll of the
-    /// viewport it was declared in, once, over its own area, and declares from
-    /// there in screen coordinates — free to open a viewport of its own. The
-    /// anchored kinds keep that viewport's coordinates and are projected out
-    /// of it once.
-    screen_level: bool,
-}
-
-impl LayerPolicy {
-    /// What everything declared outside any layer gets: no policy at all,
-    /// except that it can be clicked.
-    const fn base() -> Self {
-        Self {
-            takes_over: false,
-            hit_testable: true,
-            allows_focus: true,
-            dismiss_on_outside_press: false,
-            screen_level: false,
-        }
-    }
-}
-
 impl LayerKind {
-    /// The whole difference between the layer kinds, in one table.
-    const fn policy(self) -> LayerPolicy {
-        match self {
-            // Takes the screen over: dims, claims interaction, holds focus,
-            // swallows keys, and belongs to the screen rather than to whatever
-            // viewport declared it.
-            Self::Modal => LayerPolicy {
-                takes_over: true,
-                screen_level: true,
-                ..LayerPolicy::base()
-            },
-            // Occludes its own footprint and dismisses on an outside press,
-            // but never steals focus and lets keys reach its declarer.
-            Self::Popup => LayerPolicy {
-                dismiss_on_outside_press: true,
-                ..LayerPolicy::base()
-            },
-            // Says something and takes nothing: not a pointer target, so a
-            // press goes to whatever it covers, and not a focus target, so Tab
-            // passes it by even if what is inside claims to be focusable.
-            Self::Hint => LayerPolicy {
-                hit_testable: false,
-                allows_focus: false,
-                ..LayerPolicy::base()
-            },
-        }
+    /// Whether this kind takes the screen over — see [`Self::Modal`].
+    const fn takes_over(self) -> bool {
+        matches!(self, Self::Modal)
+    }
+
+    /// Whether this kind is inert: neither the pointer nor focus can land
+    /// inside it — see [`Self::Hint`].
+    const fn inert(self) -> bool {
+        matches!(self, Self::Hint)
     }
 }
 
@@ -449,8 +393,8 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
 struct Layer<Msg> {
     root: usize,
     kind: LayerKind,
-    /// The message a press outside the layer emits, on the kinds that
-    /// dismiss.
+    /// The message a press outside the layer emits: only ever a popup's, and
+    /// only when the app bound one.
     on_dismiss: Option<Box<dyn Fn() -> Msg>>,
 }
 
@@ -591,7 +535,7 @@ impl<State, Msg> Surface<State, Msg> {
     fn hittable(&self, index: usize) -> bool {
         self.present(index)
             && self.interactive(index)
-            && self.policy(self.nodes[index].layer).hit_testable
+            && !self.on_inert_layer(index)
             && self.viewport_visibility(index) != ViewportVisibility::Hidden
     }
 
@@ -616,10 +560,12 @@ impl<State, Msg> Surface<State, Msg> {
             .is_none_or(|root| self.inside(index, root))
     }
 
-    /// What the layer `layer` names does to interaction. `None` is the base
-    /// layer everything outside any layer is declared into.
-    fn policy(&self, layer: Option<usize>) -> LayerPolicy {
-        layer.map_or_else(LayerPolicy::base, |index| self.layers[index].kind.policy())
+    /// Whether `index` was declared on an inert layer, which neither the
+    /// pointer nor focus reaches. Nothing outside any layer is inert.
+    fn on_inert_layer(&self, index: usize) -> bool {
+        self.nodes[index]
+            .layer
+            .is_some_and(|layer| self.layers[layer].kind.inert())
     }
 
     /// The topmost open layer that satisfies `wants`.
@@ -630,7 +576,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// The layer that has taken the screen over, if one is open: everything
     /// outside it is inert, unfocusable, and unreachable by a key.
     fn takeover_root(&self) -> Option<usize> {
-        self.top_layer(|layer| layer.kind.policy().takes_over)
+        self.top_layer(|layer| layer.kind.takes_over())
             .map(|layer| layer.root)
     }
 
@@ -645,7 +591,7 @@ impl<State, Msg> Surface<State, Msg> {
     fn modal_roots(&self) -> impl Iterator<Item = usize> + '_ {
         self.layers
             .iter()
-            .filter(|layer| layer.kind == LayerKind::Modal)
+            .filter(|layer| layer.kind.takes_over())
             .map(|layer| layer.root)
     }
 
@@ -746,7 +692,7 @@ impl<State, Msg> Surface<State, Msg> {
     fn takes_focus(&self, index: usize) -> bool {
         self.present(index)
             && self.interactive(index)
-            && self.policy(self.nodes[index].layer).allows_focus
+            && !self.on_inert_layer(index)
             && self.nodes[index].options.focusable
     }
 
@@ -1418,10 +1364,11 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// The single place the layer lifecycle is written, coordinates included.
     /// An anchored layer keeps the coordinates of the viewport it was declared
     /// in, and takes that viewport's projection of `env.area` as its canvas. A
-    /// screen-level one undoes the viewport's scroll once — over its own area,
-    /// and over the frame its subtree reads — and then declares with no
-    /// viewport open at all, so what it declares is in screen coordinates and
-    /// may open a viewport of its own. Either way the viewport is back for
+    /// layer that takes the screen over belongs to it instead: it undoes the
+    /// viewport's scroll once — over its own area, and over the frame its
+    /// subtree reads — and then declares with no viewport open at all, so what
+    /// it declares is in screen coordinates and may open a viewport of its
+    /// own. Either way the viewport is back for
     /// whatever the declaration goes on to say after the layer.
     ///
     /// The layer is recorded before `declare_root` opens its root node, so
@@ -1435,7 +1382,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     ) {
         let enclosing = self.open_viewport;
         let viewport = enclosing.map(|index| self.surface.viewports[index].viewport);
-        let canvas_area = if kind.policy().screen_level {
+        let canvas_area = if kind.takes_over() {
             self.open_viewport = None;
             env.frame_area = self.frame_area;
             env.area = viewport.map_or(env.area, |viewport| viewport.unscrolled(env.area));
@@ -1612,9 +1559,8 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Declare a layer whose root is an app-declared scope rather than a
     /// component: the popup and hint form of [`layer`](Self::layer).
     ///
-    /// `on_dismiss` belongs to the caller rather than to the kind, because
-    /// only a kind whose policy has `dismiss_on_outside_press` can ever fire
-    /// one — hints pass `None` instead of carrying a hook that never runs.
+    /// `on_dismiss` belongs to the caller rather than to the kind: only a
+    /// popup carries one, and only when the app bound it.
     pub(crate) fn layer_scope(
         &mut self,
         id: ChildId,
@@ -1625,7 +1571,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         debug_assert!(
-            on_dismiss.is_none() || kind.policy().dismiss_on_outside_press,
+            on_dismiss.is_none() || kind == LayerKind::Popup,
             "a dismiss hook on a layer kind that never dismisses"
         );
         self.guarded(|pass| {
@@ -1812,7 +1758,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// it takes the screen over — and flush the deferred thunks that belong
     /// to it.
     fn composite_layer(&mut self, index: usize, buffer: &mut Buffer, state: &State, theme: &Theme) {
-        if self.surface.policy(Some(index)).takes_over {
+        if self.surface.layers[index].kind.takes_over() {
             dim_background(
                 buffer,
                 self.canvases[index]
@@ -2456,7 +2402,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                 surface.leaf_of(path).is_some_and(|index| {
                     surface.participates(index)
                         && surface.interactive(index)
-                        && surface.policy(surface.nodes[index].layer).hit_testable
+                        && !surface.on_inert_layer(index)
                 })
             });
         }
@@ -2595,12 +2541,10 @@ impl<State, Msg> Ratcn<State, Msg> {
         // Focusability controls traversal, not fallback delivery: an open
         // Select with no options still needs Esc on its parked path. Layer
         // inertness, in contrast, blocks delivery regardless of the component.
-        if let Some(position) = matched.iter().position(|&index| {
-            !self
-                .surface
-                .policy(self.surface.nodes[index].layer)
-                .allows_focus
-        }) {
+        if let Some(position) = matched
+            .iter()
+            .position(|&index| self.surface.on_inert_layer(index))
+        {
             matched.truncate(position);
         }
         let Some(takeover) = self.surface.takeover_root() else {
@@ -3056,21 +3000,22 @@ impl<State, Msg> Ratcn<State, Msg> {
         Some(self.focus_transition_result(focus, &current))
     }
 
-    /// The dismiss message of the topmost popup the press landed outside of,
-    /// if any, with `target` naming what it hit. "Outside" is containment, not
-    /// depth: the press hit nothing, or hit something that is not inside the
-    /// popup's subtree. Popups an open modal covers are inert and never
-    /// dismiss.
+    /// The dismiss message of the topmost popup with a dismiss hook that the
+    /// press landed outside of, if any, with `target` naming what it hit.
+    /// "Outside" is containment, not depth: the press hit nothing, or hit
+    /// something that is not inside the popup's subtree. A popup without a
+    /// hook has nothing to say and does not shadow one beneath it. Popups an
+    /// open modal covers are inert and never dismiss.
     fn popup_dismissal(&self, target: Option<&[ChildId]>) -> Option<Msg> {
         // Innermost first, and keep looking: the layer the press landed
         // inside is not dismissed, but one it landed outside of still is.
         let top = self.surface.top_layer(|layer| {
-            layer.kind.policy().dismiss_on_outside_press
+            layer.on_dismiss.is_some()
                 && self.surface.interactive(layer.root)
                 && self.surface.participates(layer.root)
                 && target.is_none_or(|hit| !self.surface.path_is_prefix_of(layer.root, hit))
         })?;
-        top.on_dismiss.as_ref().map(|f| f())
+        top.on_dismiss.as_ref().map(|dismiss| dismiss())
     }
 
     /// The focus change a motion onto `path` produces when it crosses a

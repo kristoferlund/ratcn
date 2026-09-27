@@ -289,6 +289,37 @@ fn an_outside_press_dismisses_the_innermost_nested_popup() {
     );
 }
 
+/// A popup with no dismiss hook — one opened only to paint above its
+/// neighbours — has nothing to say about an outside press, so it must not
+/// stand between that press and the menu it is nested in: the menu still
+/// closes.
+#[test]
+fn a_hookless_nested_popup_does_not_block_its_parents_dismissal() {
+    let state = PointerState;
+    let mut driver = Driver::<PointerState, PointerMsg>::new(10, 4);
+    driver.render(&state, |ctx| {
+        ctx.popup(
+            ChildId::Static("menu"),
+            Rect::new(0, 0, 5, 2),
+            PopupOptions::default().on_dismiss(|| PointerMsg::Dismissed),
+            |ctx| {
+                ctx.popup(
+                    ChildId::Static("nested"),
+                    Rect::new(0, 0, 3, 1),
+                    PopupOptions::default(),
+                    |_| {},
+                );
+            },
+        );
+    });
+
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 9, 3), &state),
+        EventResult::Emit(PointerMsg::Dismissed),
+        "the menu's dismiss hook must fire past a hookless popup above it"
+    );
+}
+
 #[test]
 fn outside_press_emits_the_dismiss_hook_only_when_routing_stayed_silent() {
     let state = PointerState;
