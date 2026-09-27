@@ -34,12 +34,12 @@
 //!
 //! # Declaring and painting are two walks
 //!
-//! [`Ratcn::render`] runs the closure once, and that run paints nothing: it
-//! builds the tree and queues the paint each declaration owes. Focus resolves
-//! against the finished tree, and only then does the queue run — which is why
-//! [`PaintCtx`] carries the interaction flags and [`DeclareCtx`] does not.
-//! Declaring once means the closure may have side effects and may move what it
-//! captures into the components it declares.
+//! A run of the [`Ratcn::render`] closure paints nothing: it builds the tree
+//! and queues the paint each declaration owes. Focus resolves against the
+//! finished tree, and only then does the queue run — which is why
+//! [`PaintCtx`] carries the interaction flags and [`DeclareCtx`] does not. A
+//! frame whose focus lands on content a viewport clips declares twice and
+//! paints the second, so keep side effects out of the closure.
 //!
 //! # Who owns what
 //!
