@@ -2424,4 +2424,192 @@ k: Reset on Reset NONE
             assert_eq!(painted, recorded);
         }
     }
+
+    fn painted(widget: SelectWidget<'_>, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        widget.render(area, &mut buffer);
+        crate::test_support::styled_snapshot(&buffer)
+    }
+
+    const FRUITS: [&str; 5] = ["Mango", "Papaya", "Lychee", "Durian", "Guava"];
+
+    // The frames below were recorded from the paint-only widget before it
+    // shared a row painter with `List`; a plain-ratatui caller must keep
+    // seeing exactly these cells.
+
+    #[test]
+    fn standalone_open_panel_paints_default_markers_and_row_states() {
+        let widget = SelectWidget::new(Some("Papaya"))
+            .open(true)
+            .options(&FRUITS)
+            .focused_item(Some(2))
+            .selected_item(Some(1))
+            // Shorter than the options: the rest are enabled.
+            .disabled_items(&[false, false, false, true])
+            .focused(true)
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 16, 8),
+            r" Papaya       ∧ |
+╭──────────────╮|
+│ ○ Mango      │|
+│ ● Papaya     │|
+│ ○ Lychee     │|
+│ ○ Durian     │|
+│ ○ Guava      │|
+╰──────────────╯|
+abbbbbbaaaaaaaca
+dddddddddddddddd
+dccccccccccccccd
+deebbbbbbbbbbbbd
+dffggggggggggggd
+dhhhhhhhhhhhhhhd
+dccccccccccccccd
+dddddddddddddddd
+a: Reset on #282828 NONE
+b: #FAFAFA on #282828 NONE
+c: #A1A1A1 on #282828 NONE
+d: #5E5E5E on #282828 NONE
+e: #E5E5E5 on #282828 NONE
+f: #A1A1A1 on #484848 NONE
+g: #FAFAFA on #484848 NONE
+h: #565656 on #151515 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_first_item_near_the_end_leaves_blank_panel_rows() {
+        let widget = SelectWidget::new(None)
+            .open(true)
+            .options(&FRUITS)
+            .first_item(3)
+            .focused_item(Some(4))
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 16, 8),
+            r"              ∧ |
+╭──────────────╮|
+│ ○ Durian     │|
+│ ○ Guava      │|
+│              │|
+│              │|
+│              │|
+╰──────────────╯|
+aaaaaaaaaaaaaaba
+cccccccccccccccc
+cddddddddddddddc
+ceeffffffffffffc
+cggggggggggggggc
+cggggggggggggggc
+cggggggggggggggc
+cccccccccccccccc
+a: Reset on #1F1F1F NONE
+b: #A1A1A1 on #1F1F1F NONE
+c: #5E5E5E on #282828 NONE
+d: #A1A1A1 on #282828 NONE
+e: #A1A1A1 on #484848 NONE
+f: #FAFAFA on #484848 NONE
+g: Reset on #282828 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_item_rows_pad_clip_and_leave_missing_rows_blank() {
+        let rows = [
+            Text::from(vec![Line::from("Mango"), Line::from(" sweet")]),
+            Text::from("Papaya"),
+            Text::from(vec![
+                Line::from("Lychee"),
+                Line::from(" pink"),
+                Line::from(" gone"),
+            ]),
+        ];
+        let widget = SelectWidget::new(None)
+            .placeholder("Pick")
+            .open(true)
+            .options(&FRUITS[..4])
+            .visible_item_rows(&rows)
+            .row_height(2)
+            .focused_item(Some(0))
+            .selected_item(Some(1))
+            .disabled_items(&[false, false, true])
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 16, 11),
+            r" Pick         ∧ |
+╭──────────────╮|
+│Mango         │|
+│ sweet        │|
+│Papaya        │|
+│              │|
+│Lychee        │|
+│ pink         │|
+│              │|
+│              │|
+╰──────────────╯|
+abbbbaaaaaaaaaba
+cccccccccccccccc
+cddddddddddddddc
+cddddddddddddddc
+ceeeeeeeeeeeeeec
+ceeeeeeeeeeeeeec
+cffffffffffffffc
+cffffffffffffffc
+cggggggggggggggc
+cggggggggggggggc
+cccccccccccccccc
+a: Reset on #1F1F1F NONE
+b: #A1A1A1 on #1F1F1F NONE
+c: #5E5E5E on #282828 NONE
+d: #FAFAFA on #484848 NONE
+e: #FAFAFA on #282828 NONE
+f: #565656 on #151515 NONE
+g: #A1A1A1 on #282828 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_explicit_style_and_row_height_zero_reading_as_one() {
+        let mut style = SelectStyle::fallback();
+        style.panel_background = Color::Blue;
+        style.focused_option_background = Color::Rgb(9, 8, 7);
+        style.selected_marker = Color::Red;
+        let widget = SelectWidget::new(Some("Mango"))
+            .open(true)
+            .options(&FRUITS[..2])
+            .row_height(0)
+            .focused_item(Some(1))
+            .selected_item(Some(0))
+            .style(style);
+
+        assert_eq!(
+            painted(widget, 12, 5),
+            r" Mango    ∧ |
+╭──────────╮|
+│ ● Mango  │|
+│ ○ Papaya │|
+╰──────────╯|
+abbbbbaaaaca
+dddddddddddd
+deeffffffffd
+dgghhhhhhhhd
+dddddddddddd
+a: Reset on Reset NONE
+b: White on Reset NONE
+c: DarkGray on Reset NONE
+d: DarkGray on Blue NONE
+e: Red on Blue NONE
+f: White on Blue NONE
+g: DarkGray on #090807 NONE
+h: Black on #090807 NONE
+"
+        );
+    }
 }

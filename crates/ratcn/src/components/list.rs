@@ -2548,4 +2548,124 @@ d: #A1A1A1 on #282828 NONE
             assert_eq!(painted, recorded);
         }
     }
+
+    fn painted(widget: ListWidget<'_>, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        widget.render(area, &mut buffer);
+        crate::test_support::styled_snapshot(&buffer)
+    }
+
+    // The frames below were recorded from the paint-only widget before it
+    // shared a row painter with `Select`; a plain-ratatui caller must keep
+    // seeing exactly these cells.
+
+    #[test]
+    fn standalone_widget_paints_cursor_symbol_selection_and_disabled_mask() {
+        let rows = ["one", "two", "three", "four", "five"].map(Text::from);
+        let widget = ListWidget::new(&rows)
+            .focused_item(Some(1))
+            .selected_items(&[1, 3])
+            // Shorter than the rows: the rest are enabled.
+            .disabled_items(&[false, false, true])
+            .focused(true)
+            .focus_symbol("> ")
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 14, 6),
+            r"  one         |
+> two         |
+  three       |
+  four        |
+  five        |
+              |
+aaaaaaaaaaaaaa
+bbbbbbbbbbbbbb
+cccccccccccccc
+dddddddddddddd
+aaaaaaaaaaaaaa
+aaaaaaaaaaaaaa
+a: #A1A1A1 on #282828 NONE
+b: #FAFAFA on #484848 NONE
+c: #565656 on #151515 NONE
+d: #FAFAFA on #282828 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_cursor_scrolled_out_of_the_window_keeps_the_gutter() {
+        let rows = ["three", "four", "five"].map(Text::from);
+        let widget = ListWidget::new(&rows)
+            .first_item(2)
+            .focused_item(Some(0))
+            .selected_items(&[3])
+            .focused(true)
+            .focus_symbol("> ")
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 14, 4),
+            r"  three       |
+  four        |
+  five        |
+              |
+aaaaaaaaaaaaaa
+bbbbbbbbbbbbbb
+aaaaaaaaaaaaaa
+aaaaaaaaaaaaaa
+a: #A1A1A1 on #282828 NONE
+b: #FAFAFA on #282828 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_explicit_text_styles_survive_every_row_state() {
+        let rows = [
+            Text::from(Span::styled(
+                "bold",
+                Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            )),
+            Text::from(Line::from(vec![
+                Span::raw("half "),
+                Span::styled("filled", Style::new().bg(Color::Green)),
+            ])),
+            Text::from(Span::styled(
+                "italic",
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::ITALIC),
+            )),
+            Text::from("plain"),
+        ];
+        let widget = ListWidget::new(&rows)
+            .focused_item(Some(1))
+            .selected_items(&[0, 1])
+            .disabled_items(&[false, false, true])
+            .focused(true)
+            .focus_symbol("> ")
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 14, 5),
+            r"  bold        |
+> half filled |
+  italic      |
+  plain       |
+              |
+aabbbbaaaaaaaa
+cccccccddddddc
+eeffffffeeeeee
+gggggggggggggg
+gggggggggggggg
+a: #FAFAFA on #282828 NONE
+b: Magenta on #282828 BOLD
+c: #FAFAFA on #484848 NONE
+d: #FAFAFA on Green NONE
+e: #565656 on #151515 NONE
+f: Cyan on #151515 ITALIC
+g: #A1A1A1 on #282828 NONE
+"
+        );
+    }
 }
