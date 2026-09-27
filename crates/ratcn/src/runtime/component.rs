@@ -654,23 +654,33 @@ impl<Msg> PopupOptions<Msg> {
 /// lays out in when it is projected.
 pub(crate) struct PaintTarget<'a> {
     buffer: &'a mut Buffer,
-    /// `None` writes straight onto `buffer`: base paint outside any viewport,
-    /// which the render area does not sandbox.
-    projection: Option<Projection>,
-    /// Where projected paint lays out before it is copied back. One buffer
-    /// serves the whole frame's paint calls, resized and blanked per call.
+    route: PaintRoute,
+    /// Where projected or clipped paint lays out before it is copied back.
+    /// One buffer serves the whole frame's paint calls, resized and blanked
+    /// per call.
     scratch: &'a mut Buffer,
 }
 
+/// How one paint reaches the frame's buffer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PaintRoute {
+    /// Straight onto the buffer: base paint outside any viewport, which the
+    /// render area does not sandbox.
+    Direct,
+    /// Laid out against the declared area, then projected: paint inside a
+    /// viewport, whose content can be far taller than what shows.
+    Projected(Projection),
+    /// Laid out against the declared area clipped to this rectangle, the
+    /// render area: layer paint outside any viewport, which never reaches
+    /// past it.
+    Clipped(Rect),
+}
+
 impl<'a> PaintTarget<'a> {
-    pub(crate) fn new(
-        buffer: &'a mut Buffer,
-        projection: Option<Projection>,
-        scratch: &'a mut Buffer,
-    ) -> Self {
+    pub(crate) fn new(buffer: &'a mut Buffer, route: PaintRoute, scratch: &'a mut Buffer) -> Self {
         Self {
             buffer,
-            projection,
+            route,
             scratch,
         }
     }
@@ -678,9 +688,23 @@ impl<'a> PaintTarget<'a> {
     /// Paint `area` through this target: `paint` receives the rectangle and
     /// the buffer to write it in.
     fn with_buffer<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
-        match self.projection {
-            None => paint(area, self.buffer),
-            Some(projection) => {
+        match self.route {
+            PaintRoute::Direct => paint(area, self.buffer),
+            PaintRoute::Projected(projection) => {
+                let cells = area.area();
+                assert!(
+                    cells <= super::engine::MAX_VIEWPORT_CELLS,
+                    "a viewport paint covers {area}, {cells} cells; the maximum is {}",
+                    super::engine::MAX_VIEWPORT_CELLS
+                );
+                with_projected_buffer(self.buffer, self.scratch, projection, area, |buffer| {
+                    paint(area, buffer)
+                })
+            }
+            // Bounded by the render area, which the caller allocated.
+            PaintRoute::Clipped(clip) => {
+                let area = area.intersection(clip);
+                let projection = Projection::clipped(clip);
                 with_projected_buffer(self.buffer, self.scratch, projection, area, |buffer| {
                     paint(area, buffer)
                 })
@@ -705,12 +729,6 @@ fn with_projected_buffer<R>(
     area: Rect,
     paint: impl FnOnce(&mut Buffer) -> R,
 ) -> R {
-    let cells = area.area();
-    assert!(
-        cells <= super::engine::MAX_VIEWPORT_CELLS,
-        "a clipped paint covers {area}, {cells} cells; the maximum is {}",
-        super::engine::MAX_VIEWPORT_CELLS
-    );
     scratch.resize(area);
     scratch.reset();
     for (source, screen) in projection.projected_positions(area) {
@@ -795,12 +813,14 @@ impl<'a, State> PaintCtx<'a, State> {
     /// The closure receives `area` and the buffer to write it in, so values
     /// read from `ctx` must be taken as arguments or moved in.
     ///
-    /// Inside a [`viewport`](DeclareCtx::viewport) or a layer, the buffer
-    /// covers exactly `area`, in the paint's own coordinates: a write outside
-    /// it lands nowhere, and the call costs what `area` does, however tall the
-    /// content around it. Layer paint lands above everything declared outside
-    /// the layer, clipped to the render area, and like
-    /// [`widget`](Self::widget) touches only the cells it writes. Base paint
+    /// Inside a [`viewport`](DeclareCtx::viewport), the buffer covers exactly
+    /// `area`, in the paint's own coordinates: a write outside it lands
+    /// nowhere, and the call costs what `area` does, however tall the content
+    /// around it. Layer paint outside a viewport receives `area` clipped to
+    /// the render area, and a buffer covering just that: it lays out against
+    /// the part that shows. Layer paint lands above everything declared
+    /// outside the layer and, like [`widget`](Self::widget), touches only the
+    /// cells it writes. Base paint
     /// outside both writes straight onto the frame's buffer, which the render
     /// area does not sandbox.
     pub fn with_buffer<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {

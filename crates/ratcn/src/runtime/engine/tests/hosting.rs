@@ -56,7 +56,8 @@ fn overlapping_style_paint_preserves_a_complete_wide_glyph() {
 
 #[test]
 fn clipped_modal_wide_glyph_does_not_emit_over_host_chrome() {
-    // A split glyph on either edge becomes blank; whole glyphs at the edges survive.
+    // A glyph the edge would split does not fit the clipped allocation, so
+    // the cell keeps what is beneath; whole glyphs at the edges survive.
     for (glyph_x, visible) in [(25, false), (24, true), (7, false), (8, true)] {
         let mut driver = Driver::<(), ()>::new(40, 18);
         driver
@@ -114,7 +115,7 @@ fn clipped_modal_wide_glyph_does_not_emit_over_host_chrome() {
                 let edge = glyph_x.max(ROOT.x);
                 assert_eq!(
                     frame.buffer_mut()[(edge, 7)].symbol(),
-                    if visible { "\u{754c}" } else { " " }
+                    if visible { "\u{754c}" } else { "#" }
                 );
                 if glyph_x >= ROOT.x {
                     assert_eq!(frame.buffer_mut()[(edge, 7)].fg, Color::Green);
@@ -124,6 +125,21 @@ fn clipped_modal_wide_glyph_does_not_emit_over_host_chrome() {
         assert_eq!(driver.cell(7, 7).symbol(), "#");
         assert_eq!(driver.cell(26, 7).symbol(), "#");
     }
+}
+
+#[test]
+fn a_wide_glyph_written_across_the_clip_edge_is_blanked() {
+    let driver = render_hosted(|ctx| {
+        ctx.modal_scope("modal", ROOT, ScopeOptions::default(), |ctx| {
+            ctx.paint(|ctx| {
+                ctx.with_buffer(ROOT, |_, buffer| {
+                    buffer[(ROOT.right() - 1, 7)].set_symbol("\u{754c}");
+                });
+            });
+        });
+    });
+    // Half a glyph would reach the terminal over host chrome.
+    assert_eq!(driver.cell(ROOT.right() - 1, 7).symbol(), " ");
 }
 
 fn render_hosted(
@@ -349,4 +365,49 @@ fn root_area_guides_paint_but_does_not_sandbox_base_writes() {
 
     assert_eq!(driver.cell(0, 0).symbol(), "D");
     assert_eq!(driver.cell(1, 0).symbol(), "W");
+}
+
+#[test]
+fn a_modal_over_a_render_area_past_the_viewport_cap_paints() {
+    // `render_into` exists for pages taller than the window; the render area
+    // is the caller's allocation, so layer paint over it is not capped the
+    // way viewport content is.
+    let area = Rect::new(0, 0, 200, 1400);
+    let mut buffer = Buffer::empty(area);
+    for cell in &mut buffer.content {
+        cell.set_symbol("#");
+    }
+    let mut ratcn = Ratcn::<(), ()>::new();
+    ratcn.render_into(&mut buffer, area, &(), &Theme::default_dark(), |ctx| {
+        ctx.modal_scope("modal", ctx.area(), ScopeOptions::default(), |ctx| {
+            ctx.paint_widget(ratatui::widgets::Clear, ctx.area());
+        });
+    });
+    assert_eq!(buffer[(0, 0)].symbol(), " ");
+    assert_eq!(buffer[(199, 1399)].symbol(), " ");
+}
+
+#[test]
+fn an_oversized_popup_lays_out_and_paints_its_visible_part() {
+    // A popup reaching far past the render area is handed the part it shows,
+    // as a widget sees any allocation clipped to its buffer.
+    let driver = render_hosted(|ctx| {
+        ctx.popup(
+            "popup",
+            Rect::new(0, 0, u16::MAX, u16::MAX),
+            PopupOptions::default(),
+            |ctx| {
+                ctx.paint(|ctx| {
+                    let area = ctx.area();
+                    ctx.with_buffer(area, |area, buffer| {
+                        assert_eq!(area, ROOT, "the paint lays out against what shows");
+                        buffer.set_style(area, Color::Green);
+                    });
+                });
+            },
+        );
+    });
+    for position in ROOT.positions() {
+        assert_eq!(driver.buffer()[position].fg, Color::Green);
+    }
 }

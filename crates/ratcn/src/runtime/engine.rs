@@ -29,7 +29,7 @@ use crate::backdrop::dim_background;
 use super::{
     ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyEvent, ModalState,
     MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
-    component::{InteractionFlags, PaintTarget, PointerInputs, TransientMap},
+    component::{InteractionFlags, PaintRoute, PaintTarget, PointerInputs, TransientMap},
     focus,
     gesture::Gestures,
 };
@@ -188,7 +188,7 @@ pub(crate) struct Projection {
 
 impl Projection {
     /// Paint in screen coordinates, kept inside `clip`.
-    const fn clipped(clip: Rect) -> Self {
+    pub(crate) const fn clipped(clip: Rect) -> Self {
         Self { offset: 0, clip }
     }
 
@@ -1551,14 +1551,17 @@ impl<State, Msg> RenderPass<State, Msg> {
             self.surface.interaction_flags(index, resolved)
         });
         let hover_position = self.hover_in(slot);
-        let projection = match (slot.viewport, slot.layer) {
-            (viewport, None) => viewport.map(Viewport::projection),
+        let route = match (slot.viewport, slot.layer) {
+            (None, None) => PaintRoute::Direct,
+            (Some(viewport), None) => PaintRoute::Projected(viewport.projection()),
             // Layer paint stays inside the render area, whatever it writes.
-            (None, Some(_)) => Some(Projection::clipped(self.frame_area)),
-            (Some(viewport), Some(_)) => Some(viewport.projection().within(self.frame_area)),
+            (None, Some(_)) => PaintRoute::Clipped(self.frame_area),
+            (Some(viewport), Some(_)) => {
+                PaintRoute::Projected(viewport.projection().within(self.frame_area))
+            }
         };
         let mut ctx = PaintCtx {
-            target: PaintTarget::new(buffer, projection, &mut self.scratch),
+            target: PaintTarget::new(buffer, route, &mut self.scratch),
             theme,
             area: op.area(),
             flags,

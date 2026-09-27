@@ -39,7 +39,8 @@ Layers are **transparent**. A layer covers exactly the cells its content writes;
 everything else shows what is beneath it. A layer that should hide what it covers
 paints a background first — a `Clear` over its area, then a filled block — which
 is what the built-in dialog, select panel, and tooltip bubble do. A modal's dim
-applies beneath it either way. Layer paint is clipped to the render area.
+applies beneath it either way. Layer paint is clipped to the render area, and a
+widget in a layer lays out against the part of its area that shows.
 Every one is callable from anywhere in the tree and anchors its subtree at the
 declaring node, so `if open { ctx.popup(...) }` inside a component is the whole
 ceremony.
