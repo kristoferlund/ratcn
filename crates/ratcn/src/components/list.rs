@@ -2374,4 +2374,217 @@ mod tests {
             "the third painted row is the forty-third item"
         );
     }
+
+    /// The recorded frames below were captured before `ListWidget` took rows
+    /// with their own state flags. That change was a refactor of how rows reach
+    /// the painter, not of what a list looks like, so every one of these frames
+    /// must stay exactly as recorded.
+    fn painted_list_frames() -> [String; 3] {
+        use crate::runtime::FocusState;
+        use crate::test_support::styled_snapshot;
+        use ratatui::style::Stylize;
+
+        let four = || {
+            [
+                item(Task::A, "Alpha"),
+                item(Task::B, "Bravo"),
+                item(Task::C, "Charlie").disabled(true),
+                item(Task::D, "Delta"),
+            ]
+        };
+        let six = || {
+            [
+                item(Task::A, "Alpha"),
+                item(Task::B, "Bravo"),
+                item(Task::C, "Charlie"),
+                item(Task::D, "Delta").disabled(true),
+                item(Task::E, "Echo"),
+                item(Task::F, "Foxtrot"),
+            ]
+        };
+        let state = State {
+            component_focus: FocusState::intent(["single"]),
+            ..State::default()
+        };
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &State| &state.component_focus, Msg::ComponentFocus),
+            48,
+            5,
+        );
+        let render = |driver: &mut Driver<State, Msg>| {
+            driver.render(&state, |ctx| {
+                // Focused, single selection, a disabled row, a focus symbol,
+                // and a backdrop row past the last item.
+                ctx.component(
+                    "single",
+                    List::new(four())
+                        .item_focus(|_: &State| Some(Task::B), Msg::Focused)
+                        .selection(|_: &State| Some(Task::A), Msg::Selected)
+                        .focus_symbol("> "),
+                    Rect::new(0, 0, 12, 5),
+                );
+                // Resting multi-selection with custom markers: the cursor is
+                // not shown, so neither is the symbol's gutter.
+                ctx.component(
+                    "multi",
+                    List::new(four())
+                        .item_focus(|_: &State| Some(Task::A), Msg::Focused)
+                        .multi_selection(
+                            |_: &State, task: &Task| matches!(task, Task::A | Task::C),
+                            Msg::Toggled,
+                        )
+                        .selected_marker("[x]")
+                        .unselected_marker("[ ]")
+                        .focus_symbol(">"),
+                    Rect::new(12, 0, 12, 5),
+                );
+                ctx.component(
+                    "disabled",
+                    List::new(four())
+                        .item_focus(|_: &State| Some(Task::B), Msg::Focused)
+                        .selection(|_: &State| Some(Task::A), Msg::Selected)
+                        .focus_symbol(">")
+                        .disabled(true),
+                    Rect::new(24, 0, 12, 5),
+                );
+                // Hovered, two-row items scrolled to the cursor, an explicit
+                // span color, and a clipped trailing item.
+                ctx.component(
+                    "tall",
+                    List::new(six())
+                        .item_focus(|_: &State| Some(Task::E), Msg::Focused)
+                        .selection(|_: &State| Some(Task::D), Msg::Selected)
+                        .row_height(2)
+                        .paint_item(|_, row| {
+                            Text::from(vec![
+                                Line::from(row.label.to_string()),
+                                Line::from(format!(" #{}", row.index).magenta()),
+                            ])
+                        })
+                        .focus_symbol(">"),
+                    Rect::new(36, 0, 12, 5),
+                );
+            });
+        };
+        render(&mut driver);
+        driver.event(mouse(MouseKind::Moved, 40, 4), &state);
+        render(&mut driver);
+        let components = styled_snapshot(driver.buffer());
+
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 24, 4));
+        standalone_widgets(&theme, &mut buffer);
+        [components, cursorless_frame(), styled_snapshot(&buffer)]
+    }
+
+    /// Hovered with no cursor anywhere: the cursor is shown, but there is
+    /// nothing to point at, so no gutter.
+    fn cursorless_frame() -> String {
+        let state = State::default();
+        let mut driver = Driver::<State, Msg>::new(12, 3);
+        let render = |driver: &mut Driver<State, Msg>| {
+            driver.render(&state, |ctx| {
+                ctx.component(
+                    "cursorless",
+                    List::new([
+                        item(Task::A, "Alpha"),
+                        item(Task::B, "Bravo"),
+                        item(Task::C, "Charlie").disabled(true),
+                    ])
+                    .item_focus(|_: &State| None, Msg::Focused)
+                    .focus_symbol(">"),
+                    Rect::new(0, 0, 12, 3),
+                );
+            });
+        };
+        render(&mut driver);
+        driver.event(mouse(MouseKind::Moved, 3, 1), &state);
+        render(&mut driver);
+        crate::test_support::styled_snapshot(driver.buffer())
+    }
+
+    /// The paint-only widget on its own: a scrolled, focused window, and the
+    /// same window disabled.
+    fn standalone_widgets(theme: &Theme, buffer: &mut Buffer) {
+        let rows = [
+            Text::from("two"),
+            Text::from("three"),
+            Text::from("four"),
+            Text::from("five"),
+        ];
+        ListWidget::new(&rows)
+            .first_item(2)
+            .focused_item(Some(3))
+            .selected_items(&[2, 4])
+            .disabled_items(&[false, false, false, false, true])
+            .focused(true)
+            .focus_symbol("> ")
+            .themed(theme)
+            .render(Rect::new(0, 0, 12, 4), buffer);
+        ListWidget::new(&rows)
+            .first_item(2)
+            .focused_item(Some(3))
+            .selected_items(&[2])
+            .focused(true)
+            .focus_symbol("> ")
+            .disabled(true)
+            .themed(theme)
+            .render(Rect::new(12, 0, 12, 4), buffer);
+    }
+
+    const RECORDED_LIST_FRAMES: [&str; 3] = [
+        r"   ● Alpha   [x] Alpha   ● Alpha     Delta      |
+>  ○ Bravo   [ ] Bravo   ○ Bravo      #3        |
+   ○ Charlie [x] Charlie ○ Charlie  >Echo       |
+   ○ Delta   [ ] Delta   ○ Delta      #4        |
+                                     Foxtrot    |
+aabbaaaaaaaaccccddddddddeeeeeeeeeeeeeeeeeeeeeeee
+ffggffffffffhhhhhhhhhhhheeeeeeeeeeeeeiiieeeeeeee
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeffffffffffff
+jjjjjjjjjjjjhhhhhhhhhhhheeeeeeeeeeeefkkkffffffff
+jjjjjjjjjjjjhhhhhhhhhhhhllllllllllllmmmmmmmmmmmm
+a: #FAFAFA on #282828 NONE
+b: #E5E5E5 on #282828 NONE
+c: #E5E5E5 on #1F1F1F NONE
+d: #FAFAFA on #1F1F1F NONE
+e: #565656 on #151515 NONE
+f: #FAFAFA on #484848 NONE
+g: #A1A1A1 on #484848 NONE
+h: #A1A1A1 on #1F1F1F NONE
+i: Magenta on #151515 NONE
+j: #A1A1A1 on #282828 NONE
+k: Magenta on #484848 NONE
+l: #A1A1A1 on #151515 NONE
+m: #A1A1A1 on #313131 NONE
+",
+        r"Alpha       |
+Bravo       |
+Charlie     |
+aaaaaaaaaaaa
+aaaaaaaaaaaa
+bbbbbbbbbbbb
+a: #A1A1A1 on #313131 NONE
+b: #565656 on #151515 NONE
+",
+        r"  two       two         |
+> three     three       |
+  four      four        |
+  five      five        |
+aaaaaaaaaaaabbbbbbbbbbbb
+ccccccccccccbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbb
+ddddddddddddbbbbbbbbbbbb
+a: #FAFAFA on #282828 NONE
+b: #565656 on #151515 NONE
+c: #FAFAFA on #484848 NONE
+d: #A1A1A1 on #282828 NONE
+",
+    ];
+
+    #[test]
+    fn list_frames_paint_exactly_as_recorded() {
+        for (painted, recorded) in painted_list_frames().iter().zip(RECORDED_LIST_FRAMES) {
+            assert_eq!(painted, recorded);
+        }
+    }
 }

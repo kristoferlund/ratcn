@@ -2250,4 +2250,199 @@ mod tests {
             EventResult::Ignored
         );
     }
+
+    /// The recorded frames below were captured before the panel took rows with
+    /// their own state flags from the shared row painter. That change was a
+    /// refactor of how rows reach the painter, not of what a select looks
+    /// like, so every one of these frames must stay exactly as recorded.
+    fn painted_select_frames() -> [String; 3] {
+        use crate::test_support::styled_snapshot;
+        use ratatui::style::Stylize;
+
+        let with_durian_disabled = || {
+            let mut items = items();
+            items[3] = ListItem::new(Fruit::Durian, "Durian").disabled(true);
+            items
+        };
+        let fixed = |open: bool, cursor: Fruit, selected: Option<Fruit>| {
+            Select::new(with_durian_disabled())
+                .placeholder("Pick a fruit")
+                .open(move |_: &State| open, Msg::Open)
+                .item_focus(move |_: &State| Some(cursor), Msg::Focused)
+                .selection(move |_: &State| selected, Msg::Selected)
+        };
+
+        // Closed: a placeholder, a focused value, and a disabled value.
+        let state = State {
+            focus: FocusState::intent(["valued"]),
+            ..State::default()
+        };
+        let mut closed = driver(16, 3);
+        closed.render(&state, |ctx| {
+            ctx.component(
+                "placeholder",
+                fixed(false, Fruit::Mango, None),
+                Rect::new(0, 0, 16, 1),
+            );
+            ctx.component(
+                "valued",
+                fixed(false, Fruit::Mango, Some(Fruit::Papaya)),
+                Rect::new(0, 1, 16, 1),
+            );
+            ctx.component(
+                "disabled",
+                fixed(false, Fruit::Mango, Some(Fruit::Papaya)).disabled(true),
+                Rect::new(0, 2, 16, 1),
+            );
+        });
+
+        // Open: default markers over a disabled option; custom markers
+        // scrolled to the cursor; custom two-row options with an explicit
+        // span color.
+        let mut open = driver(48, 8);
+        open.render(&state, |ctx| {
+            ctx.component(
+                "markers",
+                fixed(true, Fruit::Papaya, Some(Fruit::Mango)),
+                Rect::new(0, 3, 16, 1),
+            );
+            ctx.component(
+                "custom",
+                fixed(true, Fruit::Lychee, Some(Fruit::Papaya))
+                    .max_visible_items(2)
+                    .selected_marker("[x]")
+                    .unselected_marker("[ ]"),
+                Rect::new(16, 3, 16, 1),
+            );
+            ctx.component(
+                "painted",
+                Select::new(items())
+                    .open(|_: &State| true, Msg::Open)
+                    .item_focus(|_: &State| Some(Fruit::Durian), Msg::Focused)
+                    .selection(|_: &State| Some(Fruit::Mango), Msg::Selected)
+                    .max_visible_items(2)
+                    .row_height(2)
+                    .paint_item(|_, row| {
+                        Text::from(vec![
+                            Line::from(row.label.to_string()),
+                            Line::from(format!(" #{}", row.index).magenta()),
+                        ])
+                    }),
+                Rect::new(32, 3, 16, 1),
+            );
+        });
+
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 32, 6));
+        standalone_widgets(&theme, &mut buffer);
+        [
+            styled_snapshot(closed.buffer()),
+            styled_snapshot(open.buffer()),
+            styled_snapshot(&buffer),
+        ]
+    }
+
+    /// The paint-only widget on its own: a scrolled panel with the default
+    /// markers, and a panel of custom two-row options too tall to show both.
+    fn standalone_widgets(theme: &Theme, buffer: &mut Buffer) {
+        let options = ["Mango", "Papaya", "Lychee", "Durian"];
+        SelectWidget::new(Some("Papaya"))
+            .open(true)
+            .options(&options)
+            .first_item(1)
+            .focused_item(Some(2))
+            .selected_item(Some(1))
+            .disabled_items(&[false, false, false, true])
+            .focused(true)
+            .themed(theme)
+            .render(Rect::new(0, 0, 16, 6), buffer);
+        let rows = [
+            Text::from(vec![Line::from("Mango"), Line::from(" sweet")]),
+            Text::from(vec![Line::from("Papaya"), Line::from(" soft")]),
+        ];
+        SelectWidget::new(None)
+            .placeholder("Pick")
+            .open(true)
+            .options(&options[..2])
+            .visible_item_rows(&rows)
+            .row_height(2)
+            .focused_item(Some(0))
+            .themed(theme)
+            .render(Rect::new(16, 0, 16, 6), buffer);
+    }
+
+    const RECORDED_SELECT_FRAMES: [&str; 3] = [
+        r" Pick a fruit ∨ |
+ Papaya       ∨ |
+ Papaya       ∨ |
+abbbbbbbbbbbbaba
+cddddddcccccccec
+fggggggfffffffgf
+a: Reset on #1F1F1F NONE
+b: #A1A1A1 on #1F1F1F NONE
+c: Reset on #282828 NONE
+d: #FAFAFA on #282828 NONE
+e: #A1A1A1 on #282828 NONE
+f: Reset on #151515 NONE
+g: #565656 on #151515 NONE
+",
+        r"                                                |
+                                                |
+╭──────────────╮╭──────────────╮╭──────────────╮|
+│ ● Mango      ││ [x] Papaya   ││Lychee        │|
+│ ○ Papaya     ││ [ ] Lychee   ││ #2           │|
+│ ○ Lychee     │╰──────────────╯│Durian        │|
+│ ○ Durian     │                │ #3           │|
+╰──────────────╯                ╰──────────────╯|
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bccddddddddddddbbccccddddddddddbbeeeeeeeeeeeeeeb
+bffggggggggggggbbffffggggggggggbbhhheeeeeeeeeeeb
+beeeeeeeeeeeeeebbbbbbbbbbbbbbbbbbggggggggggggggb
+biiiiiiiiiiiiiibaaaaaaaaaaaaaaaabjjjgggggggggggb
+bbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb
+a: Reset on Reset NONE
+b: #5E5E5E on #282828 NONE
+c: #E5E5E5 on #282828 NONE
+d: #FAFAFA on #282828 NONE
+e: #A1A1A1 on #282828 NONE
+f: #A1A1A1 on #484848 NONE
+g: #FAFAFA on #484848 NONE
+h: Magenta on #282828 NONE
+i: #565656 on #151515 NONE
+j: Magenta on #484848 NONE
+",
+        r" Papaya       ∧  Pick         ∧ |
+╭──────────────╮╭──────────────╮|
+│ ● Papaya     ││Mango         │|
+│ ○ Lychee     ││ sweet        │|
+│ ○ Durian     │╰──────────────╯|
+╰──────────────╯                |
+abbbbbbaaaaaaacadeeeeddddddddded
+ffffffffffffffffffffffffffffffff
+fggbbbbbbbbbbbbffhhhhhhhhhhhhhhf
+fiihhhhhhhhhhhhffhhhhhhhhhhhhhhf
+fjjjjjjjjjjjjjjfffffffffffffffff
+ffffffffffffffffkkkkkkkkkkkkkkkk
+a: Reset on #282828 NONE
+b: #FAFAFA on #282828 NONE
+c: #A1A1A1 on #282828 NONE
+d: Reset on #1F1F1F NONE
+e: #A1A1A1 on #1F1F1F NONE
+f: #5E5E5E on #282828 NONE
+g: #E5E5E5 on #282828 NONE
+h: #FAFAFA on #484848 NONE
+i: #A1A1A1 on #484848 NONE
+j: #565656 on #151515 NONE
+k: Reset on Reset NONE
+",
+    ];
+
+    #[test]
+    fn select_frames_paint_exactly_as_recorded() {
+        for (painted, recorded) in painted_select_frames().iter().zip(RECORDED_SELECT_FRAMES) {
+            assert_eq!(painted, recorded);
+        }
+    }
 }
