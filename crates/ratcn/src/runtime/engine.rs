@@ -34,12 +34,6 @@ use super::{
     gesture::{Gestures, Press},
 };
 
-/// `begin_node`'s node kind, spelled out at each call site: a component node
-/// occupies the area it was declared with and carries a [`Component`]; a scope
-/// node is kept for identity and parents a subtree.
-const COMPONENT_NODE: bool = false;
-const SCOPE_NODE: bool = true;
-
 // The largest rectangle a viewport declares as its content, and the largest a
 // single paint inside one or inside a layer covers: a paint becomes a scratch
 // buffer of one Ratatui cell per cell.
@@ -338,7 +332,8 @@ pub(crate) struct Node<State, Msg> {
     /// was declared inside.
     viewport: Option<usize>,
     options: ScopeOptions,
-    is_scope: bool,
+    /// The component declared here; `None` for a scope, which is kept for
+    /// identity and parents a subtree.
     component: Option<Box<dyn Component<State, Msg>>>,
     /// The layer this node was declared on, indexing [`Surface::layers`].
     /// `None` outside any layer.
@@ -363,7 +358,6 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
             .field("area", &self.area)
             .field("viewport", &self.viewport)
             .field("options", &self.options)
-            .field("is_scope", &self.is_scope)
             .field("component", &self.component.is_some())
             .field("layer", &self.layer)
             .field("live", &self.live)
@@ -447,7 +441,7 @@ impl<State, Msg> Surface<State, Msg> {
         // it.
         for index in 0..self.nodes.len() {
             let node = &self.nodes[index];
-            let live = (node.is_scope || !node.area.is_empty())
+            let live = (node.component.is_none() || !node.area.is_empty())
                 && node.parent.is_none_or(|parent| self.nodes[parent].live);
             self.nodes[index].live = live;
         }
@@ -1077,9 +1071,10 @@ pub(crate) struct RenderPass<State, Msg> {
     /// focus does.
     hover_position: Option<Position>,
     hover_path: Vec<ChildId>,
-    /// Set when any declaration region unwinds — see [`Self::guarded`]. A
-    /// poisoned pass can never commit.
-    failed: bool,
+    /// Declaration regions entered and not yet left — see [`Self::guarded`].
+    /// A region that unwinds is never left, so a pass one unwound in can
+    /// never commit.
+    open_regions: usize,
     /// The open viewport, indexing [`Surface::viewports`]. A viewport
     /// declared while one is open panics, so there is at most one.
     open_viewport: Option<usize>,
@@ -1102,7 +1097,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             paint_queue: Vec::new(),
             hover_position: None,
             hover_path: Vec::new(),
-            failed: false,
+            open_regions: 0,
             open_viewport: None,
             layer_stack: Vec::new(),
             scratch: Buffer::empty(Rect::ZERO),
@@ -1280,26 +1275,18 @@ impl<State, Msg> RenderPass<State, Msg> {
     }
 
     /// Run `f` as one declaration region: if it unwinds — a panicking
-    /// component, or the runtime's own validation — the pass is poisoned and
-    /// can never commit, no matter who catches the panic. Every entry point
-    /// that runs user code or validates a declaration goes through here.
+    /// component, or the runtime's own validation — the region is never
+    /// left, and the pass can never commit, no matter who catches the panic.
+    /// Every entry point that runs user code or validates a declaration goes
+    /// through here.
     pub(crate) fn guarded<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
-            Ok(result) => result,
-            Err(payload) => {
-                self.failed = true;
-                std::panic::resume_unwind(payload)
-            }
-        }
+        self.open_regions += 1;
+        let result = f(self);
+        self.open_regions -= 1;
+        result
     }
 
-    fn begin_node(
-        &mut self,
-        id: ChildId,
-        area: Rect,
-        options: ScopeOptions,
-        is_scope: bool,
-    ) -> usize {
+    fn begin_node(&mut self, id: ChildId, area: Rect, options: ScopeOptions) -> usize {
         let parent = self.parent_stack.last().copied();
         let index = self.surface.nodes.len();
         assert!(
@@ -1326,7 +1313,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             area,
             viewport,
             options,
-            is_scope,
             component: None,
             layer,
             live: false,
@@ -1368,7 +1354,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             // The node hit-tests against `interaction_area`, but its children
             // are declared over the full paint `area`: a component may narrow
             // what it responds to without narrowing where it draws.
-            let index = pass.begin_node(id, interaction_area, options, COMPONENT_NODE);
+            let index = pass.begin_node(id, interaction_area, options);
             pass.enter_node(index);
             // Queued before the subtree declares, so the component's own
             // paint replays ahead of its descendants' — the paint-before-
@@ -1475,7 +1461,7 @@ impl<State, Msg> RenderPass<State, Msg> {
     ) {
         self.guarded(|pass| {
             let area = env.area;
-            let index = pass.begin_node(id, area, options, SCOPE_NODE);
+            let index = pass.begin_node(id, area, options);
             pass.enter_node(index);
             pass.with_declare_ctx(env.nested(area), declare);
             pass.leave_node();
@@ -1487,11 +1473,10 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// [`DeclareCtx::in_area`], and [`Component::declare`] all pass through
     /// here.
     ///
-    /// A panic out of `declare` poisons the pass through the [`Self::guarded`]
-    /// region of the declaration entry point that is open — `scope`,
-    /// `component`, `viewport`, or a layer entry, which carries a region of its
-    /// own around the validation and lifecycle it owns. Poisoning is
-    /// idempotent, so crossing several regions reads the same as crossing one.
+    /// A panic out of `declare` leaves open the [`Self::guarded`] region of
+    /// the declaration entry point that is open — `scope`, `component`,
+    /// `viewport`, or a layer entry, which carries a region of its own around
+    /// the validation and lifecycle it owns — and so rejects the pass.
     pub(crate) fn with_declare_ctx(
         &mut self,
         env: DeclarationEnv<'_, State>,
@@ -1593,8 +1578,8 @@ impl<State, Msg> RenderPass<State, Msg> {
             state,
         };
         match op {
-            // `assert_valid`'s completeness check ran before replay, so
-            // every node here has its component.
+            // `assert_valid` saw every region close before replay, and a
+            // component region closes only once its component is installed.
             DeclaredPaint::Node { index, .. } => self.surface.nodes[index]
                 .component
                 .as_deref_mut()
@@ -1612,18 +1597,14 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// own: a panic crossing it unwinds past this check and past the commit,
     /// while a panic a declaration inside it raises was recorded by that
     /// declaration's region before an app closure could catch it.
+    ///
+    /// Every open declaration, layer, and viewport, and every component still
+    /// to be installed, sits inside a region, so regions all closing is also
+    /// what says the tree is complete.
     fn assert_valid(&self) {
-        assert!(!self.failed, "cannot commit a failed declaration pass");
         assert!(
-            self.parent_stack.is_empty() && self.layer_stack.is_empty(),
-            "cannot commit a declaration pass with unclosed components or layers"
-        );
-        assert!(
-            self.surface
-                .nodes
-                .iter()
-                .all(|node| node.is_scope || node.component.is_some()),
-            "cannot commit a declaration pass with incomplete components"
+            self.open_regions == 0,
+            "cannot commit a failed declaration pass"
         );
     }
 }
