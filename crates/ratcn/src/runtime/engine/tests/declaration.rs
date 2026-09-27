@@ -57,6 +57,35 @@ fn failed_declaration_discards_staged_transient_settlement() {
     );
 }
 
+/// Settling the same transient twice in one declaration builds on the first
+/// staged write rather than restarting from the stored value.
+#[test]
+fn repeated_settlement_in_one_declaration_accumulates() {
+    struct Probe;
+    impl Component<(), u32> for Probe {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
+            for _ in 0..2 {
+                if let Some(value) = ctx.transient_mut::<u32>() {
+                    *value += 1;
+                }
+            }
+        }
+        fn scope_options(&self) -> ScopeOptions {
+            ScopeOptions::default().focusable(true)
+        }
+        fn handle_event(&mut self, _: &Event, (): &(), ctx: &mut EventCtx<'_>) -> EventResult<u32> {
+            EventResult::Emit(*ctx.transient::<u32>())
+        }
+    }
+    let mut driver = Driver::<(), u32>::new(4, 1);
+    let area = driver.area();
+    driver.render(&(), |ctx| ctx.component("probe", Probe, area));
+    let key = Event::Key(KeyEvent::new(KeyCode::Enter));
+    assert_eq!(driver.event(key.clone(), &()), EventResult::Emit(0));
+    driver.render(&(), |ctx| ctx.component("probe", Probe, area));
+    assert_eq!(driver.event(key, &()), EventResult::Emit(2));
+}
+
 struct ContextProbe {
     area: Rect,
 }

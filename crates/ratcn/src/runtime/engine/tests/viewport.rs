@@ -722,6 +722,8 @@ struct RevealState {
     late: bool,
     /// Whether a modal covers the area this frame.
     modal: bool,
+    /// Whether the bottom row is declared unable to take focus.
+    inert_bottom: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -742,10 +744,19 @@ struct RevealArea {
 impl Component<RevealState, RevealMsg> for RevealArea {
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, RevealState, RevealMsg>) {
         let area = ctx.area();
-        let late = ctx.state().late;
+        let (late, inert_bottom) = (ctx.state().late, ctx.state().inert_bottom);
         ctx.viewport(area, 6, self.offset, move |ctx| {
             ctx.component("top", RevealLeaf, Rect::new(0, 0, 4, 1));
-            ctx.component("bottom", RevealLeaf, Rect::new(0, 5, 4, 1));
+            if inert_bottom {
+                ctx.scope(
+                    "bottom",
+                    Rect::new(0, 5, 4, 1),
+                    ScopeOptions::default(),
+                    |_| {},
+                );
+            } else {
+                ctx.component("bottom", RevealLeaf, Rect::new(0, 5, 4, 1));
+            }
             if late {
                 ctx.component("late", RevealLeaf, Rect::new(0, 3, 4, 1));
             }
@@ -978,6 +989,22 @@ fn focus_returned_as_a_modal_closes_reveals_in_that_frame() {
     state.focus = FocusState::intent(["area", "bottom"]);
     render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
+}
+
+/// A stored path whose target cannot take focus is kept, but it is not
+/// focus: nothing asks the viewport to show it, and the frame declares once.
+#[test]
+fn a_stored_path_onto_a_target_that_cannot_take_focus_reveals_nothing() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let state = RevealState {
+        focus: FocusState::intent(["area", "bottom"]),
+        inert_bottom: true,
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(log.borrow().is_empty());
 }
 
 /// A focus path nothing declares whole parks, and a parked path names no

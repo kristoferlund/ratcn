@@ -61,10 +61,10 @@ match msg {
 Focus moving to a descendant the viewport is clipping scrolls that descendant
 into view on the same frame, however focus got there — a path the app stores
 from its own update function included — and a descendant declared for the
-first time by that frame, such as a row appended and focused together. Focus itself travels
-through `Ratcn::focus(read, on_change)` as it does everywhere else: Tab,
-BackTab, focus keys, and pointer focus all produce that message, and the area
-adds the reveal on top of it.
+first time by that frame, such as a row appended and focused together. Focus
+itself travels through `Ratcn::focus(read, on_change)` as it does everywhere
+else: Tab, BackTab, focus keys, and pointer focus all produce that message, and
+the area adds the reveal on top of it.
 
 Focus reveal currently does not emit the `.scroll(...)` change message, so a
 controlled offset may differ from the effective offset used for painting. There

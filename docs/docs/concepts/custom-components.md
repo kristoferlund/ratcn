@@ -59,9 +59,9 @@ resolved — which is why the interaction flags (`ctx.focused()`,
 complete to resolve against yet. Hover is the exception, because it predates
 the frame rather than following from it: `DeclareCtx::pointer_within()` reports
 whether the pointer is inside this declaration, for the rare component whose
-*structure* depends on it. Both methods run once per frame, so anything
-`handle_event` reads back must be recorded in `declare`, and must therefore not
-depend on those flags.
+*structure* depends on it. Neither method sees the frame's resolved flags, so
+anything `handle_event` reads back must be recorded in `declare`, and must
+therefore not depend on those flags.
 
 Every method except `declare` has a default:
 

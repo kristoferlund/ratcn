@@ -217,8 +217,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// declared — see [`EventCtx::transient`] for the ownership rules; semantic
     /// state does not belong here.
     ///
-    /// Use [`transient_mut`](Self::transient_mut) when the declaration must
-    /// also settle the value it reads.
+    /// A value this pass already settled through
+    /// [`transient_mut`](Self::transient_mut) reads back as settled; use that
+    /// when the declaration must also settle the value it reads.
     #[must_use]
     pub fn transient<T: 'static>(&self) -> Option<&T> {
         let path = self.pass.current_path()?;
@@ -234,9 +235,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// [`List`](crate::List) settles it in its `declare`, alongside the
     /// arithmetic that produces the offset it stores.
     ///
-    /// The write lands once per frame, where the declaration makes it, and is
-    /// read back by the next frame's declaration — and by any event handler
-    /// that writes it in between. Settling a flag
+    /// The write is published when the render commits, and is read back by
+    /// the next frame's declaration — and by any event handler that writes it
+    /// in between. Settling a flag
     /// (`if moved { held = false }`) or storing a computed offset is what
     /// this is for; anything the app should read, persist, or act on belongs
     /// in app state.

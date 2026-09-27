@@ -64,8 +64,7 @@ pub const SCROLL_STEP: usize = 3;
 ///
 /// - [`hold`](Self::hold) records a wheel scroll: the view moves to `offset`
 ///   and holds there while the list stays as it was.
-/// - [`settle`](Self::settle) runs once per frame, where the component
-///   declares. It releases the hold for good once anything has moved, and
+/// - [`settle`](Self::settle) runs where the component declares. It releases the hold for good once anything has moved, and
 ///   answers with the offset that declaration paints from. Releasing is
 ///   permanent: without it, moving the cursor away and back would revive a
 ///   stale hold and throw the cursor off-screen again.

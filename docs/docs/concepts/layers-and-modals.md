@@ -72,7 +72,7 @@ ratcn.render(frame, area, &state, &state.theme, |ctx| {
     // Base paint and declarations first.
     if state.modals.is_open("confirm") {
         let area = ctx.area();
-        ctx.modal("confirm", dialog, area);
+        ctx.modal("confirm", confirm_dialog(), area);
     }
 });
 

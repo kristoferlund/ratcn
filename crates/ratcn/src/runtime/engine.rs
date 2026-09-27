@@ -1928,9 +1928,10 @@ impl<State, Msg> RenderPass<State, Msg> {
 /// on screen: declaring does not draw, and every reason to reject a pass is
 /// known before the first cell is written. A declaration writes nothing
 /// outside its pass — [`DeclareCtx::transient_mut`] is staged until commit —
-/// so a rejected pass leaves no trace. The one thing that cannot be taken
-/// back is a panic thrown by painting itself, after the pass had already been
-/// accepted.
+/// so a rejected pass leaves no trace. Two things cannot be taken back: the
+/// offset a [`Component::reveal_in_viewport`] stored for a frame whose second
+/// declaration is then rejected, and a panic thrown by painting itself, after
+/// the pass had already been accepted.
 pub struct Ratcn<State, Msg> {
     surface: Surface<State, Msg>,
     has_rendered: bool,
@@ -2201,8 +2202,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// lands on content a viewport clips: the component that declared the
     /// viewport is asked to scroll, and the first declaration is discarded
     /// for one built with the new offset. Keep side effects out of it.
-    /// Declaration
-    /// records what exists and where; [`Component::paint`] and the closures
+    /// Declaration records what exists and where; [`Component::paint`] and the closures
     /// [`DeclareCtx::paint`] queues are replayed afterwards, in the order the
     /// declaration reached them. Focus and hover resolve in between, against
     /// the finished tree, so every interaction flag a paint reads is derived
@@ -2306,6 +2306,7 @@ impl<State, Msg> Ratcn<State, Msg> {
                 Reveal::Delivered => {
                     pass = self.declare_pass(area, state, theme, &mut declare);
                     resolved_focus = pass.surface.resolve_focus(focus_snapshot);
+                    reveal_pending = pass.surface.leaf_of(resolved_focus.path()).is_none();
                 }
             }
         }
