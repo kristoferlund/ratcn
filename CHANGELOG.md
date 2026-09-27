@@ -9,81 +9,43 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
-- `Ratcn::render` and `render_into` take `FnMut`. The closure runs a second time
-  on a frame where focus lands on content a viewport clips, so build what it
-  consumes inside it.
-- `Component::reveal_in_viewport` returns whether it moved the view; the frame
-  is declared a second time only when it did.
-- `DeclareCtx` has one `transient::<T>() -> &mut T` (`T: Clone + Default`),
-  shaped like `EventCtx::transient`; `transient_mut` and the read-only
-  `Option` form are gone. Declaration writes land when the render commits.
-- A popup or hint declared inside a viewport now declares in screen
-  coordinates, as a modal does: paint at the layer's `ctx.area()`, not at a
-  rectangle captured before opening it. A modal above its viewport's top edge
-  is no longer pushed down onto it.
 - Layers are transparent: a modal, popup, or hint covers only the cells its
-  content paints. Paint a background (`Clear`, then a filled block) to hide
-  what is beneath; Dialog, Select, and Tooltip do.
-- `DeclareCtx::defer_paint` is removed. Declare a `hint` layer for decoration
-  above later siblings, or paint onto the buffer after `render` for decoration
-  above every layer.
-- `PaintCtx::with_buffer` takes the area it writes and hands it to the closure:
-  `with_buffer(area, |area, buf| …)`. `PaintCtx::stateful_widget` is removed;
-  render a `StatefulWidget` through `with_buffer`.
-- `ListWidget::new` and `SelectWidget::options` take `ListRow`s, each carrying
-  its own focused/selected/disabled flags; `first_item`, `focused_item`,
-  `selected_item(s)`, `disabled_items`, `visible_item_rows`, `row_height`, and
-  the markers leave both widgets. `list_core::windowed_rows` returns `ListRow`s.
-- `TabsStyle` is two `button_shape::FilledStyle`s, `selected` and
-  `unselected`: `style.selected_background` becomes `style.selected.background`,
-  `style.background` becomes `style.unselected.background`, and so on.
-- `Component::prepare` is removed. `scope_options` and `interaction_area`
-  receive the state the component is declared with:
-  `scope_options(&self, state)`, `interaction_area(&self, area, state)`.
-- `BrowserEventError` and `Event`'s `TryFrom<ClipboardEvent>` are removed; use
-  `runtime::BrowserPasteListener`.
-- `Ratcn::has_rendered` is removed: `handle_event` already returns `Ignored`
-  before the first render, which is the answer a host needs.
-- `Cycle::width()` and its measured size include the column of padding painted
-  either side of the value, so both grow by 2.
-- `CheckboxWidget::themed` and `CycleWidget::themed` are no longer `const`.
-- `list_core::WheelHold::settle_transient` is renamed `settle_in`.
+  content paints. Paint `Clear` first to hide what is beneath. Every layer now
+  declares in screen coordinates, so paint at the layer's `ctx.area()`.
+- `DeclareCtx::defer_paint` is removed: declare a `hint` for decoration above
+  later siblings, or paint onto the buffer after `render`.
+- `Ratcn::render`/`render_into` take `FnMut`: a frame whose focus reveal scrolls
+  a viewport is declared twice. Build what the closure consumes inside it.
+- `Component`: `prepare` is removed, `scope_options` and `interaction_area`
+  receive the state, and `reveal_in_viewport` returns whether it scrolled.
+- `DeclareCtx::transient::<T>()` returns `&mut T`, like `EventCtx::transient`;
+  `transient_mut` is removed.
+- `PaintCtx::with_buffer(area, |area, buf| …)` takes the area it writes;
+  `stateful_widget` is removed.
+- `ListWidget` and `SelectWidget` take `ListRow`s that carry their own state,
+  and `TabsStyle` is two `FilledStyle`s (`style.selected.background`).
+- `Cycle::width()` includes its padding and grows by 2.
+- `Ratcn::has_rendered` and `BrowserEventError` are removed.
 
 ### Added
 
-- With the `ratzilla` feature, `runtime::BrowserPasteListener` installs the
-  document paste listener and forwards `text/plain` as `Event::Paste`.
-- `ListRow`, `list_core::{RowStyle, paint_rows}`, and
-  `button_shape::{FilledStyle, paint_filled_shape, label_style}`: the row and
-  button painters the built-in components use, for copied-out components.
+- `runtime::BrowserPasteListener` (`ratzilla` feature) forwards browser pastes
+  as `Event::Paste`.
+- `ListRow`, `list_core::paint_rows`, and `button_shape::FilledStyle` expose
+  the row and button painters for copied-out components.
 
 ### Fixed
 
-- A tab filled with `Color::Reset` leaves the surface beneath its label
-  showing, as a button does, instead of painting the terminal default.
-- `CheckboxWidget` and `CycleWidget` take colors from whichever of `themed` and
-  `style` was called last, as every other widget does; `style` no longer
-  outranks a later `themed`.
-- Focus onto a viewport-clipped target declared that same frame (startup focus,
-  an appended row) is revealed by that frame, not the next one.
-- Stored focus no longer activates or highlights content inside a hint, and a
-  pointer capture is released when its layer becomes a hint.
-- A click after a wheel notch but before the redraw hits the row still painted
-  there in List and Select.
-- Viewport clipping blanks a wide glyph cut by its edge instead of leaving it
-  over host cells.
-- Declaring many siblings and wrapping long text no longer scale quadratically.
-- A List without a `scroll` binding, and Select's panel, keep their view while
-  the cursor moves within it instead of dragging it toward the top.
-- A primary press on the empty space (or a non-focusable child) of a scope that
-  already holds focus no longer moves focus to the scope's first control.
-- A panic after a `terminal::Session` has dropped, or failed to open, no longer
-  writes mode resets to the terminal.
-- A popup without `on_dismiss` layered above one with it no longer swallows the
-  outer popup's dismissal on an outside press.
-- A viewport inside a popup or hint inside a viewport no longer panics.
-- `PaintCtx::with_buffer` inside a viewport costs what its area does, not the
-  whole scrolled content.
+- Focus onto a clipped target declared that same frame (startup focus, an
+  appended row) scrolls it into view immediately, not on the next render.
+- A List without a `scroll` binding, and Select's panel, no longer drag the view
+  when the cursor moves within it.
+- A click right after a wheel scroll hits the row still on screen.
+- Clicking the empty space of a scope that holds focus no longer moves focus.
+- A popup without `on_dismiss` no longer blocks the popup beneath it from
+  dismissing.
+- `terminal::Session` no longer writes to the terminal on a panic after it has
+  closed.
 
 ## [0.0.4] - 2026-09-26
 
