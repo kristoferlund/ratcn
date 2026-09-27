@@ -346,6 +346,10 @@ pub(crate) struct Node<State, Msg> {
     /// or on any descendant. [`Surface::takes_focus`] answers for the node
     /// alone.
     focusable: bool,
+    /// Whether focus comes to rest here: the node takes focus itself and no
+    /// descendant can. Every descent ends on one, and traversal steps
+    /// between them in declaration order.
+    focus_leaf: bool,
 }
 
 impl<State, Msg> fmt::Debug for Node<State, Msg> {
@@ -362,6 +366,7 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
             .field("layer", &self.layer)
             .field("live", &self.live)
             .field("focusable", &self.focusable)
+            .field("focus_leaf", &self.focus_leaf)
             .finish()
     }
 }
@@ -447,9 +452,12 @@ impl<State, Msg> Surface<State, Msg> {
         }
         for index in (0..self.nodes.len()).rev() {
             // So far `focusable` holds whether any child is.
-            let focusable = self.nodes[index].focusable || self.takes_focus(index);
-            self.nodes[index].focusable = focusable;
-            if let (true, Some(parent)) = (focusable, self.nodes[index].parent) {
+            let beneath = self.nodes[index].focusable;
+            let takes_focus = self.takes_focus(index);
+            let node = &mut self.nodes[index];
+            node.focusable = takes_focus || beneath;
+            node.focus_leaf = takes_focus && !beneath;
+            if let (true, Some(parent)) = (node.focusable, node.parent) {
                 self.nodes[parent].focusable = true;
             }
         }
@@ -508,12 +516,6 @@ impl<State, Msg> Surface<State, Msg> {
             && self.viewport_visibility(index) != ViewportVisibility::Hidden
     }
 
-    fn children(&self, parent: Option<usize>) -> &[usize] {
-        parent.map_or(self.roots.as_slice(), |index| {
-            self.nodes[index].children.as_slice()
-        })
-    }
-
     /// Whether this node is inside the layer that has taken the screen over,
     /// and so can still be interacted with. With no such layer open,
     /// everything can.
@@ -564,7 +566,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// used to answer it — a layer declared after another takes a higher
     /// number without being inside it.
     fn inside(&self, index: usize, root: usize) -> bool {
-        (root..self.nodes[root].subtree_end).contains(&index)
+        self.subtree(root).contains(&index)
     }
 
     /// The node `path` names, or `None` when this surface does not declare it
@@ -641,7 +643,7 @@ impl<State, Msg> Surface<State, Msg> {
     /// have hit geometry, sit inside the layer that has taken the screen over
     /// if one is open, and belong to a layer that allows focus at all.
     ///
-    /// See [`Self::focusable`] for the same question about a node *or any of
+    /// See [`Node::focusable`] for the same question about a node *or any of
     /// its descendants*.
     fn takes_focus(&self, index: usize) -> bool {
         self.present(index)
@@ -650,60 +652,42 @@ impl<State, Msg> Surface<State, Msg> {
             && self.nodes[index].options.focusable
     }
 
-    /// Whether focus can land anywhere in this subtree — on the node itself
-    /// or on any descendant. Traversal uses this to decide whether a container
-    /// is worth descending into; [`Self::takes_focus`] answers for the node
-    /// alone.
-    fn focusable(&self, index: usize) -> bool {
-        self.nodes[index].focusable
+    /// `index`'s subtree, as the index range declaration order gives it.
+    fn subtree(&self, index: usize) -> Range<usize> {
+        index..self.nodes[index].subtree_end
     }
 
-    /// The first focusable index among `candidates`, scanning declaration order
-    /// forward or reverse per `direction`.
-    fn find_focusable(&self, candidates: &[usize], direction: Step) -> Option<usize> {
-        let mut iter = candidates.iter().copied();
+    /// The first focus leaf in `range`, scanning declaration order forward or
+    /// in reverse per `direction`.
+    fn leaf_in(&self, range: Range<usize>, direction: Step) -> Option<usize> {
+        let mut leaves = range.filter(|&index| self.nodes[index].focus_leaf);
         match direction {
-            Step::Forward => iter.find(|&index| self.focusable(index)),
-            Step::Backward => iter.rfind(|&index| self.focusable(index)),
+            Step::Forward => leaves.next(),
+            Step::Backward => leaves.next_back(),
         }
     }
 
-    /// The first focusable child of `parent` in `direction`. With no parent
-    /// the candidates are the tree roots — or, while a layer has taken the
-    /// screen over, that layer's root alone, which traps Tab inside it.
-    fn edge_child(&self, parent: Option<usize>, direction: Step) -> Option<usize> {
-        match (parent, self.takeover) {
-            (Some(index), _) => self.find_focusable(&self.nodes[index].children, direction),
-            (None, Some(root)) => self.focusable(root).then_some(root),
-            (None, None) => self.find_focusable(&self.roots, direction),
-        }
+    /// The focus that lands on `leaf`.
+    fn focus_on(&self, leaf: usize) -> FocusState {
+        FocusState::intent(self.path_of(leaf).iter().cloned())
     }
 
-    fn extend_to_edge(&self, index: usize, direction: Step) -> Option<usize> {
-        match self.edge_child(Some(index), direction) {
-            Some(child) => self.extend_to_edge(child, direction),
-            None => self.takes_focus(index).then_some(index),
-        }
-    }
-
-    /// The focus path produced by descending into the first focusable child
-    /// of `parent` — the traversal roots when there is no parent. The other
-    /// primitive: an edge, with no request behind it.
-    fn edge_focus(&self, parent: Option<usize>, direction: Step) -> Option<FocusState> {
-        let index = self.edge_child(parent, direction)?;
-        self.descend_focus(index, direction)
-    }
-
-    /// The focus path produced by descending from `index` to its first
-    /// focusable leaf, seeded with the node's own ancestor prefix — correct
-    /// whether the node is a tree root or a nested layer root.
+    /// The focus path produced by descending from `index` to the first focus
+    /// leaf of its subtree in `direction`.
     ///
     /// The primitive every focus policy ends at: the path it answers with is
-    /// a leaf this surface declares, walked to here on the surface's own
-    /// terms.
+    /// a leaf this surface declares, reached on the surface's own terms.
     fn descend_focus(&self, index: usize, direction: Step) -> Option<FocusState> {
-        self.extend_to_edge(index, direction)
-            .map(|leaf| FocusState::intent(self.path_of(leaf).iter().cloned()))
+        self.leaf_in(self.subtree(index), direction)
+            .map(|leaf| self.focus_on(leaf))
+    }
+
+    /// The first focus leaf of the whole tree in `direction` — the other
+    /// primitive: an edge, with no request behind it. While a layer holds
+    /// the screen that is its edge, since nothing outside it takes focus.
+    fn edge_focus(&self, direction: Step) -> Option<FocusState> {
+        self.leaf_in(0..self.nodes.len(), direction)
+            .map(|leaf| self.focus_on(leaf))
     }
 
     /// Resolve an app-held focus path against this surface's actual structure
@@ -748,12 +732,12 @@ impl<State, Msg> Surface<State, Msg> {
             });
         }
         if stored.path().is_empty() {
-            return self.edge_focus(None, Step::Forward).unwrap_or_default();
+            return self.edge_focus(Step::Forward).unwrap_or_default();
         }
         let Some(target) = self.leaf_of(stored.path()) else {
             return stored.clone();
         };
-        self.edge_focus(Some(target), Step::Forward)
+        self.descend_focus(target, Step::Forward)
             .unwrap_or_else(|| stored.clone())
     }
 
@@ -861,79 +845,94 @@ impl<State, Msg> Surface<State, Msg> {
             && !self.path_is_prefix_of(root, focus.path())
         {
             return self
-                .edge_focus(None, direction)
+                .descend_focus(root, direction)
                 .map_or(FocusAdvance::Consumed, FocusAdvance::Move);
         }
         let matched = self.nodes_along_path(focus.path());
-        if matched.len() != focus.path().len() {
-            let parent = matched.last().copied();
-            if let Some(next) = self.edge_focus(parent, direction) {
+        let Some(&current) = matched.last() else {
+            if let Some(next) = self.edge_focus(direction) {
                 return FocusAdvance::Move(next);
             }
-            let options = parent.map_or(root_options, |index| &self.nodes[index].options);
-            if options.tab_wrap == TabWrap::Wrap {
+            // An absent path is parked in the root scope, which decides; the
+            // empty path asks for nothing.
+            let parked = !focus.path().is_empty();
+            return if parked && root_options.tab_wrap == TabWrap::Wrap {
+                FocusAdvance::Consumed
+            } else {
+                FocusAdvance::Ignored
+            };
+        };
+        if matched.len() != focus.path().len() {
+            // Parked beneath `current`: its own descendants come first, and a
+            // wrapping `current` keeps the step even when it has none.
+            let beneath = current + 1..self.nodes[current].subtree_end;
+            if let Some(leaf) = self.leaf_in(beneath, direction) {
+                return FocusAdvance::Move(self.focus_on(leaf));
+            }
+            if self.nodes[current].options.tab_wrap == TabWrap::Wrap {
                 return FocusAdvance::Consumed;
             }
-            let Some(current) = parent else {
-                return FocusAdvance::Ignored;
-            };
-            return self.next_from_scope(current, direction, root_options);
         }
-
-        let Some(current) = matched.last().copied() else {
-            return self
-                .edge_focus(None, direction)
-                .map_or(FocusAdvance::Ignored, FocusAdvance::Move);
-        };
-        self.next_from_scope(current, direction, root_options)
+        self.next_from(current, direction, root_options)
     }
 
-    /// The next focusable node after `current`, walking outwards until a
-    /// scope wraps or the root runs out.
+    /// The next focus leaf past `start`, inside the window Tab wraps in,
+    /// wrapping to the window's edge when there is none.
+    ///
+    /// The window is [`Self::wrap_window`]'s. With none, the whole tree is
+    /// scanned and a step past its last leaf escapes as `Ignored`. Stepping
+    /// backward skips `start`'s own ancestors: they precede it in declaration
+    /// order, but hold it rather than come before it.
     ///
     /// A step that lands back on the node it started from is still a
     /// `Move`; the caller compares it against the current focus.
-    fn next_from_scope(
+    fn next_from(
         &self,
-        mut current: usize,
+        start: usize,
         direction: Step,
         root_options: &ScopeOptions,
     ) -> FocusAdvance {
-        loop {
-            let parent = self.nodes[current].parent;
-            let siblings = self.children(parent);
-            let position = siblings
-                .iter()
-                .position(|&index| index == current)
-                .expect("focused node is registered under its parent");
-            let remaining = match direction {
-                Step::Forward => &siblings[position + 1..],
-                Step::Backward => &siblings[..position],
-            };
-            if let Some(next) = self.find_focusable(remaining, direction)
-                && let Some(focus) = self.descend_focus(next, direction)
-            {
-                return FocusAdvance::Move(focus);
-            }
+        let window = self.wrap_window(start, root_options);
+        let bounds = window.clone().unwrap_or(0..self.nodes.len());
+        let next = match direction {
+            Step::Forward => self.leaf_in(self.nodes[start].subtree_end..bounds.end, direction),
+            Step::Backward => (bounds.start..start).rev().find(|&index| {
+                self.nodes[index].focus_leaf && self.nodes[index].subtree_end <= start
+            }),
+        };
+        match (next, window) {
+            (Some(leaf), _) => FocusAdvance::Move(self.focus_on(leaf)),
+            (None, Some(window)) => self
+                .leaf_in(window, direction)
+                .map_or(FocusAdvance::Consumed, |leaf| {
+                    FocusAdvance::Move(self.focus_on(leaf))
+                }),
+            (None, None) => FocusAdvance::Ignored,
+        }
+    }
 
-            // The root of a layer holding the screen traps Tab regardless of
-            // where it sits in the tree; otherwise the enclosing scope decides.
-            let tab_wrap = if self.takeover == Some(current) {
-                TabWrap::Wrap
-            } else {
-                parent.map_or(root_options.tab_wrap, |index| {
-                    self.nodes[index].options.tab_wrap
-                })
-            };
-            if tab_wrap == TabWrap::Wrap {
-                return self
-                    .edge_focus(parent, direction)
-                    .map_or(FocusAdvance::Consumed, FocusAdvance::Move);
+    /// The nodes Tab wraps within from `start`, walking outwards: the
+    /// descendants of the innermost enclosing scope that wraps, the whole
+    /// tree when only the root options do, and `None` when nothing does.
+    ///
+    /// The root of a layer holding the screen traps Tab regardless of where
+    /// it sits in the tree, so reaching it closes the window over its own
+    /// subtree before any scope above it is asked.
+    fn wrap_window(&self, start: usize, root_options: &ScopeOptions) -> Option<Range<usize>> {
+        let mut current = start;
+        loop {
+            if self.takeover == Some(current) {
+                return Some(self.subtree(current));
             }
-            let Some(parent) = parent else {
-                return FocusAdvance::Ignored;
-            };
-            current = parent;
+            match self.nodes[current].parent {
+                Some(parent) if self.nodes[parent].options.tab_wrap == TabWrap::Wrap => {
+                    return Some(parent + 1..self.nodes[parent].subtree_end);
+                }
+                Some(parent) => current = parent,
+                None => {
+                    return (root_options.tab_wrap == TabWrap::Wrap).then_some(0..self.nodes.len());
+                }
+            }
         }
     }
 }
@@ -1317,6 +1316,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             layer,
             live: false,
             focusable: false,
+            focus_leaf: false,
         });
         if let Some(parent) = parent {
             self.surface.nodes[parent].children.push(index);
@@ -2753,7 +2753,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             .iter()
             .rev()
             .copied()
-            .find(|&index| self.surface.focusable(index))?;
+            .find(|&index| self.surface.nodes[index].focusable)?;
 
         let current = self.surface.resolve_focus(self.stored_focus(state));
         if self.surface.leaf_of(current.path()) != Some(target)
