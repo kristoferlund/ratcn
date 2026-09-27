@@ -29,6 +29,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Declaring many siblings and wrapping long text no longer scale quadratically.
 - A List without a `scroll` binding, and Select's panel, keep their view while
   the cursor moves within it instead of dragging it toward the top.
+- A primary press on the empty space (or a non-focusable child) of a scope that
+  already holds focus no longer moves focus to the scope's first control.
 
 ## [0.0.4] - 2026-09-26
 

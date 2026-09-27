@@ -1190,6 +1190,71 @@ fn area_scope_hit_prefers_descendant_then_falls_back_to_scope() {
     );
 }
 
+/// A press on a pane's dead space, or on something in it that takes no
+/// focus, leaves focus where it is when the pane already holds it: the user
+/// clicked the pane they are in, not its first control. A pane that does not
+/// hold focus still hands it to its first control.
+#[test]
+fn a_press_inside_the_scope_holding_focus_leaves_focus_alone() {
+    let mut state = FocusTestState {
+        focus: FocusState::intent([ChildId::Static("pane"), ChildId::Static("b")]),
+    };
+    let mut driver = focus_driver(20, 2);
+    let render = |driver: &mut Driver<FocusTestState, FocusTestMsg>, state: &FocusTestState| {
+        driver.render(state, |ctx| {
+            ctx.scope(
+                ChildId::Static("pane"),
+                Rect::new(0, 0, 16, 2),
+                ScopeOptions::default(),
+                |ctx| {
+                    ctx.component(
+                        ChildId::Static("a"),
+                        FocusLeaf::enabled(),
+                        Rect::new(0, 0, 3, 1),
+                    );
+                    ctx.component(
+                        ChildId::Static("b"),
+                        FocusLeaf::enabled(),
+                        Rect::new(4, 0, 3, 1),
+                    );
+                    ctx.component(
+                        ChildId::Static("label"),
+                        FocusLeaf::disabled(),
+                        Rect::new(8, 0, 3, 1),
+                    );
+                },
+            );
+            ctx.component(
+                ChildId::Static("other"),
+                FocusLeaf::enabled(),
+                Rect::new(17, 0, 3, 1),
+            );
+        });
+    };
+    render(&mut driver, &state);
+
+    for (x, what) in [(13, "dead space"), (9, "a non-focusable child")] {
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), x, 1), &state),
+            EventResult::Consumed,
+            "a press on the focused pane's {what} keeps focus on b"
+        );
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), x, 1), &state);
+        assert!(!driver.ratcn.reveal_pending, "and asks nothing to scroll");
+    }
+
+    state.focus = FocusState::intent([ChildId::Static("other")]);
+    render(&mut driver, &state);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 13, 1), &state),
+        EventResult::Emit(FocusTestMsg::Focus(FocusState::intent([
+            ChildId::Static("pane"),
+            ChildId::Static("a"),
+        ]))),
+        "a pane without focus still hands it to its first control"
+    );
+}
+
 #[test]
 fn raw_button_press_focuses_then_synthesized_click_emits() {
     let mut state = ButtonTimingState {

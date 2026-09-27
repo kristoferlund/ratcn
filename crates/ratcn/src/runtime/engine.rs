@@ -3024,6 +3024,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// it, or `None` when this event is not one or nothing along the chain can
     /// take focus. The search runs over the bubble chain rather than the
     /// whole surface, which keeps focus-on-press inside the hit layer.
+    ///
+    /// A press that lands in a scope already holding focus — its dead space,
+    /// or a child that takes none — is consumed and leaves focus alone, with
+    /// no reveal: the user pressed the pane they are in, not its first
+    /// control, and nothing asked to be scrolled into view.
     fn focus_on_press(
         &mut self,
         chain: &[usize],
@@ -3039,10 +3044,15 @@ impl<State, Msg> Ratcn<State, Msg> {
             .copied()
             .find(|&index| self.surface.focusable(index))?;
 
+        let current = self.surface.resolve_focus(self.stored_focus(state));
+        if self.surface.leaf_of(current.path()) != Some(target)
+            && self.surface.path_is_prefix_of(target, current.path())
+        {
+            return Some(EventResult::Consumed);
+        }
         // Focus lands on a leaf, so a focusable container hands off to its
         // first focusable descendant.
         let focus = self.surface.descend_focus(target, Step::Forward)?;
-        let current = self.surface.resolve_focus(self.stored_focus(state));
         Some(self.focus_transition_result(focus, &current))
     }
 
