@@ -697,7 +697,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         // A dialog itself is only a useful fallback focus target when it can
         // handle its dismiss key. Descendants remain independently focusable.
         ScopeOptions::default()
@@ -705,7 +705,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
             .focusable(self.on_dismiss.is_some())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         dialog_layout(area, self.offset, &self.dims()).box_area
     }
 
@@ -833,7 +833,7 @@ mod tests {
             }
         }
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &State) -> ScopeOptions {
             ScopeOptions::default().focusable(!self.disabled)
         }
     }
@@ -1182,7 +1182,7 @@ mod tests {
         // press lands on that box's top-left border corner.
         let area = Rect::new(0, 0, 60, 10);
         let mut fixed = Dialog::<State, Msg>::new().title("Confirm");
-        let box_area = fixed.interaction_area(area);
+        let box_area = fixed.interaction_area(area, &State::default());
         assert_eq!(box_area, Rect::new(6, 3, 48, 4));
         let border = |button| mouse(MouseKind::Down(button), box_area.x, box_area.y);
         assert_eq!(
@@ -1248,16 +1248,13 @@ mod tests {
         );
     }
 
-    struct PreparedComposite {
-        resolves: Arc<AtomicUsize>,
+    struct CountedComposite {
+        declares: Arc<AtomicUsize>,
     }
 
-    impl Component<State, Msg> for PreparedComposite {
-        fn prepare(&mut self, _state: &State) {
-            self.resolves.fetch_add(1, Ordering::SeqCst);
-        }
-
+    impl Component<State, Msg> for CountedComposite {
         fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>) {
+            self.declares.fetch_add(1, Ordering::SeqCst);
             let area = ctx.area();
             ctx.component(
                 ChildId::Static("inner"),
@@ -1266,15 +1263,15 @@ mod tests {
             );
         }
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &State) -> ScopeOptions {
             ScopeOptions::default()
         }
     }
 
     #[test]
     fn dialog_declares_composite_child_once_and_routes_to_its_descendant() {
-        let resolves = Arc::new(AtomicUsize::new(0));
-        let child_resolves = Arc::clone(&resolves);
+        let declares = Arc::new(AtomicUsize::new(0));
+        let child_declares = Arc::clone(&declares);
         let state = State {
             focus: FocusState::intent([
                 ChildId::Static("dialog"),
@@ -1286,15 +1283,15 @@ mod tests {
         let mut driver = driver(30, 8);
         let area = driver.area();
         driver.render(&state, |ctx| {
-            let child_resolves = Arc::clone(&child_resolves);
+            let child_declares = Arc::clone(&child_declares);
             ctx.modal(
                 ChildId::Static("dialog"),
                 Dialog::new().footer(1, move |ctx| {
                     let area = ctx.area();
                     ctx.component(
                         ChildId::Static("composite"),
-                        PreparedComposite {
-                            resolves: Arc::clone(&child_resolves),
+                        CountedComposite {
+                            declares: Arc::clone(&child_declares),
                         },
                         area,
                     );
@@ -1305,7 +1302,7 @@ mod tests {
 
         // Once: the frame declares once, so a body closure hands its child
         // over exactly one time.
-        assert_eq!(resolves.load(Ordering::SeqCst), 1);
+        assert_eq!(declares.load(Ordering::SeqCst), 1);
         assert_eq!(
             driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(Msg::Activated)
@@ -1317,7 +1314,7 @@ mod tests {
     impl Component<State, Msg> for OptionFocusable {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &State) -> ScopeOptions {
             ScopeOptions::default().focusable(true)
         }
 

@@ -223,11 +223,6 @@ pub struct Cycle<S, M> {
     style: Option<StyleFn>,
     /// Which edge of the declared area the value hugs.
     align: Alignment,
-    /// The bound selection, resolved and clamped once per declaration.
-    resolved_selected: usize,
-    /// The columns the current option paints — the Cycle is as wide as the
-    /// value it shows, no wider.
-    resolved_width: u16,
 }
 
 impl<S, M> fmt::Debug for Cycle<S, M> {
@@ -251,8 +246,6 @@ impl<S, M> Cycle<S, M> {
             disabled: false,
             style: None,
             align: Alignment::Left,
-            resolved_selected: 0,
-            resolved_width: 0,
         }
     }
 
@@ -318,9 +311,11 @@ impl<S, M> Cycle<S, M> {
 
     /// The rect the current value paints in and answers events in: one column
     /// of the List-derived field surrounds either side of the value, hugging
-    /// the [`align`](Self::align) edge of the declared area.
-    fn value_area(&self, area: Rect) -> Rect {
-        let width = self.resolved_width.saturating_add(2).min(area.width);
+    /// the [`align`](Self::align) edge of the declared area. The Cycle is as
+    /// wide as the value it shows, no wider.
+    fn value_area(&self, area: Rect, state: &S) -> Rect {
+        let value = self.current(state).map_or(0, text_width::display_width_u16);
+        let width = value.saturating_add(2).min(area.width);
         let x = self.aligned_x(area, width);
         crate::geometry::fixed_height(Rect { x, width, ..area }, 1)
     }
@@ -338,6 +333,14 @@ impl<S, M> Cycle<S, M> {
             .as_ref()
             .map_or(0, |(read, _)| read(state))
             .min(self.options.len().saturating_sub(1))
+    }
+
+    /// The option shown: the clamped selection, so this is `None` only with
+    /// no options at all.
+    fn current(&self, state: &S) -> Option<&str> {
+        self.options
+            .get(self.selected_index(state))
+            .map(String::as_str)
     }
 
     /// Advance one option. Forward past the end wraps to the first; backward
@@ -376,23 +379,14 @@ impl<S, M> Cycle<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
-    fn prepare(&mut self, state: &S) {
-        self.resolved_selected = self.selected_index(state);
-        self.resolved_width = self
-            .options
-            .get(self.resolved_selected)
-            .map_or(0, |option| text_width::display_width_u16(option));
-    }
-
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {
         // Everything a Cycle is lives on its own node: the paint below and
         // the events answered here. There is nothing to declare inside it.
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
-        // `prepare` clamped the selection, so this is `None` only with no
-        // options at all — nothing to show, nothing to paint.
-        let Some(value) = self.options.get(self.resolved_selected) else {
+        // With no options at all there is nothing to show, nothing to paint.
+        let Some(value) = self.current(ctx.state()) else {
             return;
         };
         let style = resolve_style(self.style.as_deref(), ctx.theme, CycleStyle::from_theme);
@@ -401,7 +395,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
             .hovered(ctx.hovered())
             .disabled(self.disabled)
             .style(style);
-        ctx.widget(widget, self.value_area(ctx.area()));
+        ctx.widget(widget, self.value_area(ctx.area(), ctx.state()));
     }
 
     fn handle_event(
@@ -423,12 +417,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(self.can_act())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
-        self.value_area(area)
+    fn interaction_area(&self, area: Rect, state: &S) -> Rect {
+        self.value_area(area, state)
     }
 }
 
@@ -767,7 +761,7 @@ mod tests {
     /// never shifts as the value cycles.
     #[test]
     fn the_component_measures_its_widest_option_with_its_padding() {
-        let mut cycle: Cycle<State, Msg> =
+        let cycle: Cycle<State, Msg> =
             Cycle::new(SIZES).selection(|state: &State| state.size, Msg::Size);
         assert_eq!(
             cycle.width(),
@@ -776,13 +770,13 @@ mod tests {
         );
         assert_eq!(cycle.measure(), Size::new(8, 1));
 
-        cycle.prepare(&State {
+        let medium = State {
             size: 1,
             ..State::default()
-        });
+        };
         let measured = Rect::new(0, 0, cycle.measure().width, 1);
         assert_eq!(
-            cycle.value_area(measured),
+            cycle.value_area(measured, &medium),
             measured,
             "the widest value paints its padding within the measured area"
         );
@@ -790,16 +784,16 @@ mod tests {
 
     #[test]
     fn a_cycle_pads_its_current_value_by_one_column_on_each_side() {
-        let mut cycle: Cycle<State, Msg> = Cycle::new(SIZES)
+        let cycle: Cycle<State, Msg> = Cycle::new(SIZES)
             .selection(|state: &State| state.size, Msg::Size)
             .align(Alignment::Right);
-        cycle.prepare(&State {
+        let medium = State {
             size: 1,
             ..State::default()
-        });
+        };
 
         assert_eq!(
-            cycle.value_area(Rect::new(2, 2, 20, 1)),
+            cycle.value_area(Rect::new(2, 2, 20, 1), &medium),
             Rect::new(14, 2, 8, 1),
             "a six-column value receives one visible field column on either side"
         );

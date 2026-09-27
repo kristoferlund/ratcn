@@ -17,7 +17,7 @@ fn failed_declaration_discards_staged_transient_settlement() {
                 );
             }
         }
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &()) -> ScopeOptions {
             ScopeOptions::default().focusable(true)
         }
         fn handle_event(&mut self, _: &Event, (): &(), ctx: &mut EventCtx<'_>) -> EventResult<u32> {
@@ -68,7 +68,7 @@ fn repeated_settlement_in_one_declaration_accumulates() {
                 *ctx.transient_mut::<u32>() += 1;
             }
         }
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &()) -> ScopeOptions {
             ScopeOptions::default().focusable(true)
         }
         fn handle_event(&mut self, _: &Event, (): &(), ctx: &mut EventCtx<'_>) -> EventResult<u32> {
@@ -98,7 +98,7 @@ impl Component<u8, ()> for ContextProbe {
         assert_eq!(*ctx.state(), 7);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &u8) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -111,7 +111,7 @@ impl Component<(), ()> for Composite {
         ctx.component(ChildId::Static("leaf"), Leaf, area);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &()) -> ScopeOptions {
         ScopeOptions::default().tab_wrap(TabWrap::Wrap)
     }
 }
@@ -129,19 +129,9 @@ struct PanickingScopeOptions;
 impl Component<(), ()> for PanickingScopeOptions {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &()) -> ScopeOptions {
         panic!("scope options failed");
     }
-}
-
-struct PanickingPrepare;
-
-impl Component<(), ()> for PanickingPrepare {
-    fn prepare(&mut self, _state: &()) {
-        panic!("prepare failed");
-    }
-
-    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 }
 
 struct PanickingInteractionArea;
@@ -149,7 +139,7 @@ struct PanickingInteractionArea;
 impl Component<(), ()> for PanickingInteractionArea {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
-    fn interaction_area(&self, _area: Rect) -> Rect {
+    fn interaction_area(&self, _area: Rect, _state: &()) -> Rect {
         panic!("interaction area failed");
     }
 }
@@ -159,7 +149,7 @@ struct EscapingInteractionArea;
 impl Component<(), ()> for EscapingInteractionArea {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &()) -> Rect {
         Rect::new(area.x, area.y, area.width.saturating_add(1), area.height)
     }
 }
@@ -196,7 +186,7 @@ impl Component<FocusTestState, FocusTestMsg> for PathProbe {
         record_declared_path(ctx, &self.0);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -231,11 +221,11 @@ impl Component<FocusTestState, FocusTestMsg> for AreaAwareComposite {
         ctx.component(ChildId::Static("child"), FocusLeaf::enabled(), ctx.area());
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default()
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &FocusTestState) -> Rect {
         assert_eq!(area, self.expected_area);
         if area.width >= self.minimum_width {
             area
@@ -515,12 +505,6 @@ fn a_failed_declaration_pass_leaves_the_previous_surface_in_place() {
             }));
             assert!(caught.is_err());
         }),
-        ("Component::prepare, caught", |ctx, area| {
-            let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.component(ChildId::Static("panicking-prepare"), PanickingPrepare, area);
-            }));
-            assert!(caught.is_err());
-        }),
         ("Component::scope_options, caught", |ctx, area| {
             let caught = catch_unwind(AssertUnwindSafe(|| {
                 ctx.component(
@@ -644,27 +628,21 @@ fn a_paint_panic_does_not_replace_the_previous_surface() {
     );
 }
 
-/// Declared closed, prepared open: every pre-render answer reports what
-/// `prepare` computed, never the value the builder was constructed with.
-struct PreparedClaims {
-    open: bool,
-}
+/// Open or closed only in app state: every pre-render answer reads the state
+/// the component is declared with, which is the only place `open` lives.
+struct StateClaims;
 
-impl Component<bool, ()> for PreparedClaims {
-    fn prepare(&mut self, state: &bool) {
-        self.open = *state;
-    }
-
+impl Component<bool, ()> for StateClaims {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, bool, ()>) {}
 
-    fn scope_options(&self) -> ScopeOptions {
-        ScopeOptions::default().focusable(self.open)
+    fn scope_options(&self, open: &bool) -> ScopeOptions {
+        ScopeOptions::default().focusable(*open)
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
-        // Non-empty when closed, so an unprepared area suppresses only the
+    fn interaction_area(&self, area: Rect, open: &bool) -> Rect {
+        // Non-empty when closed, so a wrong answer here fails only the
         // hit-test assertion below and not the focus claim as well.
-        if self.open {
+        if *open {
             area
         } else {
             Rect::new(area.x, area.y, 1, 1)
@@ -682,15 +660,11 @@ impl Component<bool, ()> for PreparedClaims {
 }
 
 #[test]
-fn prepare_runs_before_every_pre_render_answer_is_read() {
+fn every_pre_render_answer_reads_the_declared_state() {
     let mut driver = Driver::<bool, ()>::new(8, 2);
     let area = Rect::new(0, 0, 8, 2);
     driver.render(&true, |ctx| {
-        ctx.component(
-            ChildId::Static("claims"),
-            PreparedClaims { open: false },
-            area,
-        );
+        ctx.component(ChildId::Static("claims"), StateClaims, area);
     });
 
     assert!(
@@ -698,12 +672,12 @@ fn prepare_runs_before_every_pre_render_answer_is_read() {
             .ratcn
             .focus_path(&[ChildId::Static("claims")])
             .is_some(),
-        "scope_options was read after prepare"
+        "scope_options read the declared state"
     );
     assert_eq!(
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 1), &true),
         EventResult::Emit(()),
-        "interaction_area was read after prepare, so the whole area hit-tests"
+        "interaction_area read the declared state, so the whole area hit-tests"
     );
 }
 

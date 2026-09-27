@@ -1338,10 +1338,9 @@ impl<State, Msg> RenderPass<State, Msg> {
             // Every claim the runtime needs before descendants exist is read
             // here, in this order: focus for the whole frame is decided in one
             // pass, so none of it may depend on what painting produces.
-            component.prepare(state);
-            let options = component.scope_options();
+            let options = component.scope_options(state);
             let area = env.area;
-            let interaction_area = component.interaction_area(area);
+            let interaction_area = component.interaction_area(area, state);
             assert!(
                 interaction_area.width == 0
                     || interaction_area.height == 0

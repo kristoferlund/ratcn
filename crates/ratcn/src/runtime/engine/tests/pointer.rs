@@ -40,7 +40,7 @@ impl Component<FocusTestState, FocusTestMsg> for DownFocusLeaf {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }

@@ -37,6 +37,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `TabsStyle` is two `button_shape::FilledStyle`s, `selected` and
   `unselected`: `style.selected_background` becomes `style.selected.background`,
   `style.background` becomes `style.unselected.background`, and so on.
+- `Component::prepare` is removed. `scope_options` and `interaction_area`
+  receive the state the component is declared with:
+  `scope_options(&self, state)`, `interaction_area(&self, area, state)`.
 
 ### Fixed
 

@@ -20,15 +20,13 @@ it never uses.
 ## The trait
 
 ```rust
-// A frame reaches the first five in this order. `handle_event` runs on the
+// A frame reaches the first four in this order. `handle_event` runs on the
 // retained instance between frames, and `reveal_in_viewport` opens the frame
 // that answers a focus move.
 impl Component<AppState, Msg> for MyComponent {
-    fn prepare(&mut self, state: &AppState) { ... }
+    fn scope_options(&self, state: &AppState) -> ScopeOptions { ... }
 
-    fn scope_options(&self) -> ScopeOptions { ... }
-
-    fn interaction_area(&self, area: Rect) -> Rect { ... }
+    fn interaction_area(&self, area: Rect, state: &AppState) -> Rect { ... }
 
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, AppState, Msg>) { ... }
 
@@ -65,12 +63,10 @@ therefore not depend on those flags.
 
 Every method except `declare` has a default:
 
-- [`prepare`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.prepare)
-  runs once per declaration, before `scope_options` and `interaction_area`
-  are read, so both can answer from state it pins.
 - [`scope_options`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.scope_options)
   carries the focus claim: `ScopeOptions::default().focusable(true)` is how a
-  component takes part in Tab traversal. The same options shape a composite's
+  component takes part in Tab traversal. It and `interaction_area` receive the
+  state the component is declared with. The same options shape a composite's
   scope (below).
 - [`interaction_area`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.interaction_area)
   returns the supplied paint area; override it when the interactive pixels
@@ -251,7 +247,6 @@ what you can use too.
 - Everything that paints: `paint`, styled from its interaction flags.
 - Interactive geometry within the paint area: express it with `interaction_area`.
 - Gesture mechanics that outlive the instance: `ctx.transient`.
-- The focus claim in `scope_options` answers from the props alone, and
-  reflects the same condition that makes events ignored. Settle anything
-  state-dependent in `prepare`.
+- The focus claim in `scope_options` reflects the same condition that makes
+  events ignored, read from the props and the declared state it receives.
 - One `Emit` per event; `Ignored` only when a parent should get a chance.

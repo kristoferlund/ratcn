@@ -85,7 +85,7 @@ impl Component<ModalTestState, ModalTestMsg> for ModalRoute {
         EventResult::Emit(ModalTestMsg::Routed(self.0))
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &ModalTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -112,7 +112,7 @@ impl Component<ModalTestState, ModalTestMsg> for ModalFocusRoute {
         EventResult::Emit(ModalTestMsg::Routed("dialog"))
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &ModalTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -125,7 +125,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusModal {
         ctx.component(ChildId::Static("leaf"), FocusLeaf::enabled(), area);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().tab_wrap(TabWrap::Wrap)
     }
 }
@@ -139,7 +139,7 @@ impl Component<FocusTestState, FocusTestMsg> for EscapeFocusModal {
         ctx.component(ChildId::Static("second"), FocusLeaf::enabled(), area);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().tab_wrap(TabWrap::Escape)
     }
 }
@@ -166,7 +166,7 @@ impl Component<FocusTestState, FocusTestMsg> for RecordingFocusModal {
         );
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default()
     }
 }
@@ -720,7 +720,7 @@ impl Component<ModalTestState, ModalTestMsg> for ModalFocusLeaf {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &ModalTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }

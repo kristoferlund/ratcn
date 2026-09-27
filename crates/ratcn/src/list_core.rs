@@ -655,8 +655,8 @@ pub fn disabled_at<T>(items: &[ListItem<T>], index: usize) -> bool {
 
 /// Panic if two of the given item values are equal.
 ///
-/// Call it from a component's declaration-time validation (`prepare`) with an
-/// iterator over the identifying values — e.g. `items.iter().map(ListItem::value)`
+/// Call it from a component's `declare` with an iterator over the identifying
+/// values — e.g. `items.iter().map(ListItem::value)`
 /// for [`ListItem`]s, or the equivalent for any other value-keyed item type.
 /// Duplicate values make focus, selection, and pointer actions ambiguous — two
 /// rows answer to the same identity — so declaration panics. `component` names
@@ -1036,7 +1036,6 @@ mod tests {
             .open(|(): &()| true, Msg::Opened)
             .item_focus(|(): &()| Some('a'), Msg::Focused)
             .selection(|(): &()| None, Msg::Selected);
-        select.prepare(&state);
         let mut tabs = Tabs::new(items())
             .item_focus(|(): &()| Some('a'), Msg::Focused)
             .selection(|(): &()| None, Msg::Selected);

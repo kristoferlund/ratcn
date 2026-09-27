@@ -53,7 +53,7 @@ impl Component<State, Msg> for Probe {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &State) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }

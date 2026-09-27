@@ -872,8 +872,8 @@ impl<'a, State> PaintCtx<'a, State> {
 /// The runtime reads these from [`Component::scope_options`] *before* the
 /// component declares, because it must know the shape of the scope before
 /// descendants are declared into it. They therefore cannot depend on anything
-/// computed during paint — use [`Component::prepare`] if a claim depends on
-/// app state.
+/// computed during paint; a claim that depends on app state reads the state
+/// the component is declared with, which the runtime passes in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScopeOptions {
     pub(crate) tab_wrap: TabWrap,
@@ -899,11 +899,11 @@ impl ScopeOptions {
     ///
     /// An interactive leaf answers from the props it was declared with, so a
     /// disabled button says `false`; anything that has to be derived from app
-    /// state is settled in [`Component::prepare`] first. A container asks for
-    /// it when it is a Tab stop in its own right — a scrollable pane with
-    /// nothing focusable inside it, for instance. Focus still prefers a
-    /// focusable descendant when there is one, so this only makes the scope a
-    /// target when there isn't.
+    /// state reads the state [`Component::scope_options`] receives. A
+    /// container asks for it when it is a Tab stop in its own right — a
+    /// scrollable pane with nothing focusable inside it, for instance. Focus
+    /// still prefers a focusable descendant when there is one, so this only
+    /// makes the scope a target when there isn't.
     ///
     /// The runtime also requires a non-empty
     /// [`Component::interaction_area`]; a zero-area declaration never
@@ -1289,52 +1289,33 @@ pub enum Step {
 ///
 /// # What happens each frame
 ///
-/// 1. [`prepare`](Self::prepare) — pin what the steps below read out of app
-///    state.
-/// 2. [`scope_options`](Self::scope_options) — read *before* any painting,
+/// 1. [`scope_options`](Self::scope_options) — read *before* any painting,
 ///    because focus for the whole frame is decided in one pass.
-/// 3. [`interaction_area`](Self::interaction_area) — derive the geometry used
+/// 2. [`interaction_area`](Self::interaction_area) — derive the geometry used
 ///    for focus, hit-testing, and events from the final paint area.
-/// 4. [`declare`](Self::declare) — lay out, and declare descendants if any.
-/// 5. [`paint`](Self::paint) — draw, once the whole tree has been declared
+/// 3. [`declare`](Self::declare) — lay out, and declare descendants if any.
+/// 4. [`paint`](Self::paint) — draw, once the whole tree has been declared
 ///    and focus has resolved.
+///
+/// The first two receive the app state the component is declared with, so a
+/// claim that depends on app state reads it there rather than from a copy
+/// pinned on the instance.
 ///
 /// The instances from the last successful pass are then retained, and those are
 /// the instances [`handle_event`](Self::handle_event) is called on afterwards —
 /// possibly against app state newer than the one they were declared with.
 pub trait Component<State, Msg> {
-    /// Prepare this component from the state it is being declared with.
-    ///
-    /// The runtime runs this once per declaration, before it reads either of
-    /// [`scope_options`](Component::scope_options) or
-    /// [`interaction_area`](Component::interaction_area) — so a component may
-    /// answer both from state computed here.
-    ///
-    /// That is what the hook is for: pinning declaration-time state once,
-    /// rather than deriving it again in every answer.
-    /// [`Select`](crate::Select) resolves here whether it is open. It is also
-    /// where the built-ins fail loud on a malformed declaration —
-    /// [`List`](crate::List), [`Select`](crate::Select), and
-    /// [`Tabs`](crate::Tabs) assert their item values are unique — so the
-    /// panic names the declaring component rather than surfacing later as a
-    /// routing oddity. Put a check whose answer changes only with the props
-    /// behind `cfg!(debug_assertions)`: every frame declares a fresh instance,
-    /// so every frame runs this hook.
-    ///
-    /// Leaf components take their props as plain values at declaration and can
-    /// ignore it.
-    fn prepare(&mut self, _state: &State) {}
-
     /// The scope this component opens around its descendants. Read once, before
-    /// [`declare`](Component::declare), so it cannot depend on paint.
-    fn scope_options(&self) -> ScopeOptions {
+    /// [`declare`](Component::declare), so it cannot depend on paint; `state`
+    /// is the app state this component is being declared with.
+    fn scope_options(&self, _state: &State) -> ScopeOptions {
         ScopeOptions::default()
     }
 
     /// Return the area used for focus, hit-testing, and event routing.
     ///
     /// The runtime calls this once with the final area passed to
-    /// [`DeclareCtx::component`], after [`prepare`](Self::prepare) and
+    /// [`DeclareCtx::component`], and the app state it is being declared with,
     /// before [`declare`](Self::declare). Painting still receives the original
     /// area. Returning an area with zero width or height keeps the component's
     /// identity and still calls `declare`, but excludes its whole subtree from
@@ -1351,7 +1332,7 @@ pub trait Component<State, Msg> {
     /// [`Ratcn::render`](super::Ratcn::render) panics if this returns a non-empty
     /// area that is not fully contained in `area`. The failed pass does not
     /// replace the previous retained surface.
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &State) -> Rect {
         area
     }
 

@@ -183,7 +183,7 @@ fn a_hint_layer_is_inert_to_the_pointer_and_to_focus() {
     impl Component<PointerState, PointerMsg> for FocusableLeaf {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &PointerState) -> ScopeOptions {
             ScopeOptions::default().focusable(true)
         }
     }

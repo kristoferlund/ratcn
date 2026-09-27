@@ -126,7 +126,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusComposite {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default()
     }
 }
@@ -145,7 +145,7 @@ impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
             .push((ctx.focused(), ctx.contains_focus()));
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(self.focusable)
     }
 }
@@ -1000,7 +1000,7 @@ impl Component<FocusTestState, FocusTestMsg> for HoverFocusComposite {
         ctx.component(ChildId::Static("leaf"), FocusLeaf::enabled(), area);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default()
     }
 }
@@ -1069,7 +1069,7 @@ impl Component<FocusTestState, FocusTestMsg> for ThunkProbe {
         });
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }

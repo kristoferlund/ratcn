@@ -714,11 +714,11 @@ impl<S, M> Component<S, M> for Button<M> {
         EventResult::Emit(on_press())
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(!self.disabled && self.on_press.is_some())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         fixed_height(area, self.size.height())
     }
 }
@@ -797,7 +797,7 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
 
-        assert!(!Component::<(), ()>::scope_options(&button).focusable);
+        assert!(!Component::<(), ()>::scope_options(&button, &()).focusable);
         for event in [
             Event::Key(crate::runtime::KeyEvent::new(KeyCode::Enter)),
             Event::Key(crate::runtime::KeyEvent::new(KeyCode::Char(' '))),
@@ -1137,19 +1137,19 @@ mod tests {
         let large = Button::<()>::new("OK").size(ButtonSize::Large);
 
         assert_eq!(
-            Component::<(), ()>::interaction_area(&small, Rect::new(2, 3, 1, 4)),
+            Component::<(), ()>::interaction_area(&small, Rect::new(2, 3, 1, 4), &()),
             Rect::new(2, 3, 1, 1)
         );
         assert_eq!(
-            Component::<(), ()>::interaction_area(&large, Rect::new(0, 0, 4, 2)),
+            Component::<(), ()>::interaction_area(&large, Rect::new(0, 0, 4, 2), &()),
             Rect::default()
         );
         assert_eq!(
-            Component::<(), ()>::interaction_area(&large, Rect::new(0, 0, 0, 3)),
+            Component::<(), ()>::interaction_area(&large, Rect::new(0, 0, 0, 3), &()),
             Rect::default()
         );
         assert_eq!(
-            Component::<(), ()>::interaction_area(&large, Rect::new(2, 3, 1, 5)),
+            Component::<(), ()>::interaction_area(&large, Rect::new(2, 3, 1, 5), &()),
             Rect::new(2, 3, 1, 3)
         );
     }

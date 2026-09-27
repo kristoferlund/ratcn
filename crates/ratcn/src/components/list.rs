@@ -747,7 +747,7 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
 }
 
 impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
-    fn prepare(&mut self, _state: &S) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         // Quadratic in the item count and re-derived on every frame's fresh
         // instance, so a release build takes the items on trust.
         if cfg!(debug_assertions) {
@@ -757,9 +757,6 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
             !(self.selected.is_some() && self.selected_many.is_some()),
             "List::selection(...) and List::multi_selection(...) cannot be used together; choose one selection mode"
         );
-    }
-
-    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let area = ctx.area();
         let state = ctx.state();
         let focused_item = self.focused_index(state);
@@ -893,7 +890,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(
             self.focused_item.is_some()
                 && !self.disabled

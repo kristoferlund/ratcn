@@ -714,15 +714,12 @@ impl<T, S, M> Component<S, M> for Tabs<T, S, M>
 where
     T: Clone + PartialEq,
 {
-    fn prepare(&mut self, _state: &S) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         // Quadratic in the tab count and re-derived on every frame's fresh
         // instance, so a release build takes the tabs on trust.
         if cfg!(debug_assertions) {
             list_core::assert_unique_values(self.items.iter().map(Tab::value), "Tabs");
         }
-    }
-
-    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let state = ctx.state();
         let selected = self.selected_index(state);
         let cursor = self.cursor_index(state);
@@ -819,11 +816,11 @@ where
         }
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         fixed_height(area, self.height())
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(
             !self.disabled
                 && self.keyboard_enabled()
@@ -1140,7 +1137,7 @@ mod tests {
         ])
         .selection(|s: &State| Some(s.selected), Msg::Selected);
         let state = State::default();
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default(),),
             EventResult::Ignored
@@ -1153,7 +1150,7 @@ mod tests {
             .item_focus(|_: &State| Some(Screen::A), Msg::Focused);
         let state = State::default();
 
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored
@@ -1167,7 +1164,7 @@ mod tests {
                 .activation(TabsActivation::Automatic);
         let state = State::default();
 
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored
@@ -1621,7 +1618,7 @@ mod tests {
         ]);
         let state = State::default();
 
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default(),),
             EventResult::Ignored
@@ -1634,15 +1631,15 @@ mod tests {
             Tabs::new([Tab::new(Screen::A, "A")]).size(TabsSize::Large);
 
         assert_eq!(
-            tabs.interaction_area(Rect::new(0, 0, 1, 2)),
+            tabs.interaction_area(Rect::new(0, 0, 1, 2), &State::default()),
             Rect::default()
         );
         assert_eq!(
-            tabs.interaction_area(Rect::new(2, 3, 1, 5)),
+            tabs.interaction_area(Rect::new(2, 3, 1, 5), &State::default()),
             Rect::new(2, 3, 1, 3)
         );
         assert_eq!(
-            tabs.interaction_area(Rect::new(0, 0, 0, 3)),
+            tabs.interaction_area(Rect::new(0, 0, 0, 3), &State::default()),
             Rect::default()
         );
     }
@@ -2236,11 +2233,17 @@ mod tests {
     #[test]
     #[cfg(debug_assertions)]
     fn duplicate_tab_values_panic_with_the_shared_message() {
-        let mut tabs: Tabs<Screen, State, Msg> =
-            Tabs::new([Tab::new(Screen::A, "First"), Tab::new(Screen::A, "Second")]);
+        let mut driver = Driver::<State, Msg>::new(20, TabsSize::Small.height());
+        let area = driver.area();
 
         let panic = catch_unwind(AssertUnwindSafe(|| {
-            Component::prepare(&mut tabs, &State::default());
+            driver.render(&State::default(), |ctx| {
+                ctx.component(
+                    ChildId::Static("tabs"),
+                    Tabs::new([Tab::new(Screen::A, "First"), Tab::new(Screen::A, "Second")]),
+                    area,
+                );
+            });
         }))
         .expect_err("duplicate tab values must panic");
         let message = panic
@@ -2265,7 +2268,7 @@ mod tests {
         );
         let state = State::default();
 
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored

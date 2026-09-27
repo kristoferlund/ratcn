@@ -80,9 +80,8 @@ usually a sign the design should move it to the app instead. See
 
 **Naming follows a fixed vocabulary.** `render` means declare *and* paint,
 `paint` means write cells, `declare` means state that a component exists.
-`resolve` computes an effective value; `prepare` asks a component its
-declaration-time questions. Matching the surrounding code matters more than
-personal preference.
+`resolve` computes an effective value. Matching the surrounding code matters
+more than personal preference.
 
 **Component modules share one layout.** Imports, constants, variant enums, the
 style struct (`from_theme()`, a `fallback()` where the component paints without

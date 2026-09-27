@@ -364,8 +364,6 @@ pub struct Checkbox<S, M> {
     checked: Option<(ReadCheckedFn<S>, OnToggleFn<M>)>,
     disabled: bool,
     style: Option<StyleFn>,
-    /// The bound checked value, resolved once per declaration.
-    resolved_checked: bool,
 }
 
 impl<S, M> fmt::Debug for Checkbox<S, M> {
@@ -390,7 +388,6 @@ impl<S, M> Checkbox<S, M> {
             checked: None,
             disabled: false,
             style: None,
-            resolved_checked: false,
         }
     }
 
@@ -485,10 +482,6 @@ impl<S, M> Checkbox<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
-    fn prepare(&mut self, state: &S) {
-        self.resolved_checked = self.checked.as_ref().is_some_and(|(read, _)| read(state));
-    }
-
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {
         // Everything a checkbox is lives on its own node: the paint below and
         // the events answered here. There is nothing to declare inside it.
@@ -496,7 +489,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let style = resolve_style(self.style.as_deref(), ctx.theme, CheckboxStyle::from_theme);
-        let widget = CheckboxWidget::new(&self.label, self.resolved_checked)
+        let checked = self
+            .checked
+            .as_ref()
+            .is_some_and(|(read, _)| read(ctx.state()));
+        let widget = CheckboxWidget::new(&self.label, checked)
             .checked_marker(&self.checked_marker)
             .unchecked_marker(&self.unchecked_marker)
             .focused(ctx.focused())
@@ -525,11 +522,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(self.can_act())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         // A checkbox is one row tall; a taller declaration must not leave a
         // strip of itself clickable.
         crate::geometry::fixed_height(area, 1)

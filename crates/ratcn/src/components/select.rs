@@ -495,7 +495,6 @@ pub struct Select<T, S, M> {
     selected_marker: Option<String>,
     unselected_marker: Option<String>,
     style: Option<StyleFn>,
-    resolved_open: bool,
     page_size: usize,
 }
 
@@ -531,7 +530,6 @@ impl<T, S, M> Select<T, S, M> {
             selected_marker: None,
             unselected_marker: None,
             style: None,
-            resolved_open: false,
             page_size: 1,
         }
     }
@@ -726,8 +724,10 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
         )
     }
 
+    /// Whether the panel shows: a disabled Select stays closed whatever its
+    /// binding reads.
     fn is_open(&self, state: &S) -> bool {
-        self.open.as_ref().is_some_and(|(read, _)| read(state))
+        !self.disabled && self.open.as_ref().is_some_and(|(read, _)| read(state))
     }
 
     fn toggle(&self, open: bool) -> EventResult<M> {
@@ -824,17 +824,14 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
 }
 
 impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for Select<T, S, M> {
-    fn prepare(&mut self, state: &S) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         // Quadratic in the option count and re-derived on every frame's fresh
         // instance, so a release build takes the items on trust.
         if cfg!(debug_assertions) {
             list_core::assert_unique_values(self.items.iter().map(ListItem::value), "Select");
         }
-        self.resolved_open = !self.disabled && self.is_open(state);
-    }
-
-    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
-        let Some((open, on_open_change)) = self.open.as_ref().filter(|_| self.resolved_open) else {
+        let is_open = self.is_open(ctx.state());
+        let Some((open, on_open_change)) = self.open.as_ref().filter(|_| is_open) else {
             return;
         };
         let area = trigger_area(ctx.area());
@@ -891,7 +888,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         let value = selected.map(|index| self.items[index].label());
         let trigger = SelectWidget::new(value)
             .placeholder(&self.placeholder)
-            .open(self.resolved_open)
+            .open(self.is_open(state))
             .focused(ctx.focused())
             .hovered(ctx.hovered())
             .disabled(self.disabled)
@@ -919,12 +916,12 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default()
             .focusable(self.keyboard_enabled() && !self.disabled && self.has_enabled_item())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         trigger_area(area)
     }
 }
@@ -1350,7 +1347,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items());
-        component.prepare(&open);
         let key = |code, modifiers| Event::Key(KeyEvent { code, modifiers });
 
         for code in [KeyCode::Tab, KeyCode::BackTab] {
@@ -1429,7 +1425,6 @@ mod tests {
             KeyCode::Down,
         ] {
             let mut component = select(items());
-            component.prepare(&closed);
             assert_eq!(
                 component.handle_event(
                     &Event::Key(KeyEvent::new(code)),
@@ -1447,7 +1442,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items());
-        component.prepare(&open);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Esc)),
@@ -1766,7 +1760,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items);
-        component.prepare(&state);
 
         // The cursor really is on the disabled option: moving up from it
         // reaches Mango. A retargeted cursor would already be on Mango and
@@ -1805,7 +1798,6 @@ mod tests {
             .collect();
         let closed = State::default();
         let mut component = select(items);
-        component.prepare(&closed);
 
         for code in [
             KeyCode::Enter,
@@ -1862,7 +1854,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items());
-        component.prepare(&state);
 
         for code in [KeyCode::Delete, KeyCode::Backspace, KeyCode::F(5)] {
             assert_eq!(
@@ -1976,7 +1967,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items());
-        component.prepare(&closed);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Char('j'))),
@@ -2003,9 +1993,8 @@ mod tests {
         let mut component = Select::new(items())
             .open(|state: &State| state.open, Msg::Open)
             .selection(|state: &State| state.selected, Msg::Selected);
-        component.prepare(&state);
 
-        assert!(!component.scope_options().focusable);
+        assert!(!component.scope_options(&state).focusable);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Down)),
@@ -2030,9 +2019,8 @@ mod tests {
         let mut component = Select::new(items())
             .open(|state: &State| state.open, Msg::Open)
             .item_focus(|state: &State| state.cursor, Msg::Focused);
-        component.prepare(&state);
 
-        assert!(!component.scope_options().focusable);
+        assert!(!component.scope_options(&state).focusable);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Down)),
@@ -2109,8 +2097,7 @@ mod tests {
     fn a_disabled_select_is_not_focusable_and_ignores_keys() {
         let state = State::default();
         let mut disabled = select(items()).disabled(true);
-        disabled.prepare(&state);
-        assert!(!disabled.scope_options().focusable);
+        assert!(!disabled.scope_options(&state).focusable);
         assert_eq!(
             disabled.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Enter)),

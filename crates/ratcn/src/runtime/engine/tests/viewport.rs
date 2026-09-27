@@ -184,7 +184,7 @@ impl Component<State, Msg> for Leaf {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &State) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -783,7 +783,7 @@ struct RevealLeaf;
 impl Component<RevealState, RevealMsg> for RevealLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, RevealState, RevealMsg>) {}
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &RevealState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
