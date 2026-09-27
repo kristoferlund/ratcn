@@ -2695,7 +2695,9 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// A press that lands in a scope already holding focus — its dead space,
     /// or a child that takes none — is consumed and leaves focus alone, with
     /// no reveal: the user pressed the pane they are in, not its first
-    /// control, and nothing asked to be scrolled into view.
+    /// control, and nothing asked to be scrolled into view. Only a focused
+    /// leaf that takes focus holds it; a path parked anywhere else is
+    /// rescued as if the scope held none.
     fn focus_on_press(
         &mut self,
         chain: &[usize],
@@ -2712,7 +2714,14 @@ impl<State, Msg> Ratcn<State, Msg> {
             .find(|&index| self.surface.nodes[index].focusable)?;
 
         let current = self.surface.resolve_focus(self.stored_focus(state));
-        if self.surface.leaf_of(current.path()) != Some(target)
+        // Held means a leaf that really takes focus: a path parked on
+        // something that takes none, or on nothing declared, is left for the
+        // press to rescue.
+        let held = self
+            .surface
+            .leaf_of(current.path())
+            .filter(|&leaf| self.surface.takes_focus(leaf));
+        if held.is_some_and(|leaf| leaf != target)
             && self.surface.path_is_prefix_of(target, current.path())
         {
             return Some(EventResult::Consumed);

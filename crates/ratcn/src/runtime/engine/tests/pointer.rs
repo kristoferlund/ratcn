@@ -1255,6 +1255,49 @@ fn a_press_inside_the_scope_holding_focus_leaves_focus_alone() {
     );
 }
 
+/// Only focus a pane really holds keeps a press from moving it: a stored path
+/// parked on something that takes no focus, or on nothing declared, is not
+/// held, and a press in the pane still rescues it onto the first control.
+#[test]
+fn a_press_rescues_focus_parked_inside_the_pressed_scope() {
+    let mut driver = focus_driver(20, 2);
+    for parked in ["label", "ghost"] {
+        let state = FocusTestState {
+            focus: FocusState::intent([ChildId::Static("pane"), ChildId::Static(parked)]),
+        };
+        driver.render(&state, |ctx| {
+            ctx.scope(
+                ChildId::Static("pane"),
+                Rect::new(0, 0, 16, 2),
+                ScopeOptions::default(),
+                |ctx| {
+                    ctx.component(
+                        ChildId::Static("a"),
+                        FocusLeaf::enabled(),
+                        Rect::new(0, 0, 3, 1),
+                    );
+                    ctx.component(
+                        ChildId::Static("label"),
+                        FocusLeaf::disabled(),
+                        Rect::new(8, 0, 3, 1),
+                    );
+                },
+            );
+        });
+        for x in [13, 9] {
+            assert_eq!(
+                driver.event(mouse(MouseKind::Down(MouseButton::Left), x, 1), &state),
+                EventResult::Emit(FocusTestMsg::Focus(FocusState::intent([
+                    ChildId::Static("pane"),
+                    ChildId::Static("a"),
+                ]))),
+                "focus parked on {parked} is not held; the press at x={x} moves it"
+            );
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), x, 1), &state);
+        }
+    }
+}
+
 #[test]
 fn raw_button_press_focuses_then_synthesized_click_emits() {
     let mut state = ButtonTimingState {
