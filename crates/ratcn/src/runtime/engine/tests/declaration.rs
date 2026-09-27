@@ -297,9 +297,15 @@ fn composite_declaration_builds_paths_and_scope_options() {
             vec![ChildId::Static("composite"), ChildId::Static("leaf")],
         ]
     );
-    assert_eq!(driver.ratcn.surface.roots, vec![0]);
-    assert_eq!(driver.ratcn.surface.nodes[0].children, vec![1]);
-    assert_eq!(driver.ratcn.surface.nodes[1].parent, Some(0));
+    // The composite is the one root and parents the leaf it declared.
+    let parents: Vec<_> = driver
+        .ratcn
+        .surface
+        .nodes
+        .iter()
+        .map(|node| node.parent)
+        .collect();
+    assert_eq!(parents, vec![None, Some(0)]);
     assert_eq!(
         driver.ratcn.surface.nodes[0].options.tab_wrap,
         TabWrap::Wrap

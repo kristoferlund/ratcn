@@ -323,7 +323,6 @@ pub(crate) struct Node<State, Msg> {
     /// whole path, outermost first, ending in the node's own id.
     path: Range<usize>,
     parent: Option<usize>,
-    children: Vec<usize>,
     /// One past the last index of this node's subtree. Declaration order is
     /// pre-order, so the subtree is exactly `index..subtree_end`.
     subtree_end: usize,
@@ -357,7 +356,6 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
         f.debug_struct("Node")
             .field("path", &self.path)
             .field("parent", &self.parent)
-            .field("children", &self.children)
             .field("subtree_end", &self.subtree_end)
             .field("area", &self.area)
             .field("viewport", &self.viewport)
@@ -386,9 +384,8 @@ struct Layer<Msg> {
 
 pub(crate) struct Surface<State, Msg> {
     nodes: Vec<Node<State, Msg>>,
-    /// Scoped identity lookup; child vectors retain declaration order.
+    /// Scoped identity lookup: a node by its parent and its own id.
     child_index: HashMap<(Option<usize>, ChildId), usize>,
-    roots: Vec<usize>,
     /// Every layer, in declaration order, indexed by the layer number nodes
     /// carry. Nesting appends, so scanning backwards reaches the topmost
     /// first.
@@ -409,7 +406,6 @@ impl<State, Msg> Default for Surface<State, Msg> {
         Self {
             nodes: Vec::new(),
             child_index: HashMap::new(),
-            roots: Vec::new(),
             layers: Vec::new(),
             viewports: Vec::new(),
             path_ids: Vec::new(),
@@ -423,7 +419,6 @@ impl<State, Msg> fmt::Debug for Surface<State, Msg> {
         f.debug_struct("Surface")
             .field("nodes", &self.nodes.len())
             .field("child_index", &self.child_index.len())
-            .field("roots", &self.roots.len())
             .field("layers", &self.layers.len())
             .field("viewports", &self.viewports.len())
             .field("path_ids", &self.path_ids.len())
@@ -1307,7 +1302,6 @@ impl<State, Msg> RenderPass<State, Msg> {
         self.surface.nodes.push(Node {
             path,
             parent,
-            children: Vec::new(),
             subtree_end: index + 1,
             area,
             viewport,
@@ -1318,11 +1312,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             focusable: false,
             focus_leaf: false,
         });
-        if let Some(parent) = parent {
-            self.surface.nodes[parent].children.push(index);
-        } else {
-            self.surface.roots.push(index);
-        }
         index
     }
 
