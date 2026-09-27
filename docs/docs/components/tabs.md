@@ -160,11 +160,13 @@ use ratcn::TabsStyle;
 
 Tabs::new(tabs).style(|theme| {
     let mut style = TabsStyle::from_theme(theme);
-    style.selected_background = theme.accent;
+    style.selected.background = theme.accent;
     style
 })
 ```
 
+`TabsStyle` holds two `button_shape::FilledStyle`s, `selected` and
+`unselected` — the same colors `ButtonStyle` gives those variants.
 `TabsStyle::fallback()` is the no-theme starting point: plain ANSI colors that
 render on any terminal.
 

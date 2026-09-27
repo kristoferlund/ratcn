@@ -1790,29 +1790,33 @@ mod tests {
         for (label, foreground, background) in [
             (
                 "selected tab",
-                tabs.selected_foreground,
-                tabs.selected_background,
+                tabs.selected.foreground,
+                tabs.selected.background,
             ),
             (
                 "selected tab focused",
-                tabs.selected_focused_foreground,
-                tabs.selected_focused_background,
+                tabs.selected.focused_foreground,
+                tabs.selected.focused_background,
             ),
             (
                 "selected tab hovered",
-                tabs.selected_hovered_foreground,
-                tabs.selected_hovered_background,
+                tabs.selected.hovered_foreground,
+                tabs.selected.hovered_background,
             ),
-            ("tab", tabs.foreground, tabs.background),
+            (
+                "tab",
+                tabs.unselected.foreground,
+                tabs.unselected.background,
+            ),
             (
                 "tab focused",
-                tabs.focused_foreground,
-                tabs.focused_background,
+                tabs.unselected.focused_foreground,
+                tabs.unselected.focused_background,
             ),
             (
                 "tab hovered",
-                tabs.hovered_foreground,
-                tabs.hovered_background,
+                tabs.unselected.hovered_foreground,
+                tabs.unselected.hovered_background,
             ),
         ] {
             pairs.push((format!("{label} label"), foreground, background));
@@ -1964,16 +1968,16 @@ mod tests {
         check_three_fills(
             theme,
             "selected tab",
-            tabs.selected_background,
-            tabs.selected_focused_background,
-            tabs.selected_hovered_background,
+            tabs.selected.background,
+            tabs.selected.focused_background,
+            tabs.selected.hovered_background,
         );
         check_three_fills(
             theme,
             "tab",
-            tabs.background,
-            tabs.focused_background,
-            tabs.hovered_background,
+            tabs.unselected.background,
+            tabs.unselected.focused_background,
+            tabs.unselected.hovered_background,
         );
     }
 

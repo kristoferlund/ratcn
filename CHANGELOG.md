@@ -34,9 +34,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its own focused/selected/disabled flags; `first_item`, `focused_item`,
   `selected_item(s)`, `disabled_items`, `visible_item_rows`, `row_height`, and
   the markers leave both widgets. `list_core::windowed_rows` returns `ListRow`s.
+- `TabsStyle` is two `button_shape::FilledStyle`s, `selected` and
+  `unselected`: `style.selected_background` becomes `style.selected.background`,
+  `style.background` becomes `style.unselected.background`, and so on.
 
 ### Fixed
 
+- A tab filled with `Color::Reset` leaves the surface beneath its label
+  showing, as a button does, instead of painting the terminal default.
 - Focus onto a viewport-clipped target declared that same frame (startup focus,
   an appended row) is revealed by that frame, not the next one.
 - Stored focus no longer activates or highlights content inside a hint, and a

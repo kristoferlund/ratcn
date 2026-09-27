@@ -9,8 +9,8 @@ use ratatui::{
 };
 
 use crate::Theme;
-use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, shape_width};
-use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
+use crate::button_shape::{FilledStyle, paint_filled_shape, shape_width};
+use crate::color::{away_from, nearest_to};
 use crate::geometry::fixed_height;
 use crate::linear_nav::{self, Axis};
 use crate::list_core::{self, KeyIntent};
@@ -69,63 +69,29 @@ const MARKER_WIDTH: u16 = 1;
 
 /// Every color a tab row can paint.
 ///
-/// A tab is drawn as a button, so these mirror [`ButtonStyle`](crate::ButtonStyle)
-/// with one axis added: whether the tab is the selected one. The selected tab
-/// looks like a `Default` button and the rest like `Secondary` buttons, which is
-/// what makes the active tab read as the primary thing on the row.
+/// A tab is drawn as a button, so this is two sets of filled-button colors,
+/// picked by whether the tab is the selected one. The selected tab looks like
+/// a `Default` button and the rest like `Secondary` buttons, which is what
+/// makes the active tab read as the primary thing on the row.
 ///
 /// Every state gives both a label color and a fill, so a row can express focus,
 /// hover, and selection through text alone — set every `*_background` to the
 /// surface the row sits on and the tabs lose their chrome without losing their
 /// feedback.
 ///
-/// When several states apply at once, disabled wins, then hovered, then focused,
-/// then the resting colors — the same precedence [`ButtonStyle`](crate::ButtonStyle)
-/// uses. Hover beating focus is what keeps pointing at an already-focused tab
-/// visible.
+/// Within each set, disabled wins, then hovered, then focused, then the
+/// resting colors — the same precedence [`ButtonStyle`](crate::ButtonStyle)
+/// uses. A selected, disabled tab keeps the selected set's disabled colors, so
+/// it keeps its selected identity while disabledness suppresses interaction.
 ///
 /// "Focused" and "hovered" describe the tab under the cursor while the row has
 /// keyboard focus or the pointer, not the whole row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TabsStyle {
-    /// An unselected tab's label (the secondary button's foreground).
-    pub foreground: Color,
-    /// An unselected tab's fill (the secondary button's background).
-    pub background: Color,
-    /// An unselected tab's label while it is the cursor tab and the row has
-    /// keyboard focus.
-    pub focused_foreground: Color,
-    /// An unselected tab's fill while it is the cursor tab and the row has
-    /// keyboard focus (the secondary button's focus shift, away from the
-    /// background).
-    pub focused_background: Color,
-    /// An unselected tab's label while the pointer is over the row and this is
-    /// the cursor tab.
-    pub hovered_foreground: Color,
-    /// An unselected tab's fill while hovered. Wins over focus, as on buttons.
-    pub hovered_background: Color,
-    /// The selected tab's label (the default button's foreground).
-    pub selected_foreground: Color,
-    /// The selected tab's fill (the default button's background).
-    pub selected_background: Color,
-    /// The selected tab's label while focused.
-    pub selected_focused_foreground: Color,
-    /// The selected tab's fill while focused (the default button's focus
-    /// shift, toward the background's own end).
-    pub selected_focused_background: Color,
-    /// The selected tab's label while hovered.
-    pub selected_hovered_foreground: Color,
-    /// The selected tab's fill while hovered.
-    pub selected_hovered_background: Color,
-    /// A disabled tab's label.
-    pub disabled_foreground: Color,
-    /// A disabled tab's fill.
-    pub disabled_background: Color,
-    /// A selected, disabled tab's label.
-    pub selected_disabled_foreground: Color,
-    /// A selected, disabled tab's fill. This state keeps selected identity while
-    /// disabledness suppresses interaction.
-    pub selected_disabled_background: Color,
+    /// An unselected tab: the secondary button's colors.
+    pub unselected: FilledStyle,
+    /// The selected tab: the default button's colors.
+    pub selected: FilledStyle,
 }
 
 impl TabsStyle {
@@ -134,22 +100,26 @@ impl TabsStyle {
     #[must_use]
     pub const fn fallback() -> Self {
         Self {
-            foreground: Color::Gray,
-            background: Color::DarkGray,
-            focused_foreground: Color::White,
-            focused_background: Color::Gray,
-            hovered_foreground: Color::White,
-            hovered_background: Color::Gray,
-            selected_foreground: Color::Black,
-            selected_background: Color::Cyan,
-            selected_focused_foreground: Color::Black,
-            selected_focused_background: Color::Cyan,
-            selected_hovered_foreground: Color::Black,
-            selected_hovered_background: Color::LightCyan,
-            disabled_foreground: Color::DarkGray,
-            disabled_background: Color::Reset,
-            selected_disabled_foreground: Color::DarkGray,
-            selected_disabled_background: Color::Cyan,
+            unselected: FilledStyle {
+                foreground: Color::Gray,
+                background: Color::DarkGray,
+                focused_foreground: Color::White,
+                focused_background: Color::Gray,
+                hovered_foreground: Color::White,
+                hovered_background: Color::Gray,
+                disabled_foreground: Color::DarkGray,
+                disabled_background: Color::Reset,
+            },
+            selected: FilledStyle {
+                foreground: Color::Black,
+                background: Color::Cyan,
+                focused_foreground: Color::Black,
+                focused_background: Color::Cyan,
+                hovered_foreground: Color::Black,
+                hovered_background: Color::LightCyan,
+                disabled_foreground: Color::DarkGray,
+                disabled_background: Color::Cyan,
+            },
         }
     }
 
@@ -164,66 +134,41 @@ impl TabsStyle {
     /// `*_foreground` slots instead.
     #[must_use]
     pub fn from_theme(theme: &Theme) -> Self {
-        let pressed = nearest_to(theme.background);
-        let raised = away_from(theme.background);
         Self {
-            foreground: theme.secondary_foreground,
-            background: theme.secondary,
-            focused_foreground: theme.secondary_foreground,
-            focused_background: dim(theme.secondary, raised, FOCUS_SHIFT),
-            hovered_foreground: theme.secondary_foreground,
-            hovered_background: dim(theme.secondary, raised, HOVER_SHIFT),
-            selected_foreground: theme.primary_foreground,
-            selected_background: theme.primary,
-            selected_focused_foreground: theme.primary_foreground,
-            selected_focused_background: dim(theme.primary, pressed, FOCUS_SHIFT),
-            selected_hovered_foreground: theme.primary_foreground,
-            selected_hovered_background: dim(theme.primary, pressed, HOVER_SHIFT),
-            disabled_foreground: theme.muted_foreground,
-            disabled_background: dim(theme.secondary, theme.surface, DISABLED_DIM),
-            selected_disabled_foreground: theme.muted_foreground,
-            selected_disabled_background: dim(theme.primary, theme.surface, DISABLED_DIM),
+            unselected: FilledStyle::themed(
+                theme.secondary,
+                theme.secondary_foreground,
+                away_from(theme.background),
+                theme,
+            ),
+            selected: FilledStyle::themed(
+                theme.primary,
+                theme.primary_foreground,
+                nearest_to(theme.background),
+                theme,
+            ),
         }
     }
 
     /// The label color and fill (which is also the cap color) for one tab's
-    /// paint — the single place a tab's state is turned into style.
-    ///
-    /// Selection picks the family: a selected tab paints like the default
-    /// button, an unselected one like the secondary button. Within a family the
-    /// precedence matches [`ButtonStyle`](crate::ButtonStyle) — disabled first,
-    /// then hovered, then focused, then the resting colors. Hover beats focus so
-    /// that pointing at an already-focused tab still changes something.
+    /// paint: selection picks the set, and the set resolves the rest.
     #[expect(
         clippy::fn_params_excessive_bools,
         reason = "the four independent tab states; call sites read from named fields"
     )]
-    fn resolve(
+    const fn resolve(
         &self,
         selected: bool,
         focused: bool,
         hovered: bool,
         disabled: bool,
     ) -> (Color, Color) {
-        match (selected, disabled, hovered, focused) {
-            (true, true, _, _) => (
-                self.selected_disabled_foreground,
-                self.selected_disabled_background,
-            ),
-            (false, true, _, _) => (self.disabled_foreground, self.disabled_background),
-            (true, false, true, _) => (
-                self.selected_hovered_foreground,
-                self.selected_hovered_background,
-            ),
-            (true, false, false, true) => (
-                self.selected_focused_foreground,
-                self.selected_focused_background,
-            ),
-            (true, false, false, false) => (self.selected_foreground, self.selected_background),
-            (false, false, true, _) => (self.hovered_foreground, self.hovered_background),
-            (false, false, false, true) => (self.focused_foreground, self.focused_background),
-            (false, false, false, false) => (self.foreground, self.background),
-        }
+        let set = if selected {
+            &self.selected
+        } else {
+            &self.unselected
+        };
+        set.resolve(focused, hovered, disabled)
     }
 }
 
@@ -415,23 +360,19 @@ impl TabsWidget<'_> {
                 self.hovered_item == Some(index),
                 disabled,
             );
-            if self.size == TabsSize::Large {
-                paint_tab_cap(rect, fill, TOP_CAP, buf);
-                paint_tab_cap(
-                    Rect::new(rect.x, rect.y + 2, rect.width, 1),
-                    fill,
-                    BOTTOM_CAP,
-                    buf,
-                );
-            }
-            Line::from(filled_middle(self.labels[index], rect.width as usize))
-                .style(Style::default().fg(foreground).bg(fill))
-                .render(Rect::new(rect.x, rect.y + label_offset, rect.width, 1), buf);
+            paint_filled_shape(
+                self.labels[index],
+                self.size == TabsSize::Large,
+                foreground,
+                fill,
+                rect,
+                buf,
+            );
         }
         for (marker, slot) in [(LEFT_MARKER, layout.left), (RIGHT_MARKER, layout.right)] {
             if let Some(rect) = slot {
                 Line::from(marker)
-                    .style(Style::default().fg(self.style.foreground))
+                    .style(Style::default().fg(self.style.unselected.foreground))
                     .render(
                         Rect::new(rect.x, rect.y + label_offset, MARKER_WIDTH, 1),
                         buf,
@@ -439,12 +380,6 @@ impl TabsWidget<'_> {
             }
         }
     }
-}
-
-fn paint_tab_cap(rect: Rect, fill: Color, symbol: &str, buf: &mut Buffer) {
-    Line::from(cap_row(fill, symbol, rect.width as usize))
-        .style(Style::default().fg(fill))
-        .render(rect, buf);
 }
 
 /// One tab: an identifying `value` and the `label` shown on it — the same
@@ -1810,11 +1745,11 @@ mod tests {
         let buffer = driver.buffer();
         assert_eq!(
             buffer.cell((2, 0)).expect("selected A label cell").bg,
-            style.selected_focused_background
+            style.selected.focused_background
         );
         assert_eq!(
             buffer.cell((14, 0)).expect("unselected C label cell").bg,
-            style.background
+            style.unselected.background
         );
     }
 
@@ -1838,7 +1773,7 @@ mod tests {
         );
 
         let focused = buffer.cell((8, 0)).expect("focused label cell");
-        assert_eq!(focused.bg, style.focused_background);
+        assert_eq!(focused.bg, style.unselected.focused_background);
     }
 
     /// Motion inside one component still asks for a redraw. A tabs row paints
@@ -1868,7 +1803,7 @@ mod tests {
         );
         draw(&mut driver);
         let hovered_item = driver.cell(14, 0).bg;
-        assert_eq!(hovered_item, style.hovered_background);
+        assert_eq!(hovered_item, style.unselected.hovered_background);
 
         // The empty end of the row is inside the tabs component but on no tab,
         // so nothing handles the motion. Hover does not move either — the
@@ -1881,7 +1816,7 @@ mod tests {
         draw(&mut driver);
         assert_ne!(
             driver.cell(14, 0).bg,
-            style.hovered_background,
+            style.unselected.hovered_background,
             "the tab under the old pointer position stopped being highlighted"
         );
     }
@@ -1926,9 +1861,9 @@ mod tests {
         // the focus ones — hover and focus are distinct so a style can express
         // both, and so pointing at an already-focused tab still changes something.
         let cursor = driver.cell(14, 0);
-        assert_eq!(cursor.bg, style.hovered_background);
+        assert_eq!(cursor.bg, style.unselected.hovered_background);
         assert_ne!(
-            style.hovered_background, style.focused_background,
+            style.unselected.hovered_background, style.unselected.focused_background,
             "hover must be distinguishable from focus"
         );
     }
@@ -1938,18 +1873,24 @@ mod tests {
     #[test]
     fn a_row_with_no_fill_still_distinguishes_every_state() {
         let surface = Color::Rgb(10, 10, 10);
+        let fallback = TabsStyle::fallback();
         let style = TabsStyle {
-            foreground: Color::Rgb(120, 120, 120),
-            focused_foreground: Color::Rgb(200, 200, 200),
-            hovered_foreground: Color::Rgb(255, 255, 255),
-            selected_foreground: Color::Rgb(139, 92, 246),
-            background: surface,
-            focused_background: surface,
-            hovered_background: surface,
-            selected_background: surface,
-            selected_focused_background: surface,
-            selected_hovered_background: surface,
-            ..TabsStyle::fallback()
+            unselected: FilledStyle {
+                foreground: Color::Rgb(120, 120, 120),
+                focused_foreground: Color::Rgb(200, 200, 200),
+                hovered_foreground: Color::Rgb(255, 255, 255),
+                background: surface,
+                focused_background: surface,
+                hovered_background: surface,
+                ..fallback.unselected
+            },
+            selected: FilledStyle {
+                foreground: Color::Rgb(139, 92, 246),
+                background: surface,
+                focused_background: surface,
+                hovered_background: surface,
+                ..fallback.selected
+            },
         };
 
         let resting = style.resolve(false, false, false, false);
@@ -1971,7 +1912,7 @@ mod tests {
     fn hover_takes_precedence_over_focus() {
         let style = TabsStyle::from_theme(&Theme::default_dark());
         let (_, fill) = style.resolve(false, true, true, false);
-        assert_eq!(fill, style.hovered_background);
+        assert_eq!(fill, style.unselected.hovered_background);
     }
 
     #[test]
@@ -2154,7 +2095,7 @@ mod tests {
         for x in [0, 1, 6, 7] {
             let pad = buffer.cell((x, 0)).expect("padding cell");
             assert_eq!(pad.symbol(), " ", "pad at {x}");
-            assert_eq!(pad.bg, style.selected_background, "fill spans tab at {x}");
+            assert_eq!(pad.bg, style.selected.background, "fill spans tab at {x}");
         }
         // Past the tab: untouched.
         assert_eq!(buffer.cell((8, 0)).expect("outside cell").bg, Color::Reset);
@@ -2178,11 +2119,11 @@ mod tests {
 
         // The selected tab fills with the primary (default button).
         let selected = buffer.cell((2, 0)).expect("selected label cell");
-        assert_eq!(selected.bg, style.selected_background);
+        assert_eq!(selected.bg, style.selected.background);
         assert_eq!(selected.bg, theme.primary);
         // An unselected tab fills with the secondary.
         let unselected = buffer.cell((8, 0)).expect("unselected label cell");
-        assert_eq!(unselected.bg, style.background);
+        assert_eq!(unselected.bg, style.unselected.background);
         assert_eq!(unselected.bg, theme.secondary);
     }
 
@@ -2204,8 +2145,8 @@ mod tests {
 
         let selected = buffer.cell((2, 0)).expect("selected disabled tab");
         let unselected = buffer.cell((8, 0)).expect("unselected disabled tab");
-        assert_eq!(selected.bg, style.selected_disabled_background);
-        assert_eq!(unselected.bg, style.disabled_background);
+        assert_eq!(selected.bg, style.selected.disabled_background);
+        assert_eq!(unselected.bg, style.unselected.disabled_background);
         assert_ne!(selected.bg, unselected.bg);
     }
 
@@ -2363,8 +2304,8 @@ mod tests {
 
         let selected = buffer.cell((2, 0)).expect("selected disabled tab");
         let unselected = buffer.cell((8, 0)).expect("unselected disabled tab");
-        assert_eq!(selected.bg, style.selected_disabled_background);
-        assert_eq!(unselected.bg, style.disabled_background);
+        assert_eq!(selected.bg, style.selected.disabled_background);
+        assert_eq!(unselected.bg, style.unselected.disabled_background);
     }
 
     #[test]
@@ -2470,6 +2411,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A `Reset` fill has no color of its own to paint, so a tab with one
+    /// leaves the surface it sits on showing — as a button does — rather than
+    /// punching the terminal default into a dialog or pane.
+    #[test]
+    fn a_reset_fill_keeps_the_surface_beneath_the_label() {
+        let surface = Color::Blue;
+        let area = Rect::new(0, 0, shape_width("Tab"), 1);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_style(area, Style::default().bg(surface));
+        // The fallback's disabled, unselected tab is filled with `Reset`.
+        TabsWidget::new(&["Tab"])
+            .disabled(true)
+            .render(area, &mut buffer);
+        assert_eq!(buffer.cell((2, 0)).expect("label cell").bg, surface);
     }
 
     /// Recorded before tabs and buttons shared one filled-shape painter. That
