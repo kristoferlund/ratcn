@@ -430,57 +430,79 @@ impl std::fmt::Display for Unsupported {
 
 impl std::error::Error for Unsupported {}
 
-/// Why a typed browser paste event could not be normalized.
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum BrowserEventError {
-    /// The paste event did not expose clipboard data.
-    MissingClipboardData,
-    /// Reading `text/plain` from the clipboard failed.
-    ClipboardRead,
-}
+mod browser_paste {
+    use std::io;
 
-#[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-impl std::fmt::Display for BrowserEventError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let message = match self {
-            Self::MissingClipboardData => "browser paste has no clipboard data",
-            Self::ClipboardRead => "could not read text/plain from browser clipboard",
-        };
-        f.write_str(message)
+    use web_sys::{
+        ClipboardEvent, Document,
+        wasm_bindgen::{JsCast, prelude::Closure},
+    };
+
+    use super::Event;
+
+    /// A document `paste` listener that forwards `text/plain` clipboard data as
+    /// [`Event::Paste`], installed for as long as the guard lives. Ratzilla has
+    /// no callback for paste, so the listener goes on the document itself.
+    #[must_use = "dropping the listener removes its browser paste handler"]
+    pub struct BrowserPasteListener {
+        document: Document,
+        callback: Closure<dyn FnMut(ClipboardEvent)>,
     }
-}
 
-#[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-impl std::error::Error for BrowserEventError {}
-
-#[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-mod browser_conv {
-    use super::{BrowserEventError, Event};
-    use web_sys::ClipboardEvent;
-
-    impl TryFrom<&ClipboardEvent> for Event {
-        type Error = BrowserEventError;
-
-        fn try_from(event: &ClipboardEvent) -> Result<Self, Self::Error> {
-            let data = event
-                .clipboard_data()
-                .ok_or(BrowserEventError::MissingClipboardData)?;
-            data.get_data("text/plain")
-                .map(Event::Paste)
-                .map_err(|_error| BrowserEventError::ClipboardRead)
+    impl std::fmt::Debug for BrowserPasteListener {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("BrowserPasteListener")
+                .finish_non_exhaustive()
         }
     }
 
-    impl TryFrom<ClipboardEvent> for Event {
-        type Error = BrowserEventError;
+    impl BrowserPasteListener {
+        /// Install the listener. `on_paste` reports whether the app took the
+        /// text — as a host does by mapping anything but
+        /// [`EventResult::Ignored`](super::EventResult::Ignored) to `true` —
+        /// and only then is the page's own paste handling suppressed. A paste
+        /// before the first render is ignored by the runtime, so the page keeps
+        /// it.
+        ///
+        /// # Errors
+        ///
+        /// Returns an I/O error if there is no document, or if it refuses the
+        /// listener.
+        pub fn install(mut on_paste: impl FnMut(Event) -> bool + 'static) -> io::Result<Self> {
+            let document = web_sys::window()
+                .and_then(|window| window.document())
+                .ok_or_else(|| io::Error::other("no document"))?;
+            let callback = Closure::new(move |event: ClipboardEvent| {
+                let Some(text) = event
+                    .clipboard_data()
+                    .and_then(|data| data.get_data("text/plain").ok())
+                else {
+                    return;
+                };
+                if on_paste(Event::Paste(text)) {
+                    event.prevent_default();
+                }
+            });
+            document
+                .add_event_listener_with_callback("paste", callback.as_ref().unchecked_ref())
+                .map_err(|error| io::Error::other(format!("paste listener: {error:?}")))?;
+            Ok(Self { document, callback })
+        }
+    }
 
-        fn try_from(event: ClipboardEvent) -> Result<Self, Self::Error> {
-            Self::try_from(&event)
+    impl Drop for BrowserPasteListener {
+        fn drop(&mut self) {
+            let _ = self.document.remove_event_listener_with_callback(
+                "paste",
+                self.callback.as_ref().unchecked_ref(),
+            );
         }
     }
 }
+
+#[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
+pub use browser_paste::BrowserPasteListener;
 
 #[cfg(feature = "ratzilla")]
 mod ratzilla_conv {

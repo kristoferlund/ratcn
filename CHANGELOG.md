@@ -40,6 +40,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Component::prepare` is removed. `scope_options` and `interaction_area`
   receive the state the component is declared with:
   `scope_options(&self, state)`, `interaction_area(&self, area, state)`.
+- `BrowserEventError` and `Event`'s `TryFrom<ClipboardEvent>` are removed. With
+  the `ratzilla` feature, `runtime::BrowserPasteListener` installs the document
+  paste listener and forwards `text/plain` as `Event::Paste`.
 
 ### Fixed
 

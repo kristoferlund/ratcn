@@ -24,6 +24,9 @@ unicode-width = "0.2.2"
 web-sys = { version = "0.3", optional = true, features = [
     "ClipboardEvent",
     "DataTransfer",
+    "Document",
+    "EventTarget",
+    "Window",
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

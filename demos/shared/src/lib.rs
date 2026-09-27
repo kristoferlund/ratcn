@@ -263,7 +263,7 @@ mod web_host {
 
     use gloo_timers::callback::Timeout;
     use ratatui::Terminal;
-    use ratcn::runtime::Event;
+    use ratcn::runtime::{BrowserPasteListener, Event};
     use ratzilla::{
         WebGl2Backend, WebRenderer,
         web_sys::{
@@ -272,7 +272,7 @@ mod web_host {
         },
     };
 
-    use super::{ANIMATION_FRAME, BrowserPasteListener, Demo};
+    use super::{ANIMATION_FRAME, Demo};
 
     /// Drives one demo on its own animation frames.
     ///
@@ -474,67 +474,6 @@ fn web_backend(background: Color) -> Result<ratzilla::WebGl2Backend, io::Error> 
     )
     .map_err(|error| io::Error::other(error.to_string()))
 }
-
-/// Browser paste listener, installed for the guard's lifetime.
-#[cfg(target_arch = "wasm32")]
-mod browser_paste {
-    use std::io;
-
-    use ratcn::runtime::Event;
-    use ratzilla::web_sys::{
-        ClipboardEvent, Document,
-        wasm_bindgen::{JsCast, prelude::Closure},
-    };
-
-    #[must_use = "dropping the listener removes its browser paste handler"]
-    pub struct BrowserPasteListener {
-        document: Document,
-        callback: Closure<dyn FnMut(ClipboardEvent)>,
-    }
-
-    impl BrowserPasteListener {
-        /// Forward `text/plain` clipboard data as [`Event::Paste`]. Ratzilla has
-        /// no callback for it, so the listener goes on the document itself.
-        ///
-        /// `on_paste` reports whether the demo took the text; only then is the
-        /// page's own paste handling suppressed.
-        ///
-        /// # Errors
-        ///
-        /// Returns an I/O error if there is no document, or if it refuses the
-        /// listener.
-        pub fn install(on_paste: impl FnMut(Event) -> bool + 'static) -> io::Result<Self> {
-            let document = ratzilla::web_sys::window()
-                .and_then(|window| window.document())
-                .ok_or_else(|| io::Error::other("no document"))?;
-            let mut on_paste = on_paste;
-            let callback = Closure::new(move |event: ClipboardEvent| {
-                let Ok(paste) = Event::try_from(&event) else {
-                    return;
-                };
-                if on_paste(paste) {
-                    event.prevent_default();
-                }
-            });
-            document
-                .add_event_listener_with_callback("paste", callback.as_ref().unchecked_ref())
-                .map_err(|error| io::Error::other(format!("paste listener: {error:?}")))?;
-            Ok(Self { document, callback })
-        }
-    }
-
-    impl Drop for BrowserPasteListener {
-        fn drop(&mut self) {
-            let _ = self.document.remove_event_listener_with_callback(
-                "paste",
-                self.callback.as_ref().unchecked_ref(),
-            );
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-pub use browser_paste::BrowserPasteListener;
 
 /// Elapsed time since this was first called, from the platform's monotonic
 /// clock. Demos call it every frame, so the first call is the first frame.
