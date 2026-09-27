@@ -33,6 +33,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already holds focus no longer moves focus to the scope's first control.
 - `Cycle::width()` and its measured size include the column of padding painted
   either side of the value, so both grow by 2.
+- A panic after a `terminal::Session` has dropped, or failed to open, no longer
+  writes mode resets to the terminal.
 
 ## [0.0.4] - 2026-09-26
 

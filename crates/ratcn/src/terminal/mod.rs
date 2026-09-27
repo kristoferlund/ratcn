@@ -69,6 +69,10 @@ mod watch;
 
 use std::{
     io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -121,6 +125,11 @@ pub struct Session {
     /// What the terminal last said it looks like, once it has said anything.
     theme: Option<Theme>,
     modes: Vec<DecPrivateModeCode>,
+    /// Whether the panic hook still owes the terminal its modes: set once the
+    /// session switches them on, cleared when it drops. The hook is
+    /// process-global and outlives the session, so this is what keeps a later
+    /// panic from writing into a terminal the session already gave back.
+    live: Arc<AtomicBool>,
 }
 
 /// What an app wants of its [`Session`]. Each builder switches on the terminal
@@ -212,12 +221,8 @@ impl Session {
         // Termina restores raw mode after this hook runs, so the hook owes only
         // the modes below. It writes through a handle of its own, so it works
         // while the session is being unwound.
-        output.set_panic_hook({
-            let modes = modes.clone();
-            move |handle| {
-                let _ = restore_modes(handle, &modes);
-            }
-        });
+        let live = Arc::new(AtomicBool::new(false));
+        output.set_panic_hook(panic_restore(Arc::clone(&live), modes.clone()));
 
         // `Terminal::new` measures the grid and can fail. The modes are still
         // off here, so a failure has nothing to restore.
@@ -228,6 +233,7 @@ impl Session {
             watch,
             theme,
             modes,
+            live,
         };
         session.enable()
     }
@@ -281,6 +287,7 @@ impl Session {
     /// the session already owns them: resetting a mode that never went on is
     /// what a terminal does with any mode it does not know.
     fn enable(mut self) -> io::Result<Self> {
+        self.live.store(true, Ordering::Relaxed);
         set_modes(self.terminal.backend_mut(), &self.modes)?;
         Ok(self)
     }
@@ -288,6 +295,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        self.live.store(false, Ordering::Relaxed);
         let _ = restore_modes(self.terminal.backend_mut(), &self.modes);
     }
 }
@@ -409,6 +417,19 @@ fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Resu
     out.flush()
 }
 
+/// The panic hook's share of restoring: the modes, while `live` says a session
+/// still has them on, and nothing once it has ended — or never got that far.
+fn panic_restore<W: io::Write>(
+    live: Arc<AtomicBool>,
+    modes: Vec<DecPrivateModeCode>,
+) -> impl Fn(&mut W) + Send + Sync + 'static {
+    move |out| {
+        if live.load(Ordering::Relaxed) {
+            let _ = restore_modes(out, &modes);
+        }
+    }
+}
+
 /// Switch the modes back off, newest first, and show the cursor.
 ///
 /// A frame interrupted between hiding the cursor and showing it again leaves it
@@ -428,8 +449,8 @@ mod tests {
     use std::io;
 
     use super::{
-        DecPrivateModeCode as M, Duration, Instant, SessionEvent, SessionOptions, TerminalColors,
-        Watch, modes, pump, restore_modes,
+        Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Ordering, SessionEvent,
+        SessionOptions, TerminalColors, Watch, modes, panic_restore, pump, restore_modes,
         watch::{DEBOUNCE, IDLE},
     };
     use crate::terminal::fake::FakeTerminal;
@@ -671,6 +692,28 @@ mod tests {
         assert!(
             written.ends_with("\x1b[?25h"),
             "and the cursor is visible again at the end: {written:?}"
+        );
+    }
+
+    /// The panic hook is process-global and never removed, so it must go quiet
+    /// once its session is over: a later panic would otherwise write mode
+    /// resets into a terminal the app has already handed back, or into a
+    /// session opened after it.
+    #[test]
+    fn the_panic_hook_restores_only_while_its_session_is_live() {
+        let live = Arc::new(AtomicBool::new(true));
+        let hook = panic_restore::<Vec<u8>>(Arc::clone(&live), modes(SessionOptions::new(), false));
+
+        let mut during = Vec::new();
+        hook(&mut during);
+        assert!(!during.is_empty(), "a live session's modes are restored");
+
+        live.store(false, Ordering::Relaxed);
+        let mut after = Vec::new();
+        hook(&mut after);
+        assert!(
+            after.is_empty(),
+            "an ended session writes nothing: {after:?}"
         );
     }
 }
