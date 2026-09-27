@@ -471,7 +471,6 @@ impl ButtonWidget<'_> {
     fn paint_filled(self, resolved: &ResolvedButtonStyle, area: Rect, buf: &mut Buffer) {
         paint_filled_shape(
             self.label,
-            self.size == ButtonSize::Large,
             resolved.foreground,
             resolved.background,
             area,

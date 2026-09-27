@@ -98,16 +98,16 @@ pub fn label_style(foreground: Color, background: Color) -> Style {
 }
 
 /// Paint the filled shape into `area`: `label` centered on a row of `fill`,
-/// with a cap row above and below when `large`. `area` is the shape's own
-/// rect, one row tall or three.
+/// with a cap row above and below when `area` is three rows tall. `area` is
+/// the shape's own rect, one row tall or three.
 pub fn paint_filled_shape(
     label: &str,
-    large: bool,
     foreground: Color,
     fill: Color,
     area: Rect,
     buf: &mut Buffer,
 ) {
+    let large = area.height >= 3;
     let width = usize::from(area.width);
     if large {
         for (symbol, y) in [(TOP_CAP, area.y), (BOTTOM_CAP, area.y + 2)] {

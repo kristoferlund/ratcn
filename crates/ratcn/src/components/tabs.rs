@@ -362,7 +362,6 @@ impl TabsWidget<'_> {
             );
             paint_filled_shape(
                 self.labels[index],
-                self.size == TabsSize::Large,
                 foreground,
                 fill,
                 rect,
