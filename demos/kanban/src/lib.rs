@@ -257,7 +257,9 @@ impl Component<AppState, Msg> for KanbanCard {
             let area = ctx.area();
             ctx.paint(move |ctx| {
                 let theme = ctx.theme;
-                ctx.with_buffer(|buf| paint_card(buf, area, &dragged_card_id, theme));
+                ctx.with_buffer(area, |area, buf| {
+                    paint_card(buf, area, &dragged_card_id, theme);
+                });
             });
         });
     }
@@ -279,7 +281,9 @@ impl Component<AppState, Msg> for KanbanCard {
                 area,
             );
         } else {
-            ctx.with_buffer(|buf| paint_card(buf, area, &self.card_id, theme));
+            ctx.with_buffer(area, |area, buf| {
+                paint_card(buf, area, &self.card_id, theme)
+            });
         }
     }
 

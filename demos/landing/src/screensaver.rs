@@ -49,7 +49,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>, area: Rect, now: Dura
         let area = ctx.area();
         ctx.paint(move |ctx| {
             let elapsed = now.saturating_sub(ctx.state().screensaver.started);
-            ctx.with_buffer(|buf| snow(buf, area, elapsed));
+            ctx.with_buffer(area, |area, buf| snow(buf, area, elapsed));
         });
     });
 }

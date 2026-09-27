@@ -8,7 +8,7 @@
 use ratatui::{
     layout::{Position, Rect},
     style::{Color, Style},
-    widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget},
 };
 
 use crate::Theme;
@@ -450,7 +450,7 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
             let mut state = ScrollbarState::new(usize::from(position_count))
                 .position(usize::from(offset))
                 .viewport_content_length(usize::from(viewport_height));
-            ctx.stateful_widget(scrollbar, gutter, &mut state);
+            ctx.with_buffer(gutter, |area, buf| scrollbar.render(area, buf, &mut state));
         });
     }
 

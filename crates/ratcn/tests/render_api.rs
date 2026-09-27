@@ -37,7 +37,7 @@ impl Component<State, Msg> for Probe {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, State>) {
         assert_eq!(ctx.state().marker, 7);
         let area = ctx.area();
-        ctx.with_buffer(|buf| assert!(buf.area.width >= area.width));
+        ctx.with_buffer(area, |_, buf| assert!(buf.area.width >= area.width));
     }
 
     fn handle_event(

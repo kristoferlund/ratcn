@@ -5,7 +5,7 @@ use std::cell::Cell;
 
 use ratatui::{
     style::Style,
-    widgets::{Paragraph, StatefulWidget, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 use super::*;
@@ -61,8 +61,8 @@ fn viewport_style_overlay_preserves_an_intact_wide_glyph() {
         ctx.viewport(Rect::new(1, 0, 2, 1), 1, 0, |ctx| {
             ctx.paint_widget(Line::from("界"), Rect::new(1, 0, 2, 1));
             ctx.paint(|ctx| {
-                ctx.with_buffer(|buffer| {
-                    buffer.set_style(Rect::new(1, 0, 1, 1), Style::default().fg(Color::Red));
+                ctx.with_buffer(Rect::new(1, 0, 1, 1), |area, buffer| {
+                    buffer.set_style(area, Style::default().fg(Color::Red));
                 });
             });
         });
@@ -158,7 +158,6 @@ fn paint_inside_a_viewport_keeps_the_cells_its_widget_leaves_alone() {
 #[derive(Debug, Clone, Copy)]
 enum CaughtViewportFailure {
     Widget,
-    StatefulWidget,
     WithBuffer,
 }
 
@@ -203,13 +202,14 @@ fn a_paint_inside_a_viewport_reads_blanks_where_it_has_not_written() {
     driver.render(&State, move |ctx| {
         let read = Rc::clone(&read);
         ctx.viewport(Rect::new(0, 0, 4, 1), 4, 0, move |ctx| {
-            ctx.paint(|ctx| {
-                ctx.with_buffer(|buffer| {
+            let row = Rect::new(0, 3, 4, 1);
+            ctx.paint(move |ctx| {
+                ctx.with_buffer(row, |_, buffer| {
                     buffer[(0, 3)].set_symbol("X");
                 });
             });
             ctx.paint(move |ctx| {
-                ctx.with_buffer(|buffer| {
+                ctx.with_buffer(row, |_, buffer| {
                     read.borrow_mut().push_str(buffer[(0, 3)].symbol());
                 });
             });
@@ -228,14 +228,6 @@ impl Widget for PanicWidget {
     }
 }
 
-impl StatefulWidget for PanicWidget {
-    type State = ();
-
-    fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
-        Widget::render(self, area, buf);
-    }
-}
-
 /// A paint panic a component catches is the component's own business: the
 /// pass finishes and commits. What the panicking paint wrote still never
 /// reaches the frame, because a paint inside a viewport lays out in a
@@ -244,7 +236,6 @@ impl StatefulWidget for PanicWidget {
 fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
     for failure in [
         CaughtViewportFailure::Widget,
-        CaughtViewportFailure::StatefulWidget,
         CaughtViewportFailure::WithBuffer,
     ] {
         let mut driver = Driver::<State, Msg>::new(10, 3);
@@ -270,11 +261,8 @@ fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
                                         CaughtViewportFailure::Widget => {
                                             ctx.widget(PanicWidget, area);
                                         }
-                                        CaughtViewportFailure::StatefulWidget => {
-                                            ctx.stateful_widget(PanicWidget, area, &mut ());
-                                        }
                                         CaughtViewportFailure::WithBuffer => {
-                                            ctx.with_buffer(|buffer| {
+                                            ctx.with_buffer(area, |_, buffer| {
                                                 buffer[(0, 0)].set_symbol("X");
                                                 panic!("component paint failed");
                                             });
@@ -456,23 +444,28 @@ fn content_below_the_visible_rows_leaves_the_frame_beneath_it_alone() {
     );
 }
 
-/// A free-form paint inside a viewport covers the whole logical content,
-/// so it may address rows the viewport is not showing.
+/// A raw write inside a viewport pays for the area it names, not for the
+/// whole logical content: the buffer it is handed covers exactly that area,
+/// so a write outside it lands nowhere.
 #[test]
-fn with_buffer_inside_a_viewport_covers_the_whole_logical_content() {
+fn with_buffer_inside_a_viewport_covers_only_the_area_it_names() {
     let mut driver = Driver::<State, Msg>::new(4, 2);
     driver.render(&State, |ctx| {
-        ctx.viewport(Rect::new(0, 0, 4, 2), 6, 4, |ctx| {
+        ctx.viewport(Rect::new(0, 0, 4, 2), 1000, 4, |ctx| {
             ctx.paint(|ctx| {
-                ctx.with_buffer(|buffer| {
-                    buffer.set_string(0, 0, "hi", Style::default());
+                ctx.with_buffer(Rect::new(0, 4, 4, 1), |area, buffer| {
+                    assert_eq!(buffer.area, area, "one row, not a thousand");
                     buffer.set_string(0, 4, "ok", Style::default());
+                    if let Some(cell) = buffer.cell_mut((0, 5)) {
+                        cell.set_symbol("X");
+                    }
                 });
             });
         });
     });
 
     assert_eq!(driver.row(0), "ok  ");
+    assert_eq!(driver.row(1), "    ", "a write outside the named area");
 }
 
 /// A layer opened inside a viewport escaped that clip, and paints where

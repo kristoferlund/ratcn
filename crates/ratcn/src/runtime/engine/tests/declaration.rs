@@ -582,10 +582,12 @@ fn the_closure_declares_once_and_queued_paint_runs_once_on_the_frame() {
         declared.fetch_add(1, Ordering::SeqCst);
         let seen = Rc::clone(&seen);
         ctx.paint(move |ctx| {
-            let before =
-                ctx.with_buffer(|buf| buf.cell((0, 0)).expect("probe cell").symbol().to_owned());
+            let probe = Rect::new(0, 0, 1, 1);
+            let before = ctx.with_buffer(probe, |_, buf| {
+                buf.cell((0, 0)).expect("probe cell").symbol().to_owned()
+            });
             seen.borrow_mut().push(before);
-            ctx.with_buffer(|buf| {
+            ctx.with_buffer(probe, |_, buf| {
                 buf.cell_mut((0, 0)).expect("probe cell").set_symbol("X");
             });
         });

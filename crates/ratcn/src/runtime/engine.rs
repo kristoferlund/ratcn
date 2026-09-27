@@ -41,8 +41,8 @@ const COMPONENT_NODE: bool = false;
 const SCOPE_NODE: bool = true;
 
 // The largest rectangle a viewport declares as its content, and the largest a
-// single paint inside one covers: each becomes a scratch buffer of one Ratatui
-// cell per cell.
+// single paint inside one or inside a layer covers: a paint becomes a scratch
+// buffer of one Ratatui cell per cell.
 pub(crate) const MAX_VIEWPORT_CELLS: u32 = 262_144;
 
 type ModalRead<State> = Box<dyn Fn(&State) -> &ModalState>;
@@ -77,7 +77,7 @@ enum ViewportVisibility {
 
 impl Viewport {
     /// The full logical allocation descendants are declared against.
-    pub(crate) fn content(self) -> Rect {
+    fn content(self) -> Rect {
         Rect::new(
             self.screen.x,
             self.screen.y,
@@ -1606,9 +1606,8 @@ impl<State, Msg> RenderPass<State, Msg> {
             (None, Some(_)) => Some(Projection::clipped(self.frame_area)),
             (Some(viewport), Some(_)) => Some(viewport.projection().within(self.frame_area)),
         };
-        let allocation = slot.viewport.map_or(buffer.area, Viewport::content);
         let mut ctx = PaintCtx {
-            target: PaintTarget::new(buffer, projection, allocation, &mut self.scratch),
+            target: PaintTarget::new(buffer, projection, &mut self.scratch),
             theme,
             area: op.area(),
             flags,

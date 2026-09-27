@@ -258,28 +258,27 @@ fn a_layer_leaves_the_cells_its_content_does_not_write_to_what_is_beneath() {
     }
 }
 
-/// A layer's paint reaches the frame whichever write form did the writing:
-/// raw buffer access lands exactly as a widget does, so a popup that only
-/// ever calls `with_buffer` still reaches the frame.
+/// A layer's paint reaches the frame whichever write form did the writing,
+/// and a raw write touches only what it writes: the rest of the layer's
+/// footprint keeps what is beneath it.
 #[test]
-fn layer_paint_written_through_with_buffer_composites_onto_the_frame() {
-    let state = PointerState;
-    let mut driver = Driver::<PointerState, PointerMsg>::new(2, 1);
-    driver.render(&state, |ctx| {
+fn layer_paint_written_through_with_buffer_lands_only_where_it_writes() {
+    let mut driver = Driver::<(), ()>::new(3, 1);
+    driver.render(&(), |ctx| {
+        ctx.paint_widget(ratatui::text::Line::from("###"), Rect::new(0, 0, 3, 1));
         ctx.popup(
             ChildId::Static("panel"),
-            Rect::new(0, 0, 2, 1),
+            Rect::new(0, 0, 3, 1),
             PopupOptions::default(),
             |ctx| {
                 ctx.paint(|ctx| {
-                    ctx.with_buffer(|buf| {
-                        buf[(0, 0)].set_symbol("Z");
+                    ctx.with_buffer(Rect::new(0, 0, 1, 1), |area, buf| {
+                        buf[(area.x, area.y)].set_symbol("Z");
                     });
                 });
             },
         );
     });
 
-    let buffer = driver.buffer();
-    assert_eq!(buffer.cell((0, 0)).expect("cell").symbol(), "Z");
+    assert_eq!(driver.row(0), "Z##");
 }

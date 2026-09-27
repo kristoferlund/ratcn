@@ -338,7 +338,7 @@ fn root_area_guides_paint_but_does_not_sandbox_base_writes() {
                     ctx.paint_widget(Line::from("W"), Rect::new(1, 0, 1, 1));
                     ctx.paint(move |ctx| {
                         assert_eq!(ctx.area(), ROOT);
-                        ctx.with_buffer(|buffer| {
+                        ctx.with_buffer(ROOT, |_, buffer| {
                             assert_eq!(buffer.area, destination);
                             buffer[(0, 0)].set_symbol("D");
                         });

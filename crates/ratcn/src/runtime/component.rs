@@ -21,7 +21,7 @@ use std::{
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect, Size};
-use ratatui::widgets::{StatefulWidget, Widget};
+use ratatui::widgets::Widget;
 
 use crate::Theme;
 
@@ -652,17 +652,11 @@ impl<Msg> PopupOptions<Msg> {
 
 /// Where paint lands, how it is projected on the way there, and the buffer it
 /// lays out in when it is projected.
-///
-/// The three write forms are implemented once, here, because routing is the
-/// only thing they do that [`PaintCtx`] does not.
 pub(crate) struct PaintTarget<'a> {
     buffer: &'a mut Buffer,
     /// `None` writes straight onto `buffer`: base paint outside any viewport,
     /// which the render area does not sandbox.
     projection: Option<Projection>,
-    /// The whole rectangle a free-form [`Self::with_buffer`] covers, in the
-    /// coordinates paint uses.
-    allocation: Rect,
     /// Where projected paint lays out before it is copied back. One buffer
     /// serves the whole frame's paint calls, resized and blanked per call.
     scratch: &'a mut Buffer,
@@ -672,23 +666,18 @@ impl<'a> PaintTarget<'a> {
     pub(crate) fn new(
         buffer: &'a mut Buffer,
         projection: Option<Projection>,
-        allocation: Rect,
         scratch: &'a mut Buffer,
     ) -> Self {
         Self {
             buffer,
             projection,
-            allocation,
             scratch,
         }
     }
 
-    /// Paint `area` through this target: `paint` receives the buffer to write
-    /// and the rectangle to write it in.
-    ///
-    /// The three write forms differ only in what they hand that closure, so
-    /// routing — which buffer, which projection — is settled once, here.
-    fn paint_at<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
+    /// Paint `area` through this target: `paint` receives the rectangle and
+    /// the buffer to write it in.
+    fn with_buffer<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
         match self.projection {
             None => paint(area, self.buffer),
             Some(projection) => {
@@ -697,18 +686,6 @@ impl<'a> PaintTarget<'a> {
                 })
             }
         }
-    }
-
-    fn widget(&mut self, widget: impl Widget, area: Rect) {
-        self.paint_at(area, |area, buffer| widget.render(area, buffer));
-    }
-
-    fn stateful_widget<W: StatefulWidget>(&mut self, widget: W, area: Rect, state: &mut W::State) {
-        self.paint_at(area, |area, buffer| widget.render(area, buffer, state));
-    }
-
-    fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        self.paint_at(self.allocation, |_, buffer| paint(buffer))
     }
 }
 
@@ -764,8 +741,7 @@ fn with_projected_buffer<R>(
 /// derived from that resolution, and there is nothing to derive them from
 /// while the tree is still being built.
 ///
-/// Painting goes through [`widget`](Self::widget),
-/// [`stateful_widget`](Self::stateful_widget), and
+/// Painting goes through [`widget`](Self::widget) and
 /// [`with_buffer`](Self::with_buffer). The context keeps the frame's buffer
 /// to itself, so a paint call can read `ctx.theme`,
 /// [`ctx.state()`](Self::state), and the interaction flags while building its
@@ -807,32 +783,28 @@ impl<'a, State> PaintCtx<'a, State> {
     /// background first — `Clear`, then a filled block — as the built-in
     /// layers do.
     pub fn widget(&mut self, widget: impl Widget, area: Rect) {
-        self.target.widget(widget, area);
+        self.with_buffer(area, |area, buffer| widget.render(area, buffer));
     }
 
-    /// Paint a ratatui stateful widget onto the active paint surface.
-    ///
-    /// The escape hatch for widgets that need a `&mut` widget state during
-    /// paint (e.g. ratatui's `List` with `ListState`). Lands exactly as
-    /// [`widget`](Self::widget) does.
-    pub fn stateful_widget<W: StatefulWidget>(
-        &mut self,
-        widget: W,
-        area: Rect,
-        state: &mut W::State,
-    ) {
-        self.target.stateful_widget(widget, area, state);
-    }
-
-    /// Run a paint closure over the frame's raw cell buffer.
+    /// Run a paint closure over the raw cells of `area`.
     ///
     /// The escape hatch for direct cell writes (`set_string`, `set_style`,
-    /// per-cell edits). The closure receives only the buffer, so values read
-    /// from `ctx` must be taken as arguments or moved in. Inside a layer, what
-    /// it writes lands above everything declared outside the layer, clipped
-    /// to the render area.
-    pub fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        self.target.with_buffer(paint)
+    /// per-cell edits) and for widgets that take more than an area — a
+    /// `StatefulWidget` renders as
+    /// `ctx.with_buffer(area, |area, buf| widget.render(area, buf, &mut state))`.
+    /// The closure receives `area` and the buffer to write it in, so values
+    /// read from `ctx` must be taken as arguments or moved in.
+    ///
+    /// Inside a [`viewport`](DeclareCtx::viewport) or a layer, the buffer
+    /// covers exactly `area`, in the paint's own coordinates: a write outside
+    /// it lands nowhere, and the call costs what `area` does, however tall the
+    /// content around it. Layer paint lands above everything declared outside
+    /// the layer, clipped to the render area, and like
+    /// [`widget`](Self::widget) touches only the cells it writes. Base paint
+    /// outside both writes straight onto the frame's buffer, which the render
+    /// area does not sandbox.
+    pub fn with_buffer<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
+        self.target.with_buffer(area, paint)
     }
 
     /// The area of the declaration this paint belongs to: a component's paint

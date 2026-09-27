@@ -56,7 +56,9 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
                 .wrap(Wrap { trim: true }),
             intro_area,
         );
-        ctx.with_buffer(|buf| buf.set_style(left_padding, Style::default().bg(theme.field)));
+        ctx.with_buffer(left_padding, |area, buf| {
+            buf.set_style(area, Style::default().bg(theme.field));
+        });
         let bars = MONTHLY_CONTRIBUTIONS.map(|(label, value)| Bar::with_label(label, value));
         ctx.widget(
             BarChartWidget::new(bars)

@@ -27,6 +27,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `DeclareCtx::defer_paint` is removed. Declare a `hint` layer for decoration
   above later siblings, or paint onto the buffer after `render` for decoration
   above every layer.
+- `PaintCtx::with_buffer` takes the area it writes and hands it to the closure:
+  `with_buffer(area, |area, buf| …)`. `PaintCtx::stateful_widget` is removed;
+  render a `StatefulWidget` through `with_buffer`.
 
 ### Fixed
 
@@ -50,6 +53,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A popup without `on_dismiss` layered above one with it no longer swallows the
   outer popup's dismissal on an outside press.
 - A viewport inside a popup or hint inside a viewport no longer panics.
+- `PaintCtx::with_buffer` inside a viewport costs what its area does, not the
+  whole scrolled content.
 
 ## [0.0.4] - 2026-09-26
 
