@@ -45,6 +45,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A tab filled with `Color::Reset` leaves the surface beneath its label
   showing, as a button does, instead of painting the terminal default.
+- `CheckboxWidget` and `CycleWidget` take colors from whichever of `themed` and
+  `style` was called last, as every other widget does; `style` no longer
+  outranks a later `themed`.
 - Focus onto a viewport-clipped target declared that same frame (startup focus,
   an appended row) is revealed by that frame, not the next one.
 - Stored focus no longer activates or highlights content inside a hint, and a

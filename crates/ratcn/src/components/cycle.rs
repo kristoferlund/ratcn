@@ -122,8 +122,7 @@ pub struct CycleWidget<'a> {
     focused: bool,
     hovered: bool,
     disabled: bool,
-    theme: Option<Theme>,
-    style: Option<CycleStyle>,
+    style: CycleStyle,
 }
 
 impl<'a> CycleWidget<'a> {
@@ -135,22 +134,21 @@ impl<'a> CycleWidget<'a> {
             focused: false,
             hovered: false,
             disabled: false,
-            theme: None,
-            style: None,
+            style: CycleStyle::fallback(),
         }
     }
 
     /// Take colors from `theme`.
     #[must_use]
-    pub const fn themed(mut self, theme: &Theme) -> Self {
-        self.theme = Some(*theme);
+    pub fn themed(mut self, theme: &Theme) -> Self {
+        self.style = CycleStyle::from_theme(theme);
         self
     }
 
-    /// Exact colors, taking precedence over [`themed`](Self::themed).
+    /// Use these exact colors, ignoring any theme.
     #[must_use]
     pub const fn style(mut self, style: CycleStyle) -> Self {
-        self.style = Some(style);
+        self.style = style;
         self
     }
 
@@ -174,14 +172,6 @@ impl<'a> CycleWidget<'a> {
         self.disabled = disabled;
         self
     }
-
-    fn resolved_style(&self) -> CycleStyle {
-        match (self.style, self.theme) {
-            (Some(style), _) => style,
-            (None, Some(theme)) => CycleStyle::from_theme(&theme),
-            (None, None) => CycleStyle::fallback(),
-        }
-    }
 }
 
 impl Widget for CycleWidget<'_> {
@@ -190,7 +180,7 @@ impl Widget for CycleWidget<'_> {
             return;
         }
         let style = self
-            .resolved_style()
+            .style
             .resolve(self.focused, self.hovered, self.disabled);
         Line::from(filled_middle(self.value, area.width as usize))
             .style(style)
@@ -839,5 +829,44 @@ mod tests {
             driver.event(key(KeyCode::Char(' ')), &state),
             EventResult::Ignored
         ));
+    }
+
+    /// Colors come from whichever of `themed` and `style` was called last, as
+    /// on every other widget: a later theme is not silently outranked by an
+    /// earlier style, and a later style is not by an earlier theme.
+    #[test]
+    fn the_last_of_themed_and_style_wins() {
+        let theme = Theme::default_dark();
+        let area = Rect::new(0, 0, 10, 1);
+        let paint = |widget: CycleWidget<'_>| {
+            let mut buffer = Buffer::empty(area);
+            widget.focused(true).render(area, &mut buffer);
+            buffer
+        };
+        let themed = paint(CycleWidget::new("Medium").themed(&theme));
+        let styled = paint(CycleWidget::new("Medium").style(CycleStyle::fallback()));
+        assert_ne!(
+            themed, styled,
+            "the theme and the fallback must paint apart"
+        );
+
+        assert_eq!(
+            paint(
+                CycleWidget::new("Medium")
+                    .style(CycleStyle::fallback())
+                    .themed(&theme)
+            ),
+            themed,
+            "a later themed() replaces an earlier style()"
+        );
+        assert_eq!(
+            paint(
+                CycleWidget::new("Medium")
+                    .themed(&theme)
+                    .style(CycleStyle::fallback())
+            ),
+            styled,
+            "a later style() replaces an earlier themed()"
+        );
     }
 }
