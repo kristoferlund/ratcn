@@ -31,6 +31,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the cursor moves within it instead of dragging it toward the top.
 - A primary press on the empty space (or a non-focusable child) of a scope that
   already holds focus no longer moves focus to the scope's first control.
+- `Cycle::width()` and its measured size include the column of padding painted
+  either side of the value, so both grow by 2.
 
 ## [0.0.4] - 2026-09-26
 

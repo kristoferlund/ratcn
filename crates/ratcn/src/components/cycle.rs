@@ -24,8 +24,9 @@ use ratatui::{
 };
 
 use crate::{
-    ListStyle, Theme,
+    Theme,
     button_shape::filled_middle,
+    color::{FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, away_from, dim},
     linear_nav::{Axis, step_key},
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
@@ -74,18 +75,19 @@ impl CycleStyle {
         }
     }
 
-    /// Colors derived from a theme: the List's three backdrops, with the value
-    /// keeping the theme's foreground on them.
+    /// Colors derived from a theme: the List's three backdrops — the field,
+    /// shifted away from the page background for focus and further for
+    /// hover — with the value keeping the theme's foreground on them.
     #[must_use]
     pub fn from_theme(theme: &Theme) -> Self {
-        let list = ListStyle::from_theme(theme);
+        let away = away_from(theme.background);
         Self {
-            foreground: list.foreground,
-            background: list.background,
+            foreground: theme.muted_foreground,
+            background: theme.field,
             focused_foreground: theme.foreground,
-            focused_background: list.focused_background,
+            focused_background: dim(theme.field, away, FIELD_FOCUS_SHIFT),
             hovered_foreground: theme.foreground,
-            hovered_background: list.hovered_background,
+            hovered_background: dim(theme.field, away, FIELD_HOVER_SHIFT),
             disabled_foreground: theme.muted_foreground,
         }
     }
@@ -266,10 +268,10 @@ impl<S, M> Cycle<S, M> {
         self
     }
 
-    /// The columns that fit every option — the widest value, so an area
-    /// reserved from this never truncates and never shifts as the value
-    /// cycles. What the Cycle paints each frame is narrower: exactly its
-    /// current value.
+    /// The columns that fit every option as painted — the widest value plus
+    /// its column of field on either side — so an area reserved from this
+    /// never truncates and never shifts as the value cycles. What the Cycle
+    /// paints each frame is narrower: exactly its current value, padded.
     #[must_use]
     pub fn width(&self) -> u16 {
         self.options
@@ -277,6 +279,7 @@ impl<S, M> Cycle<S, M> {
             .map(|option| text_width::display_width_u16(option))
             .max()
             .unwrap_or(0)
+            .saturating_add(2)
     }
 
     /// Bind the selection and the message that moves it.
@@ -439,6 +442,7 @@ impl<S: 'static, M: 'static> MeasuredComponent<S, M> for Cycle<S, M> {
 mod tests {
 
     use super::*;
+    use crate::ListStyle;
     use crate::runtime::{ChildId, FocusState, Modifiers, Ratcn};
     use crate::test_support::{Driver, key, key_with, mouse};
 
@@ -644,6 +648,36 @@ mod tests {
         );
     }
 
+    /// The Cycle derives its colors from the theme itself rather than from
+    /// `ListStyle`, and must land on exactly the List's colors in every
+    /// shipped theme.
+    #[test]
+    fn a_themed_cycle_matches_the_list_in_every_theme() {
+        for theme in [
+            Theme::default_dark(),
+            Theme::terminal(),
+            Theme::catppuccin(),
+            Theme::gruvbox(),
+            Theme::nord(),
+            Theme::tokyo_night(),
+            Theme::solarized(),
+        ] {
+            let list = ListStyle::from_theme(&theme);
+            assert_eq!(
+                CycleStyle::from_theme(&theme),
+                CycleStyle {
+                    foreground: list.foreground,
+                    background: list.background,
+                    focused_foreground: theme.foreground,
+                    focused_background: list.focused_background,
+                    hovered_foreground: theme.foreground,
+                    hovered_background: list.hovered_background,
+                    disabled_foreground: theme.muted_foreground,
+                }
+            );
+        }
+    }
+
     /// Disabled is the loudest state: no events, no traversal, no fill.
     #[test]
     fn a_disabled_cycle_is_inert() {
@@ -728,13 +762,30 @@ mod tests {
         );
     }
 
-    /// The component measures the columns that fit every option, so a layout
-    /// reserved from it never truncates and never shifts as the value cycles.
+    /// The component measures the columns that fit every option as painted —
+    /// padding included — so a layout reserved from it never truncates and
+    /// never shifts as the value cycles.
     #[test]
-    fn the_component_measures_its_widest_option() {
-        let cycle: Cycle<State, Msg> = Cycle::new(SIZES);
-        assert_eq!(cycle.width(), 6, "\"Medium\" is the widest option");
-        assert_eq!(cycle.measure(), Size::new(6, 1));
+    fn the_component_measures_its_widest_option_with_its_padding() {
+        let mut cycle: Cycle<State, Msg> =
+            Cycle::new(SIZES).selection(|state: &State| state.size, Msg::Size);
+        assert_eq!(
+            cycle.width(),
+            8,
+            "\"Medium\" is the widest option, plus a column either side"
+        );
+        assert_eq!(cycle.measure(), Size::new(8, 1));
+
+        cycle.prepare(&State {
+            size: 1,
+            ..State::default()
+        });
+        let measured = Rect::new(0, 0, cycle.measure().width, 1);
+        assert_eq!(
+            cycle.value_area(measured),
+            measured,
+            "the widest value paints its padding within the measured area"
+        );
     }
 
     #[test]
