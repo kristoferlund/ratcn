@@ -360,13 +360,7 @@ impl TabsWidget<'_> {
                 self.hovered_item == Some(index),
                 disabled,
             );
-            paint_filled_shape(
-                self.labels[index],
-                foreground,
-                fill,
-                rect,
-                buf,
-            );
+            paint_filled_shape(self.labels[index], foreground, fill, rect, buf);
         }
         for (marker, slot) in [(LEFT_MARKER, layout.left), (RIGHT_MARKER, layout.right)] {
             if let Some(rect) = slot {
