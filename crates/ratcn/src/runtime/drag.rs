@@ -321,8 +321,7 @@ mod tests {
             Rect::ZERO,
             &mut transients,
             PointerInputs {
-                capture: Some(&mut capture),
-                button: Some(MouseButton::Left),
+                claim: Some((MouseButton::Left, &mut capture)),
                 screen_mouse: None,
                 captured_press: None,
             },
@@ -336,15 +335,12 @@ mod tests {
             DragPhase::Down
         );
         assert_eq!(capture, Some(path.clone()));
-
-        let mut no_capture = None;
         let mut ctx = EventCtx::at(
             path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
-                capture: Some(&mut no_capture),
-                button: None,
+                claim: None,
                 screen_mouse: None,
                 captured_press: Some(PRESS),
             },
@@ -372,8 +368,7 @@ mod tests {
             Rect::ZERO,
             &mut transients,
             PointerInputs {
-                capture: Some(&mut capture),
-                button: Some(MouseButton::Left),
+                claim: Some((MouseButton::Left, &mut capture)),
                 screen_mouse: None,
                 captured_press: None,
             },
@@ -382,15 +377,12 @@ mod tests {
             &mouse(MouseKind::Down(MouseButton::Left), 5, 5),
             DragOptions::new(CellOffset::new(2, -1)),
         );
-
-        let mut no_capture = None;
         let phase = EventCtx::at(
             path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
-                capture: Some(&mut no_capture),
-                button: None,
+                claim: None,
                 screen_mouse: None,
                 captured_press: Some(PRESS),
             },
@@ -418,8 +410,7 @@ mod tests {
             Rect::ZERO,
             &mut transients,
             PointerInputs {
-                capture: Some(&mut capture),
-                button: Some(MouseButton::Right),
+                claim: Some((MouseButton::Right, &mut capture)),
                 screen_mouse: None,
                 captured_press: None,
             },
@@ -450,8 +441,7 @@ mod tests {
             Rect::ZERO,
             &mut transients,
             PointerInputs {
-                capture: Some(&mut capture),
-                button: Some(MouseButton::Left),
+                claim: Some((MouseButton::Left, &mut capture)),
                 screen_mouse: None,
                 captured_press: None,
             },
@@ -460,15 +450,12 @@ mod tests {
             &mouse(MouseKind::Down(MouseButton::Left), 5, 5),
             DragOptions::new(CellOffset::default()),
         );
-
-        let mut no_capture = None;
         let mut ctx = EventCtx::at(
             path.clone(),
             Rect::ZERO,
             &mut transients,
             PointerInputs {
-                capture: Some(&mut no_capture),
-                button: None,
+                claim: None,
                 screen_mouse: None,
                 captured_press: Some(PRESS),
             },

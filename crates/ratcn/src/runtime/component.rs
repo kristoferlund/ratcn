@@ -1053,10 +1053,10 @@ impl Default for TransientStore<'_> {
 /// The pointer facts one dispatch carries into an [`EventCtx`].
 #[derive(Default)]
 pub(crate) struct PointerInputs<'a> {
-    /// Where a [`EventCtx::capture_pointer`] claim is recorded.
-    pub(crate) capture: Option<&'a mut Option<Vec<ChildId>>>,
-    /// The button holding the capture this event belongs to.
-    pub(crate) button: Option<MouseButton>,
+    /// The button a `Down` pressed, and where an
+    /// [`EventCtx::capture_pointer`] claim on its gesture is recorded.
+    /// `None` for every other event: only a press begins a gesture.
+    pub(crate) claim: Option<(MouseButton, &'a mut Option<Vec<ChildId>>)>,
     /// The event as it arrived, before any declaration-space projection.
     pub(crate) screen_mouse: Option<MouseEvent>,
     /// The press that opened the gesture this event continues, when the
@@ -1073,7 +1073,10 @@ impl fmt::Debug for EventCtx<'_> {
                 "transients_available",
                 &matches!(self.transients, TransientStore::Runtime(_)),
             )
-            .field("capture_button", &self.pointer.button)
+            .field(
+                "capture_button",
+                &self.pointer.claim.as_ref().map(|(button, _)| *button),
+            )
             .field("screen_mouse", &self.pointer.screen_mouse)
             .finish()
     }
@@ -1228,18 +1231,14 @@ impl<'a> EventCtx<'a> {
     /// [`Ratcn`](super::Ratcn) event dispatch — capture can only begin a
     /// gesture, not join one in progress.
     pub fn capture_pointer(&mut self, button: MouseButton) {
-        assert_eq!(
-            self.pointer.button,
-            Some(button),
-            "EventCtx::capture_pointer({button:?}) requires the matching MouseKind::Down"
-        );
-        let capture = self
-            .pointer
-            .capture
-            .as_deref_mut()
-            .expect("EventCtx::capture_pointer is unavailable outside Ratcn event dispatch");
-        if capture.is_none() {
-            *capture = Some(self.path.clone());
+        let claim = match &mut self.pointer.claim {
+            Some((pressed, claim)) if *pressed == button => claim,
+            _ => panic!(
+                "EventCtx::capture_pointer({button:?}) requires the matching MouseKind::Down"
+            ),
+        };
+        if claim.is_none() {
+            **claim = Some(self.path.clone());
         }
     }
 

@@ -31,7 +31,7 @@ use super::{
     MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
     component::{InteractionFlags, PaintTarget, PointerInputs, TransientMap},
     focus,
-    gesture::{Gestures, Press},
+    gesture::Gestures,
 };
 
 // The largest rectangle a viewport declares as its content, and the largest a
@@ -2276,7 +2276,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let focus = self.surface.resolve_focus(self.stored_focus(state));
         let chain = self.key_bubble_chain(&focus);
 
-        let routed = self.dispatch_chain(&chain, event, state, &mut None, None, None);
+        let routed = self.dispatch_chain(&chain, event, state);
         if !matches!(routed, EventResult::Ignored) {
             return routed;
         }
@@ -2556,23 +2556,30 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// The one dispatch loop. Keys and pointer events build different chains —
     /// keys from the focus path, the pointer from what it hit — but bubble
     /// through them identically, so this is where "unhandled events bubble up"
-    /// is actually implemented. `capture` receives a component's
-    /// [`EventCtx::capture_pointer`] claim; the key path passes `&mut None`
-    /// because there is no gesture to own.
-    ///
+    /// is actually implemented. A pointer `Down` is the one event a
+    /// component may claim the gesture of, through
+    /// [`EventCtx::capture_pointer`]; the claim is recorded once the chain
+    /// is done.
     fn dispatch_chain(
         &mut self,
         chain: &[usize],
         event: &Event,
         state: &State,
-        capture: &mut Option<Vec<ChildId>>,
-        capture_button: Option<MouseButton>,
-        captured_press: Option<Press>,
     ) -> EventResult<Msg> {
-        let capture_owner = match event {
-            Event::Mouse(mouse) => self.gestures.capture_for(mouse.kind).map(ToOwned::to_owned),
+        let mouse = match event {
+            Event::Mouse(mouse) => Some(*mouse),
             _ => None,
         };
+        let pressed = mouse.and_then(|mouse| match mouse.kind {
+            MouseKind::Down(button) => Some(button),
+            _ => None,
+        });
+        let capture_owner = mouse
+            .and_then(|mouse| self.gestures.capture_for(mouse.kind))
+            .map(ToOwned::to_owned);
+        let captured_press = mouse.and_then(|mouse| self.gestures.captured_press(mouse.kind));
+        let mut claim = None;
+        let mut result = EventResult::Ignored;
         for &index in chain.iter().rev() {
             if !self.surface.nodes[index].live {
                 continue;
@@ -2589,10 +2596,6 @@ impl<State, Msg> Ratcn<State, Msg> {
                 _ => None,
             };
             let delivered = projected.as_ref().unwrap_or(event);
-            let screen_mouse = match event {
-                Event::Mouse(mouse) => Some(*mouse),
-                _ => None,
-            };
             let owns_capture = capture_owner.as_deref().is_some_and(|owner| path == owner);
             let Some(component) = self.surface.nodes[index].component.as_mut() else {
                 continue;
@@ -2602,18 +2605,20 @@ impl<State, Msg> Ratcn<State, Msg> {
                 area,
                 &mut self.transients,
                 PointerInputs {
-                    capture: Some(capture),
-                    button: capture_button,
-                    screen_mouse,
+                    claim: pressed.map(|button| (button, &mut claim)),
+                    screen_mouse: mouse,
                     captured_press: captured_press.filter(|_| owns_capture),
                 },
             );
-            let result = component.handle_event(delivered, state, &mut ctx);
+            result = component.handle_event(delivered, state, &mut ctx);
             if !matches!(result, EventResult::Ignored) {
-                return result;
+                break;
             }
         }
-        EventResult::Ignored
+        if let (Some(button), Some(path)) = (pressed, claim) {
+            self.gestures.claim(button, path);
+        }
+        result
     }
 
     /// Route one *normalized* mouse event through the retained surface, and
@@ -2668,7 +2673,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         };
 
         let chain = self.surface.mouse_bubble_chain(&path);
-        let routed = self.dispatch_pointer(&chain, mouse, state);
+        let routed = self.dispatch_chain(&chain, &Event::Mouse(mouse), state);
         if !matches!(routed, EventResult::Ignored) {
             return routed;
         }
@@ -2701,34 +2706,6 @@ impl<State, Msg> Ratcn<State, Msg> {
             .capture_for(mouse.kind)
             .or(hit)
             .map(<[ChildId]>::to_vec)
-    }
-
-    /// Offer the event to the hit component and its ancestors, and record a
-    /// capture if one of them claims the gesture. Only a `Down` may claim.
-    fn dispatch_pointer(
-        &mut self,
-        chain: &[usize],
-        mouse: MouseEvent,
-        state: &State,
-    ) -> EventResult<Msg> {
-        let capture_button = match mouse.kind {
-            MouseKind::Down(button) => Some(button),
-            _ => None,
-        };
-        let mut capture = None;
-        let captured_press = self.gestures.captured_press(mouse.kind);
-        let result = self.dispatch_chain(
-            chain,
-            &Event::Mouse(mouse),
-            state,
-            &mut capture,
-            capture_button,
-            captured_press,
-        );
-        if let (Some(button), Some(path)) = (capture_button, capture) {
-            self.gestures.claim(button, path);
-        }
-        result
     }
 
     /// The focus change a primary `Down` produces when no component handled
