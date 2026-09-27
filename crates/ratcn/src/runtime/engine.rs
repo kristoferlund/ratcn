@@ -1891,8 +1891,8 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// This is not a paint sandbox or a root hit-test boundary. Base-layer
     /// paint is not clipped to `area`: widgets can paint outside their rects,
-    /// and [`PaintCtx::with_buffer`] gives unprojected base paint the whole
-    /// destination buffer. The host still owns input routing between trees.
+    /// and [`PaintCtx::with_buffer`] gives base paint outside viewports and
+    /// layers the whole destination buffer. The host still owns input routing between trees.
     ///
     /// This delegates to [`render_into`](Self::render_into) with the frame's
     /// buffer. Use that entry point for a caller-owned offscreen buffer rather
@@ -1973,8 +1973,9 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// `area` supplies floating placement bounds and clips layer paint and
     /// modal dimming, not arbitrary base paint or root hit-testing. Base widgets
-    /// can paint outside their rects, and unprojected [`PaintCtx::with_buffer`]
-    /// receives the whole destination buffer, as it does with `render`.
+    /// can paint outside their rects, and [`PaintCtx::with_buffer`] in base
+    /// paint outside viewports and layers receives the whole destination
+    /// buffer, as it does with `render`.
     ///
     /// A bare buffer carries no cursor metadata, and this method reports no
     /// caret position. Future caret-bearing components may require a caret

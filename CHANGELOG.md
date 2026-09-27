@@ -40,11 +40,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Component::prepare` is removed. `scope_options` and `interaction_area`
   receive the state the component is declared with:
   `scope_options(&self, state)`, `interaction_area(&self, area, state)`.
-- `BrowserEventError` and `Event`'s `TryFrom<ClipboardEvent>` are removed. With
-  the `ratzilla` feature, `runtime::BrowserPasteListener` installs the document
-  paste listener and forwards `text/plain` as `Event::Paste`.
+- `BrowserEventError` and `Event`'s `TryFrom<ClipboardEvent>` are removed; use
+  `runtime::BrowserPasteListener`.
 - `Ratcn::has_rendered` is removed: `handle_event` already returns `Ignored`
   before the first render, which is the answer a host needs.
+- `Cycle::width()` and its measured size include the column of padding painted
+  either side of the value, so both grow by 2.
+- `CheckboxWidget::themed` and `CycleWidget::themed` are no longer `const`.
+
+### Added
+
+- With the `ratzilla` feature, `runtime::BrowserPasteListener` installs the
+  document paste listener and forwards `text/plain` as `Event::Paste`.
+- `ListRow`, `list_core::{RowStyle, paint_rows}`, and
+  `button_shape::{FilledStyle, paint_filled_shape, label_style}`: the row and
+  button painters the built-in components use, for copied-out components.
 
 ### Fixed
 
@@ -66,8 +76,6 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the cursor moves within it instead of dragging it toward the top.
 - A primary press on the empty space (or a non-focusable child) of a scope that
   already holds focus no longer moves focus to the scope's first control.
-- `Cycle::width()` and its measured size include the column of padding painted
-  either side of the value, so both grow by 2.
 - A panic after a `terminal::Session` has dropped, or failed to open, no longer
   writes mode resets to the terminal.
 - A popup without `on_dismiss` layered above one with it no longer swallows the

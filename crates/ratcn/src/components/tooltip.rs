@@ -7,9 +7,10 @@
 //!   tooltip's area, so pointer and keyboard events over the trigger pass
 //!   through the tooltip on their way up.
 //! - The **bubble** is the bordered box holding the tooltip text. It is
-//!   declared as a *hint layer* — a subtree painted above everything else that
-//!   takes no input at all (see [`DeclareCtx::hint`]), which is what keeps a
-//!   tooltip from swallowing the click on the control it describes.
+//!   declared as a *hint layer* — a subtree painted above the content around
+//!   it (though beneath a modal it sits outside of) that takes no input at
+//!   all (see [`DeclareCtx::hint`]), which is what keeps a tooltip from
+//!   swallowing the click on the control it describes.
 
 use ratatui::{
     buffer::Buffer,
@@ -241,8 +242,9 @@ type TriggerFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
 /// keyboard order.
 ///
 /// When [`open`](Self::open) reads `true`, the bubble is declared as a *hint
-/// layer*: a subtree painted above everything else that takes no input at all
-/// (see [`DeclareCtx::hint`]). A press over the bubble reaches whatever the
+/// layer*: a subtree painted above the content around it (though beneath a
+/// modal it sits outside of) that takes no input at all (see
+/// [`DeclareCtx::hint`]). A press over the bubble reaches whatever the
 /// bubble covers, focus never moves into it, and it dims nothing. That is the
 /// whole reason a tooltip can safely float over the control it explains.
 ///

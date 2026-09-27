@@ -51,12 +51,13 @@ component claims to be focusable. Because it takes no input it has no dismissal
 of its own: whatever state opened it is what closes it. See
 [Tooltip](../components/tooltip).
 
-A **popup** occludes exactly its own footprint. A press inside it that nothing
-handles is consumed at the popup root rather than reaching the control beneath;
-a press outside routes to whatever is visibly there and additionally emits the
-popup's `on_dismiss` message. Focus is never stolen — move it in with your own
-message, in the same update that opens the popup. Keys bubble *through* the
-popup root to the component that declared it. See [Select](../components/select).
+A **popup** blocks pointer input over exactly its own footprint. A press inside
+it that nothing handles is consumed at the popup root rather than reaching the
+control beneath; a press outside routes to whatever is visibly there and
+additionally emits the popup's `on_dismiss` message. Focus is never stolen —
+move it in with your own message, in the same update that opens the popup. Keys
+bubble *through* the popup root to the component that declared it. See
+[Select](../components/select).
 
 A **modal** is the strongest: it becomes the **active layer**. While it is open
 the area behind is dimmed, keyboard and mouse routing are confined to it,
@@ -150,15 +151,16 @@ frame, and it comes back with its anchor.
 When focus reaches a descendant the viewport is clipping, the runtime calls
 `Component::reveal_in_viewport` on the component that opened the viewport, with
 that descendant's logical area, and it returns whether it moved its offset.
-The call comes at the start of a frame, and it covers every way focus moves:
-Tab, a press, and a path the app stores from its own update function. That is
-how a scrolled-away control comes into view as focus arrives at it.
+The call comes once the frame has declared, before it paints, and it covers
+every way focus moves: Tab, a press, and a path the app stores from its own
+update function. That is how a scrolled-away control comes into view as focus
+arrives at it.
 
 The reveal is answered against the tree the frame just declared, so it also
 covers a target that frame declares for the first time: startup focus, focus
-handed back as a modal closes, a row appended and focused together. When the
-component scrolls, the frame declares once more with the new offset before it
-paints.
+handed back as a modal closes, a row appended and focused together. Only when
+the component scrolls does the frame declare once more, with the new offset,
+before it paints.
 
 [ScrollArea](../components/scroll-area) is this mechanism packaged with a
 scrollbar and wheel and key handling.

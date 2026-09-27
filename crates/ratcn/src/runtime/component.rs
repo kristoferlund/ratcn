@@ -170,7 +170,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Floating components use these bounds to stay within their host's pane
     /// rather than the whole terminal. This does not sandbox base-layer paint:
     /// widgets may paint outside their rects, and [`PaintCtx::with_buffer`]
-    /// gives unprojected base paint the whole destination buffer.
+    /// gives base paint outside viewports and layers the whole destination
+    /// buffer.
     #[must_use]
     pub const fn frame_area(&self) -> Rect {
         self.frame_area
@@ -203,14 +204,16 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     }
 
     /// Read the transient stored at the current declaration's identity path,
-    /// if an event handler stored one.
+    /// if one is stored.
     ///
     /// The declaration-time counterpart of [`EventCtx::transient`]: event
     /// handlers write scratch values that mean nothing to the app — a
     /// wheel-scrolled viewport offset, say — and the next declaration reads
     /// them here to lay out accordingly.
     ///
-    /// `None` when no event handler has stored a `T` at this path. Like every
+    /// `None` when nothing has stored a `T` at this path: no event handler,
+    /// and no declaration through [`transient_mut`](Self::transient_mut),
+    /// which stores `T::default()` when it finds nothing. Like every
     /// transient, the value disappears as soon as its path stops being
     /// declared — see [`EventCtx::transient`] for the ownership rules; semantic
     /// state does not belong here.
@@ -233,9 +236,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// [`List`](crate::List) settles it in its `declare`, alongside the
     /// arithmetic that produces the offset it stores.
     ///
-    /// The write is published when the render commits, and is read back by
-    /// the next frame's declaration — and by any event handler that writes it
-    /// in between. Settling a flag
+    /// The next frame's declaration reads the write back, and so does any
+    /// event handler that runs in between. Settling a flag
     /// (`if moved { held = false }`) or storing a computed offset is what
     /// this is for; anything the app should read, persist, or act on belongs
     /// in app state.
@@ -467,8 +469,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
         pass.modal(id.into(), component, env);
     }
 
-    /// Declare a hint layer: a subtree painted above everything else that
-    /// takes no input at all.
+    /// Declare a hint layer: a subtree painted above everything declared
+    /// outside it, beneath a modal it sits outside of, that takes no input at
+    /// all.
     ///
     /// This is the layer for tooltips and other content that explains rather
     /// than acts. Like [`modal`](Self::modal) and [`popup`](Self::popup) it is
@@ -519,9 +522,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// - Nothing is dimmed, and nothing outside the popup is captured: a
     ///   press outside its footprint routes to whatever is visibly there — a
     ///   button under the pointer still presses.
-    /// - The popup occludes exactly its own footprint. A press inside it that
-    ///   nothing handles is consumed at the popup root, never delivered to
-    ///   the control it covers.
+    /// - The popup blocks pointer input over exactly its own footprint. A
+    ///   press inside it that nothing handles is consumed at the popup root,
+    ///   never delivered to the control it covers.
     /// - Focus is never stolen. Move focus into the popup through your own
     ///   messages, in the same update that opens it.
     /// - A press outside the popup emits the

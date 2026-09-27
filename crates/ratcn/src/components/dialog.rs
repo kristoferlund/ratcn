@@ -399,6 +399,8 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     ///
     /// The closure is `FnOnce`, so it may consume owned values, but it is stored
     /// on the retained component and so must capture only `'static` values.
+    /// The render closure is `FnMut`, so build those values inside it: it
+    /// builds them afresh each time it runs.
     #[must_use]
     pub fn content(
         mut self,

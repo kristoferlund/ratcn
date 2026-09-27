@@ -21,8 +21,8 @@ it never uses.
 
 ```rust
 // A frame reaches the first four in this order. `handle_event` runs on the
-// retained instance between frames, and `reveal_in_viewport` opens the frame
-// that answers a focus move.
+// retained instance between frames, and `reveal_in_viewport` runs between a
+// frame's declaration and its paint when focus has moved.
 impl Component<AppState, Msg> for MyComponent {
     fn scope_options(&self, state: &AppState) -> ScopeOptions { ... }
 
@@ -79,7 +79,11 @@ Every method except `declare` has a default:
 - [`reveal_in_viewport`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.reveal_in_viewport)
   is called on the component that declared a viewport when focus lands on a
   descendant the viewport clips, so it can scroll that descendant into view;
-  it returns whether it moved.
+  it returns whether it moved. The offset lives in a transient: the reveal
+  writes the new one through `ctx.transient::<Offset>()` on its `EventCtx`,
+  and `declare` reads it back with `DeclareCtx::transient` (or
+  `transient_mut`, when it also settles it) to open the viewport there. A
+  reveal that returns `true` has the frame declared again with that offset.
   [Layers and modals](./layers-and-modals) covers when the call arrives.
 
 [`MeasuredComponent`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.MeasuredComponent.html)
@@ -201,7 +205,9 @@ a plain block (`Block::bordered().padding(p).inner(area)`, which depends only on
 borders and padding) and build the styled one inside the closure.
 
 **Caller-supplied bodies.** A region the caller fills is a closure, and it
-should be `FnOnce` so the caller can move owned values into it. Store it as
+should be `FnOnce` so the caller can move owned values into it. The render
+closure that declares the composite is `FnMut`, so the caller builds those
+values inside it, afresh each time it runs. Store it as
 `Option<Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>>` and `take()` it in
 `declare`, then hand it the area you chose for it with
 `ctx.in_area(area, body)`. The body's children land in the composite's own
