@@ -301,8 +301,9 @@ fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
     }
 }
 
-/// A layer canvas holds the same guarantee: a write the panic left
-/// unrecorded composites nowhere.
+/// Layer paint holds the same guarantee: it is clipped to the render area
+/// through the same scratch buffer, so a write the panic left behind lands
+/// nowhere.
 #[test]
 fn a_caught_layer_paint_panic_composites_nothing_and_commits() {
     let mut driver = Driver::<State, Msg>::new(10, 3);
@@ -431,25 +432,6 @@ fn a_captured_drag_reports_travel_at_the_coordinate_limit() {
         driver.event(mouse(MouseKind::Moved, 0, 4), &State),
         EventResult::Emit(Msg::Dragged(CellOffset::new(0, 4)))
     );
-}
-
-/// Deferred paint escapes the viewport it was registered in the way a layer
-/// does, and paints in screen coordinates.
-#[test]
-fn deferred_paint_inside_a_viewport_paints_in_screen_coordinates() {
-    let mut driver = Driver::<State, Msg>::new(2, 6);
-    driver.render(&State, |ctx| {
-        ctx.viewport(Rect::new(0, 0, 2, 3), u16::MAX, u16::MAX, |ctx| {
-            ctx.defer_paint(|ctx| {
-                assert_eq!(ctx.area(), Rect::new(0, 0, 2, 6));
-                ctx.with_buffer(|buffer| {
-                    buffer.set_string(0, 5, "D", Style::default());
-                });
-            });
-        });
-    });
-
-    assert_eq!(&driver.row(5)[..1], "D");
 }
 
 /// A viewport's clip travels with its content's paint: rows declared

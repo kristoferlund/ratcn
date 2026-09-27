@@ -10,9 +10,10 @@
 //! committed surface, holds the app's focus and modal bindings, and routes
 //! input against it.
 //!
-//! Supporting types sit with the one that uses them: viewports before
-//! [`Surface`], and the paint queue and its canvases before [`RenderPass`]. What the pointer is doing between a press and its
-//! release lives in [`gesture`](super::gesture), which [`Ratcn`] drives.
+//! Supporting types sit with the one that uses them: viewports and
+//! projections before [`Surface`], and the paint queue before [`RenderPass`].
+//! What the pointer is doing between a press and its release lives in
+//! [`gesture`](super::gesture), which [`Ratcn`] drives.
 
 use std::{collections::HashMap, fmt};
 
@@ -87,7 +88,7 @@ impl Viewport {
 
     /// The part of the screen rectangle the content covers. Content shorter
     /// than the rectangle leaves the rows past its end to what is beneath.
-    pub(crate) fn visible_screen(self) -> Rect {
+    fn visible_screen(self) -> Rect {
         Rect::new(
             self.screen.x,
             self.screen.y,
@@ -149,25 +150,12 @@ impl Viewport {
         }
     }
 
-    /// A logical rectangle in screen coordinates, clipped to the rows this
-    /// viewport shows.
-    pub(crate) fn project_rect(self, area: Rect) -> Rect {
-        let above = self.offset.saturating_sub(area.y);
-        if above >= area.height {
-            return Rect::ZERO;
-        }
-        // `max` then subtract: both operands are at least `offset`.
-        let projected = Rect::new(
-            area.x,
-            area.y.max(self.offset) - self.offset,
-            area.width,
-            area.height - above,
-        )
-        .intersection(self.visible_screen());
-        if projected.is_empty() {
-            Rect::ZERO
-        } else {
-            projected
+    /// How paint declared inside this viewport reaches the screen: shifted
+    /// up by the offset, onto the rows it shows.
+    fn projection(self) -> Projection {
+        Projection {
+            offset: self.offset,
+            clip: self.visible_screen(),
         }
     }
 
@@ -182,27 +170,82 @@ impl Viewport {
         }
     }
 
-    /// Every cell of `logical` this viewport shows, paired with the screen
-    /// cell it lands on.
-    pub(crate) fn projected_positions(
-        self,
-        logical: Rect,
-    ) -> impl Iterator<Item = (Position, Position)> {
-        let offset = self.offset;
-        self.project_rect(logical).positions().map(move |screen| {
-            (
-                Position::new(screen.x, screen.y.saturating_add(offset)),
-                screen,
-            )
-        })
-    }
-
     /// The frame rectangle in this viewport's logical coordinates.
     fn logical_frame(self, frame: Rect) -> Rect {
         Rect {
             y: frame.y.saturating_add(self.offset),
             ..frame
         }
+    }
+}
+
+/// How one paint reaches the frame when it may not write straight onto it:
+/// laid out in its own coordinates, shifted up by `offset` rows, and kept
+/// only where it lands inside `clip`.
+///
+/// Paint inside a viewport carries the viewport's offset and the rows it
+/// shows; layer paint carries the render area as its clip, so what a layer
+/// paints never reaches past it. See [`PaintTarget`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Projection {
+    offset: u16,
+    clip: Rect,
+}
+
+impl Projection {
+    /// Paint in screen coordinates, kept inside `clip`.
+    const fn clipped(clip: Rect) -> Self {
+        Self { offset: 0, clip }
+    }
+
+    /// The same projection, reaching no further than `bound` as well.
+    fn within(self, bound: Rect) -> Self {
+        Self {
+            clip: self.clip.intersection(bound),
+            ..self
+        }
+    }
+
+    /// The screen rectangle paint through this reaches.
+    pub(crate) const fn clip(self) -> Rect {
+        self.clip
+    }
+
+    /// A rectangle in paint coordinates, in screen coordinates and clipped.
+    /// Rows that project above the screen are dropped.
+    fn project_rect(self, area: Rect) -> Rect {
+        let above = self.offset.saturating_sub(area.y);
+        if above >= area.height {
+            return Rect::ZERO;
+        }
+        // `max` then subtract: both operands are at least `offset`.
+        let projected = Rect::new(
+            area.x,
+            area.y.max(self.offset) - self.offset,
+            area.width,
+            area.height - above,
+        )
+        .intersection(self.clip);
+        if projected.is_empty() {
+            Rect::ZERO
+        } else {
+            projected
+        }
+    }
+
+    /// Every cell of `area` this projection keeps, paired with the screen
+    /// cell it lands on.
+    pub(crate) fn projected_positions(
+        self,
+        area: Rect,
+    ) -> impl Iterator<Item = (Position, Position)> {
+        let offset = self.offset;
+        self.project_rect(area).positions().map(move |screen| {
+            (
+                Position::new(screen.x, screen.y.saturating_add(offset)),
+                screen,
+            )
+        })
     }
 }
 
@@ -246,20 +289,20 @@ enum FocusAdvance {
 /// What kind of layer a node roots, when it roots one.
 ///
 /// A layer is a subtree painted above everything declared outside it. Every
-/// kind shares that mechanism — a tag, a canvas, compositing order, and
-/// screen coordinates: a layer undoes the scroll of the viewport that
-/// declared it once, over its own area, and declares from there in screen
-/// coordinates. The kinds differ only in what they do to interaction.
+/// kind shares that mechanism — a tag, paint order, and screen coordinates:
+/// a layer undoes the scroll of the viewport that declared it once, over its
+/// own area, and declares from there in screen coordinates. The kinds differ
+/// only in what they do to interaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LayerKind {
     /// Takes the screen over: what lies beneath it dims, events landing
     /// outside it are consumed, focus resolves into it, Tab is trapped at its
     /// root, and keys stop there too.
     Modal,
-    /// Occludes its own footprint and, when it carries a dismiss hook, emits
-    /// it on a press outside itself — but never steals focus and lets keys
-    /// reach its declarer. Anchored: skipped while its declaration is
-    /// scrolled out of sight.
+    /// Holds the pointer over its own footprint and, when it carries a
+    /// dismiss hook, emits it on a press outside itself — but never steals
+    /// focus and lets keys reach its declarer. Anchored: skipped while its
+    /// declaration is scrolled out of sight.
     Popup,
     /// Says something and takes nothing: not a pointer target, so a press
     /// goes to whatever it covers, and not a focus target, so Tab passes it by
@@ -293,8 +336,8 @@ pub(crate) struct Node<State, Msg> {
     options: ScopeOptions,
     is_scope: bool,
     component: Option<Box<dyn Component<State, Msg>>>,
-    /// The layer this node's paint lands on, indexing [`Surface::layers`]
-    /// and the pass's canvases. `None` outside any layer.
+    /// The layer this node was declared on, indexing [`Surface::layers`].
+    /// `None` outside any layer.
     layer: Option<usize>,
 }
 
@@ -314,10 +357,14 @@ impl<State, Msg> fmt::Debug for Node<State, Msg> {
     }
 }
 
-/// One declared layer: the node rooting its subtree, and what it does.
+/// One declared layer: the node rooting its subtree, where it sits, and what
+/// it does.
 struct Layer<Msg> {
     root: usize,
     kind: LayerKind,
+    /// The area it was declared over, in screen coordinates: what a layer
+    /// taking the screen over dims beneath itself.
+    area: Rect,
     /// The message a press outside the layer emits: only ever a popup's, and
     /// only when the app bound one.
     on_dismiss: Option<Box<dyn Fn() -> Msg>>,
@@ -505,8 +552,8 @@ impl<State, Msg> Surface<State, Msg> {
             .map(|layer| layer.root)
     }
 
-    /// Whether the canvas `index` backs lies beneath the layer that has taken
-    /// the screen over, when one is open.
+    /// Whether layer `index` lies beneath the layer that has taken the screen
+    /// over, when one is open.
     fn covered_by_takeover(&self, index: usize, takeover: Option<usize>) -> bool {
         takeover.is_some_and(|root| !self.inside(self.layers[index].root, root))
     }
@@ -938,13 +985,13 @@ struct QueuedPaint<State> {
     paint: DeclaredPaint<State>,
 }
 
-/// The surface an op paints onto, and the viewport it paints through.
+/// The layer an op paints on, and the viewport it paints through.
 ///
 /// Both are fixed where the op was queued, so an op belongs to the layer that
 /// was open at its declaration whatever is open at replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PaintSlot {
-    /// The layer canvas the op paints onto, `None` for the frame.
+    /// The layer the op paints on, `None` for the base declaration.
     layer: Option<usize>,
     viewport: Option<Viewport>,
 }
@@ -958,9 +1005,8 @@ struct PaintSlot {
 enum DeclaredPaint<State> {
     /// Call [`Component::paint`] on the component installed at this node.
     Node { index: usize, area: Rect },
-    /// Run a closure queued through [`DeclareCtx::paint`] or
-    /// [`DeclareCtx::defer_paint`]. `node` is the declaration it was reached
-    /// from, or `None` at the root and for deferred paint, which have no
+    /// Run a closure queued through [`DeclareCtx::paint`]. `node` is the
+    /// declaration it was reached from, or `None` at the root, which has no
     /// identity and therefore no flags.
     Thunk {
         node: Option<usize>,
@@ -982,48 +1028,6 @@ impl<State> DeclaredPaint<State> {
     const fn area(&self) -> Rect {
         match self {
             Self::Node { area, .. } | Self::Thunk { area, .. } => *area,
-        }
-    }
-}
-
-/// A private paint surface: a buffer, and the rectangles written into it.
-///
-/// A layer subtree is declared inline, wherever its owner lives in the tree,
-/// and paints *above* everything declared outside it — including siblings
-/// declared later. It paints here and composites once the pass is over:
-/// `painted` records the rects paint wrote through, only those rects blit —
-/// so a modal declared over the full screen composites just the box it
-/// painted — and each rect composites opaquely, unwritten cells included.
-pub(crate) struct Canvas {
-    pub(crate) buffer: Buffer,
-    painted: Vec<Rect>,
-}
-
-/// A layer's canvas and the overlays that must finish before it composites.
-struct LayerPaint<State> {
-    canvas: Canvas,
-    deferred: Vec<QueuedPaint<State>>,
-}
-
-impl Canvas {
-    fn new(area: Rect) -> Self {
-        Self {
-            buffer: Buffer::empty(area),
-            painted: Vec::new(),
-        }
-    }
-
-    /// The part of `area` this canvas can hold. Paint outside it is clipped
-    /// away.
-    pub(crate) fn clip(&self, area: Rect) -> Rect {
-        area.intersection(self.buffer.area)
-    }
-
-    /// Record that `area` was painted, clipped to the canvas.
-    pub(crate) fn mark_painted(&mut self, area: Rect) {
-        let clipped = self.clip(area);
-        if !clipped.is_empty() {
-            self.painted.push(clipped);
         }
     }
 }
@@ -1090,9 +1094,6 @@ pub(crate) struct RenderPass<State, Msg> {
     /// The identity path of the open declaration chain, maintained in step
     /// with `parent_stack` by [`Self::enter_node`] and [`Self::leave_node`].
     path_cursor: Vec<ChildId>,
-    /// Root overlays flush after every layer has composited. Layer overlays
-    /// live with their canvas and flush immediately before its composite.
-    deferred: Vec<QueuedPaint<State>>,
     /// Every paint this frame owes, in the order the declaration walk reached
     /// it, replayed by [`Self::replay_paint`] once the walk is over.
     paint_queue: Vec<QueuedPaint<State>>,
@@ -1108,16 +1109,15 @@ pub(crate) struct RenderPass<State, Msg> {
     /// Set when any declaration region unwinds — see [`Self::guarded`]. A
     /// poisoned pass can never commit.
     failed: bool,
-    /// One canvas per declared layer, in discovery order.
-    canvases: Vec<LayerPaint<State>>,
     /// The open viewport, indexing [`Surface::viewports`]. A viewport
     /// declared while one is open panics, so there is at most one.
     open_viewport: Option<usize>,
-    /// The layer canvases open in declaration nesting order; the innermost
-    /// decides where the next paint belongs.
+    /// The layers open in declaration nesting order, indexing
+    /// [`Surface::layers`]; the innermost decides where the next paint
+    /// belongs.
     layer_stack: Vec<usize>,
-    /// The buffer paint inside a viewport lays out in, shared by every paint
-    /// call the frame makes — see [`PaintTarget`].
+    /// The buffer clipped paint lays out in, shared by every paint call the
+    /// frame makes — see [`PaintTarget`].
     scratch: Buffer,
 }
 
@@ -1129,19 +1129,17 @@ impl<State, Msg> RenderPass<State, Msg> {
             settled_transients: HashMap::new(),
             parent_stack: Vec::new(),
             path_cursor: Vec::new(),
-            deferred: Vec::new(),
             paint_queue: Vec::new(),
             hover_position: None,
             hover_path: Vec::new(),
             failed: false,
-            canvases: Vec::new(),
             open_viewport: None,
             layer_stack: Vec::new(),
             scratch: Buffer::empty(Rect::ZERO),
         }
     }
 
-    /// The layer currently being declared into, named by its canvas index.
+    /// The layer currently being declared into.
     /// `None` outside any layer.
     fn current_layer(&self) -> Option<usize> {
         self.layer_stack.last().copied()
@@ -1290,17 +1288,14 @@ impl<State, Msg> RenderPass<State, Msg> {
             env.area = self.surface.viewports[index].viewport.unscrolled(env.area);
         }
         env.frame_area = self.frame_area;
-        self.canvases.push(LayerPaint {
-            canvas: Canvas::new(env.area),
-            deferred: Vec::new(),
-        });
-        let canvas = self.canvases.len() - 1;
-        self.layer_stack.push(canvas);
+        let layer = self.surface.layers.len();
+        self.layer_stack.push(layer);
 
         let root = self.surface.nodes.len();
         self.surface.layers.push(Layer {
             root,
             kind,
+            area: env.area,
             on_dismiss,
         });
         declare_root(self, env);
@@ -1308,7 +1303,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             self.surface
                 .nodes
                 .get(root)
-                .is_some_and(|node| node.layer == Some(canvas)),
+                .is_some_and(|node| node.layer == Some(layer)),
             "a layer's root is the first node its declaration opens"
         );
 
@@ -1544,33 +1539,17 @@ impl<State, Msg> RenderPass<State, Msg> {
         declare(&mut ctx);
     }
 
-    /// Register a deferred closure. It has no identity, so its area is the
-    /// whole surface it writes to. It escapes the open viewport the way a
-    /// layer does, and paints in screen coordinates.
-    pub(crate) fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
-        let slot = PaintSlot {
-            layer: self.current_layer(),
-            viewport: None,
-        };
-        let area = slot.layer.map_or(self.frame_area, |index| {
-            self.canvases[index].canvas.buffer.area
-        });
-        let queue = match slot.layer {
-            Some(index) => &mut self.canvases[index].deferred,
-            None => &mut self.deferred,
-        };
-        queue.push(QueuedPaint {
-            slot,
-            paint: DeclaredPaint::Thunk {
-                node: None,
-                area,
-                paint: Box::new(paint),
-            },
-        });
-    }
-
-    /// Run every queued op in declaration order, each onto the surface its
-    /// declaration belonged to, with the flags the finished tree resolved.
+    /// Run every queued op onto the frame with the flags the finished tree
+    /// resolved: the base declaration's ops in declaration order, then each
+    /// layer's in composite order.
+    ///
+    /// Layers are transparent — a layer covers what is beneath it only where
+    /// its own ops write — so compositing is nothing but this order. Layers
+    /// paint in declaration order, except that every layer outside the one
+    /// that has taken the screen over paints before it: what the takeover
+    /// covers is inert, and so must not paint above it either. The takeover
+    /// dims what is beneath it immediately before its own ops run. Ops of one
+    /// layer keep the order they were declared in.
     fn replay_paint(
         &mut self,
         buffer: &mut Buffer,
@@ -1578,17 +1557,38 @@ impl<State, Msg> RenderPass<State, Msg> {
         theme: &Theme,
         resolved: Resolved<'_>,
     ) {
-        for QueuedPaint { slot, paint } in std::mem::take(&mut self.paint_queue) {
-            self.paint_op(paint, slot, buffer, state, theme, resolved);
+        let mut layers: Vec<Vec<QueuedPaint<State>>> =
+            self.surface.layers.iter().map(|_| Vec::new()).collect();
+        for op in std::mem::take(&mut self.paint_queue) {
+            match op.slot.layer {
+                None => self.paint_op(op, buffer, state, theme, resolved),
+                Some(layer) => layers[layer].push(op),
+            }
+        }
+        let takeover = self.surface.takeover_root();
+        let (covered, uncovered): (Vec<usize>, Vec<usize>) =
+            (0..layers.len()).partition(|&index| self.surface.covered_by_takeover(index, takeover));
+        for index in covered.into_iter().chain(uncovered) {
+            let layer = &self.surface.layers[index];
+            if layer.kind.takes_over() {
+                dim_background(
+                    buffer,
+                    layer.area.intersection(self.frame_area),
+                    theme.background,
+                );
+            }
+            for op in std::mem::take(&mut layers[index]) {
+                self.paint_op(op, buffer, state, theme, resolved);
+            }
         }
     }
 
-    /// Paint one declaration onto the surface its layer names, with the flags
-    /// the finished tree resolved for it.
+    /// Paint one declaration onto the frame, through the viewport and the
+    /// layer clip its slot names, with the flags the finished tree resolved
+    /// for it.
     fn paint_op(
         &mut self,
-        op: DeclaredPaint<State>,
-        slot: PaintSlot,
+        QueuedPaint { slot, paint: op }: QueuedPaint<State>,
         buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
@@ -1600,16 +1600,15 @@ impl<State, Msg> RenderPass<State, Msg> {
             self.surface.interaction_flags(index, resolved)
         });
         let hover_position = self.hover_in(slot);
-        let target = match slot.layer {
-            None => PaintTarget::frame(buffer, slot.viewport, &mut self.scratch),
-            Some(index) => PaintTarget::canvas(
-                &mut self.canvases[index].canvas,
-                slot.viewport,
-                &mut self.scratch,
-            ),
+        let projection = match (slot.viewport, slot.layer) {
+            (viewport, None) => viewport.map(Viewport::projection),
+            // Layer paint stays inside the render area, whatever it writes.
+            (None, Some(_)) => Some(Projection::clipped(self.frame_area)),
+            (Some(viewport), Some(_)) => Some(viewport.projection().within(self.frame_area)),
         };
+        let allocation = slot.viewport.map_or(buffer.area, Viewport::content);
         let mut ctx = PaintCtx {
-            target,
+            target: PaintTarget::new(buffer, projection, allocation, &mut self.scratch),
             theme,
             area: op.area(),
             flags,
@@ -1625,85 +1624,6 @@ impl<State, Msg> RenderPass<State, Msg> {
                 .expect("a checked pass installed every node's component")
                 .paint(&mut ctx),
             DeclaredPaint::Thunk { paint, .. } => paint(&mut ctx),
-        }
-    }
-
-    /// Finish the frame's painting: composite every layer canvas over the
-    /// frame — a modal dims what is beneath it first, and the layer's own
-    /// deferred thunks land on its canvas above everything it declared — then
-    /// flush the base declaration's deferred thunks on top of the result,
-    /// making root-level [`DeclareCtx::defer_paint`] the topmost decoration
-    /// slot (toast stacks, drag ghosts).
-    ///
-    /// Layers composite in declaration order, except that every layer outside
-    /// the one that has taken the screen over composites before it: what the
-    /// takeover covers is inert, and so must not paint above it either.
-    fn finish_frame(&mut self, buffer: &mut Buffer, state: &State, theme: &Theme) {
-        let takeover = self.surface.takeover_root();
-        for index in 0..self.canvases.len() {
-            if self.surface.covered_by_takeover(index, takeover) {
-                self.composite_layer(index, buffer, state, theme);
-            }
-        }
-        for index in 0..self.canvases.len() {
-            if !self.surface.covered_by_takeover(index, takeover) {
-                self.composite_layer(index, buffer, state, theme);
-            }
-        }
-        self.flush_deferred(None, buffer, state, theme);
-    }
-
-    /// Copy one layer's canvas onto the frame — dimming beneath it first when
-    /// it takes the screen over — and flush the deferred thunks that belong
-    /// to it.
-    fn composite_layer(&mut self, index: usize, buffer: &mut Buffer, state: &State, theme: &Theme) {
-        if self.surface.layers[index].kind.takes_over() {
-            dim_background(
-                buffer,
-                self.canvases[index]
-                    .canvas
-                    .buffer
-                    .area
-                    .intersection(self.frame_area),
-                theme.background,
-            );
-        }
-        self.flush_deferred(Some(index), buffer, state, theme);
-        let frame_area = self.frame_area;
-        let canvas = &self.canvases[index].canvas;
-        let clip = frame_area.intersection(canvas.buffer.area);
-        for &rect in &canvas.painted {
-            super::buffer::copy_cells(
-                &canvas.buffer,
-                buffer,
-                rect.intersection(clip)
-                    .positions()
-                    .map(|position| (position, position)),
-                clip,
-            );
-        }
-    }
-
-    /// Drain the owning layer's thunks in registration order.
-    fn flush_deferred(
-        &mut self,
-        layer: Option<usize>,
-        buffer: &mut Buffer,
-        state: &State,
-        theme: &Theme,
-    ) {
-        let queue = match layer {
-            Some(index) => &mut self.canvases[index].deferred,
-            None => &mut self.deferred,
-        };
-        let deferred = std::mem::take(queue);
-        // Deferred thunks carry `node: None`, so no flag is ever read from this.
-        let resolved = Resolved {
-            focus: &[],
-            hover: &[],
-        };
-        for QueuedPaint { slot, paint } in deferred {
-            self.paint_op(paint, slot, buffer, state, theme, resolved);
         }
     }
 
@@ -2014,7 +1934,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// exists.
     ///
     /// The pass has to finish completely before it counts: declaration,
-    /// component paint, runtime validation, and deferred paint all have to
+    /// component paint, runtime validation, and layer paint all have to
     /// succeed. Only then does the new surface replace the old one, and it
     /// happens in one step. A pass that panics or fails validation leaves the
     /// previous surface handling events, so a bad frame degrades interaction to
@@ -2028,8 +1948,8 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// Pass `frame.area()` for a whole-frame app, or a pane's rectangle for a
     /// hosted tree. Choose an area within the frame; it is passed unchanged
     /// for layout, not silently clamped. Floating components read its bounds
-    /// through [`DeclareCtx::frame_area`]; layer copies and modal backdrop
-    /// dimming are intersected with it. Viewports retain their logical
+    /// through [`DeclareCtx::frame_area`]; layer paint and modal backdrop
+    /// dimming are clipped to it. Viewports retain their logical
     /// coordinate transforms, and input events still use screen coordinates.
     ///
     /// This is not a paint sandbox or a root hit-test boundary. Base-layer
@@ -2067,11 +1987,13 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// order — a component draws before its own descendants — and it sets
     /// hit-testing order, with later declarations on top — within one layer.
     /// [`modal`](DeclareCtx::modal), [`popup`](DeclareCtx::popup), and
-    /// [`hint`](DeclareCtx::hint) layers are exempt from paint order: each
-    /// paints into its own canvas, and canvases composite over the frame in
-    /// the order the layers were declared, so base content declared *after* a
-    /// layer still paints beneath it. Layers may therefore be declared from
-    /// anywhere in the tree, whenever their owner declares.
+    /// [`hint`](DeclareCtx::hint) layers are exempt from paint order: every
+    /// layer paints after the whole base declaration, in the order the layers
+    /// were declared, so base content declared *after* a layer still paints
+    /// beneath it. Layers may therefore be declared from anywhere in the
+    /// tree, whenever their owner declares. Layers are transparent: a layer
+    /// covers only the cells its content writes, so one that should hide what
+    /// is beneath it paints a background (`Clear`, then a filled block).
     ///
     /// # Panics
     ///
@@ -2112,7 +2034,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// translating screen pointer positions back into buffer coordinates before
     /// [`handle_event`](Self::handle_event).
     ///
-    /// `area` supplies floating placement bounds and clips layer copies and
+    /// `area` supplies floating placement bounds and clips layer paint and
     /// modal dimming, not arbitrary base paint or root hit-testing. Base widgets
     /// can paint outside their rects, and unprojected [`PaintCtx::with_buffer`]
     /// receives the whole destination buffer, as it does with `render`.
@@ -2173,7 +2095,6 @@ impl<State, Msg> Ratcn<State, Msg> {
                 hover: &resolved_hover,
             },
         );
-        pass.finish_frame(buffer, state, theme);
         for (path, slots) in pass.settled_transients {
             self.transients.entry(path).or_default().extend(slots);
         }

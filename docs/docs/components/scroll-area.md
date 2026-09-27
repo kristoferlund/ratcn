@@ -115,7 +115,7 @@ scrolling under a held pointer leaves the travel it measures alone.
 
 ## Layers
 
-Hints, popups, modals, and `defer_paint` keep their normal layer behavior. Each
+Hints, popups, and modals keep their normal layer behavior. Each
 opens at the place on screen its area names and declares in screen coordinates
 from there, so layer content paints at its own `ctx.area()`, and a scroll area
 inside a dialog or popup inside a scroll area is ordinary nesting. A popup or

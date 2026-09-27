@@ -41,14 +41,16 @@ impl State {
 /// declaration closure when the modal stack says the screensaver is open.
 ///
 /// The scope itself is the focusable leaf — nothing inside takes focus — and
-/// the runtime dims the base layer when the layer opens. Snow is deferred from
-/// the root so it paints onto that dimmed frame instead of an opaque layer
-/// canvas, preserving the app beneath it.
+/// the runtime dims the base layer when the layer opens. Layers are
+/// transparent, so the snow the layer paints lands on that dimmed frame and
+/// the app beneath stays visible.
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>, area: Rect, now: Duration) {
-    ctx.modal_scope(ID, area, ScopeOptions::default().focusable(true), |_| {});
-    ctx.defer_paint(move |ctx| {
-        let elapsed = now.saturating_sub(ctx.state().screensaver.started);
-        ctx.with_buffer(|buf| snow(buf, area, elapsed));
+    ctx.modal_scope(ID, area, ScopeOptions::default().focusable(true), |ctx| {
+        let area = ctx.area();
+        ctx.paint(move |ctx| {
+            let elapsed = now.saturating_sub(ctx.state().screensaver.started);
+            ctx.with_buffer(|buf| snow(buf, area, elapsed));
+        });
     });
 }
 

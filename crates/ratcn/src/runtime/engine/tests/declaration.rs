@@ -43,7 +43,7 @@ fn failed_declaration_discards_staged_transient_settlement() {
         catch_unwind(AssertUnwindSafe(|| {
             driver.render(&(), |ctx| {
                 ctx.component("probe", Probe(true), area);
-                ctx.defer_paint(|_| panic!("reject during paint"));
+                ctx.paint(|_| panic!("reject during paint"));
             });
         }))
         .is_err()
@@ -601,17 +601,17 @@ fn the_closure_declares_once_and_queued_paint_runs_once_on_the_frame() {
 }
 
 #[test]
-fn deferred_paint_finishes_before_surface_replacement() {
+fn queued_paint_finishes_before_surface_replacement() {
     let mut driver = Driver::<(), ()>::new(10, 3);
     let painted = Arc::new(AtomicBool::new(false));
-    let deferred_painted = Arc::clone(&painted);
+    let queued_painted = Arc::clone(&painted);
 
     let area = driver.area();
     driver.render(&(), |ctx| {
         ctx.component(ChildId::Static("next"), Leaf, area);
-        let deferred_painted = Arc::clone(&deferred_painted);
-        ctx.defer_paint(move |_| {
-            deferred_painted.store(true, Ordering::SeqCst);
+        let queued_painted = Arc::clone(&queued_painted);
+        ctx.paint(move |_| {
+            queued_painted.store(true, Ordering::SeqCst);
         });
     });
 
@@ -623,7 +623,7 @@ fn deferred_paint_finishes_before_surface_replacement() {
 }
 
 #[test]
-fn deferred_paint_panic_does_not_replace_the_previous_surface() {
+fn a_paint_panic_does_not_replace_the_previous_surface() {
     let mut driver = Driver::<(), ()>::new(10, 3);
     render_leaf(&mut driver, &ChildId::Static("stable"));
 
@@ -631,7 +631,7 @@ fn deferred_paint_panic_does_not_replace_the_previous_surface() {
         let area = driver.area();
         driver.render(&(), |ctx| {
             ctx.component(ChildId::Static("next"), Leaf, area);
-            ctx.defer_paint(|_| panic!("deferred paint failed"));
+            ctx.paint(|_| panic!("paint failed"));
         });
     }));
 

@@ -271,7 +271,7 @@ fn viewport_popup_restores_screen_root_bounds_and_projects_once() {
                             Button::new("Go").on_press(|| "popup"),
                             Rect::new(10, 6, 6, 1),
                         );
-                        ctx.defer_paint(move |ctx| {
+                        ctx.paint(move |ctx| {
                             assert_eq!(ctx.area(), ROOT);
                             ctx.widget(Line::from("T"), Rect::new(8, 4, 1, 1));
                             ctx.widget(Line::from("B"), Rect::new(8, 10, 1, 1));
@@ -326,7 +326,7 @@ fn viewport_modal_restores_screen_root_bounds_and_can_open_its_own_viewport() {
 }
 
 #[test]
-fn root_area_guides_deferred_paint_but_does_not_sandbox_base_writes() {
+fn root_area_guides_paint_but_does_not_sandbox_base_writes() {
     let mut driver = Driver::<(), ()>::new(40, 18);
     driver
         .terminal
@@ -336,7 +336,7 @@ fn root_area_guides_deferred_paint_but_does_not_sandbox_base_writes() {
                 .ratcn
                 .render(frame, ROOT, &(), &Theme::default_dark(), |ctx| {
                     ctx.paint_widget(Line::from("W"), Rect::new(1, 0, 1, 1));
-                    ctx.defer_paint(move |ctx| {
+                    ctx.paint(move |ctx| {
                         assert_eq!(ctx.area(), ROOT);
                         ctx.with_buffer(|buffer| {
                             assert_eq!(buffer.area, destination);

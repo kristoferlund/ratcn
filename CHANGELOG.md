@@ -21,6 +21,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   coordinates, as a modal does: paint at the layer's `ctx.area()`, not at a
   rectangle captured before opening it. A modal above its viewport's top edge
   is no longer pushed down onto it.
+- Layers are transparent: a modal, popup, or hint covers only the cells its
+  content paints. Paint a background (`Clear`, then a filled block) to hide
+  what is beneath; Dialog, Select, and Tooltip do.
+- `DeclareCtx::defer_paint` is removed. Declare a `hint` layer for decoration
+  above later siblings, or paint onto the buffer after `render` for decoration
+  above every layer.
 
 ### Fixed
 

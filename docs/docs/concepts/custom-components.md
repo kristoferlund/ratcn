@@ -180,9 +180,11 @@ The queue position is fixed, so decoration that has to cover a composite's
 *descendants* — a dimming wash — cannot come from `Component::paint` at all,
 which is queued before them. A `ctx.paint` closure reached *after* those
 declarations is queued after them, on the same layer, and is the usual answer.
-`ctx.defer_paint` goes one step further, flushing after the current layer has
-finished declaring, which is what decoration that must also cover *later
-siblings* — a drag ghost — needs; it has no identity or geometry of its own.
+Decoration that must also cover *later siblings* — a drag ghost — goes one step
+further: declare it as a `ctx.hint` layer, which paints above everything
+declared outside it and takes no input. Layers are transparent, so paint only
+the cells the decoration covers, and a background first if it should hide what
+is beneath.
 
 What still follows declaration order is hit-testing, and it knows nothing about
 pixels: a later sibling painted underneath another still takes the clicks over

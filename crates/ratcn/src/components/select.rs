@@ -20,7 +20,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::Text,
-    widgets::{Block, BorderType, Borders, Widget},
+    widgets::{Block, BorderType, Borders, Clear, Widget},
 };
 
 use crate::Theme;
@@ -1160,7 +1160,10 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         if let Some(rows) = &rows {
             widget = widget.visible_item_rows(rows);
         }
+        // Layers are transparent: the panel clears its footprint so nothing
+        // beneath shows through.
         let area = ctx.area();
+        ctx.widget(Clear, area);
         ctx.widget(SelectPanelWidget(widget), area);
     }
 
@@ -1383,6 +1386,43 @@ mod tests {
         assert!(driver.row(4).contains("Mango"), "{}", driver.row(4));
         assert!(!driver.row(4).contains("later sibling"));
         assert!(driver.row(5).contains("Papaya"));
+    }
+
+    /// Every framed box on screen hides what was painted beneath it: no `x`
+    /// of the background survives between a box's left and right border.
+    fn assert_boxes_hide_the_background(driver: &Driver<State, Msg>, height: u16) {
+        let mut boxed = 0;
+        for row in 0..height {
+            let cells: Vec<char> = driver.row(row).chars().collect();
+            let left = cells.iter().position(|c| "╭│╰".contains(*c));
+            let right = cells.iter().rposition(|c| "╮│╯".contains(*c));
+            if let (Some(left), Some(right)) = (left, right) {
+                boxed += 1;
+                assert!(
+                    !cells[left..=right].contains(&'x'),
+                    "the background shows through row {row}: {}",
+                    driver.row(row)
+                );
+            }
+        }
+        assert!(boxed > 0, "no box was painted");
+    }
+
+    /// Layers are transparent, so the panel clears its own footprint before
+    /// drawing: nothing painted beneath it shows through.
+    #[test]
+    fn the_open_panel_hides_what_is_painted_beneath_it() {
+        let mut driver = Driver::<State, Msg>::new(20, 8);
+        let state = State {
+            open: true,
+            ..State::default()
+        };
+        driver.render(&state, |ctx| {
+            let background = vec![Line::from("x".repeat(20)); 8];
+            ctx.paint_widget(ratatui::widgets::Paragraph::new(background), ctx.area());
+            ctx.component("fruit", select(items()), Rect::new(0, 0, 20, 1));
+        });
+        assert_boxes_hide_the_background(&driver, 8);
     }
 
     #[test]

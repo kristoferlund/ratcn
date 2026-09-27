@@ -16,7 +16,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::Line,
-    widgets::{Block, BorderType, Borders, Paragraph, Widget},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget},
 };
 
 use crate::Theme;
@@ -509,7 +509,10 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
         // the area it opened at rather than the one placed above.
         ctx.hint(BUBBLE_ID, area, ScopeOptions::default(), move |ctx| {
             ctx.paint(move |ctx| {
+                // Layers are transparent: the bubble clears its footprint
+                // so nothing beneath shows through.
                 let area = ctx.area();
+                ctx.widget(Clear, area);
                 ctx.widget(TooltipWidget::new(&text).style(style), area);
             });
         });
@@ -948,6 +951,43 @@ mod tests {
         render_tooltip(&mut driver, &state, Rect::new(2, 5, 8, 1), TooltipSide::Top);
         assert!(driver.row(3).contains(TIP), "{}", driver.row(3));
         assert!(driver.row(2).contains('╭'), "{}", driver.row(2));
+    }
+
+    /// Every framed box on screen hides what was painted beneath it: no `x`
+    /// of the background survives between a box's left and right border.
+    fn assert_boxes_hide_the_background(driver: &Driver<State, Msg>, height: u16) {
+        let mut boxed = 0;
+        for row in 0..height {
+            let cells: Vec<char> = driver.row(row).chars().collect();
+            let left = cells.iter().position(|c| "╭│╰".contains(*c));
+            let right = cells.iter().rposition(|c| "╮│╯".contains(*c));
+            if let (Some(left), Some(right)) = (left, right) {
+                boxed += 1;
+                assert!(
+                    !cells[left..=right].contains(&'x'),
+                    "the background shows through row {row}: {}",
+                    driver.row(row)
+                );
+            }
+        }
+        assert!(boxed > 0, "no box was painted");
+    }
+
+    /// Layers are transparent, so the bubble clears its own footprint before
+    /// drawing: nothing painted beneath it shows through.
+    #[test]
+    fn the_bubble_hides_what_is_painted_beneath_it() {
+        let mut driver = driver(30, 10);
+        let state = State {
+            open: true,
+            ..State::default()
+        };
+        driver.render(&state, |ctx| {
+            let background = vec![ratatui::text::Line::from("x".repeat(30)); 10];
+            ctx.paint_widget(Paragraph::new(background), ctx.area());
+            ctx.component("tip", tooltip(TooltipSide::Top), Rect::new(2, 5, 8, 1));
+        });
+        assert_boxes_hide_the_background(&driver, 10);
     }
 
     /// Inside a scrolled viewport the bubble is placed against the trigger

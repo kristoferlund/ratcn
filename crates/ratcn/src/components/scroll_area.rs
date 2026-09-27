@@ -3,7 +3,7 @@
 //! Descendants are declared against their full logical content allocations.
 //! The runtime translates and clips ordinary paint and pointer input without
 //! changing those allocations, while keeping offscreen descendants in focus
-//! traversal. Popup, hint, modal, and deferred paint escape the ordinary clip.
+//! traversal. Popup, hint, and modal layers escape the ordinary clip.
 
 use ratatui::{
     layout::{Position, Rect},

@@ -1,4 +1,4 @@
-//! Cell compositing shared by layer canvases and projected viewport paint.
+//! Copying paint laid out in a scratch buffer back onto the frame.
 
 use ratatui::{
     buffer::{Buffer, CellDiffOption, CellWidth},

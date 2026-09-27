@@ -43,7 +43,7 @@ decoration and cannot.
 Pass a pane's rectangle as `area` to host a tree, or `frame.area()` to use the
 whole frame. `ctx.frame_area()` reports those root bounds, translated into
 logical coordinates inside a viewport. Floating components place themselves
-within them; layer copies and modal dimming are clipped to them. This is not
+within them; layer paint and modal dimming are clipped to them. This is not
 a paint sandbox: base widgets can paint outside their rects, and unprojected
 base `PaintCtx::with_buffer` exposes the whole destination buffer. Events still
 arrive in screen coordinates; routing input between hosted trees stays yours.

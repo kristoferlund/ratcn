@@ -25,7 +25,7 @@ use ratatui::widgets::{StatefulWidget, Widget};
 
 use crate::Theme;
 
-use super::engine::{DeclarationEnv, LayerKind, RenderPass};
+use super::engine::{DeclarationEnv, LayerKind, Projection, RenderPass};
 use super::gesture::Press;
 use super::{ChildId, Event, EventResult, KeyChord, MouseButton, MouseEvent, TabWrap};
 
@@ -108,9 +108,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// walk, at the point in the queue where this call was reached — so it
     /// paints in declaration order relative to the components around it, and
     /// before anything declared after it. Inside a [`modal`](Self::modal),
-    /// [`popup`](Self::popup), or [`hint`](Self::hint) layer it lands on that
-    /// layer's canvas and composites above everything declared outside;
-    /// otherwise it lands on the frame.
+    /// [`popup`](Self::popup), or [`hint`](Self::hint) layer it paints with
+    /// that layer, above everything declared outside it.
     ///
     /// Because it runs after declaration has ended, the closure has to own
     /// what it draws with: it is `'static` and gets a [`PaintCtx`] rather
@@ -133,8 +132,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// The shorthand for the common single-write case: exactly
     /// `self.paint(move |ctx| ctx.widget(widget, area))`, queued at the same
     /// point and painted under the same rules — declaration order against the
-    /// components around it, onto the enclosing layer's canvas when there is
-    /// one.
+    /// components around it, with the enclosing layer when there is one.
     ///
     /// Reach for it when a write is independent: one widget, one area, nothing
     /// else in the op. Use [`paint`](Self::paint) when several writes share
@@ -317,7 +315,6 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// name, and declares in screen coordinates from there. Its content
     /// therefore paints at its own [`area`](Self::area), not at a rectangle
     /// captured before it opened, and it may hold a viewport of its own. A
-    /// [`defer_paint`](Self::defer_paint) closure escapes the same way. A
     /// popup or hint anchored to a declaration the viewport has scrolled out
     /// of sight is skipped for the frame, and comes back with its anchor.
     ///
@@ -423,10 +420,10 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// The modal becomes a child of whatever is currently declaring, so its
     /// identity path, focus scope, and event bubbling anchor there, and a
     /// component can own its own confirmation dialog with one declaration
-    /// guarded by one app-state flag. Layers composite in declaration order,
+    /// guarded by one app-state flag. Layers paint in declaration order,
     /// wherever in the tree they are declared — except that a layer declared
-    /// outside the topmost modal composites beneath it whatever the order,
-    /// and is dimmed with everything else the modal covers.
+    /// outside the topmost modal paints beneath it whatever the order, and is
+    /// dimmed with everything else the modal covers.
     ///
     /// Modal policy: the area behind the modal is dimmed, events outside it
     /// are consumed rather than routed, and Tab wraps
@@ -597,32 +594,6 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
         let (pass, env) = self.declaring(area);
         pass.modal_scope(id.into(), options, env, declare);
     }
-
-    /// Schedule paint that should land on top of everything else in this layer.
-    ///
-    /// Ordinary paint happens in declaration order, so a component cannot draw
-    /// over siblings declared after it. This defers a closure until the
-    /// current layer has finished declaring: deferred paint registered inside
-    /// a [`modal`](Self::modal) or [`popup`](Self::popup) flushes into that
-    /// layer's canvas and composites with it, while deferred paint registered
-    /// in the base declaration flushes after every layer has composited —
-    /// making it the topmost decoration slot, where toast stacks and drag
-    /// ghosts live.
-    ///
-    /// Deferred paint is decoration only: it has no identity, geometry, focus,
-    /// hover, or hit target, and cannot be clicked. Its [`PaintCtx`] therefore
-    /// reports all four interaction flags as false, and
-    /// [`area`](PaintCtx::area) is the layer's footprint inside a layer, the
-    /// supplied render area otherwise, expressed in the paint's coordinates.
-    /// That area does not clip base-layer paint.
-    ///
-    /// Because the closure runs after the declaration pass has ended, it does
-    /// not get a `DeclareCtx`. It is `'static` and receives a [`PaintCtx`],
-    /// which carries the theme and the app state the pass was declared with;
-    /// anything else it needs must be moved into the closure here.
-    pub fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
-        self.pass.defer_paint(paint);
-    }
 }
 
 /// Options for a [`popup`](DeclareCtx::popup) layer.
@@ -679,57 +650,35 @@ impl<Msg> PopupOptions<Msg> {
     }
 }
 
-/// The surface paint lands on: the frame for the base layer, a layer's canvas
-/// for paint that belongs to that layer.
-enum PaintSurface<'a> {
-    Frame(&'a mut Buffer),
-    Canvas(&'a mut super::engine::Canvas),
-}
-
-impl PaintSurface<'_> {
-    /// The rectangle this surface covers.
-    fn area(&self) -> Rect {
-        match self {
-            Self::Frame(buffer) => buffer.area,
-            Self::Canvas(canvas) => canvas.buffer.area,
-        }
-    }
-}
-
 /// Where paint lands, how it is projected on the way there, and the buffer it
 /// lays out in when it is projected.
 ///
 /// The three write forms are implemented once, here, because routing is the
 /// only thing they do that [`PaintCtx`] does not.
 pub(crate) struct PaintTarget<'a> {
-    surface: PaintSurface<'a>,
-    viewport: Option<super::engine::Viewport>,
+    buffer: &'a mut Buffer,
+    /// `None` writes straight onto `buffer`: base paint outside any viewport,
+    /// which the render area does not sandbox.
+    projection: Option<Projection>,
+    /// The whole rectangle a free-form [`Self::with_buffer`] covers, in the
+    /// coordinates paint uses.
+    allocation: Rect,
     /// Where projected paint lays out before it is copied back. One buffer
     /// serves the whole frame's paint calls, resized and blanked per call.
     scratch: &'a mut Buffer,
 }
 
 impl<'a> PaintTarget<'a> {
-    pub(crate) fn frame(
+    pub(crate) fn new(
         buffer: &'a mut Buffer,
-        viewport: Option<super::engine::Viewport>,
+        projection: Option<Projection>,
+        allocation: Rect,
         scratch: &'a mut Buffer,
     ) -> Self {
         Self {
-            surface: PaintSurface::Frame(buffer),
-            viewport,
-            scratch,
-        }
-    }
-
-    pub(crate) fn canvas(
-        canvas: &'a mut super::engine::Canvas,
-        viewport: Option<super::engine::Viewport>,
-        scratch: &'a mut Buffer,
-    ) -> Self {
-        Self {
-            surface: PaintSurface::Canvas(canvas),
-            viewport,
+            buffer,
+            projection,
+            allocation,
             scratch,
         }
     }
@@ -738,42 +687,16 @@ impl<'a> PaintTarget<'a> {
     /// and the rectangle to write it in.
     ///
     /// The three write forms differ only in what they hand that closure, so
-    /// routing — which buffer, which clip, which projection, what counts as
-    /// painted — is settled once, here.
+    /// routing — which buffer, which projection — is settled once, here.
     fn paint_at<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
-        match (&mut self.surface, self.viewport) {
-            (PaintSurface::Frame(buffer), None) => paint(area, buffer),
-            (PaintSurface::Frame(buffer), Some(viewport)) => {
-                with_projected_buffer(buffer, self.scratch, viewport, area, |buffer| {
+        match self.projection {
+            None => paint(area, self.buffer),
+            Some(projection) => {
+                with_projected_buffer(self.buffer, self.scratch, projection, area, |buffer| {
                     paint(area, buffer)
                 })
             }
-            (PaintSurface::Canvas(canvas), None) => {
-                let clipped = canvas.clip(area);
-                let result = paint(clipped, &mut canvas.buffer);
-                canvas.mark_painted(clipped);
-                result
-            }
-            (PaintSurface::Canvas(canvas), Some(viewport)) => {
-                let painted = viewport.project_rect(area);
-                let result = with_projected_buffer(
-                    &mut canvas.buffer,
-                    self.scratch,
-                    viewport,
-                    area,
-                    |buffer| paint(area, buffer),
-                );
-                canvas.mark_painted(painted);
-                result
-            }
         }
-    }
-
-    /// The whole of what this target writes, in the coordinates its paint
-    /// closure uses — the allocation a free-form [`Self::with_buffer`] covers.
-    pub(crate) fn whole_area(&mut self) -> Rect {
-        self.viewport
-            .map_or_else(|| self.surface.area(), super::engine::Viewport::content)
     }
 
     fn widget(&mut self, widget: impl Widget, area: Rect) {
@@ -785,41 +708,37 @@ impl<'a> PaintTarget<'a> {
     }
 
     fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        let area = self.whole_area();
-        self.paint_at(area, |_, buffer| paint(buffer))
+        self.paint_at(self.allocation, |_, buffer| paint(buffer))
     }
 }
 
-/// Paint `logical` into `target` through `viewport`.
+/// Paint `area` into `target` through `projection`.
 ///
-/// The closure sees `scratch` covering exactly the logical rectangle, so a
-/// widget lays out against its declared allocation. `scratch` is blanked
-/// first, so a widget reads a blank wherever it has written nothing. The
-/// cells the projection reaches are then seeded from the target beforehand
-/// and copied back afterwards, so what the closure leaves untouched keeps
-/// whatever was already there, and what falls outside the projection's clip
-/// stays out of the target.
+/// The closure sees `scratch` covering exactly `area`, so a widget lays out
+/// against its declared allocation. `scratch` is blanked first, so a widget
+/// reads a blank wherever it has written nothing. The cells the projection
+/// keeps are then seeded from the target beforehand and copied back
+/// afterwards, so what the closure leaves untouched keeps whatever was
+/// already there, and what falls outside the projection's clip stays out of
+/// the target.
 fn with_projected_buffer<R>(
     target: &mut Buffer,
     scratch: &mut Buffer,
-    viewport: super::engine::Viewport,
-    logical: Rect,
+    projection: Projection,
+    area: Rect,
     paint: impl FnOnce(&mut Buffer) -> R,
 ) -> R {
-    let cells = logical.area();
+    let cells = area.area();
     assert!(
         cells <= super::engine::MAX_VIEWPORT_CELLS,
-        "a paint inside a viewport covers {logical}, {cells} cells; the maximum is {}",
+        "a clipped paint covers {area}, {cells} cells; the maximum is {}",
         super::engine::MAX_VIEWPORT_CELLS
     );
-    scratch.resize(logical);
+    scratch.resize(area);
     scratch.reset();
-    for (logical_position, screen_position) in viewport.projected_positions(logical) {
-        if let (Some(source), Some(destination)) = (
-            target.cell(screen_position),
-            scratch.cell_mut(logical_position),
-        ) {
-            *destination = source.clone();
+    for (source, screen) in projection.projected_positions(area) {
+        if let (Some(from), Some(to)) = (target.cell(screen), scratch.cell_mut(source)) {
+            *to = from.clone();
         }
     }
 
@@ -828,8 +747,8 @@ fn with_projected_buffer<R>(
     super::buffer::copy_cells(
         scratch,
         target,
-        viewport.projected_positions(logical),
-        viewport.visible_screen(),
+        projection.projected_positions(area),
+        projection.clip(),
     );
     result
 }
@@ -873,7 +792,7 @@ impl<State> fmt::Debug for PaintCtx<'_, State> {
 }
 
 impl<'a, State> PaintCtx<'a, State> {
-    /// Paint a ratatui widget onto the active paint surface.
+    /// Paint a ratatui widget onto the frame.
     ///
     /// The widget is consumed here; nothing is deferred or allocated. Because
     /// the context never lends out the buffer, the widget expression may read
@@ -881,12 +800,12 @@ impl<'a, State> PaintCtx<'a, State> {
     /// in argument position.
     ///
     /// Inside a [`modal`](DeclareCtx::modal), [`popup`](DeclareCtx::popup), or
-    /// [`hint`](DeclareCtx::hint) layer the paint lands on that layer's canvas
-    /// and composites above everything declared outside it; otherwise it
-    /// lands on the frame. A layer composites the widget's whole declared
-    /// `area` opaquely — cells the widget left unwritten come through as
-    /// empty rather than transparent, so paint a panel background first, as
-    /// the built-in layers do.
+    /// [`hint`](DeclareCtx::hint) layer the paint lands above everything
+    /// declared outside the layer, clipped to the render area. Layers are
+    /// transparent: cells the widget leaves unwritten keep whatever is
+    /// beneath them, so a layer that should hide what it covers paints a
+    /// background first — `Clear`, then a filled block — as the built-in
+    /// layers do.
     pub fn widget(&mut self, widget: impl Widget, area: Rect) {
         self.target.widget(widget, area);
     }
@@ -894,8 +813,8 @@ impl<'a, State> PaintCtx<'a, State> {
     /// Paint a ratatui stateful widget onto the active paint surface.
     ///
     /// The escape hatch for widgets that need a `&mut` widget state during
-    /// paint (e.g. ratatui's `List` with `ListState`). Targets the same
-    /// surface as [`widget`](Self::widget).
+    /// paint (e.g. ratatui's `List` with `ListState`). Lands exactly as
+    /// [`widget`](Self::widget) does.
     pub fn stateful_widget<W: StatefulWidget>(
         &mut self,
         widget: W,
@@ -905,13 +824,13 @@ impl<'a, State> PaintCtx<'a, State> {
         self.target.stateful_widget(widget, area, state);
     }
 
-    /// Run a paint closure over the active paint surface's raw cell buffer.
+    /// Run a paint closure over the frame's raw cell buffer.
     ///
     /// The escape hatch for direct cell writes (`set_string`, `set_style`,
     /// per-cell edits). The closure receives only the buffer, so values read
-    /// from `ctx` must be taken as arguments or moved in. Inside a layer, the
-    /// buffer is the layer's canvas and the whole layer footprint counts as
-    /// painted for compositing.
+    /// from `ctx` must be taken as arguments or moved in. Inside a layer, what
+    /// it writes lands above everything declared outside the layer, clipped
+    /// to the render area.
     pub fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
         self.target.with_buffer(paint)
     }

@@ -571,7 +571,7 @@ fn disappearing_capture_is_suppressed_through_reappearance_until_release() {
 }
 
 #[test]
-fn deferred_paint_failure_preserves_capture_transient_and_previous_component() {
+fn a_paint_failure_preserves_capture_transient_and_previous_component() {
     let state = PointerState;
     let mut driver = Driver::new(20, 4);
     render_drag_surface(
@@ -590,7 +590,7 @@ fn deferred_paint_failure_preserves_capture_transient_and_previous_component() {
                 },
                 area,
             );
-            ctx.defer_paint(|_| panic!("deferred paint failed"));
+            ctx.paint(|_| panic!("paint failed"));
         });
     }));
     assert!(result.is_err());
