@@ -970,7 +970,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         // The panel owns its scrolling, so the hold supplies the offset: the
         // view stays where the wheel left it — cursor visible or not — until
         // the cursor or the options move, and the hold dies with the popup.
-        WheelHold::settle_transient(
+        WheelHold::settle_in(
             ctx,
             &self.items,
             cursor,

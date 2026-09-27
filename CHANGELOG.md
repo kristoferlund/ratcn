@@ -47,6 +47,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Cycle::width()` and its measured size include the column of padding painted
   either side of the value, so both grow by 2.
 - `CheckboxWidget::themed` and `CycleWidget::themed` are no longer `const`.
+- `list_core::WheelHold::settle_transient` is renamed `settle_in`.
 
 ### Added
 

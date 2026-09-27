@@ -179,7 +179,7 @@ impl<T: Clone + PartialEq + 'static> WheelHold<T> {
     /// component that owns its scrolling resumes from it next frame, so a
     /// cursor moving within the visible rows leaves the view where it is —
     /// the same view a bound offset would keep.
-    pub fn settle_transient<S, M>(
+    pub fn settle_in<S, M>(
         ctx: &mut DeclareCtx<'_, S, M>,
         items: &[ListItem<T>],
         cursor: Option<usize>,

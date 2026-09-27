@@ -766,7 +766,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         // may leave the cursor off-screen. Once the cursor moves, or the items
         // do, it is scrolled back into view. A bound scroll offset always wins
         // over the hold: the app owns it.
-        WheelHold::settle_transient(
+        WheelHold::settle_in(
             ctx,
             &self.items,
             focused_item,
