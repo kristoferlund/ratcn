@@ -81,8 +81,8 @@ Every method except `declare` has a default:
   descendant the viewport clips, so it can scroll that descendant into view;
   it returns whether it moved. The offset lives in a transient: the reveal
   writes the new one through `ctx.transient::<Offset>()` on its `EventCtx`,
-  and `declare` reads it back with `DeclareCtx::transient` (or
-  `transient_mut`, when it also settles it) to open the viewport there. A
+  and `declare` reads it back with the same `ctx.transient::<Offset>()` on
+  its `DeclareCtx` to open the viewport there. A
   reveal that returns `true` has the frame declared again with that offset.
   [Layers and modals](./layers-and-modals) covers when the call arrives.
 
@@ -139,9 +139,10 @@ kept for as long as that path keeps being declared. Each type has its own slot,
 so a component's transients never collide with those `ctx.drag` keeps. See
 [Dragging](./dragging) for the standard use.
 
-`declare` can read the same value back with `DeclareCtx::transient::<T>()` — that
-is how a wheel scroll survives a redraw. Prefer writing from the event side,
-where a single event carries the change.
+`declare` reaches the same value with `ctx.transient::<T>()` on its
+`DeclareCtx` — that is how a wheel scroll survives a redraw. A declaration may
+settle it too; its write lands only when the frame commits. Prefer writing from
+the event side, where a single event carries the change.
 
 ## Handling events
 

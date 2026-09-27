@@ -14,9 +14,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   consumes inside it.
 - `Component::reveal_in_viewport` returns whether it moved the view; the frame
   is declared a second time only when it did.
-- `DeclareCtx::transient_mut` requires `T: Clone + Default` and returns `&mut T`,
-  starting from the default when nothing is stored. It stages its write until
-  the render commits; a rejected pass leaves the stored value unchanged.
+- `DeclareCtx` has one `transient::<T>() -> &mut T` (`T: Clone + Default`),
+  shaped like `EventCtx::transient`; `transient_mut` and the read-only
+  `Option` form are gone. Declaration writes land when the render commits.
 - A popup or hint declared inside a viewport now declares in screen
   coordinates, as a modal does: paint at the layer's `ctx.area()`, not at a
   rectangle captured before opening it. A modal above its viewport's top edge

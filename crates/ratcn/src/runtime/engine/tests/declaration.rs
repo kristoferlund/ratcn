@@ -9,10 +9,10 @@ fn failed_declaration_discards_staged_transient_settlement() {
     impl Component<(), u32> for Probe {
         fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
             if self.0 {
-                *ctx.transient_mut::<u32>() = 99;
+                *ctx.transient::<u32>() = 99;
                 assert_eq!(
-                    ctx.transient::<u32>(),
-                    Some(&99),
+                    *ctx.transient::<u32>(),
+                    99,
                     "declaration reads its own staged work"
                 );
             }
@@ -65,7 +65,7 @@ fn repeated_settlement_in_one_declaration_accumulates() {
     impl Component<(), u32> for Probe {
         fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
             for _ in 0..2 {
-                *ctx.transient_mut::<u32>() += 1;
+                *ctx.transient::<u32>() += 1;
             }
         }
         fn scope_options(&self, _state: &()) -> ScopeOptions {

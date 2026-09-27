@@ -203,63 +203,31 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
                 .is_some_and(|position| self.area.contains(position))
     }
 
-    /// Read the transient stored at the current declaration's identity path,
-    /// if one is stored.
+    /// The transient of type `T` kept at the current declaration's identity —
+    /// the declaration-time counterpart of [`EventCtx::transient`], with the
+    /// same ownership rules: scratch that means nothing to the app, gone as
+    /// soon as its path stops being declared.
     ///
-    /// The declaration-time counterpart of [`EventCtx::transient`]: event
-    /// handlers write scratch values that mean nothing to the app — a
-    /// wheel-scrolled viewport offset, say — and the next declaration reads
-    /// them here to lay out accordingly.
+    /// Event handlers write it — a wheel-scrolled offset, say — and the next
+    /// declaration reads it here to lay out accordingly. A declaration may
+    /// also settle it, for presentation state only the layout can answer:
+    /// whether a wheel-scrolled view still holds, given where the cursor now
+    /// is, is the built-in example — [`List`](crate::List) settles it in its
+    /// `declare`. Anything the app should read, persist, or act on belongs in
+    /// app state; prefer writing from [`EventCtx::transient`] whenever an
+    /// event can carry the change.
     ///
-    /// `None` when nothing has stored a `T` at this path: no event handler,
-    /// and no declaration through [`transient_mut`](Self::transient_mut),
-    /// which stores `T::default()` when it finds nothing. Like every
-    /// transient, the value disappears as soon as its path stops being
-    /// declared — see [`EventCtx::transient`] for the ownership rules; semantic
-    /// state does not belong here.
-    ///
-    /// A value this pass already settled through
-    /// [`transient_mut`](Self::transient_mut) reads back as settled; use that
-    /// when the declaration must also settle the value it reads.
-    #[must_use]
-    pub fn transient<T: 'static>(&self) -> Option<&T> {
-        let path = self.pass.current_path()?;
-        slot_ref(&self.pass.settled_transients, path).or_else(|| slot_ref(self.transients, path))
-    }
-
-    /// [`transient`](Self::transient), for the rare value a declaration has to
-    /// settle rather than merely read.
-    ///
-    /// Some presentation state can only be resolved once the layout is known,
-    /// because only the layout answers it: whether a wheel-scrolled viewport
-    /// still holds, given where the cursor now is, is the built-in example —
-    /// [`List`](crate::List) settles it in its `declare`, alongside the
-    /// arithmetic that produces the offset it stores.
-    ///
-    /// The next frame's declaration reads the write back, and so does any
-    /// event handler that runs in between. Settling a flag
-    /// (`if moved { held = false }`) or storing a computed offset is what
-    /// this is for; anything the app should read, persist, or act on belongs
-    /// in app state.
-    ///
-    /// Prefer writing from [`EventCtx::transient`] whenever an event can carry
-    /// the change instead.
-    ///
-    /// The write is staged on a clone and published only when the render
-    /// commits, so a rejected pass leaves the stored value as it was. `Clone`
-    /// must isolate what the declaration changes: a write through shared
-    /// interior state cannot be taken back.
-    ///
-    /// A declaration that finds nothing stored starts from `T::default()`,
-    /// published like any other settlement: a value settled every frame —
-    /// an offset the component owns itself — has to carry over to the next
-    /// one even before any event has written it.
+    /// Nothing stored yet reads as `T::default()`. A write is made on a clone
+    /// and published only when the render commits, so a rejected pass leaves
+    /// the stored value as it was; `Clone` must isolate what the declaration
+    /// changes, since a write through shared interior state cannot be taken
+    /// back.
     ///
     /// # Panics
     ///
     /// When called from the root declaration, which has no identity to keep a
     /// transient at.
-    pub fn transient_mut<T: Clone + Default + 'static>(&mut self) -> &mut T {
+    pub fn transient<T: Clone + Default + 'static>(&mut self) -> &mut T {
         let path = self
             .pass
             .current_path()
@@ -1196,8 +1164,8 @@ impl<'a> EventCtx<'a> {
     /// The next declaration reads the same value back with
     /// [`DeclareCtx::transient`](DeclareCtx::transient), which is how a wheel
     /// scroll survives a redraw. Write from here whenever an event can carry
-    /// the change; [`DeclareCtx::transient_mut`](DeclareCtx::transient_mut) is
-    /// the narrow exception, for a value only the layout can settle.
+    /// the change; settling it in the declaration is the narrow exception, for
+    /// a value only the layout can settle.
     ///
     /// In a context built without a dispatch — `EventCtx::default()` in a
     /// component unit test — the value lives and dies with that context, so a

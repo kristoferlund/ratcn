@@ -1641,7 +1641,7 @@ impl<State, Msg> RenderPass<State, Msg> {
 /// validation leaves the previous surface in charge *and* the previous frame
 /// on screen: declaring does not draw, and every reason to reject a pass is
 /// known before the first cell is written. A declaration writes nothing
-/// outside its pass — [`DeclareCtx::transient_mut`] is staged until commit —
+/// outside its pass — [`DeclareCtx::transient`] is staged until commit —
 /// so a rejected pass leaves no trace. Two things cannot be taken back: the
 /// offset a [`Component::reveal_in_viewport`] stored for a frame whose second
 /// declaration is then rejected, and a panic thrown by painting itself, after
