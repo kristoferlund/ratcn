@@ -1347,7 +1347,7 @@ mod tests {
     ) {
         let items = items.to_vec();
         driver.render(state, |ctx| {
-            ctx.component("fruit", select(items), area);
+            ctx.component("fruit", select(items.clone()), area);
             ctx.paint(|ctx| {
                 ctx.widget(Line::from("later sibling"), Rect::new(0, 4, 20, 1));
             });
@@ -1771,6 +1771,7 @@ mod tests {
         let draw = |driver: &mut Driver<State, Msg>,
                     recorded: Rc<std::cell::RefCell<Vec<usize>>>| {
             driver.render(&state, |ctx| {
+                let recorded = Rc::clone(&recorded);
                 ctx.component(
                     "fruit",
                     select(items()).paint_item(move |_: &State, row: ListItemState<'_, Fruit>| {

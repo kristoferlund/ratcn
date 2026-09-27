@@ -43,8 +43,8 @@ impl ScrollAreaStyle {
 /// Where the wheel, a key, a gutter drag, or a reveal left the view.
 ///
 /// Event handling writes it and the next declaration reads it, which is what
-/// lets an unbound area scroll at all and what carries a reveal into the frame
-/// that follows a focus change.
+/// lets an unbound area scroll at all and what carries a reveal into the
+/// declaration that follows it.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum ScrollHold {
     /// Nothing is holding the view: the bound offset decides where it sits.
@@ -219,7 +219,7 @@ impl<S, M> ScrollArea<S, M> {
     /// returns to the offset a hold was taken at does not revive it.
     fn settle(&self, ctx: &mut DeclareCtx<'_, S, M>, area: Rect, bound: Option<u16>) -> u16 {
         let mut unheld = ScrollHold::Released;
-        let hold = ctx.settle_transient::<ScrollHold>().unwrap_or(&mut unheld);
+        let hold = ctx.transient_mut::<ScrollHold>().unwrap_or(&mut unheld);
         if matches!(*hold, ScrollHold::Held { base, .. } if base != bound) {
             *hold = ScrollHold::Released;
         }
@@ -689,7 +689,9 @@ mod tests {
     #[test]
     fn partially_visible_fixed_height_control_keeps_its_real_allocation() {
         let mut driver = driver(8, 4);
+        // No focus: a focused button would be revealed, moving the offset.
         let state = State {
+            focus: FocusState::none(),
             offset: 2,
             ..State::default()
         };
@@ -877,6 +879,38 @@ mod tests {
         state.focus = FocusState::intent(["scroll", "last"]);
         render(&mut driver, &state);
         assert_eq!(&driver.row(2)[..4], "last");
+    }
+
+    /// A row appended and focused by one update is on screen in the frame
+    /// that first declares it: an on-demand host draws that one frame and
+    /// then waits for input, so there is no later frame to finish the job.
+    #[test]
+    fn a_row_declared_and_focused_in_one_update_is_revealed_by_that_frame() {
+        let mut driver = driver(8, 3);
+        let mut state = State {
+            focus: FocusState::intent(["scroll", "first"]),
+            ..State::default()
+        };
+        let render = |driver: &mut Driver<State, Msg>, state: &State, appended: bool| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    "scroll",
+                    ScrollArea::new(9).content(move |ctx| {
+                        ctx.component("first", Probe::focusable("first"), Rect::new(0, 0, 7, 1));
+                        if appended {
+                            ctx.component("new", Probe::focusable("new"), Rect::new(0, 6, 7, 1));
+                        }
+                    }),
+                    Rect::new(0, 0, 8, 3),
+                );
+            });
+        };
+        render(&mut driver, &state, false);
+        assert_eq!(&driver.row(0)[..5], "first");
+
+        state.focus = FocusState::intent(["scroll", "new"]);
+        render(&mut driver, &state, true);
+        assert_eq!(&driver.row(2)[..3], "new", "revealed without another frame");
     }
 
     #[test]
@@ -2168,6 +2202,7 @@ mod tests {
         let render = |driver: &mut Driver<State, Msg>, state: &State, hovered: &Rc<Cell<bool>>| {
             let hovered = Rc::clone(hovered);
             driver.render(state, move |ctx| {
+                let hovered = Rc::clone(&hovered);
                 ctx.component(
                     "scroll",
                     scroll_area(8, move |ctx| {

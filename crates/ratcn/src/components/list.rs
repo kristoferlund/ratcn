@@ -1104,7 +1104,7 @@ mod tests {
         driver.render(state, |ctx| {
             ctx.component(
                 ChildId::Static("list"),
-                List::new(items)
+                List::new(items.clone())
                     .item_focus(|state: &State| state.focused, Msg::Focused)
                     .selection(|state: &State| state.selected, Msg::Selected)
                     .scroll(|state: &State| state.scroll, Msg::Scrolled)
@@ -1185,7 +1185,7 @@ mod tests {
         driver.render(state, |ctx| {
             ctx.component(
                 ChildId::Static("list"),
-                List::new(items)
+                List::new(items.clone())
                     .item_focus(|state: &State| state.focused, Msg::Focused)
                     .selection(|state: &State| state.selected, Msg::Selected)
                     .row_height(TALL_ROW_HEIGHT)
@@ -2339,9 +2339,10 @@ mod tests {
 
         let area = driver.area();
         driver.render(&state, |ctx| {
+            let recorded = std::rc::Rc::clone(&recorded);
             ctx.component(
                 ChildId::Static("list"),
-                List::new(items)
+                List::new(items.clone())
                     .scroll(|state: &BigState| state.scroll, BigMsg::Scrolled)
                     .selection(|_: &BigState| None, BigMsg::Chose)
                     .paint_item(move |_: &BigState, row: ListItemState<'_, usize>| {

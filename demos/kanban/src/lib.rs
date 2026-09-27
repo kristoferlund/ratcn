@@ -86,10 +86,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn needs_render(&self) -> bool {
-        self.ratcn.needs_render()
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         // Exited cancels runtime capture without routing to the card component.
         let cancelled = matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseKind::Exited)

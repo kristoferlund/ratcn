@@ -127,10 +127,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn needs_render(&self) -> bool {
-        self.ratcn.needs_render()
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         // Esc preserves input mode and remains available to an enclosing host.
         let keyboard = match &event {

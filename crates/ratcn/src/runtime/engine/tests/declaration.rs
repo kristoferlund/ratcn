@@ -9,7 +9,7 @@ fn failed_declaration_discards_staged_transient_settlement() {
     impl Component<(), u32> for Probe {
         fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
             if self.0 {
-                *ctx.settle_transient::<u32>().unwrap() = 99;
+                *ctx.transient_mut::<u32>().unwrap() = 99;
                 assert_eq!(
                     ctx.transient::<u32>(),
                     Some(&99),

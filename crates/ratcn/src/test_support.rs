@@ -45,7 +45,7 @@ impl<State, Msg> Driver<State, Msg> {
     pub(crate) fn render(
         &mut self,
         state: &State,
-        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+        declare: impl FnMut(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let theme = Theme::default_dark();
         let Self { terminal, ratcn } = self;

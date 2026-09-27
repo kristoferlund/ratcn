@@ -123,10 +123,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn needs_render(&self) -> bool {
-        self.ratcn.needs_render()
-    }
-
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
             EventResult::Emit(msg) => {

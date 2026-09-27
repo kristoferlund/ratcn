@@ -159,10 +159,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn needs_render(&self) -> bool {
-        self.ratcn.needs_render()
-    }
-
     /// Bracketed paste natively, and the browser's `paste` event on the web:
     /// the wiring is the demonstration, since no component reads a paste yet.
     const PASTE: bool = true;

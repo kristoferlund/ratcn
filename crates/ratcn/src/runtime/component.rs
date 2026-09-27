@@ -65,7 +65,7 @@ pub struct DeclareCtx<'a, State, Msg> {
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
     pub theme: &'a Theme,
     pub(crate) hover_position: Option<Position>,
-    pub(crate) transients: &'a mut TransientMap,
+    pub(crate) transients: &'a TransientMap,
     pub(crate) pass: &'a mut RenderPass<State, Msg>,
     pub(crate) state: &'a State,
 }
@@ -217,7 +217,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// declared — see [`EventCtx::transient`] for the ownership rules; semantic
     /// state does not belong here.
     ///
-    /// Use [`settle_transient`](Self::settle_transient) when the declaration must
+    /// Use [`transient_mut`](Self::transient_mut) when the declaration must
     /// also settle the value it reads.
     #[must_use]
     pub fn transient<T: 'static>(&self) -> Option<&T> {
@@ -244,29 +244,15 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Prefer writing from [`EventCtx::transient`] whenever an event can carry
     /// the change instead.
     ///
-    /// This borrows the live value unless it was already staged through
-    /// [`settle_transient`](Self::settle_transient). Live mutations survive a
-    /// failed render. Prefer that staged API for cloneable presentation state.
+    /// The write is staged on a clone and published only when the render
+    /// commits, so a rejected pass leaves the stored value as it was. `Clone`
+    /// must isolate what the declaration changes: a write through shared
+    /// interior state cannot be taken back.
     ///
     /// `None` until an event handler has stored a value: this never inserts
     /// one, which is what keeps a transient's lifetime tied to the events
-    /// that created it rather than to a pass that may yet fail.
-    pub fn transient_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        let path = self.pass.current_path()?.to_vec();
-        if slot_ref::<T>(&self.pass.settled_transients, &path).is_some() {
-            slot_mut(&mut self.pass.settled_transients, &path)
-        } else {
-            slot_mut(self.transients, &path)
-        }
-    }
-
-    /// Settle an existing transient on a clone, published only after this
-    /// render succeeds. Returns `None` until an event has created the value.
-    ///
-    /// Use this for declaration-derived presentation state. A rejected pass
-    /// discards its staged value. `Clone` must isolate the fields being changed:
-    /// mutations through shared interior state cannot be rolled back.
-    pub fn settle_transient<T: Clone + 'static>(&mut self) -> Option<&mut T> {
+    /// that created it.
+    pub fn transient_mut<T: Clone + 'static>(&mut self) -> Option<&mut T> {
         let path = self.pass.current_path()?.to_vec();
         if slot_ref::<T>(&self.pass.settled_transients, &path).is_none() {
             let value = slot_ref::<T>(self.transients, &path)?.clone();
@@ -360,7 +346,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
             area,
             state: self.state,
             theme: self.theme,
-            transients: &mut *self.transients,
+            transients: self.transients,
         };
         (&mut *self.pass, env)
     }
@@ -1523,21 +1509,19 @@ pub trait Component<State, Msg> {
     /// [`viewport`](DeclareCtx::viewport).
     ///
     /// The runtime calls this on the component that declared the viewport
-    /// whenever focus lands on a descendant the viewport is clipping, at the
-    /// start of a frame. Every way focus moves arrives here: Tab, a press, and
-    /// a path the app's update function stores. `target` is the descendant's
-    /// logical area, in the coordinates the viewport was declared with.
+    /// whenever focus lands on a descendant the viewport is clipping. Every way
+    /// focus moves arrives here: Tab, a press, and a path the app's update
+    /// function stores. `target` is the descendant's logical area, in the
+    /// coordinates the viewport was declared with.
     ///
-    /// The first frame whose retained surface can place the target reveals
-    /// it. Focus arriving together with the surface that first declares its
-    /// target — an app's startup focus, focus handed back as a modal closes, a
-    /// row declared for the first time — is answered one frame later, by the
-    /// render after that surface is retained.
+    /// It is called on the instance the frame just declared, once that
+    /// declaration is complete, so a target declared for the first time is
+    /// revealed by the same frame.
     ///
     /// The offset the component chooses belongs in an
-    /// [`EventCtx::transient`], which the declaration that follows reads. The
-    /// reveal is a channel of its own: the app's focus message is emitted
-    /// whatever happens here.
+    /// [`EventCtx::transient`]. The frame then declares once more, and that
+    /// declaration reads it. The reveal is a channel of its own: the app's
+    /// focus message is emitted whatever happens here.
     fn reveal_in_viewport(&mut self, _target: Rect, _state: &State, _ctx: &mut EventCtx<'_>) {}
 }
 

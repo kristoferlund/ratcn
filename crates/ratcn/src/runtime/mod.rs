@@ -17,9 +17,6 @@
 //!
 //! Everything else — the event loop, the update function, theme switching,
 //! app-level hotkeys — stays the app's.
-//! An on-demand loop should check [`Ratcn::needs_render`] after rendering and
-//! schedule a follow-up frame when requested, so newly declared offscreen
-//! focus can be revealed without waiting for another input event.
 //!
 //! # Declarations and the retained surface
 //!

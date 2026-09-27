@@ -302,6 +302,16 @@ struct Resolved<'a> {
     hover: &'a [ChildId],
 }
 
+/// What asking to reveal focus in a tree came to.
+enum Reveal {
+    /// The tree does not declare the focused path; a later one may.
+    Absent,
+    /// Nothing to scroll: no focus, a target on screen, or no owner to ask.
+    Settled,
+    /// The viewport's owner was asked, and may have moved its offset.
+    Delivered,
+}
+
 enum FocusAdvance {
     Move(FocusState),
     Consumed,
@@ -1167,8 +1177,16 @@ pub(crate) struct DeclarationEnv<'a, State> {
     pub(crate) area: Rect,
     pub(crate) state: &'a State,
     pub(crate) theme: &'a Theme,
-    pub(crate) transients: &'a mut TransientMap,
+    pub(crate) transients: &'a TransientMap,
 }
+
+impl<State> Clone for DeclarationEnv<'_, State> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<State> Copy for DeclarationEnv<'_, State> {}
 
 impl<'a, State> DeclarationEnv<'a, State> {
     /// The environment for a root declaration: the app's own closure, covering
@@ -1177,7 +1195,7 @@ impl<'a, State> DeclarationEnv<'a, State> {
         frame_area: Rect,
         state: &'a State,
         theme: &'a Theme,
-        transients: &'a mut TransientMap,
+        transients: &'a TransientMap,
     ) -> Self {
         Self {
             frame_area,
@@ -1188,16 +1206,10 @@ impl<'a, State> DeclarationEnv<'a, State> {
         }
     }
 
-    /// The same environment reborrowed for the declarations *inside* the node
-    /// just opened, over `area`.
-    fn nested(&mut self, area: Rect) -> DeclarationEnv<'_, State> {
-        DeclarationEnv {
-            frame_area: self.frame_area,
-            area,
-            state: self.state,
-            theme: self.theme,
-            transients: &mut *self.transients,
-        }
+    /// The same environment for the declarations *inside* the node just
+    /// opened, over `area`.
+    const fn nested(self, area: Rect) -> Self {
+        Self { area, ..self }
     }
 }
 
@@ -1514,7 +1526,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         id: ChildId,
         component: impl Component<State, Msg> + 'static,
-        mut env: DeclarationEnv<'_, State>,
+        env: DeclarationEnv<'_, State>,
     ) {
         let state = env.state;
         self.guarded(|pass| {
@@ -1641,7 +1653,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         id: ChildId,
         options: ScopeOptions,
-        mut env: DeclarationEnv<'_, State>,
+        env: DeclarationEnv<'_, State>,
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         self.guarded(|pass| {
@@ -1914,12 +1926,11 @@ impl<State, Msg> RenderPass<State, Msg> {
 /// Replacement is atomic, and so is the frame. A pass that panics or fails
 /// validation leaves the previous surface in charge *and* the previous frame
 /// on screen: declaring does not draw, and every reason to reject a pass is
-/// known before the first cell is written. Painting can leave partial writes
-/// if it panics after validation. This is not a transaction over arbitrary
-/// user code: live
-/// [`DeclareCtx::transient_mut`] writes and viewport reveal callbacks can
-/// mutate interaction scratch before commit. Built-in declaration settlement
-/// uses [`DeclareCtx::settle_transient`] so rejected passes discard it.
+/// known before the first cell is written. A declaration writes nothing
+/// outside its pass — [`DeclareCtx::transient_mut`] is staged until commit —
+/// so a rejected pass leaves no trace. The one thing that cannot be taken
+/// back is a panic thrown by painting itself, after the pass had already been
+/// accepted.
 pub struct Ratcn<State, Msg> {
     surface: Surface<State, Msg>,
     has_rendered: bool,
@@ -1939,11 +1950,10 @@ pub struct Ratcn<State, Msg> {
     hover: Vec<ChildId>,
     /// The focus the retained surface resolved and painted. Comparing a fresh
     /// resolution against it is how a focus change is noticed, whoever made
-    /// it. Between the reveal at the top of a frame and the commit at its end
-    /// it holds what that reveal answered for.
+    /// it.
     resolved_focus: FocusState,
-    /// Whether a reveal is still waiting to be answered: a focus change no
-    /// surface has been able to place yet, or one an event asked for
+    /// Whether a reveal is still waiting to be answered: focus parked on a
+    /// path no surface has declared yet, or a reveal an event asked for
     /// outright. The frame that answers it clears it.
     reveal_pending: bool,
 }
@@ -2187,7 +2197,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// # Declaring, then drawing
     ///
-    /// The closure runs once, and nothing draws while it does. Declaration
+    /// Nothing draws while the closure runs. It runs once, or twice when focus
+    /// lands on content a viewport clips: the component that declared the
+    /// viewport is asked to scroll, and the first declaration is discarded
+    /// for one built with the new offset. Keep side effects out of it.
+    /// Declaration
     /// records what exists and where; [`Component::paint`] and the closures
     /// [`DeclareCtx::paint`] queues are replayed afterwards, in the order the
     /// declaration reached them. Focus and hover resolve in between, against
@@ -2228,7 +2242,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         area: Rect,
         state: &State,
         theme: &Theme,
-        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+        declare: impl FnMut(&mut DeclareCtx<'_, State, Msg>),
     ) {
         self.render_into(frame.buffer_mut(), area, state, theme, declare);
     }
@@ -2271,39 +2285,33 @@ impl<State, Msg> Ratcn<State, Msg> {
         area: Rect,
         state: &State,
         theme: &Theme,
-        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+        mut declare: impl FnMut(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let focus_snapshot = self.stored_focus(state);
-        // Reveal first: the surface that painted the previous focus is still
-        // the one in hand, and it is the tree that can say where the focus now
-        // sits and what clips it. What it answers is a transient the
-        // declaration below reads. A change this surface cannot place — a path
-        // it never declared — stays pending for the frame that can.
-        let (revealed_focus, reveal_pending) = self.reveal_moved_focus(focus_snapshot, state);
-
-        // Declare. Nothing is drawn and no *focus* flag is read: the walk
-        // builds the tree and queues the paint it owes. Hover is the one
-        // interaction fact that predates the pass, so the declaration may ask
-        // for it — see [`DeclareCtx::pointer_within`].
-        let mut pass = RenderPass::new(area);
-        pass.hover_position = self.pointer;
-        pass.hover_path.clone_from(&self.hover);
-        pass.with_declare_ctx(
-            DeclarationEnv::root(area, state, theme, &mut self.transients),
-            declare,
-        );
-        // Every reason to reject a pass is known once declaration ends, and
-        // nothing has painted yet — so the checks run first and a rejected
-        // pass never reaches the screen at all. They also establish what
-        // `resolve_focus` needs: a complete tree.
-        pass.assert_valid();
-        self.assert_modal_stack(&pass.surface, state);
-        // Focus resolves once, over that tree, and only then does anything
-        // learn where it landed. Hover re-answers its own question against the
-        // same tree — the pointer has not moved, but what is under it may
-        // have — so paint reports this frame's hover rather than the one the
-        // declaration was built from.
-        let resolved_focus = pass.surface.resolve_focus(focus_snapshot);
+        let mut pass = self.declare_pass(area, state, theme, &mut declare);
+        // Focus resolves once, over the finished tree, and only then does
+        // anything learn where it landed.
+        let mut resolved_focus = pass.surface.resolve_focus(focus_snapshot);
+        // Reveal against the tree just declared: it is the one that knows
+        // where the focused target sits, even when this frame declared it for
+        // the first time. The answer is a transient the declaration reads, and
+        // the offset it changes has already placed this tree's layers and
+        // paint, so a delivered reveal declares the frame once more. Focus
+        // parked on a path this tree lacks stays pending for one that has it.
+        let mut reveal_pending = false;
+        if self.reveal_pending || resolved_focus != self.resolved_focus {
+            match self.reveal_focus(&mut pass.surface, &resolved_focus, state) {
+                Reveal::Absent => reveal_pending = true,
+                Reveal::Settled => {}
+                Reveal::Delivered => {
+                    pass = self.declare_pass(area, state, theme, &mut declare);
+                    resolved_focus = pass.surface.resolve_focus(focus_snapshot);
+                }
+            }
+        }
+        // Hover re-answers its own question against the tree — the pointer has
+        // not moved, but what is under it may have — so paint reports this
+        // frame's hover rather than the one the declaration was built from.
         let resolved_hover = self.resolve_hover(&pass.surface);
         let effective_focus = pass
             .surface
@@ -2323,8 +2331,36 @@ impl<State, Msg> Ratcn<State, Msg> {
         for (path, slots) in pass.settled_transients {
             self.transients.entry(path).or_default().extend(slots);
         }
-        let reveal_pending = reveal_pending || resolved_focus != revealed_focus;
         self.commit_surface(pass.surface, resolved_hover, resolved_focus, reveal_pending);
+    }
+
+    /// Declare and validate one pass. Nothing is drawn and no *focus* flag is
+    /// read: the walk builds the tree and queues the paint it owes, and
+    /// writes nothing outside the pass, so a pass can be dropped — rejected,
+    /// or superseded by a reveal — without trace. Hover is the one
+    /// interaction fact that predates the pass, so the declaration may ask
+    /// for it — see [`DeclareCtx::pointer_within`].
+    fn declare_pass(
+        &self,
+        area: Rect,
+        state: &State,
+        theme: &Theme,
+        declare: &mut impl FnMut(&mut DeclareCtx<'_, State, Msg>),
+    ) -> RenderPass<State, Msg> {
+        let mut pass = RenderPass::new(area);
+        pass.hover_position = self.pointer;
+        pass.hover_path.clone_from(&self.hover);
+        pass.with_declare_ctx(
+            DeclarationEnv::root(area, state, theme, &self.transients),
+            declare,
+        );
+        // Every reason to reject a pass is known once declaration ends, and
+        // nothing has painted yet — so the checks run first and a rejected
+        // pass never reaches the screen at all. They also establish what
+        // `resolve_focus` needs: a complete tree.
+        pass.assert_valid();
+        self.assert_modal_stack(&pass.surface, state);
+        pass
     }
 
     /// What the pointer is on, answered against `surface`.
@@ -2425,14 +2461,11 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         self.transients
             .retain(|path, _| self.surface.leaf_of(path).is_some());
-        // The hover and focus this frame painted, published with the surface
-        // they were resolved against — a pass that never got here leaves the
-        // previous ones in charge, exactly as it leaves the previous surface.
+        // The hover, focus, and reveal this frame settled, published with the
+        // surface they were resolved against — a pass that never got here
+        // leaves the previous ones in charge, exactly as it leaves the
+        // previous surface.
         self.hover = hover;
-        // Focus that resolves differently against this surface than against
-        // the one the frame opened with never reached that frame's reveal:
-        // this tree is the first that can answer for it, so the next frame
-        // owes the reveal.
         self.reveal_pending = reveal_pending;
         self.resolved_focus = focus;
         drop(previous);
@@ -2651,31 +2684,6 @@ impl<State, Msg> Ratcn<State, Msg> {
     #[must_use]
     pub fn modal_is_open(&self) -> bool {
         self.surface.modal_roots().next().is_some()
-    }
-
-    /// Whether another render can settle focus reveal from the last frame.
-    ///
-    /// An on-demand host should schedule a frame when this is true, even if no
-    /// input arrived. Check again after rendering. An absent, parked focus path
-    /// does not request frames: only a newly declared target can unblock it.
-    #[must_use]
-    pub fn needs_render(&self) -> bool {
-        self.reveal_pending
-            && self
-                .surface
-                .leaf_of(self.resolved_focus.path())
-                .is_some_and(|target| {
-                    self.surface.takes_focus(target)
-                        && self.surface.viewport_visibility(target) != ViewportVisibility::Full
-                        && self
-                            .surface
-                            .clipping_viewport(target)
-                            .is_some_and(|viewport| {
-                                viewport.owner.is_some_and(|owner| {
-                                    self.surface.nodes[owner].component.is_some()
-                                })
-                            })
-                })
     }
 
     fn modal_stack_matches(&self, state: &State) -> bool {
@@ -3076,65 +3084,50 @@ impl<State, Msg> Ratcn<State, Msg> {
             })
     }
 
-    /// Reveal focus that has moved since the last frame, or that an event
-    /// asked to see again, while the surface it moved across is still the one
-    /// in hand.
+    /// Ask the component that declared the viewport clipping `focus`'s target
+    /// in `surface` to bring it into view.
     ///
     /// Every reveal in the runtime happens here, whatever moved focus: a Tab
     /// the runtime resolved, a press, a [`focus_path`](Self::focus_path) the
     /// app looked up, or a [`FocusState`] its update function stored. What
-    /// they share is that the app holds the new path by the time this frame
-    /// starts. The component's answer is a transient, which the declaration
-    /// that follows reads back and lays out from.
+    /// they share is that the app holds the new path by the time the frame
+    /// is declared.
     ///
-    /// The first frame whose surface can place the focused target reveals it.
-    /// A surface that does not declare the focused leaf has no geometry to
-    /// answer with, so the reveal stays pending and each frame asks its own
-    /// surface again.
-    fn reveal_moved_focus(&mut self, stored: &FocusState, state: &State) -> (FocusState, bool) {
-        let focus = self.surface.resolve_focus(stored);
-        let pending = (self.reveal_pending || focus != self.resolved_focus)
-            && !self.reveal_focus(&focus, state);
-        (focus, pending)
-    }
-
-    /// Ask the component that declared the viewport clipping `focus`'s target
-    /// to bring it into view. A target that is already fully on screen, or
-    /// that no viewport clips, reaches nobody.
-    ///
-    /// `false` when this surface does not declare the focused leaf: it has no
-    /// geometry to answer with, and whatever prefix of the path it does
-    /// declare belongs to a different node. Focus sits on a whole path or
-    /// nowhere, and so does the reveal.
-    /// Explicit no-focus completes immediately: there is no target to wait for.
-    fn reveal_focus(&mut self, focus: &FocusState, state: &State) -> bool {
+    /// Focus sits on a whole path or nowhere, and so does the reveal: a
+    /// surface that declares only a prefix of the path answers
+    /// [`Reveal::Absent`], never for the prefix's node.
+    fn reveal_focus(
+        &mut self,
+        surface: &mut Surface<State, Msg>,
+        focus: &FocusState,
+        state: &State,
+    ) -> Reveal {
         if focus.is_none() {
-            return true;
+            return Reveal::Settled;
         }
-        let Some(target) = self.surface.leaf_of(focus.path()) else {
-            return false;
+        let Some(target) = surface.leaf_of(focus.path()) else {
+            return Reveal::Absent;
         };
-        if !self.surface.takes_focus(target)
-            || self.surface.viewport_visibility(target) == ViewportVisibility::Full
+        if !surface.takes_focus(target)
+            || surface.viewport_visibility(target) == ViewportVisibility::Full
         {
-            return true;
+            return Reveal::Settled;
         }
-        let Some(owner) = self
-            .surface
+        let Some(owner) = surface
             .clipping_viewport(target)
             .and_then(|record| record.owner)
         else {
-            return true;
+            return Reveal::Settled;
         };
-        let reveal = self.surface.nodes[target].area;
-        let path = self.surface.path_of(owner);
-        let area = self.surface.nodes[owner].area;
-        let Some(component) = self.surface.nodes[owner].component.as_mut() else {
-            return true;
+        let reveal = surface.nodes[target].area;
+        let path = surface.path_of(owner);
+        let area = surface.nodes[owner].area;
+        let Some(component) = surface.nodes[owner].component.as_mut() else {
+            return Reveal::Settled;
         };
         let mut ctx = EventCtx::at(path, area, &mut self.transients, PointerInputs::default());
         component.reveal_in_viewport(reveal, state, &mut ctx);
-        true
+        Reveal::Delivered
     }
 
     /// The result of a focus step that resolved to `next`.

@@ -127,7 +127,7 @@ fn clipped_modal_wide_glyph_does_not_emit_over_host_chrome() {
 }
 
 fn render_hosted(
-    declare: impl FnOnce(&mut DeclareCtx<'_, (), &'static str>),
+    mut declare: impl FnMut(&mut DeclareCtx<'_, (), &'static str>),
 ) -> Driver<(), &'static str> {
     let mut driver = Driver::new(40, 18);
     driver

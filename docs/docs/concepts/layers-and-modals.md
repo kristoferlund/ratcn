@@ -153,10 +153,11 @@ covers every way focus moves: Tab, a press, and a path the app stores from its
 own update function. That is how a scrolled-away control comes into view as
 focus arrives at it.
 
-The first frame whose retained surface can place the target reveals it. A focus
-change that arrives together with the surface that first declares its target —
-startup focus, focus handed back as a modal closes, a target declared for the
-first time — is answered on the frame after.
+The reveal is answered against the tree the frame just declared, so it also
+covers a target that frame declares for the first time: startup focus, focus
+handed back as a modal closes, a row appended and focused together. When the
+component scrolls, the frame declares once more with the new offset before it
+paints.
 
 [ScrollArea](../components/scroll-area) is this mechanism packaged with a
 scrollbar and wheel and key handling.

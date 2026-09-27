@@ -7,6 +7,26 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Ratcn::render` and `render_into` take `FnMut`. The closure runs a second time
+  on a frame where focus lands on content a viewport clips, so build what it
+  consumes inside it.
+- `DeclareCtx::transient_mut` requires `T: Clone` and stages its write until the
+  render commits; a rejected pass leaves the stored value unchanged.
+
+### Fixed
+
+- Focus onto a viewport-clipped target declared that same frame (startup focus,
+  an appended row) is revealed by that frame, not the next one.
+- Stored focus no longer activates or highlights content inside a hint, and a
+  pointer capture is released when its layer becomes a hint.
+- A click after a wheel notch but before the redraw hits the row still painted
+  there in List and Select.
+- Viewport clipping blanks a wide glyph cut by its edge instead of leaving it
+  over host cells.
+- Declaring many siblings and wrapping long text no longer scale quadratically.
+
 ## [0.0.4] - 2026-09-26
 
 ### Added

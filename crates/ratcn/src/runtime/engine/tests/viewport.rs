@@ -199,6 +199,7 @@ fn a_paint_inside_a_viewport_reads_blanks_where_it_has_not_written() {
     let read = Rc::clone(&seen);
     let mut driver = Driver::<State, Msg>::new(4, 1);
     driver.render(&State, move |ctx| {
+        let read = Rc::clone(&read);
         ctx.viewport(Rect::new(0, 0, 4, 1), 4, 0, move |ctx| {
             ctx.paint(|ctx| {
                 ctx.with_buffer(|buffer| {
@@ -790,12 +791,12 @@ fn render_reveal(
     state: &RevealState,
     log: &RevealLog,
 ) {
-    let area = RevealArea {
-        offset: state.offset,
-        log: Rc::clone(log),
-    };
-    let modal = state.modal;
-    driver.render(state, move |ctx| {
+    let (offset, modal) = (state.offset, state.modal);
+    driver.render(state, |ctx| {
+        let area = RevealArea {
+            offset,
+            log: Rc::clone(log),
+        };
         ctx.component("area", area, Rect::new(0, 0, 4, 3));
         if modal {
             ctx.modal("dialog", RevealLeaf, Rect::new(0, 0, 4, 1));
@@ -921,10 +922,10 @@ fn focus_that_stayed_put_is_not_revealed_again() {
 }
 
 /// A focus the app is already holding when the first frame declares its target
-/// is revealed by the frame after: the reveal is answered by a surface, and
-/// the first frame opens with none.
+/// is revealed by that frame: the reveal answers against the tree just
+/// declared, not the surface the frame opened with.
 #[test]
-fn focus_held_before_its_target_was_ever_declared_reveals_one_frame_later() {
+fn focus_held_before_its_target_was_ever_declared_reveals_in_the_first_frame() {
     let log = RevealLog::default();
     let mut driver = reveal_driver();
     let state = RevealState {
@@ -932,49 +933,15 @@ fn focus_held_before_its_target_was_ever_declared_reveals_one_frame_later() {
         ..RevealState::default()
     };
     render_reveal(&mut driver, &state, &log);
-    assert!(
-        log.borrow().is_empty(),
-        "the first frame opened with no surface to answer against"
-    );
-    assert!(
-        driver.ratcn.needs_render(),
-        "an on-demand host must be told to settle focus"
-    );
-    render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
-    assert!(
-        !driver.ratcn.needs_render(),
-        "a completed reveal must not spin"
-    );
-}
-
-#[test]
-fn failed_render_preserves_the_committed_follow_up_request() {
-    let log = RevealLog::default();
-    let mut driver = reveal_driver();
-    let mut state = RevealState {
-        focus: FocusState::intent(["area", "bottom"]),
-        ..RevealState::default()
-    };
     render_reveal(&mut driver, &state, &log);
-    assert!(driver.ratcn.needs_render());
-    state.focus = FocusState::none();
-    assert!(
-        catch_unwind(AssertUnwindSafe(|| {
-            driver.render(&state, |_| panic!("reject the unfocused frame"));
-        }))
-        .is_err()
-    );
-    assert!(
-        driver.ratcn.needs_render(),
-        "a rejected pass cannot publish its focus bookkeeping"
-    );
+    assert_eq!(log.borrow().len(), 1, "a settled reveal is not asked again");
 }
 
-/// The same when the target appears in the frame that focuses it: the surface
-/// that opens the frame has never declared it, so the frame after reveals it.
+/// The same when the target appears in the frame that focuses it — a row
+/// appended and focused by one update.
 #[test]
-fn focus_onto_a_target_declared_that_same_frame_reveals_one_frame_later() {
+fn focus_onto_a_target_declared_that_same_frame_reveals_in_that_frame() {
     let log = RevealLog::default();
     let mut driver = reveal_driver();
     let mut state = RevealState {
@@ -988,20 +955,14 @@ fn focus_onto_a_target_declared_that_same_frame_reveals_one_frame_later() {
     state.late = true;
     state.focus = FocusState::intent(["area", "late"]);
     render_reveal(&mut driver, &state, &log);
-    assert!(
-        log.borrow().is_empty(),
-        "the row is declared for the first time by this very frame"
-    );
-
-    render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
 }
 
-/// Focus handed back to a clipped row as a modal closes: the frame opens with
-/// the modal still retained, which resolves focus into the modal, so the
-/// reveal falls to the frame after.
+/// Focus handed back to a clipped row as a modal closes is revealed by the
+/// frame that closes it, although the surface it opened with still held the
+/// modal.
 #[test]
-fn focus_returned_as_a_modal_closes_reveals_one_frame_later() {
+fn focus_returned_as_a_modal_closes_reveals_in_that_frame() {
     let log = RevealLog::default();
     let mut driver = reveal_driver();
     let mut state = RevealState {
@@ -1015,12 +976,6 @@ fn focus_returned_as_a_modal_closes_reveals_one_frame_later() {
 
     state.modal = false;
     state.focus = FocusState::intent(["area", "bottom"]);
-    render_reveal(&mut driver, &state, &log);
-    assert!(
-        log.borrow().is_empty(),
-        "the retained surface still holds the modal, which owns focus"
-    );
-
     render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
 }
@@ -1041,10 +996,6 @@ fn focus_parked_on_a_path_that_resolves_to_nothing_reveals_no_prefix_of_it() {
 
     state.focus = FocusState::intent(["area", "bottom", "nowhere"]);
     render_reveal(&mut driver, &state, &log);
-    assert!(
-        !driver.ratcn.needs_render(),
-        "absent intent cannot make progress by redrawing"
-    );
     render_reveal(&mut driver, &state, &log);
 
     assert!(
@@ -1107,12 +1058,6 @@ fn a_target_declared_frames_after_the_app_focused_it_is_revealed_when_it_appears
     );
 
     state.late = true;
-    render_reveal(&mut driver, &state, &log);
-    assert!(
-        log.borrow().is_empty(),
-        "the surface that declares the row is only now retained"
-    );
-
     render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
 }

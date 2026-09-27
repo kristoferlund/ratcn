@@ -59,15 +59,14 @@ impl App {
         let _ = self.state.toasts.prune_expired(now);
 
         let area = frame.area();
-        let button = Button::new("Hello")
-            .size(ButtonSize::Large)
-            .on_press(|| Msg::Hello);
-        let button_area = area.centered(
-            Constraint::Length(button.width()),
-            Constraint::Length(ButtonSize::Large.height()),
-        );
-
         self.ratcn.render(frame, area, &self.state, theme, |ctx| {
+            let button = Button::new("Hello")
+                .size(ButtonSize::Large)
+                .on_press(|| Msg::Hello);
+            let button_area = area.centered(
+                Constraint::Length(button.width()),
+                Constraint::Length(ButtonSize::Large.height()),
+            );
             ctx.component("hello", button, button_area);
         });
         frame.render_widget(ToasterWidget::new(&self.state.toasts, now).themed(theme), area);

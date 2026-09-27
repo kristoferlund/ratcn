@@ -70,12 +70,6 @@ pub trait Demo {
         false
     }
 
-    /// Whether the last draw left runtime work for a follow-up frame.
-    /// Runtime-backed demos forward [`ratcn::runtime::Ratcn::needs_render`].
-    fn needs_render(&self) -> bool {
-        false
-    }
-
     /// How long the host may wait, with no event arriving at all, before it has
     /// to render again. [`None`] waits indefinitely.
     ///
@@ -176,11 +170,7 @@ fn drive<D: Demo, H: Host>(demo: &mut D, host: &mut H) -> io::Result<()> {
         // deadline's work happens whether the wake-up or an event caused the
         // frame. The browser host has no such asymmetry: its timer is
         // independent of input.
-        let timeout = if stale {
-            Some(ANIMATION_FRAME)
-        } else {
-            demo.wake().map(|delay| delay.max(ANIMATION_FRAME))
-        };
+        let timeout = demo.wake().map(|delay| delay.max(ANIMATION_FRAME));
         let Some(event) = host.next(timeout)? else {
             // The wait ran out: the deadline the demo named has arrived, and no
             // event needs inventing for it.
@@ -225,8 +215,8 @@ fn is_quit(event: &termina::Event) -> bool {
     )
 }
 
-/// Draw one frame, and report whether runtime settling or a resize during
-/// flush requires another frame.
+/// Draw one frame, and report whether the grid changed size while it was being
+/// flushed — which leaves the frame just drawn already out of date.
 ///
 /// Ratzilla adopts a canvas resize during the flush, after Ratatui has sized the
 /// buffer for the frame, so the frame that notices is the one before the
@@ -248,7 +238,7 @@ where
         })?
         .area
         .as_size();
-    Ok(terminal.size()? != drawn || demo.needs_render())
+    Ok(terminal.size()? != drawn)
 }
 
 /// Run `demo` in the browser. Returns once the host is wired up; the demo keeps
@@ -371,15 +361,16 @@ mod web_host {
         /// Paint one frame and decide when the next one is due.
         fn render(self: &Rc<Self>) {
             self.requested.set(false);
-            let needs_render = super::draw_frame(
+            let outgrew = super::draw_frame(
                 &mut *self.demo.borrow_mut(),
                 &mut self.terminal.borrow_mut(),
                 &D::THEME,
             )
             .expect("the canvas backend refused a frame");
             self.rendered.set(true);
-            // Settle runtime work or a canvas resize on the next frame.
-            if needs_render {
+            // The canvas adopted a resize while this frame was flushed, so the
+            // frame that settles on the new grid is the next one.
+            if outgrew {
                 self.request_frame();
             }
             self.arm_wake();
@@ -846,62 +837,6 @@ mod tests {
             .map(Cell::symbol)
             .collect();
         assert!(painted.contains("probe"), "the frame reached the backend");
-    }
-
-    #[test]
-    fn offscreen_startup_focus_settles_without_an_input_event() {
-        use ratcn::{
-            Button, ScrollArea,
-            runtime::{FocusState, Ratcn},
-        };
-
-        struct FocusDemo {
-            runtime: Ratcn<FocusState, ()>,
-            focus: FocusState,
-        }
-        impl Demo for FocusDemo {
-            fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
-                self.runtime
-                    .render_into(buffer, area, &self.focus, theme, |ctx| {
-                        ctx.component(
-                            "scroll",
-                            ScrollArea::new(10).content(|ctx| {
-                                ctx.component(
-                                    "bottom",
-                                    Button::new("VISIBLE").on_press(|| ()),
-                                    Rect::new(0, 8, 11, 1),
-                                );
-                            }),
-                            area,
-                        );
-                    });
-            }
-
-            fn needs_render(&self) -> bool {
-                self.runtime.needs_render()
-            }
-        }
-        let mut demo = FocusDemo {
-            runtime: Ratcn::new().focus(|focus: &FocusState| focus, |_| ()),
-            focus: FocusState::intent(["scroll", "bottom"]),
-        };
-        let mut script = Script::new(HostBackend::new(12, 2), [None]);
-        drive(&mut demo, &mut script).unwrap();
-        assert_eq!(
-            script.waits,
-            [Some(ANIMATION_FRAME), None],
-            "settle promptly, then sleep until input"
-        );
-        let painted: String = script
-            .terminal
-            .backend()
-            .inner
-            .buffer()
-            .content
-            .iter()
-            .map(Cell::symbol)
-            .collect();
-        assert!(painted.contains("VISIBLE"));
     }
 
     #[test]

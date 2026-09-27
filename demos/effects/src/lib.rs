@@ -115,10 +115,6 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    fn needs_render(&self) -> bool {
-        self.ratcn.needs_render()
-    }
-
     /// Route one input event through ratcn; a component that reacts emits a
     /// `Msg`, which feeds the same `dispatch` path as everything else.
     fn handle_event(&mut self, event: Event) -> bool {
