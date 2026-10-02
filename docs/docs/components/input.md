@@ -165,22 +165,26 @@ so its readline-style keys apply:
 clipboard — and a host that quits on `Ctrl+C`, as the demos do, takes that key
 before the field sees it.
 
-The field leaves these alone, so they reach focus traversal, an enclosing
-dialog, and your app:
+Keys route by binding, not by effect. A key the editor binds is the field's
+even where it changes nothing — <kbd>←</kbd> at the start of the text,
+<kbd>Ctrl+K</kbd> at its end — and every unmodified letter, `j` and `k`
+included, is typing. A chord the editor does not bind bubbles, which is how
+`Ctrl+S` reaches your save handler through a focused field; that includes
+<kbd>Ctrl+U</kbd> and <kbd>Ctrl+R</kbd>, undo and redo upstream, since a state
+keeps no history.
+
+The field also leaves these alone, whatever the editor binds them to:
 
 - <kbd>Tab</kbd> and <kbd>Shift+Tab</kbd>, <kbd>Esc</kbd>, and the function
   keys.
-- <kbd>↑</kbd>, <kbd>↓</kbd>, <kbd>Page Up</kbd>, and <kbd>Page Down</kbd>: one
-  line has no vertical movement to make.
-- <kbd>Ctrl+U</kbd> and <kbd>Ctrl+R</kbd>, the editor's undo and redo, which
-  the field does not offer.
-- Any other <kbd>Ctrl</kbd> or <kbd>Alt</kbd> chord that changes nothing here,
-  which is how `Ctrl+S` reaches your save handler through a focused field.
+- <kbd>↑</kbd>, <kbd>↓</kbd>, <kbd>Page Up</kbd>, <kbd>Page Down</kbd>, and the
+  editor's chords for the same moves — <kbd>Ctrl+N</kbd>, <kbd>Ctrl+P</kbd>,
+  <kbd>Ctrl+V</kbd>, <kbd>Alt+V</kbd>, and the <kbd>Alt</kbd> chords for
+  paragraphs and the top and bottom: one line has no vertical movement to make.
+- <kbd>Ctrl+J</kbd>, which is how a terminal reports a line feed, and which the
+  editor would take as "delete to the start".
 
-Plain typing and movement are always the field's: <kbd>←</kbd> at the start of
-the text is consumed rather than handed to whatever encloses it, and so is
-every letter, `j` and `k` included. See [Keyboard](../concepts/keyboard) for
-the rules the other components follow.
+See [Keyboard](../concepts/keyboard) for the rules the other components follow.
 
 ## Mouse
 

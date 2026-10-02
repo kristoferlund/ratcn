@@ -250,6 +250,67 @@ pub fn editor_input(event: &KeyEvent) -> Option<EditorInput> {
     })
 }
 
+/// Whether the editor binds `input` to something: an edit, a movement, a
+/// selection, the yank buffer, or a page of scrolling.
+///
+/// This mirrors the keymap in upstream's [`Editor::input`], and a test holds
+/// the two together. A component routes keys by it: a binding is consumed
+/// even where it changes nothing — Ctrl+K at the end of the text — so that
+/// whether a chord reaches the app never depends on where the cursor is. Shift
+/// never decides a binding; the editor reads it as "select".
+///
+/// Undo and redo (Ctrl+U, Ctrl+R) are left out: a state keeps no history, so
+/// in a state they do nothing.
+#[must_use]
+pub fn is_editor_binding(input: &EditorInput) -> bool {
+    let EditorInput { key, ctrl, alt, .. } = *input;
+    match key {
+        EditorKey::Char(char) => match (ctrl, alt) {
+            // Typing.
+            (false, false) => true,
+            (true, false) => matches!(
+                char,
+                'a' | 'b'
+                    | 'c'
+                    | 'd'
+                    | 'e'
+                    | 'f'
+                    | 'h'
+                    | 'j'
+                    | 'k'
+                    | 'm'
+                    | 'n'
+                    | 'p'
+                    | 'v'
+                    | 'w'
+                    | 'x'
+                    | 'y'
+            ),
+            (false, true) => matches!(
+                char,
+                'b' | 'd' | 'f' | 'h' | 'n' | 'p' | 'v' | '<' | '>' | '[' | ']'
+            ),
+            (true, true) => matches!(char, 'b' | 'f' | 'n' | 'p'),
+        },
+        EditorKey::Enter
+        | EditorKey::Home
+        | EditorKey::End
+        | EditorKey::PageUp
+        | EditorKey::PageDown
+        | EditorKey::Copy
+        | EditorKey::Cut
+        | EditorKey::Paste
+        | EditorKey::MouseScrollUp
+        | EditorKey::MouseScrollDown => true,
+        EditorKey::Tab => !ctrl && !alt,
+        EditorKey::Backspace | EditorKey::Delete => !ctrl,
+        // Alone, by character; with Ctrl, by word or paragraph; with
+        // Ctrl+Alt, to the start or end of the line or the text.
+        EditorKey::Left | EditorKey::Right | EditorKey::Up | EditorKey::Down => ctrl || !alt,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +632,82 @@ mod tests {
             ("abc".to_owned(), 3, false),
             "an unbound chord changes nothing"
         );
+    }
+
+    /// The binding table has to be the editor's keymap, or a key would be
+    /// consumed while doing nothing, or bubble to the app after the editor
+    /// acted on it. Every key, under every modifier, is tried on editors
+    /// where each binding has something to do: a key is a binding exactly
+    /// when it changes the text, the cursor, the selection, the yank buffer,
+    /// or the view in one of them. Undo and redo change nothing, because a
+    /// state keeps no history, so they are not bindings.
+    #[test]
+    fn the_binding_table_is_the_editors_keymap() {
+        let text = (0..30)
+            .map(|line| if line % 10 == 9 { "" } else { "one two three" })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut plain = TextAreaState::new(text).editor().clone();
+        plain.move_cursor(CursorMove::Jump(15, 5));
+        plain.set_yank_text("yanked");
+        let area = ratatui::layout::Rect::new(0, 0, 20, 5);
+        ratatui::widgets::Widget::render(&plain, area, &mut ratatui::buffer::Buffer::empty(area));
+        let mut selecting = plain.clone();
+        selecting.start_selection();
+        selecting.move_cursor(CursorMove::Forward);
+        let observe = |editor: &Editor<'_>| {
+            (
+                editor.lines().to_vec(),
+                editor.cursor(),
+                editor.selection_range(),
+                editor.yank_text(),
+                editor.scroll_offset(),
+            )
+        };
+
+        let mut keys = vec![
+            EditorKey::Enter,
+            EditorKey::Esc,
+            EditorKey::Tab,
+            EditorKey::Backspace,
+            EditorKey::Delete,
+            EditorKey::Left,
+            EditorKey::Right,
+            EditorKey::Up,
+            EditorKey::Down,
+            EditorKey::Home,
+            EditorKey::End,
+            EditorKey::PageUp,
+            EditorKey::PageDown,
+            EditorKey::F(1),
+            EditorKey::Copy,
+            EditorKey::Cut,
+            EditorKey::Paste,
+            EditorKey::MouseScrollUp,
+            EditorKey::MouseScrollDown,
+            EditorKey::Null,
+        ];
+        keys.extend(
+            ('a'..='z')
+                .chain(['A', '1', ' ', '<', '>', '[', ']', '\n', '\r'])
+                .map(EditorKey::Char),
+        );
+        for key in keys {
+            for bits in 0..8 {
+                let input = EditorInput {
+                    key,
+                    ctrl: bits & 1 != 0,
+                    alt: bits & 2 != 0,
+                    shift: bits & 4 != 0,
+                };
+                let acts = [&plain, &selecting].into_iter().any(|editor| {
+                    let mut edited = editor.clone();
+                    edited.input(input.clone());
+                    observe(&edited) != observe(editor)
+                });
+                assert_eq!(is_editor_binding(&input), acts, "{input:?}");
+            }
+        }
     }
 
     /// Alt alone is not `AltGr`: Alt+`<` is the editor's jump-to-top chord and

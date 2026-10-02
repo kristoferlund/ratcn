@@ -70,13 +70,15 @@ to the app. Tab traversal reveals a focused descendant that was offscreen.
 
 ### Text fields
 
-[Input](../components/input) and [TextArea](../components/textarea) take every
-unmodified key as text or cursor movement — `j`, `h`, and Space are characters
-there — and consume a movement key even at the edge of the text. They leave
-Tab, Shift+Tab, Esc, and the function keys alone, along with any Ctrl or Alt
-chord that changes nothing in the field, so traversal, dialogs, and app hotkeys
-keep working around a focused field. Input also leaves Up, Down, PageUp, and
-PageDown. Each page lists its editing keys.
+[Input](../components/input) and [TextArea](../components/textarea) route keys
+by binding, not by effect: a key their editor binds is theirs even where it
+changes nothing — `←` at the start of the text, `Ctrl+K` at its end — and a
+chord it does not bind bubbles, so app hotkeys reach the app wherever the
+cursor is. Every unmodified key is text or movement there; `j`, `h`, and Space
+are characters. Both leave Tab, Shift+Tab, Esc, and the function keys alone,
+so traversal and dialogs keep working around a focused field. Input also
+leaves the vertical keys and the editor's chords for them. Each page lists its
+editing keys.
 
 ### Commit and dismiss
 

@@ -155,7 +155,7 @@ so its readline-style keys apply:
 | `Home` `End` &nbsp;`Ctrl+A` `Ctrl+E` | Move to the start / end of the line |
 | `Ctrl+↑` `Ctrl+↓` | Move one paragraph |
 | `Alt+<` `Alt+>` | Move to the top / bottom of the text |
-| `Page Up` `Page Down` | Move one page |
+| `Page Up` `Page Down` &nbsp;`Alt+V` `Ctrl+V` | Move one page up / down |
 | `Shift` + a movement | Select |
 | `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
 | `Ctrl+W` `Alt+Backspace` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
@@ -168,20 +168,18 @@ so its readline-style keys apply:
 clipboard — and a host that quits on `Ctrl+C`, as the demos do, takes that key
 before the field sees it.
 
-The field leaves these alone, so they reach focus traversal, an enclosing
-dialog, and your app:
+Keys route by binding, not by effect. A key the editor binds is the field's
+even where it changes nothing — <kbd>↑</kbd> on the first line,
+<kbd>Ctrl+K</kbd> at the end of a line — and every unmodified letter, `j` and
+`k` included, is typing. A chord the editor does not bind bubbles, which is how
+`Ctrl+S` reaches your save handler through a focused field; that includes
+<kbd>Ctrl+U</kbd> and <kbd>Ctrl+R</kbd>, undo and redo upstream, since a state
+keeps no history.
 
-- <kbd>Tab</kbd> and <kbd>Shift+Tab</kbd>, <kbd>Esc</kbd>, and the function
-  keys. Tab moves focus; it does not indent.
-- <kbd>Ctrl+U</kbd> and <kbd>Ctrl+R</kbd>, the editor's undo and redo, which
-  the field does not offer.
-- Any other <kbd>Ctrl</kbd> or <kbd>Alt</kbd> chord that changes nothing here,
-  which is how `Ctrl+S` reaches your save handler through a focused field.
-
-Plain typing and movement are always the field's: <kbd>↑</kbd> on the first
-line is consumed rather than handed to whatever encloses it, and so is every
-letter, `j` and `k` included. See [Keyboard](../concepts/keyboard) for the
-rules the other components follow.
+The field also leaves <kbd>Tab</kbd> and <kbd>Shift+Tab</kbd>, <kbd>Esc</kbd>,
+and the function keys alone, so they reach focus traversal, an enclosing
+dialog, and your app. Tab moves focus; it does not indent. See
+[Keyboard](../concepts/keyboard) for the rules the other components follow.
 
 ## Mouse
 

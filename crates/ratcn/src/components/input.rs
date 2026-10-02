@@ -29,10 +29,10 @@ use crate::{
     color::{FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, away_from, dim},
     geometry::fixed_height,
     runtime::{
-        Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
-        MouseEvent, MouseKind, PaintCtx, ScopeOptions,
+        Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, Modifiers,
+        MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions,
     },
-    text_edit::{CursorMove, DataCursor, Editor, InputState, editor_input},
+    text_edit::{CursorMove, DataCursor, Editor, InputState, editor_input, is_editor_binding},
     theme::resolve_style,
 };
 
@@ -353,12 +353,13 @@ type StyleFn = Rc<dyn Fn(&Theme) -> InputStyle>;
 /// The editor's keys all work — arrows, <kbd>Home</kbd>/<kbd>End</kbd>,
 /// <kbd>Ctrl</kbd>+<kbd>←</kbd>/<kbd>→</kbd> by word, <kbd>Shift</kbd> with a
 /// movement to select, <kbd>Ctrl+W</kbd>, <kbd>Ctrl+K</kbd>, and the rest of
-/// the readline set. <kbd>Enter</kbd> emits [`on_submit`](Self::on_submit)
+/// the readline set; a key the editor binds is the field's even where it
+/// changes nothing. <kbd>Enter</kbd> emits [`on_submit`](Self::on_submit)
 /// and never inserts a line break. <kbd>Tab</kbd>, <kbd>Esc</kbd>, the
 /// function keys, and the vertical keys are left to bubble, as is any chord
-/// that changes nothing here, so focus traversal, an enclosing dialog, and
-/// the app's shortcuts keep working around a focused field. A paste is
-/// flattened to one line.
+/// the editor does not bind, so focus traversal, an enclosing dialog, and the
+/// app's shortcuts keep working around a focused field. A paste is flattened
+/// to one line.
 ///
 /// A click places the cursor at the character clicked, and a drag selects
 /// from the character pressed to the one under the pointer, scrolling the
@@ -509,37 +510,34 @@ impl<S, M> Input<S, M> {
     }
 
     /// The key policy. Enter submits and never reaches the editor; the keys
-    /// in [`bubbles`] are not the field's; everything else is the editor's.
-    /// A key that changes something emits the new state. One that changes
-    /// nothing is consumed when it is plain typing or movement — Left at the
-    /// start of the text must not walk out into the enclosing component —
-    /// and bubbles when it is a chord, which is how the app's own shortcuts
-    /// pass through a focused field.
+    /// in [`bubbles`] are not the field's. Of the rest, a key the editor binds
+    /// is the field's: it emits the new state, or is consumed where it changes
+    /// nothing — Left at the start of the text must not walk out into the
+    /// enclosing component, and Ctrl+K at its end must not fire the app's
+    /// shortcut. A key the editor does not bind bubbles, which is how the
+    /// app's own shortcuts pass through a focused field.
     fn handle_key(&self, key: KeyEvent, state: &InputState) -> Option<EventResult<InputState>> {
         if bubbles(key) {
             return None;
         }
-        let input = editor_input(&key)?;
+        let input = editor_input(&key).filter(is_editor_binding)?;
         let mut editor = self.editor(state);
         let before = (
             editor.cursor(),
             editor.selection_range(),
             editor.yank_text(),
         );
-        let chord = input.ctrl || input.alt;
         let modified = editor.input(input);
         let after = (
             editor.cursor(),
             editor.selection_range(),
             editor.yank_text(),
         );
-        if modified || before != after {
-            Some(EventResult::Emit(InputState::edited(editor)))
-        } else if chord {
-            None
+        Some(if modified || before != after {
+            EventResult::Emit(InputState::edited(editor))
         } else {
-            Some(EventResult::Consumed)
-        }
+            EventResult::Consumed
+        })
     }
 
     /// Insert a paste as one line.
@@ -708,13 +706,14 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
     }
 }
 
-/// The keys a field leaves alone. Tab and `BackTab` belong to focus traversal,
-/// Esc and the function keys to enclosing components and the app, and one
-/// line has no vertical movement to make. Ctrl+M and a raw line break would
-/// insert a newline, and Ctrl+J — a line feed, as a terminal reports it —
-/// would delete back to the start of the line; Ctrl+U and Ctrl+R are undo and redo, which a state
-/// replaced on every keystroke does not keep.
+/// The keys a field leaves alone, whatever the editor binds them to. Tab and
+/// `BackTab` belong to focus traversal, Esc and the function keys to enclosing
+/// components and the app. One line has no vertical movement to make, so the
+/// vertical keys go too, with the chords the editor binds to the same moves.
+/// Ctrl+M and a raw line break would insert a newline, and Ctrl+J — a line
+/// feed, as a terminal reports it — would delete back to the start of the line.
 fn bubbles(key: KeyEvent) -> bool {
+    let Modifiers { ctrl, alt, .. } = key.modifiers;
     match key.code {
         KeyCode::Tab
         | KeyCode::BackTab
@@ -723,11 +722,16 @@ fn bubbles(key: KeyEvent) -> bool {
         | KeyCode::Up
         | KeyCode::Down
         | KeyCode::PageUp
-        | KeyCode::PageDown
-        | KeyCode::Char('\n' | '\r') => true,
-        KeyCode::Char(char) if key.modifiers.ctrl && !key.modifiers.alt => {
-            matches!(char.to_ascii_lowercase(), 'm' | 'j' | 'u' | 'r')
-        }
+        | KeyCode::PageDown => true,
+        KeyCode::Char(char) => match (ctrl, alt) {
+            (false, false) => matches!(char, '\n' | '\r'),
+            (true, false) => matches!(char.to_ascii_lowercase(), 'j' | 'm' | 'n' | 'p' | 'v'),
+            (false, true) => matches!(
+                char.to_ascii_lowercase(),
+                'n' | 'p' | 'v' | '<' | '>' | '[' | ']'
+            ),
+            (true, true) => matches!(char.to_ascii_lowercase(), 'n' | 'p'),
+        },
         _ => false,
     }
 }
@@ -748,7 +752,7 @@ fn single_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{ChildId, FocusState, Modifiers, Ratcn, ScrollDirection};
+    use crate::runtime::{ChildId, FocusState, Ratcn, ScrollDirection};
     use crate::test_support::{Driver, key, key_with, mouse, styled_snapshot};
     use crate::{Dialog, ScrollArea};
 
@@ -772,6 +776,15 @@ mod tests {
     const SHIFT: Modifiers = Modifiers {
         shift: true,
         ..Modifiers::NONE
+    };
+    const ALT: Modifiers = Modifiers {
+        alt: true,
+        ..Modifiers::NONE
+    };
+    const CTRL_SHIFT: Modifiers = Modifiers {
+        ctrl: true,
+        alt: false,
+        shift: true,
     };
 
     /// The field every test declares unless it says otherwise: six columns
@@ -989,8 +1002,10 @@ mod tests {
     }
 
     /// A field that swallowed Tab would trap focus, and one that swallowed
-    /// Esc would keep its dialog open. Undo has no history to act on, and an
-    /// unknown chord is the app's shortcut.
+    /// Esc would keep its dialog open. One line has no vertical movement, so
+    /// the vertical keys and the editor's chords for them are the app's too.
+    /// Undo has no history to act on, and a chord the editor does not bind is
+    /// the app's shortcut.
     #[test]
     fn keys_that_are_not_the_fields_bubble() {
         let mut driver = Driver::<State, Msg>::new(12, 3);
@@ -1004,13 +1019,44 @@ mod tests {
             key(KeyCode::F(5)),
             key(KeyCode::Up),
             key(KeyCode::Down),
+            key_with(KeyCode::Char('n'), CTRL),
+            key_with(KeyCode::Char('p'), CTRL),
+            key_with(KeyCode::Char('v'), CTRL),
+            key_with(KeyCode::Char('v'), ALT),
+            key_with(KeyCode::Char('<'), ALT),
             key_with(KeyCode::Char('u'), CTRL),
             key_with(KeyCode::Char('r'), CTRL),
             key_with(KeyCode::Char('s'), CTRL),
+            key_with(KeyCode::Char('x'), ALT),
         ] {
             assert!(
                 matches!(driver.event(event.clone(), &state), EventResult::Ignored),
                 "{event:?} must bubble"
+            );
+        }
+    }
+
+    /// Keys route by binding, not by effect. A chord the editor binds is
+    /// the field's wherever the cursor is: if Ctrl+K at the end of the text
+    /// bubbled, the app's Ctrl+K shortcut would fire or not depending on
+    /// where the cursor happened to be.
+    #[test]
+    fn a_bound_chord_is_consumed_even_where_it_changes_nothing() {
+        let mut driver = driver();
+        let state = state("name");
+        render(&mut driver, &state);
+
+        for event in [
+            key_with(KeyCode::Char('k'), CTRL),
+            key_with(KeyCode::Char('d'), CTRL),
+            key_with(KeyCode::Char('e'), CTRL),
+            key_with(KeyCode::Char('f'), ALT),
+            key_with(KeyCode::Char('K'), CTRL_SHIFT),
+            key_with(KeyCode::Right, CTRL),
+        ] {
+            assert!(
+                matches!(driver.event(event.clone(), &state), EventResult::Consumed),
+                "{event:?} must be consumed"
             );
         }
     }
