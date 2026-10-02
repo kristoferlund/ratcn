@@ -89,8 +89,16 @@ jobs:
           cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
+      # A packaged crate builds against crates.io alone, where the fixes the
+      # workspace patches in are not released yet, so ratcn cannot be packaged
+      # while Cargo.toml has a patch. The step runs again once it is removed.
       - name: Package
-        run: cargo package -p ratcn --locked
+        run: |
+          if grep -q '^\[patch\.crates-io\]' Cargo.toml; then
+            echo "::warning::ratcn is not packaged: Cargo.toml patches a dependency with fixes crates.io does not have yet. Remove the patch once upstream releases them."
+          else
+            cargo package -p ratcn --locked
+          fi
       - name: Package CLI
         run: cargo package -p cargo-ratcn --locked
       # `cargo package` unpacks the crate into target/package/ to verify it.
