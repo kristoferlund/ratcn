@@ -49,4 +49,4 @@ web-sys = { version = "0.3.99", features = ["AbortController", "AbortSignal", "H
 # this block, and bump the version above, once upstream ships them. ratcn
 # cannot be published while this patch is in place.
 [patch.crates-io]
-ratatui-textarea = { git = "https://github.com/kristoferlund/ratatui-textarea", rev = "0141e79c596da915361f91e8779be245849d1859" }
+ratatui-textarea = { git = "https://github.com/kristoferlund/ratatui-textarea", rev = "61e6eb6c6e3feee6b8d5a57a3250393752b56634" }
