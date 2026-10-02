@@ -21,9 +21,10 @@ use std::{
 };
 
 pub use ratatui_textarea::{
-    CursorMove, DataCursor, Input as EditorInput, Key as EditorKey, Scrolling, TextArea as Editor,
-    WrapMode,
+    CursorMove, DataCursor, Input as EditorInput, Key as EditorKey, TextArea as Editor, WrapMode,
 };
+
+use ratatui::layout::{Position, Rect};
 
 use crate::runtime::{KeyCode, KeyEvent, Modifiers};
 
@@ -325,6 +326,48 @@ pub fn is_editor_binding(input: &EditorInput) -> bool {
         // Ctrl+Alt, to the start or end of the line or the text.
         EditorKey::Left | EditorKey::Right | EditorKey::Up | EditorKey::Down => ctrl || !alt,
         _ => false,
+    }
+}
+
+/// The move that puts the cursor on the character drawn under `pointer`.
+///
+/// `text` is where `editor` was painted, and the editor knows how far that
+/// view is scrolled. A pointer outside `text` counts as one cell past the edge
+/// it left by: that cell's character is the next one out of sight, so the
+/// cursor steps onto it and the next paint scrolls it into view — a drag held
+/// past an edge keeps extending as the pointer moves. Past the end of a line
+/// the editor clamps to its end, and below the text to the last line.
+#[must_use]
+pub fn cursor_at(editor: &Editor<'_>, text: Rect, pointer: Position) -> CursorMove {
+    let (top_row, top_column) = editor.scroll_offset();
+    let along = |pointer: u16, start: u16, length: u16, scrolled: u16| {
+        let offset = (i32::from(pointer) - i32::from(start))
+            .min(i32::from(length))
+            .max(-1);
+        usize::try_from(i32::from(scrolled) + offset).unwrap_or(0)
+    };
+    let DataCursor(row, column) = editor.screen_to_data(
+        along(pointer.y, text.y, text.height, top_row),
+        along(pointer.x, text.x, text.width, top_column),
+    );
+    CursorMove::Jump(
+        u16::try_from(row).unwrap_or(u16::MAX),
+        u16::try_from(column).unwrap_or(u16::MAX),
+    )
+}
+
+/// Select from `anchor` to `pointer`: the selection a drag makes, replacing
+/// whatever was selected before. A drag that comes back to where it began
+/// selects nothing — an empty selection is still one to the editor, and the
+/// next arrow key would extend it.
+pub fn select_dragged(editor: &mut Editor<'_>, anchor: CursorMove, pointer: CursorMove) {
+    editor.cancel_selection();
+    editor.move_cursor(anchor);
+    let anchored = editor.cursor();
+    editor.start_selection();
+    editor.move_cursor(pointer);
+    if editor.cursor() == anchored {
+        editor.cancel_selection();
     }
 }
 

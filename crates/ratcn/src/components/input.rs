@@ -33,7 +33,8 @@ use crate::{
         MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions,
     },
     text_edit::{
-        CursorMove, DataCursor, Editor, InputState, WrapMode, editor_input, is_editor_binding,
+        CursorMove, Editor, InputState, WrapMode, cursor_at, editor_input, is_editor_binding,
+        select_dragged,
     },
     theme::resolve_style,
 };
@@ -43,8 +44,10 @@ use crate::{
 /// At rest [`foreground`](Self::foreground) sits on
 /// [`background`](Self::background). Focus and hover swap the background, with
 /// hover beating focus; disabled mutes the text and wins over both. Invalid
-/// recolors the text, the border, and the title, and is independent of the
-/// rest: it says something about the content, not about the interaction.
+/// recolors the text, the border, and the title, and is independent of focus
+/// and hover: it says something about the content, not about the
+/// interaction. Disabled wins over it too, since a field the user cannot edit
+/// cannot be fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputStyle {
     /// Text color, and the title's.
@@ -156,7 +159,7 @@ impl InputStyle {
             selection: Style::default()
                 .fg(self.selection_foreground)
                 .bg(self.selection_background),
-            border: Style::default().fg(if invalid {
+            border: Style::default().fg(if invalid && !disabled {
                 self.invalid_foreground
             } else {
                 self.border
@@ -560,11 +563,13 @@ impl<S, M> Input<S, M> {
     /// enclosing component, and Ctrl+K at its end must not fire the app's
     /// shortcut. A key the editor does not bind bubbles, which is how the
     /// app's own shortcuts pass through a focused field.
-    fn handle_key(&self, key: KeyEvent, state: &InputState) -> Option<EventResult<InputState>> {
+    fn handle_key(&self, key: KeyEvent, state: &InputState) -> EventResult<InputState> {
         if bubbles(key) {
-            return None;
+            return EventResult::Ignored;
         }
-        let input = editor_input(&key).filter(is_editor_binding)?;
+        let Some(input) = editor_input(&key).filter(is_editor_binding) else {
+            return EventResult::Ignored;
+        };
         let mut editor = self.editor(state);
         let before = (
             editor.cursor(),
@@ -577,22 +582,22 @@ impl<S, M> Input<S, M> {
             editor.selection_range(),
             editor.yank_text(),
         );
-        Some(if modified || before != after {
+        if modified || before != after {
             EventResult::Emit(InputState::from_editor(editor))
         } else {
             EventResult::Consumed
-        })
+        }
     }
 
     /// Insert a paste as one line.
-    fn handle_paste(&self, text: &str, state: &InputState) -> Option<EventResult<InputState>> {
+    fn handle_paste(&self, text: &str, state: &InputState) -> EventResult<InputState> {
         let text = single_line(text);
         if text.is_empty() {
-            return None;
+            return EventResult::Ignored;
         }
         let mut editor = self.editor(state);
         editor.insert_str(text);
-        Some(EventResult::Emit(InputState::from_editor(editor)))
+        EventResult::Emit(InputState::from_editor(editor))
     }
 
     /// The mouse policy. A press on the text claims the rest of the gesture
@@ -607,41 +612,33 @@ impl<S, M> Input<S, M> {
         mouse: &MouseEvent,
         state: &InputState,
         ctx: &mut EventCtx<'_>,
-    ) -> Option<EventResult<InputState>> {
+    ) -> EventResult<InputState> {
         let text = text_rect(ctx.area(), self.title.is_some());
+        let pointer = Position::new(mouse.column, mouse.row);
         let mut editor = self.editor(state);
         let before = (editor.cursor(), editor.selection_range());
         match mouse.kind {
-            MouseKind::Down(MouseButton::Left)
-                if text.contains(Position::new(mouse.column, mouse.row)) =>
-            {
+            MouseKind::Down(MouseButton::Left) if text.contains(pointer) => {
                 ctx.capture_pointer(MouseButton::Left);
-                *ctx.transient() = DragAnchor(cursor_at(&editor, text, mouse));
-                return None;
+                *ctx.transient() = DragAnchor(cursor_at(&editor, text, pointer));
+                return EventResult::Ignored;
             }
             MouseKind::Click(MouseButton::Left) if ctx.pointer_captured() => {
                 editor.cancel_selection();
-                editor.move_cursor(cursor_at(&editor, text, mouse));
+                editor.move_cursor(cursor_at(&editor, text, pointer));
             }
             MouseKind::Drag(MouseButton::Left) if ctx.pointer_captured() => {
                 let DragAnchor(anchor) = *ctx.transient();
-                let pointer = cursor_at(&editor, text, mouse);
-                editor.cancel_selection();
-                editor.move_cursor(anchor);
-                let anchored = editor.cursor();
-                editor.start_selection();
-                editor.move_cursor(pointer);
-                if editor.cursor() == anchored {
-                    editor.cancel_selection();
-                }
+                let pointer = cursor_at(&editor, text, pointer);
+                select_dragged(&mut editor, anchor, pointer);
             }
-            _ => return None,
+            _ => return EventResult::Ignored,
         }
-        Some(if before == (editor.cursor(), editor.selection_range()) {
+        if before == (editor.cursor(), editor.selection_range()) {
             EventResult::Consumed
         } else {
             EventResult::Emit(InputState::from_editor(editor))
-        })
+        }
     }
 }
 
@@ -655,32 +652,6 @@ impl Default for DragAnchor {
     fn default() -> Self {
         Self(CursorMove::Jump(0, 0))
     }
-}
-
-/// The move that puts the cursor on the character drawn under the pointer.
-///
-/// `text` is where the editor was painted, and the editor knows how far that
-/// view is scrolled. A pointer outside `text` counts as one cell past the edge
-/// it left by: that cell's character is the next one out of sight, so the
-/// cursor steps onto it and the next paint scrolls it into view — a drag held
-/// past an edge keeps extending as the pointer moves. Past the end of the
-/// text the editor clamps to the end.
-fn cursor_at(editor: &Editor<'_>, text: Rect, mouse: &MouseEvent) -> CursorMove {
-    let (top_row, top_column) = editor.scroll_offset();
-    let along = |pointer: u16, start: u16, length: u16, scrolled: u16| {
-        let offset = (i32::from(pointer) - i32::from(start))
-            .min(i32::from(length))
-            .max(-1);
-        usize::try_from(i32::from(scrolled) + offset).unwrap_or(0)
-    };
-    let DataCursor(row, column) = editor.screen_to_data(
-        along(mouse.row, text.y, text.height, top_row),
-        along(mouse.column, text.x, text.width, top_column),
-    );
-    CursorMove::Jump(
-        u16::try_from(row).unwrap_or(u16::MAX),
-        u16::try_from(column).unwrap_or(u16::MAX),
-    )
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
@@ -727,17 +698,17 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
             }
             Event::Key(key) => self.handle_key(*key, read(state)),
             Event::Paste(text) => self.handle_paste(text, read(state)),
-            // Matched apart so the wildcard is reachable here and present in
-            // a copy of this file, where `Event` is non-exhaustive.
-            other => match other {
-                Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
-                _ => None,
-            },
+            Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
+            #[allow(
+                unreachable_patterns,
+                reason = "`Event` is non-exhaustive in a copy of this file, outside ratcn"
+            )]
+            _ => EventResult::Ignored,
         };
         match edited {
-            Some(EventResult::Emit(next)) => EventResult::Emit(on_change(next)),
-            Some(EventResult::Consumed) => EventResult::Consumed,
-            Some(EventResult::Ignored) | None => EventResult::Ignored,
+            EventResult::Emit(next) => EventResult::Emit(on_change(next)),
+            EventResult::Consumed => EventResult::Consumed,
+            EventResult::Ignored => EventResult::Ignored,
         }
     }
 
@@ -1614,6 +1585,29 @@ mod tests {
         assert_eq!(driver.row(0), "┌Name──────┐");
         assert_eq!(driver.row(1), "│A         │");
         assert_eq!(driver.row(2), "└──────────┘");
+    }
+
+    /// Disabled wins over invalid everywhere, the border included: a field
+    /// the user cannot edit must not ask them to fix it.
+    #[test]
+    fn a_disabled_field_draws_no_invalid_border() {
+        let theme = Theme::default_dark();
+        let style = InputStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 8, 3);
+        let state = InputState::new("x");
+        let border = |disabled| {
+            let mut buffer = Buffer::empty(area);
+            InputWidget::new(&state)
+                .themed(&theme)
+                .title("T")
+                .invalid(true)
+                .disabled(disabled)
+                .render(area, &mut buffer);
+            buffer[(0, 0)].fg
+        };
+
+        assert_eq!(border(false), style.invalid_foreground);
+        assert_eq!(border(true), style.border);
     }
 
     /// The look of every state, pinned: rest, focused, hovered over focus,

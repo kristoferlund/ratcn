@@ -34,7 +34,8 @@ use crate::{
         MouseEvent, MouseKind, PaintCtx, ScopeOptions, ScrollDirection,
     },
     text_edit::{
-        CursorMove, DataCursor, Editor, TextAreaState, WrapMode, editor_input, is_editor_binding,
+        CursorMove, DataCursor, Editor, TextAreaState, WrapMode, cursor_at, editor_input,
+        is_editor_binding, select_dragged,
     },
     theme::resolve_style,
 };
@@ -44,8 +45,10 @@ use crate::{
 /// At rest [`foreground`](Self::foreground) sits on
 /// [`background`](Self::background). Focus and hover swap the background, with
 /// hover beating focus; disabled mutes the text and wins over both. Invalid
-/// recolors the text, the border, and the title, and is independent of the
-/// rest: it says something about the content, not about the interaction.
+/// recolors the text, the border, and the title, and is independent of focus
+/// and hover: it says something about the content, not about the
+/// interaction. Disabled wins over it too, since a field the user cannot edit
+/// cannot be fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextAreaStyle {
     /// Text color, and the title's.
@@ -157,7 +160,7 @@ impl TextAreaStyle {
             selection: Style::default()
                 .fg(self.selection_foreground)
                 .bg(self.selection_background),
-            border: Style::default().fg(if invalid {
+            border: Style::default().fg(if invalid && !disabled {
                 self.invalid_foreground
             } else {
                 self.border
@@ -569,15 +572,13 @@ impl<S, M> TextArea<S, M> {
     /// the enclosing component, and Ctrl+K at the end of a line must not fire
     /// the app's shortcut. A key the editor does not bind bubbles, which is
     /// how the app's own shortcuts pass through a focused field.
-    fn handle_key(
-        &self,
-        key: KeyEvent,
-        state: &TextAreaState,
-    ) -> Option<EventResult<TextAreaState>> {
+    fn handle_key(&self, key: KeyEvent, state: &TextAreaState) -> EventResult<TextAreaState> {
         if bubbles(key) {
-            return None;
+            return EventResult::Ignored;
         }
-        let input = editor_input(&key).filter(is_editor_binding)?;
+        let Some(input) = editor_input(&key).filter(is_editor_binding) else {
+            return EventResult::Ignored;
+        };
         let mut editor = self.editor(state);
         let before = (
             editor.cursor(),
@@ -590,26 +591,22 @@ impl<S, M> TextArea<S, M> {
             editor.selection_range(),
             editor.yank_text(),
         );
-        Some(if modified || before != after {
+        if modified || before != after {
             EventResult::Emit(TextAreaState::from_editor(editor))
         } else {
             EventResult::Consumed
-        })
+        }
     }
 
     /// Insert a paste at the cursor, as the text [`pasted_text`] makes of it.
-    fn handle_paste(
-        &self,
-        text: &str,
-        state: &TextAreaState,
-    ) -> Option<EventResult<TextAreaState>> {
+    fn handle_paste(&self, text: &str, state: &TextAreaState) -> EventResult<TextAreaState> {
         let text = pasted_text(text);
         if text.is_empty() {
-            return None;
+            return EventResult::Ignored;
         }
         let mut editor = self.editor(state);
         editor.insert_str(text);
-        Some(EventResult::Emit(TextAreaState::from_editor(editor)))
+        EventResult::Emit(TextAreaState::from_editor(editor))
     }
 
     /// The mouse policy. A press on the text claims the rest of the gesture
@@ -627,8 +624,9 @@ impl<S, M> TextArea<S, M> {
         mouse: &MouseEvent,
         state: &TextAreaState,
         ctx: &mut EventCtx<'_>,
-    ) -> Option<EventResult<TextAreaState>> {
+    ) -> EventResult<TextAreaState> {
         let text = text_rect(ctx.area(), self.title.is_some());
+        let pointer = Position::new(mouse.column, mouse.row);
         let mut editor = self.editor(state);
         let before = (
             editor.cursor(),
@@ -636,28 +634,19 @@ impl<S, M> TextArea<S, M> {
             editor.scroll_offset(),
         );
         match mouse.kind {
-            MouseKind::Down(MouseButton::Left)
-                if text.contains(Position::new(mouse.column, mouse.row)) =>
-            {
+            MouseKind::Down(MouseButton::Left) if text.contains(pointer) => {
                 ctx.capture_pointer(MouseButton::Left);
-                *ctx.transient() = DragAnchor(cursor_at(&editor, text, mouse));
-                return None;
+                *ctx.transient() = DragAnchor(cursor_at(&editor, text, pointer));
+                return EventResult::Ignored;
             }
             MouseKind::Click(MouseButton::Left) if ctx.pointer_captured() => {
                 editor.cancel_selection();
-                editor.move_cursor(cursor_at(&editor, text, mouse));
+                editor.move_cursor(cursor_at(&editor, text, pointer));
             }
             MouseKind::Drag(MouseButton::Left) if ctx.pointer_captured() => {
                 let DragAnchor(anchor) = *ctx.transient();
-                let pointer = cursor_at(&editor, text, mouse);
-                editor.cancel_selection();
-                editor.move_cursor(anchor);
-                let anchored = editor.cursor();
-                editor.start_selection();
-                editor.move_cursor(pointer);
-                if editor.cursor() == anchored {
-                    editor.cancel_selection();
-                }
+                let pointer = cursor_at(&editor, text, pointer);
+                select_dragged(&mut editor, anchor, pointer);
             }
             MouseKind::Scroll(direction) => {
                 let (top, _) = editor.scroll_offset();
@@ -668,25 +657,25 @@ impl<S, M> TextArea<S, M> {
                     ScrollDirection::Left | ScrollDirection::Right => 0,
                 };
                 if rows == 0 {
-                    return None;
+                    return EventResult::Ignored;
                 }
                 // The editor's scroll extends an active selection, which the
                 // next key typed would then replace.
                 editor.cancel_selection();
                 editor.scroll((rows, 0));
             }
-            _ => return None,
+            _ => return EventResult::Ignored,
         }
         let after = (
             editor.cursor(),
             editor.selection_range(),
             editor.scroll_offset(),
         );
-        Some(if before == after {
+        if before == after {
             EventResult::Consumed
         } else {
             EventResult::Emit(TextAreaState::from_editor(editor))
-        })
+        }
     }
 }
 
@@ -702,44 +691,16 @@ impl Default for DragAnchor {
     }
 }
 
-/// The move that puts the cursor on the character drawn under the pointer.
-///
-/// `text` is where the editor was painted, and the editor knows how far that
-/// view is scrolled. A pointer outside `text` counts as one cell past the edge
-/// it left by: that cell's character is the next one out of sight, so the
-/// cursor steps onto it and the next paint scrolls it into view — a drag held
-/// past an edge keeps extending as the pointer moves. Past the end of a line
-/// the editor clamps to its end, and below the text to the last line.
-fn cursor_at(editor: &Editor<'_>, text: Rect, mouse: &MouseEvent) -> CursorMove {
-    let (top_row, top_column) = editor.scroll_offset();
-    let along = |pointer: u16, start: u16, length: u16, scrolled: u16| {
-        let offset = (i32::from(pointer) - i32::from(start))
-            .min(i32::from(length))
-            .max(-1);
-        usize::try_from(i32::from(scrolled) + offset).unwrap_or(0)
-    };
-    let DataCursor(row, column) = editor.screen_to_data(
-        along(mouse.row, text.y, text.height, top_row),
-        along(mouse.column, text.x, text.width, top_column),
-    );
-    jump(row, column)
-}
-
-/// The move to one position in the text.
-fn jump(row: usize, column: usize) -> CursorMove {
-    CursorMove::Jump(
-        u16::try_from(row).unwrap_or(u16::MAX),
-        u16::try_from(column).unwrap_or(u16::MAX),
-    )
-}
-
 /// How many rows the text takes on screen, a wrapped line counting once for
 /// each row it covers. The editor does not say, but it does say which row its
 /// cursor is on, so this asks a copy of it with the cursor at the very end.
 fn screen_rows(editor: &Editor<'_>) -> u16 {
     let mut end = editor.clone();
     let DataCursor(row, column) = end.screen_to_data(usize::MAX, usize::MAX);
-    end.move_cursor(jump(row, column));
+    end.move_cursor(CursorMove::Jump(
+        u16::try_from(row).unwrap_or(u16::MAX),
+        u16::try_from(column).unwrap_or(u16::MAX),
+    ));
     u16::try_from(end.screen_cursor().row + 1).unwrap_or(u16::MAX)
 }
 
@@ -789,17 +750,17 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
             }
             Event::Key(key) => self.handle_key(*key, read(state)),
             Event::Paste(text) => self.handle_paste(text, read(state)),
-            // Matched apart so the wildcard is reachable here and present in
-            // a copy of this file, where `Event` is non-exhaustive.
-            other => match other {
-                Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
-                _ => None,
-            },
+            Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
+            #[allow(
+                unreachable_patterns,
+                reason = "`Event` is non-exhaustive in a copy of this file, outside ratcn"
+            )]
+            _ => EventResult::Ignored,
         };
         match edited {
-            Some(EventResult::Emit(next)) => EventResult::Emit(on_change(next)),
-            Some(EventResult::Consumed) => EventResult::Consumed,
-            Some(EventResult::Ignored) | None => EventResult::Ignored,
+            EventResult::Emit(next) => EventResult::Emit(on_change(next)),
+            EventResult::Consumed => EventResult::Consumed,
+            EventResult::Ignored => EventResult::Ignored,
         }
     }
 
@@ -1792,6 +1753,29 @@ mod tests {
         assert_eq!(driver.row(1), "│A         │");
         assert_eq!(driver.row(2), "│B         │");
         assert_eq!(driver.row(3), "└──────────┘");
+    }
+
+    /// Disabled wins over invalid everywhere, the border included: a field
+    /// the user cannot edit must not ask them to fix it.
+    #[test]
+    fn a_disabled_field_draws_no_invalid_border() {
+        let theme = Theme::default_dark();
+        let style = TextAreaStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 8, 4);
+        let state = TextAreaState::new("x");
+        let border = |disabled| {
+            let mut buffer = Buffer::empty(area);
+            TextAreaWidget::new(&state)
+                .themed(&theme)
+                .title("T")
+                .invalid(true)
+                .disabled(disabled)
+                .render(area, &mut buffer);
+            buffer[(0, 0)].fg
+        };
+
+        assert_eq!(border(false), style.invalid_foreground);
+        assert_eq!(border(true), style.border);
     }
 
     /// The look of every state, pinned: rest, focused, hovered over focus,
