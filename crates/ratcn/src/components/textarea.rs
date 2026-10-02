@@ -13,13 +13,14 @@
 //! [`TextAreaState`] from app state and emits a new one for each keystroke.
 //! Editing, cursor movement, selection, wrapping, and scrolling belong to the
 //! editor inside that state; what lives in this module is the look, the keys
-//! the field takes and the ones it leaves to bubble, and how a paste goes in.
+//! the field takes and the ones it leaves to bubble, how a paste goes in, and
+//! what the mouse does.
 
 use std::{fmt, rc::Rc};
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Style},
     text::{Line, Text},
     widgets::{Block, Widget},
@@ -29,10 +30,10 @@ use crate::{
     Theme,
     color::{FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, away_from, dim},
     runtime::{
-        Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, PaintCtx,
-        ScopeOptions,
+        Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
+        MouseEvent, MouseKind, PaintCtx, ScopeOptions, ScrollDirection,
     },
-    text_edit::{Editor, TextAreaState, WrapMode, editor_input},
+    text_edit::{CursorMove, DataCursor, Editor, TextAreaState, WrapMode, editor_input},
     theme::resolve_style,
 };
 
@@ -174,6 +175,20 @@ struct ResolvedStyle {
     title: Style,
 }
 
+/// The cells of `area` the text is drawn in: all of it, inside the border
+/// when there is one. Paint draws the editor here and the mouse is read
+/// against it, so the two cannot drift apart.
+fn text_area(area: Rect, titled: bool) -> Rect {
+    if titled {
+        Block::bordered().inner(area)
+    } else {
+        area
+    }
+}
+
+/// How many rows one notch of the wheel scrolls.
+const WHEEL_ROWS: u16 = 3;
+
 /// A multi-line text field that only draws — an ordinary ratatui [`Widget`]
 /// with no focus, events, or state of its own.
 ///
@@ -292,17 +307,13 @@ impl<'a> TextAreaWidget<'a> {
         let style = self
             .style
             .resolve(self.focused, self.hovered, self.disabled, self.invalid);
-        let field = match self.title {
-            Some(title) => {
-                let block = Block::bordered()
-                    .border_style(style.border)
-                    .title(Line::styled(title, style.title));
-                let inner = block.inner(area);
-                block.render(area, buf);
-                inner
-            }
-            None => area,
-        };
+        if let Some(title) = self.title {
+            Block::bordered()
+                .border_style(style.border)
+                .title(Line::styled(title, style.title))
+                .render(area, buf);
+        }
+        let field = text_area(area, self.title.is_some());
         buf.set_style(field, style.text);
 
         if self.editor.wrap_mode() != self.wrap_mode {
@@ -352,6 +363,11 @@ type StyleFn = Rc<dyn Fn(&Theme) -> TextAreaStyle>;
 /// here, so focus traversal, an enclosing dialog, and the app's shortcuts
 /// keep working around a focused field. A paste keeps its line breaks and
 /// tabs and loses every other control character.
+///
+/// A click places the cursor at the character clicked, and a drag selects
+/// from the character pressed to the one under the pointer, scrolling the
+/// text as the pointer moves on past an edge of the field. The wheel scrolls
+/// the text, and at either end of it is left to whatever encloses the field.
 ///
 /// ```
 /// # use ratcn::{TextArea, TextAreaState};
@@ -553,6 +569,133 @@ impl<S, M> TextArea<S, M> {
         editor.insert_str(text);
         Some(EventResult::Emit(TextAreaState::edited(editor)))
     }
+
+    /// The mouse policy. A press on the text claims the rest of the gesture
+    /// and remembers the character it landed on, and is otherwise left to the
+    /// runtime, which focuses the field: an event carries one message, and a
+    /// press spends it on focus. The cursor moves when the gesture says what
+    /// it is — to the pressed character on a click, and on a drag to the
+    /// character under the pointer, selecting from the pressed one. A drag
+    /// that comes back to where it began selects nothing.
+    ///
+    /// The wheel scrolls the text a few rows, and bubbles once there is no
+    /// further to go, so a form the field sits in scrolls on from there.
+    fn handle_mouse(
+        &self,
+        mouse: &MouseEvent,
+        state: &TextAreaState,
+        ctx: &mut EventCtx<'_>,
+    ) -> Option<EventResult<TextAreaState>> {
+        let text = text_area(ctx.area(), self.title.is_some());
+        let mut editor = self.editor(state);
+        let before = (
+            editor.cursor(),
+            editor.selection_range(),
+            editor.scroll_offset(),
+        );
+        match mouse.kind {
+            MouseKind::Down(MouseButton::Left)
+                if text.contains(Position::new(mouse.column, mouse.row)) =>
+            {
+                ctx.capture_pointer(MouseButton::Left);
+                *ctx.transient() = DragAnchor(cursor_at(&editor, text, mouse));
+                return None;
+            }
+            MouseKind::Click(MouseButton::Left) if ctx.pointer_captured() => {
+                editor.cancel_selection();
+                editor.move_cursor(cursor_at(&editor, text, mouse));
+            }
+            MouseKind::Drag(MouseButton::Left) if ctx.pointer_captured() => {
+                let DragAnchor(anchor) = *ctx.transient();
+                let pointer = cursor_at(&editor, text, mouse);
+                editor.cancel_selection();
+                editor.move_cursor(anchor);
+                let anchored = editor.cursor();
+                editor.start_selection();
+                editor.move_cursor(pointer);
+                if editor.cursor() == anchored {
+                    editor.cancel_selection();
+                }
+            }
+            MouseKind::Scroll(direction) => {
+                let (top, _) = editor.scroll_offset();
+                let last = screen_rows(&editor).saturating_sub(text.height);
+                let rows = match direction {
+                    ScrollDirection::Up => -top.min(WHEEL_ROWS).cast_signed(),
+                    ScrollDirection::Down => last.saturating_sub(top).min(WHEEL_ROWS).cast_signed(),
+                    ScrollDirection::Left | ScrollDirection::Right => 0,
+                };
+                if rows == 0 {
+                    return None;
+                }
+                editor.scroll((rows, 0));
+            }
+            _ => return None,
+        }
+        let after = (
+            editor.cursor(),
+            editor.selection_range(),
+            editor.scroll_offset(),
+        );
+        Some(if before == after {
+            EventResult::Consumed
+        } else {
+            EventResult::Emit(TextAreaState::edited(editor))
+        })
+    }
+}
+
+/// The character a press landed on, kept at the field's identity while the
+/// button is held: where the selection a drag makes begins. It is a position
+/// in the text, not on screen, so it holds while the drag scrolls the view.
+#[derive(Clone, Copy)]
+struct DragAnchor(CursorMove);
+
+impl Default for DragAnchor {
+    fn default() -> Self {
+        Self(CursorMove::Jump(0, 0))
+    }
+}
+
+/// The move that puts the cursor on the character drawn under the pointer.
+///
+/// `text` is where the editor was painted, and the editor knows how far that
+/// view is scrolled. A pointer outside `text` counts as one cell past the edge
+/// it left by: that cell's character is the next one out of sight, so the
+/// cursor steps onto it and the next paint scrolls it into view — a drag held
+/// past an edge keeps extending as the pointer moves. Past the end of a line
+/// the editor clamps to its end, and below the text to the last line.
+fn cursor_at(editor: &Editor<'_>, text: Rect, mouse: &MouseEvent) -> CursorMove {
+    let (top_row, top_column) = editor.scroll_offset();
+    let along = |pointer: u16, start: u16, length: u16, scrolled: u16| {
+        let offset = (i32::from(pointer) - i32::from(start))
+            .min(i32::from(length))
+            .max(-1);
+        usize::try_from(i32::from(scrolled) + offset).unwrap_or(0)
+    };
+    let DataCursor(row, column) = editor.screen_to_data(
+        along(mouse.row, text.y, text.height, top_row),
+        along(mouse.column, text.x, text.width, top_column),
+    );
+    jump(row, column)
+}
+
+/// The move to one position in the text.
+fn jump(row: usize, column: usize) -> CursorMove {
+    CursorMove::Jump(
+        u16::try_from(row).unwrap_or(u16::MAX),
+        u16::try_from(column).unwrap_or(u16::MAX),
+    )
+}
+
+/// How many rows the text takes on screen, a wrapped line counting once for
+/// each row it covers. The editor does not say, but it does say which row its
+/// cursor is on, so this asks a copy of it with the cursor at the very end.
+fn screen_rows(editor: &Editor<'_>) -> u16 {
+    let mut end = editor.clone();
+    let DataCursor(row, column) = end.screen_to_data(usize::MAX, usize::MAX);
+    end.move_cursor(jump(row, column));
+    u16::try_from(end.screen_cursor().row + 1).unwrap_or(u16::MAX)
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
@@ -583,12 +726,7 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
         self.painted = Some((state.version(), editor));
     }
 
-    fn handle_event(
-        &mut self,
-        event: &Event,
-        state: &S,
-        _ctx: &mut EventCtx<'_>,
-    ) -> EventResult<M> {
+    fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
         let Some((read, on_change)) = &self.value else {
             return EventResult::Ignored;
         };
@@ -606,7 +744,12 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
             }
             Event::Key(key) => self.handle_key(*key, read(state)),
             Event::Paste(text) => self.handle_paste(text, read(state)),
-            _ => None,
+            // Matched apart so the wildcard is reachable here and present in
+            // a copy of this file, where `Event` is non-exhaustive.
+            other => match other {
+                Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
+                _ => None,
+            },
         };
         match edited {
             Some(EventResult::Emit(next)) => EventResult::Emit(on_change(next)),
@@ -649,9 +792,9 @@ fn pasted_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{ChildId, FocusState, Modifiers, MouseButton, MouseKind, Ratcn};
+    use crate::ScrollArea;
+    use crate::runtime::{ChildId, FocusState, Modifiers, Ratcn};
     use crate::test_support::{Driver, key, key_with, mouse, styled_snapshot};
-    use crate::text_edit::CursorMove;
 
     #[derive(Default)]
     struct State {
@@ -664,6 +807,7 @@ mod tests {
         Focus(FocusState),
         Notes(TextAreaState),
         Submit,
+        Scrolled(u16),
     }
 
     const CTRL: Modifiers = Modifiers {
@@ -737,6 +881,28 @@ mod tests {
             other => panic!("expected a new state, got {other:?}"),
         }
     }
+
+    /// Route one event that may emit nothing, storing what it does emit.
+    fn route(driver: &mut Driver<State, Msg>, state: &mut State, event: Event) {
+        match driver.event(event, state) {
+            EventResult::Emit(Msg::Notes(notes)) => state.notes = notes,
+            EventResult::Emit(Msg::Focus(focus)) => state.focus = focus,
+            EventResult::Emit(other) => panic!("unexpected {other:?}"),
+            EventResult::Consumed | EventResult::Ignored => {}
+        }
+    }
+
+    /// Press and release the primary button on one cell.
+    fn click(driver: &mut Driver<State, Msg>, state: &mut State, column: u16, row: u16) {
+        route(driver, state, mouse(LEFT_DOWN, column, row));
+        route(driver, state, mouse(LEFT_UP, column, row));
+    }
+
+    const LEFT_DOWN: MouseKind = MouseKind::Down(MouseButton::Left);
+    const LEFT_DRAG: MouseKind = MouseKind::Drag(MouseButton::Left);
+    const LEFT_UP: MouseKind = MouseKind::Up(MouseButton::Left);
+    const WHEEL_UP: MouseKind = MouseKind::Scroll(ScrollDirection::Up);
+    const WHEEL_DOWN: MouseKind = MouseKind::Scroll(ScrollDirection::Down);
 
     /// What the field's own cells show, row by row.
     fn field(driver: &Driver<State, Msg>) -> Vec<String> {
@@ -893,11 +1059,11 @@ mod tests {
         );
     }
 
-    /// Disabled is the loudest state: no keys, no paste, no focus.
+    /// Disabled is the loudest state: no keys, no paste, no mouse, no focus.
     #[test]
     fn a_disabled_field_ignores_input() {
         let mut driver = driver();
-        let state = state("note");
+        let state = state(TEN_LINES);
         render_with(&mut driver, &state, || textarea().disabled(true));
 
         for event in [
@@ -906,7 +1072,10 @@ mod tests {
             key_with(KeyCode::Enter, CTRL),
             key(KeyCode::Tab),
             Event::Paste("x".to_owned()),
-            mouse(MouseKind::Down(MouseButton::Left), 1, 0),
+            mouse(LEFT_DOWN, 1, 0),
+            mouse(MouseKind::Click(MouseButton::Left), 1, 0),
+            mouse(LEFT_DRAG, 2, 0),
+            mouse(WHEEL_UP, 1, 0),
         ] {
             assert!(
                 matches!(driver.event(event.clone(), &state), EventResult::Ignored),
@@ -1043,6 +1212,315 @@ mod tests {
         state.notes = TextAreaState::new("");
         send(&mut driver, &mut state, key(KeyCode::Char('n')));
         assert_eq!(state.notes.value(), "n");
+    }
+
+    /// A press has one message to give, and an unfocused field needs it for
+    /// focus: typing into a field that took the cursor but not the keyboard
+    /// would go somewhere else. The cursor follows on the release.
+    #[test]
+    fn a_click_focuses_the_field_and_places_the_cursor() {
+        let mut driver = driver();
+        let mut state = State {
+            focus: FocusState::none(),
+            ..state("ab\ncd")
+        };
+        render(&mut driver, &state);
+
+        let EventResult::Emit(Msg::Focus(focus)) = driver.event(mouse(LEFT_DOWN, 1, 0), &state)
+        else {
+            panic!("a press must move focus to the field");
+        };
+        assert_eq!(focus.path(), [ChildId::Static("notes")]);
+        state.focus = focus;
+        render(&mut driver, &state);
+
+        send(&mut driver, &mut state, mouse(LEFT_UP, 1, 0));
+        assert_eq!(state.notes.cursor(), (0, 1));
+    }
+
+    /// The cursor goes to the character that was clicked — whatever its
+    /// width, a tab included — to the end of a line from anywhere past it,
+    /// and to the last line from anywhere below the text.
+    #[test]
+    fn a_click_places_the_cursor_on_the_character_under_it() {
+        let mut driver = driver();
+        let mut state = state_at_top("ab\n\tc\n日本");
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(ChildId::Static("notes"), textarea(), Rect::new(0, 0, 12, 5));
+            });
+        };
+        render(&mut driver, &state);
+        assert_eq!(driver.row(1), "    c       ");
+
+        for ((column, row), cursor) in [
+            ((1, 0), (0, 1)),
+            ((9, 0), (0, 2)),
+            ((1, 1), (1, 0)),
+            ((4, 1), (1, 1)),
+            ((5, 1), (1, 2)),
+            ((0, 2), (2, 0)),
+            ((1, 2), (2, 0)),
+            ((2, 2), (2, 1)),
+            ((2, 4), (2, 1)),
+        ] {
+            click(&mut driver, &mut state, column, row);
+            assert_eq!(state.notes.cursor(), cursor, "a click on {column}, {row}");
+            render(&mut driver, &state);
+        }
+    }
+
+    /// A wrapped line covers several rows, and ten lines in three rows are
+    /// scrolled. A click means the character on screen in both cases.
+    #[test]
+    fn a_click_counts_wrapped_rows_and_scrolled_lines() {
+        let mut driver = driver();
+        let mut state = state_at_top("aaa bbb ccc");
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), ["aaa   ", "bbb   ", "ccc   "]);
+        click(&mut driver, &mut state, 1, 2);
+        assert_eq!(state.notes.cursor(), (0, 9), "the second c of the one line");
+
+        state.notes = TextAreaState::new(TEN_LINES);
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), ["7     ", "8     ", "9     "]);
+        click(&mut driver, &mut state, 0, 0);
+        assert_eq!(state.notes.cursor(), (7, 0));
+        render(&mut driver, &state);
+        assert_eq!(
+            field(&driver)[0],
+            "7     ",
+            "a click must not scroll the view"
+        );
+    }
+
+    /// The text of a titled field starts inside its border, and the border
+    /// itself is not text: a press there focuses and moves no cursor.
+    #[test]
+    fn a_click_in_a_titled_field_counts_from_inside_the_border() {
+        let mut driver = driver();
+        let mut state = state_at_top("ab\ncd");
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    ChildId::Static("notes"),
+                    textarea().title("Notes"),
+                    Rect::new(0, 0, 12, 4),
+                );
+            });
+        };
+        render(&mut driver, &state);
+        assert_eq!(driver.row(2), "│cd        │");
+
+        click(&mut driver, &mut state, 2, 2);
+        assert_eq!(state.notes.cursor(), (1, 1));
+
+        render(&mut driver, &state);
+        click(&mut driver, &mut state, 5, 0);
+        assert_eq!(state.notes.cursor(), (1, 1), "the border is not text");
+    }
+
+    /// A drag selects from the character pressed to the one under the
+    /// pointer, across lines, and the selection is a real one: the next
+    /// character typed replaces it.
+    #[test]
+    fn a_drag_selects_and_typing_replaces_the_selection() {
+        let mut driver = driver();
+        let mut state = state_at_top("abc\ndef\nghi");
+        render(&mut driver, &state);
+
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 1, 0));
+        assert_eq!(state.notes.editor().selection_range(), None);
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 2, 1));
+        assert_eq!(
+            state.notes.editor().selection_range(),
+            Some(((0, 1), (1, 2)))
+        );
+        route(&mut driver, &mut state, mouse(LEFT_UP, 2, 1));
+        assert_eq!(
+            state.notes.editor().selection_range(),
+            Some(((0, 1), (1, 2))),
+            "the release keeps it"
+        );
+
+        render(&mut driver, &state);
+        send(&mut driver, &mut state, key(KeyCode::Char('X')));
+        assert_eq!(state.notes.lines(), ["aXf", "ghi"]);
+    }
+
+    /// An empty selection is still a selection to the editor: the next
+    /// arrow key would extend it. Neither a click nor a drag that returns to
+    /// where it began may leave one — nor an older selection standing.
+    #[test]
+    fn a_click_or_a_drag_back_to_its_start_leaves_no_selection() {
+        let mut driver = driver();
+        let mut state = state("abc\ndef");
+        render(&mut driver, &state);
+
+        send(&mut driver, &mut state, key_with(KeyCode::Up, SHIFT));
+        assert!(state.notes.editor().is_selecting());
+        click(&mut driver, &mut state, 2, 0);
+        assert!(!state.notes.editor().is_selecting(), "a click deselects");
+        assert_eq!(state.notes.cursor(), (0, 2));
+
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 2, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 1, 1));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 2, 0));
+        route(&mut driver, &mut state, mouse(LEFT_UP, 2, 0));
+        assert!(!state.notes.editor().is_selecting());
+        assert_eq!(state.notes.cursor(), (0, 2));
+    }
+
+    /// A selection often has to reach text that is scrolled out of sight.
+    /// The pointer keeps its hold on the field after leaving it, and every
+    /// move it makes out there takes the selection one row further and the
+    /// view with it.
+    #[test]
+    fn a_drag_past_the_edge_keeps_extending_and_scrolls() {
+        let area = Rect::new(0, 1, 6, 3);
+        let mut driver = driver();
+        let mut state = state_at_top(TEN_LINES);
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(ChildId::Static("notes"), textarea(), area);
+            });
+        };
+        let top = |driver: &Driver<State, Msg>| driver.row(1)[..1].to_owned();
+        render(&mut driver, &state);
+
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 0, 2));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 0, 4));
+        assert_eq!(state.notes.cursor(), (3, 0), "one row past the edge");
+        render(&mut driver, &state);
+        assert_eq!(top(&driver), "1");
+
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 9, 4));
+        assert_eq!(state.notes.cursor(), (4, 1), "and one more");
+        assert_eq!(
+            state.notes.editor().selection_range(),
+            Some(((1, 0), (4, 1))),
+            "still from the line that was pressed"
+        );
+        render(&mut driver, &state);
+        assert_eq!(top(&driver), "2");
+
+        route(&mut driver, &mut state, mouse(LEFT_UP, 9, 4));
+        assert_eq!(state.notes.cursor(), (4, 1), "the release moves nothing");
+
+        // And out the other side, back through the line pressed.
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 0, 2));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 0, 0));
+        assert_eq!(
+            state.notes.editor().selection_range(),
+            Some(((1, 0), (3, 0)))
+        );
+    }
+
+    /// The wheel moves the text three rows a notch, stops where the last
+    /// line reaches the bottom of the field rather than scrolling the text
+    /// out of it, and needs no focus.
+    #[test]
+    fn the_wheel_scrolls_the_text() {
+        let mut driver = driver();
+        let mut state = State {
+            focus: FocusState::none(),
+            ..state_at_top(TEN_LINES)
+        };
+        render(&mut driver, &state);
+        assert!(
+            matches!(
+                driver.event(mouse(WHEEL_UP, 1, 1), &state),
+                EventResult::Ignored
+            ),
+            "already at the top"
+        );
+
+        send(&mut driver, &mut state, mouse(WHEEL_DOWN, 1, 1));
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), ["3     ", "4     ", "5     "]);
+
+        send(&mut driver, &mut state, mouse(WHEEL_DOWN, 1, 1));
+        send(&mut driver, &mut state, mouse(WHEEL_DOWN, 1, 1));
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), ["7     ", "8     ", "9     "]);
+
+        send(&mut driver, &mut state, mouse(WHEEL_UP, 1, 1));
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), ["4     ", "5     ", "6     "]);
+    }
+
+    /// Rows are what the wheel scrolls, and a wrapped line is several: the
+    /// end of the text is its last row on screen, not its last line.
+    #[test]
+    fn the_wheel_scrolls_by_wrapped_rows() {
+        let mut driver = driver();
+        let mut state = state_at_top("aaa bbb ccc ddd eee");
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), ["aaa   ", "bbb   ", "ccc   "]);
+
+        send(&mut driver, &mut state, mouse(WHEEL_DOWN, 1, 1));
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), ["ccc   ", "ddd   ", "eee   "]);
+        assert!(matches!(
+            driver.event(mouse(WHEEL_DOWN, 1, 1), &state),
+            EventResult::Ignored
+        ));
+
+        let short = state_at_top("aaa bbb");
+        render(&mut driver, &short);
+        assert!(
+            matches!(
+                driver.event(mouse(WHEEL_DOWN, 1, 1), &short),
+                EventResult::Ignored
+            ),
+            "text that fits has nothing to scroll"
+        );
+    }
+
+    /// A field that ate every wheel event would trap the pointer: a form
+    /// could not be scrolled past it. With nowhere left to scroll, the wheel
+    /// goes to whatever encloses the field.
+    #[test]
+    fn the_wheel_bubbles_once_the_text_has_nowhere_to_go() {
+        let mut driver = driver();
+        let mut state = state_at_top(TEN_LINES);
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    ChildId::Static("scroll"),
+                    ScrollArea::new(9)
+                        .scroll(|_: &State| 0, Msg::Scrolled)
+                        .content(|ctx| {
+                            let area = ctx.area();
+                            ctx.component(
+                                ChildId::Static("notes"),
+                                textarea(),
+                                Rect::new(area.x, area.y, 6, 3),
+                            );
+                        }),
+                    Rect::new(0, 0, 12, 5),
+                );
+            });
+        };
+        render(&mut driver, &state);
+
+        let at_top = driver.event(mouse(WHEEL_UP, 1, 1), &state);
+        assert!(
+            !matches!(at_top, EventResult::Emit(_)),
+            "at the top of both, nothing scrolls: {at_top:?}"
+        );
+        for _ in 0..3 {
+            send(&mut driver, &mut state, mouse(WHEEL_DOWN, 1, 1));
+            render(&mut driver, &state);
+        }
+        assert_eq!(field(&driver)[2], "9     ", "the text is at its end");
+        assert!(
+            matches!(
+                driver.event(mouse(WHEEL_DOWN, 1, 1), &state),
+                EventResult::Emit(Msg::Scrolled(3))
+            ),
+            "the next notch scrolls the form"
+        );
     }
 
     #[test]
