@@ -37,6 +37,26 @@ fn ratcn_path() -> PathBuf {
         .expect("the checkout's ratcn crate should exist")
 }
 
+/// The workspace root's `[patch]` tables, as manifest text.
+///
+/// A fixture depends on the checkout's ratcn by path from outside the
+/// workspace, where the root manifest's patches do not apply. While ratcn
+/// builds against a patched dependency, the fixture has to carry the same
+/// patch to resolve the same sources.
+fn workspace_patches() -> String {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+    let manifest: toml::Table = fs::read_to_string(&root)
+        .expect("the workspace manifest should be readable")
+        .parse()
+        .expect("the workspace manifest should be valid TOML");
+    let patches: toml::Table = manifest
+        .get("patch")
+        .map(|patch| ("patch".to_owned(), patch.clone()))
+        .into_iter()
+        .collect();
+    toml::to_string(&patches).expect("the patch tables should serialize")
+}
+
 fn toml_path(path: &Path) -> String {
     path.to_string_lossy()
         .replace('\\', "\\\\")
@@ -55,8 +75,9 @@ fn cargo_project(with_dependencies: bool) -> TempDir {
 
     let dependencies = if with_dependencies {
         format!(
-            "\n[dependencies]\nratcn = {{ path = \"{}\" }}\nratatui = {{ version = \"0.30.2\", default-features = false, features = [\"layout-cache\", \"std\"] }}\n",
-            toml_path(&ratcn_path())
+            "\n[dependencies]\nratcn = {{ path = \"{}\" }}\nratatui = {{ version = \"0.30.2\", default-features = false, features = [\"layout-cache\", \"std\"] }}\n\n{}",
+            toml_path(&ratcn_path()),
+            workspace_patches()
         )
     } else {
         String::new()
