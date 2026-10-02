@@ -11,8 +11,8 @@
 //! [`ratatui_textarea`] editor each state wraps. This module re-exports the
 //! editor types a component needs, so a component copied into your project
 //! depends on `ratcn` and `ratatui` alone, and holds the mechanics both fields
-//! share: the key conversion, the editor's binding table, and the mapping from
-//! a pointer to a place in the text.
+//! share: the key conversion, the editor's binding table, the mapping from a
+//! pointer to a place in the text, and the selection a drag makes.
 //!
 //! Undo history is switched off: a state is replaced on every keystroke, which
 //! is the wrong place to keep a stack of past states. An app that wants undo
@@ -227,9 +227,9 @@ impl fmt::Debug for TextAreaState {
 ///
 /// - **`AltGr`.** Some terminals report `AltGr` as Ctrl+Alt, so `@`, `{`, or
 ///   `€` arrive looking like a chord. Ctrl+Alt with anything but an ASCII
-///   letter or digit converts to the plain character. The trade-off: a real
-///   Ctrl+Alt chord on punctuation, Ctrl+Alt+`[` say, is typed rather than
-///   delivered as a shortcut.
+///   letter or digit, or a control character, converts to the plain
+///   character. The trade-off: a real Ctrl+Alt chord on punctuation or
+///   Space, Ctrl+Alt+`[` say, is typed rather than delivered as a shortcut.
 /// - **Chord letters.** The editor matches chords by lowercase letter, while
 ///   a backend reports Ctrl+Shift+A as `A`. A letter with Ctrl or Alt held
 ///   is lowercased; Shift stays set.
@@ -243,7 +243,9 @@ pub fn editor_input(event: &KeyEvent) -> Option<EditorInput> {
         shift,
     } = event.modifiers;
     let key = match event.code {
-        KeyCode::Char(char) if ctrl && alt && !char.is_ascii_alphanumeric() => {
+        KeyCode::Char(char)
+            if ctrl && alt && !char.is_ascii_alphanumeric() && !char.is_control() =>
+        {
             ctrl = false;
             alt = false;
             EditorKey::Char(char)
@@ -284,14 +286,16 @@ pub fn editor_input(event: &KeyEvent) -> Option<EditorInput> {
 /// never decides a binding; the editor reads it as "select".
 ///
 /// Undo and redo (Ctrl+U, Ctrl+R) are left out: a state keeps no history, so
-/// in a state they do nothing.
+/// in a state they do nothing. So is a control character typed as text, a tab
+/// or an escape say, which the editor would insert unseen; a line break typed
+/// is the editor's Enter.
 #[must_use]
 pub fn is_editor_binding(input: &EditorInput) -> bool {
     let EditorInput { key, ctrl, alt, .. } = *input;
     match key {
         EditorKey::Char(char) => match (ctrl, alt) {
             // Typing.
-            (false, false) => true,
+            (false, false) => !char.is_control() || matches!(char, '\n' | '\r'),
             (true, false) => matches!(
                 char,
                 'a' | 'b'
@@ -695,6 +699,33 @@ mod tests {
         }
     }
 
+    /// A control character is never `AltGr` output, and must not become an
+    /// unmodified one: Ctrl+Alt+`\n` typed as text would split a one-line
+    /// field.
+    #[test]
+    fn ctrl_alt_control_characters_stay_chords() {
+        for char in ['\n', '\r', '\t', '\u{1b}'] {
+            let input = convert(KeyCode::Char(char), CTRL_ALT);
+            assert_eq!((input.ctrl, input.alt), (true, true), "{char:?}");
+            assert!(!is_editor_binding(&input), "{char:?}");
+        }
+    }
+
+    /// A control character typed as text would be an invisible one in the
+    /// field: a tab character, an escape for the terminal to act on. A line
+    /// break is the editor's Enter, not text.
+    #[test]
+    fn a_control_character_is_never_typed() {
+        for char in ['\t', '\u{1b}', '\u{7}', '\u{0}'] {
+            let input = convert(KeyCode::Char(char), Modifiers::NONE);
+            assert!(!is_editor_binding(&input), "{char:?}");
+        }
+        assert!(is_editor_binding(&convert(
+            KeyCode::Char('\n'),
+            Modifiers::NONE
+        )));
+    }
+
     /// An ASCII letter or digit with Ctrl+Alt is a real chord — the editor
     /// binds Ctrl+Alt+B/F/N/P, and the rest are the app's shortcuts — so it
     /// must never be typed.
@@ -726,7 +757,8 @@ mod tests {
     /// where each binding has something to do: a key is a binding exactly
     /// when it changes the text, the cursor, the selection, the yank buffer,
     /// or the view in one of them. Undo and redo change nothing, because a
-    /// state keeps no history, so they are not bindings.
+    /// state keeps no history, so they are not bindings; nor is a control
+    /// character typed as text, which the editor would insert unseen.
     #[test]
     fn the_binding_table_is_the_editors_keymap() {
         let text = (0..30)
@@ -775,7 +807,9 @@ mod tests {
         ];
         keys.extend(
             ('a'..='z')
-                .chain(['A', '1', ' ', '<', '>', '[', ']', '\n', '\r'])
+                .chain([
+                    'A', '1', ' ', '<', '>', '[', ']', '\n', '\r', '\t', '\u{1b}',
+                ])
                 .map(EditorKey::Char),
         );
         for key in keys {
@@ -791,7 +825,14 @@ mod tests {
                     edited.input(input.clone());
                     observe(&edited) != observe(editor)
                 });
-                assert_eq!(is_editor_binding(&input), acts, "{input:?}");
+                let control_text = !input.ctrl
+                    && !input.alt
+                    && matches!(key, EditorKey::Char(char) if char.is_control() && !matches!(char, '\n' | '\r'));
+                assert_eq!(
+                    is_editor_binding(&input),
+                    acts && !control_text,
+                    "{input:?}"
+                );
             }
         }
     }

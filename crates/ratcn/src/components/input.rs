@@ -426,8 +426,10 @@ type StyleFn = Rc<dyn Fn(&Theme) -> InputStyle>;
 /// and never inserts a line break. <kbd>Tab</kbd>, <kbd>Esc</kbd>, the
 /// function keys, and the vertical keys are left to bubble, as is any chord
 /// the editor does not bind, so focus traversal, an enclosing dialog, and the
-/// app's shortcuts keep working around a focused field. A paste is flattened
-/// to one line.
+/// app's shortcuts keep working around a focused field. So do two chords the
+/// editor does bind: <kbd>Ctrl+M</kbd>, a line break, and <kbd>Ctrl+J</kbd>,
+/// a terminal's line feed, which the editor reads as "delete to the start". A
+/// paste is flattened to one line.
 ///
 /// A click places the cursor at the character clicked, and a drag selects
 /// from the character pressed to the one under the pointer, scrolling the
@@ -593,18 +595,11 @@ impl<S, M> Input<S, M> {
             return EventResult::Ignored;
         };
         let mut editor = self.editor(state);
-        let before = (
-            editor.cursor(),
-            editor.selection_range(),
-            editor.yank_text(),
-        );
+        // The yank buffer changes only with the text, or on a copy, which
+        // ends the selection: neither goes unseen here.
+        let before = (editor.cursor(), editor.selection_range());
         let modified = editor.input(input);
-        let after = (
-            editor.cursor(),
-            editor.selection_range(),
-            editor.yank_text(),
-        );
-        if modified || before != after {
+        if modified || before != (editor.cursor(), editor.selection_range()) {
             EventResult::Emit(InputState::from_editor(editor))
         } else {
             EventResult::Consumed
@@ -622,7 +617,7 @@ impl<S, M> Input<S, M> {
         EventResult::Emit(InputState::from_editor(editor))
     }
 
-    /// The mouse policy. A press on the text claims the rest of the gesture
+    /// The mouse policy. A press on the field claims the rest of the gesture
     /// and remembers the character it landed on, and is otherwise left to the
     /// runtime, which focuses the field: an event carries one message, and a
     /// press spends it on focus. The cursor moves when the gesture says what
@@ -635,12 +630,13 @@ impl<S, M> Input<S, M> {
         state: &InputState,
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<InputState> {
-        let text = text_rect(ctx.area(), self.title.is_some());
+        let titled = self.title.is_some();
+        let text = text_rect(ctx.area(), titled);
         let pointer = Position::new(mouse.column, mouse.row);
         let mut editor = self.editor(state);
         let before = (editor.cursor(), editor.selection_range());
         match mouse.kind {
-            MouseKind::Down(MouseButton::Left) if text.contains(pointer) => {
+            MouseKind::Down(MouseButton::Left) if well(ctx.area(), titled).contains(pointer) => {
                 ctx.capture_pointer(MouseButton::Left);
                 *ctx.transient() = DragAnchor(cursor_at(&editor, text, pointer));
                 return EventResult::Ignored;
@@ -759,9 +755,11 @@ fn bubbles(key: KeyEvent) -> bool {
         | KeyCode::Up
         | KeyCode::Down
         | KeyCode::PageUp
-        | KeyCode::PageDown => true,
+        | KeyCode::PageDown
+        // A raw line break, under any modifiers.
+        | KeyCode::Char('\n' | '\r') => true,
         KeyCode::Char(char) => match (ctrl, alt) {
-            (false, false) => matches!(char, '\n' | '\r'),
+            (false, false) => false,
             (true, false) => matches!(char.to_ascii_lowercase(), 'j' | 'm' | 'n' | 'p' | 'v'),
             (false, true) => matches!(
                 char.to_ascii_lowercase(),
@@ -822,6 +820,11 @@ mod tests {
         ctrl: true,
         alt: false,
         shift: true,
+    };
+    const CTRL_ALT: Modifiers = Modifiers {
+        ctrl: true,
+        alt: true,
+        shift: false,
     };
 
     /// The field every test declares unless it says otherwise: eight columns
@@ -1025,6 +1028,11 @@ mod tests {
             key_with(KeyCode::Char('j'), CTRL),
             key(KeyCode::Char('\n')),
             key(KeyCode::Char('\r')),
+            // However a line break arrives, it must not split the line.
+            key_with(KeyCode::Char('\n'), CTRL_ALT),
+            key_with(KeyCode::Char('\r'), CTRL_ALT),
+            key_with(KeyCode::Char('\n'), ALT),
+            key_with(KeyCode::Char('\r'), CTRL),
         ] {
             assert!(
                 matches!(driver.event(event.clone(), &state), EventResult::Ignored),
@@ -1116,6 +1124,26 @@ mod tests {
             assert!(
                 matches!(driver.event(key(code), &state), EventResult::Consumed),
                 "{code:?}"
+            );
+        }
+    }
+
+    /// A control character typed as text would sit in the value unseen: a
+    /// tab character, or an escape for the terminal to act on when the value
+    /// is shown again.
+    #[test]
+    fn a_control_character_is_never_typed() {
+        let mut driver = driver();
+        let state = state("name");
+        render(&mut driver, &state);
+
+        for char in ['\t', '\u{1b}', '\u{7}'] {
+            assert!(
+                matches!(
+                    driver.event(key(KeyCode::Char(char)), &state),
+                    EventResult::Ignored
+                ),
+                "{char:?}"
             );
         }
     }
@@ -1274,6 +1302,32 @@ mod tests {
         render(&mut driver, &state);
         click(&mut driver, &mut state, 5, 0);
         assert_eq!(state.name.cursor(), 2, "the border is not text");
+    }
+
+    /// The inset column on either side of the text is painted as field, so
+    /// a press there is a press on the field: it places the cursor at the
+    /// nearest character, in a titled field too.
+    #[test]
+    fn a_click_on_the_inset_places_the_cursor() {
+        let mut driver = driver();
+        let mut state = state("abc");
+        render(&mut driver, &state);
+
+        click(&mut driver, &mut state, 0, 0);
+        assert_eq!(state.name.cursor(), 0, "the left inset");
+        render(&mut driver, &state);
+        click(&mut driver, &mut state, 7, 0);
+        assert_eq!(state.name.cursor(), 3, "the right inset");
+
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("name"),
+                input().title("Name"),
+                Rect::new(0, 0, 12, 3),
+            );
+        });
+        click(&mut driver, &mut state, 1, 1);
+        assert_eq!(state.name.cursor(), 0, "inside the border");
     }
 
     /// A drag selects from the character pressed to the one under the

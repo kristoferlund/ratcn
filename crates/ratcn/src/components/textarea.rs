@@ -604,18 +604,18 @@ impl<S, M> TextArea<S, M> {
             return EventResult::Ignored;
         };
         let mut editor = self.editor(state);
-        let before = (
-            editor.cursor(),
-            editor.selection_range(),
-            editor.yank_text(),
-        );
+        // The yank buffer changes only with the text, or on a copy, which
+        // ends the selection: neither goes unseen here.
+        let before = (editor.cursor(), editor.selection_range());
+        let top = editor.scroll_offset();
         let modified = editor.input(input);
-        let after = (
-            editor.cursor(),
-            editor.selection_range(),
-            editor.yank_text(),
-        );
-        if modified || before != after {
+        // A page key can scroll the view and leave the cursor in it, and that
+        // scroll is an effect. Scrolled past the end of the text, off the
+        // cursor, the view is one the next paint scrolls straight back.
+        let (row, _) = editor.scroll_offset();
+        let scrolled =
+            editor.scroll_offset() != top && editor.screen_cursor().row >= usize::from(row);
+        if modified || scrolled || before != (editor.cursor(), editor.selection_range()) {
             EventResult::Emit(TextAreaState::from_editor(editor))
         } else {
             EventResult::Consumed
@@ -633,7 +633,7 @@ impl<S, M> TextArea<S, M> {
         EventResult::Emit(TextAreaState::from_editor(editor))
     }
 
-    /// The mouse policy. A press on the text claims the rest of the gesture
+    /// The mouse policy. A press on the field claims the rest of the gesture
     /// and remembers the character it landed on, and is otherwise left to the
     /// runtime, which focuses the field: an event carries one message, and a
     /// press spends it on focus. The cursor moves when the gesture says what
@@ -649,7 +649,8 @@ impl<S, M> TextArea<S, M> {
         state: &TextAreaState,
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<TextAreaState> {
-        let text = text_rect(ctx.area(), self.title.is_some());
+        let titled = self.title.is_some();
+        let text = text_rect(ctx.area(), titled);
         let pointer = Position::new(mouse.column, mouse.row);
         let mut editor = self.editor(state);
         let before = (
@@ -658,7 +659,7 @@ impl<S, M> TextArea<S, M> {
             editor.scroll_offset(),
         );
         match mouse.kind {
-            MouseKind::Down(MouseButton::Left) if text.contains(pointer) => {
+            MouseKind::Down(MouseButton::Left) if well(ctx.area(), titled).contains(pointer) => {
                 ctx.capture_pointer(MouseButton::Left);
                 *ctx.transient() = DragAnchor(cursor_at(&editor, text, pointer));
                 return EventResult::Ignored;
@@ -1162,6 +1163,27 @@ mod tests {
         }
     }
 
+    /// A control character typed as text would sit in the value unseen: a
+    /// tab character, or an escape for the terminal to act on when the value
+    /// is shown again. Ctrl+Alt on one is a chord, not `AltGr` text.
+    #[test]
+    fn a_control_character_is_never_typed() {
+        let mut driver = driver();
+        let state = state("note");
+        render(&mut driver, &state);
+
+        for event in [
+            key(KeyCode::Char('\t')),
+            key(KeyCode::Char('\u{1b}')),
+            key_with(KeyCode::Char('\n'), Modifiers { alt: true, ..CTRL }),
+        ] {
+            assert!(
+                matches!(driver.event(event.clone(), &state), EventResult::Ignored),
+                "{event:?}"
+            );
+        }
+    }
+
     /// A paste keeps its lines and tabs, whichever line break the terminal
     /// sent, and nothing invisible comes with it: no carriage return, and no
     /// escape for the terminal to act on when the text is shown again.
@@ -1264,6 +1286,29 @@ mod tests {
         assert_eq!(state.notes.cursor().0, 3, "one page of three rows");
         render(&mut driver, &state);
         assert_eq!(field(&driver), ["3     ", "4     ", "5     "]);
+    }
+
+    /// A key can scroll the view and leave the cursor where it was: Page Up
+    /// with the cursor on the second line of a view that starts there pages
+    /// the first line in. That scroll is the key's whole effect, and the next
+    /// paint must show it.
+    #[test]
+    fn a_key_that_only_scrolls_keeps_the_scroll() {
+        let mut driver = driver();
+        let lines = (0..30).map(|line| line.to_string()).collect::<Vec<_>>();
+        let mut state = state_at_top(&lines.join("\n"));
+        render(&mut driver, &state);
+        send(&mut driver, &mut state, mouse(WHEEL_DOWN, 1, 1));
+        render(&mut driver, &state);
+        send(&mut driver, &mut state, key(KeyCode::Up));
+        send(&mut driver, &mut state, key(KeyCode::Up));
+        render(&mut driver, &state);
+        assert_eq!(field(&driver)[0], "1     ");
+        assert_eq!(state.notes.cursor(), (1, 0));
+
+        send(&mut driver, &mut state, key(KeyCode::PageUp));
+        render(&mut driver, &state);
+        assert_eq!(field(&driver)[0], "0     ");
     }
 
     /// A form's text area wraps: a long line breaks over rows, at a word
@@ -1446,6 +1491,22 @@ mod tests {
         render(&mut driver, &state);
         click(&mut driver, &mut state, 5, 0);
         assert_eq!(state.notes.cursor(), (1, 1), "the border is not text");
+    }
+
+    /// The inset column on either side of the text is painted as field, so
+    /// a press there is a press on the field: it places the cursor at the
+    /// nearest character.
+    #[test]
+    fn a_click_on_the_inset_places_the_cursor() {
+        let mut driver = driver();
+        let mut state = state_at_top("ab\ncd");
+        render(&mut driver, &state);
+
+        click(&mut driver, &mut state, 7, 0);
+        assert_eq!(state.notes.cursor(), (0, 2), "the right inset");
+        render(&mut driver, &state);
+        click(&mut driver, &mut state, 0, 1);
+        assert_eq!(state.notes.cursor(), (1, 0), "the left inset");
     }
 
     /// A drag selects from the character pressed to the one under the
