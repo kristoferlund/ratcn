@@ -14,11 +14,13 @@ const COMPONENTS: &[&str] = &[
     "checkbox",
     "cycle",
     "dialog",
+    "input",
     "list",
     "progress",
     "scroll_area",
     "select",
     "tabs",
+    "textarea",
     "toast",
     "tooltip",
 ];
@@ -638,11 +640,13 @@ fn adding_every_available_component_creates_a_compilable_consumer_crate() {
             "checkbox",
             "cycle",
             "dialog",
+            "input",
             "list",
             "progress",
             "scroll_area",
             "select",
             "tabs",
+            "textarea",
             "toast",
             "tooltip",
         ],
@@ -686,11 +690,13 @@ pub mod button;\n\
 pub mod checkbox;\n\
 pub mod cycle;\n\
 pub mod dialog;\n\
+pub mod input;\n\
 pub mod list;\n\
 pub mod progress;\n\
 pub mod scroll_area;\n\
 pub mod select;\n\
 pub mod tabs;\n\
+pub mod textarea;\n\
 pub mod toast;\n\
 pub mod tooltip;\n"
     );

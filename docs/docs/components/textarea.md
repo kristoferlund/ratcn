@@ -1,0 +1,257 @@
+---
+description: "A multi-line text field for Ratatui apps: app-owned text, soft wrapping, a titled border and placeholder, Ctrl+Enter to submit, and click, drag, and wheel with the mouse."
+---
+
+# TextArea
+
+A multi-line text field: the text in a well as tall as the area it is given, a
+block cursor while focused, and an optional titled border around it. It wraps a
+line longer than it is wide and scrolls to keep the cursor in view.
+
+<div class="ratcn-preview-window" style="--ratcn-preview-height: 380px">
+  <div class="ratcn-preview-chrome" aria-hidden="true">
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-preview-url">cargo run -p textarea</span>
+  </div>
+  <div class="ratcn-preview-body">
+    <iframe class="ratcn-component-preview-frame" src="../../../demos/textarea-demo/index.html" title="ratcn textarea demo"></iframe>
+  </div>
+</div>
+
+```rust
+use ratcn::{TextArea, TextAreaState};
+
+#[derive(Default)]
+struct AppState {
+    notes: TextAreaState,
+}
+
+enum Msg {
+    Notes(TextAreaState),
+    Save,
+}
+
+// In draw(), declare the field:
+ctx.component(
+    "notes",
+    TextArea::new()
+        .value(|state: &AppState| &state.notes, Msg::Notes)
+        .title("Notes")
+        .placeholder("What happened today?")
+        .on_submit(|| Msg::Save),
+    area,
+);
+
+// In update(), store what it emits:
+Msg::Notes(notes) => state.notes = notes,
+```
+
+It is the multi-line sibling of [Input](./input), bound the same way. Unlike an
+Input, it fills the whole area it is declared in.
+
+## State
+
+The text lives in your state as a `TextAreaState`, not in the component. It
+holds the lines, the cursor, and any selection, which is why it is a type of
+its own rather than a `String`.
+
+`.value(read, on_change)` binds it. `read` returns the state the field shows,
+and `on_change` receives a new one after every edit, every cursor movement, and
+every scroll of the wheel. Store it as it is. Without the binding the field
+paints empty, is not focusable, and answers no events.
+
+```rust
+let empty = TextAreaState::default();
+let filled = TextAreaState::new("Met Ada today.\nShe counts."); // cursor at the end
+
+filled.value();  // "Met Ada today.\nShe counts.", lines joined with \n
+filled.lines();  // ["Met Ada today.", "She counts."]
+filled.cursor(); // (1, 11): the line, then the character within it
+```
+
+`TextAreaState::new` splits at `\n` and `\r\n`. To clear or replace the text,
+assign a new state. There is no `PartialEq`; compare `.value()`.
+
+## Submitting
+
+<kbd>Enter</kbd> inserts a line break, so <kbd>Ctrl+Enter</kbd> is the chord
+that emits `.on_submit(...)`. Without `on_submit` it bubbles.
+
+::: warning Ctrl+Enter needs a terminal that reports it
+Most terminals send <kbd>Ctrl+Enter</kbd> as a plain Enter unless the kitty
+keyboard protocol is enabled, and then it arrives as a line break. Give a form
+a second way to submit — the demo has a Save button.
+:::
+
+## Placeholder and title
+
+`.placeholder(...)` is the muted text shown while the field is empty and not
+focused; a focused empty field shows its cursor instead. `.title(...)` draws a
+border with the title on it, and the text then loses a row and a column on each
+side.
+
+## Wrapping
+
+A line longer than the field breaks over several rows, at a word boundary
+where there is one and inside a word that is wider than the field.
+<kbd>↑</kbd> and <kbd>↓</kbd> then move by the rows on screen. Wrapping is
+paint only: the state's lines stay as typed.
+
+`.wrap_mode(WrapMode::None)` keeps one row per line and scrolls sideways to the
+cursor instead:
+
+```rust
+use ratcn::text_edit::WrapMode;
+
+TextArea::new()
+    .value(|state: &AppState| &state.notes, Msg::Notes)
+    .wrap_mode(WrapMode::None)
+```
+
+## Invalid and disabled
+
+`.invalid(true)` paints the text, the border, and the title in the theme's
+destructive color. It is a look and nothing more: the field stays editable, and
+what counts as invalid is your decision.
+
+`.disabled(true)` mutes the field, hides the cursor, takes it out of Tab
+traversal, and makes it ignore every event.
+
+## Styling
+
+Colors derive from the theme, exactly as an [Input](./input#styling)'s do.
+Override one field with `.style(...)`. The closure receives the active theme
+each render, so a style built from it follows theme switches:
+
+```rust
+use ratcn::TextAreaStyle;
+
+TextArea::new()
+    .value(|state: &AppState| &state.notes, Msg::Notes)
+    .style(|theme| {
+        let mut style = TextAreaStyle::from_theme(theme);
+        style.selection_background = theme.accent;
+        style
+    })
+```
+
+`TextAreaStyle::fallback()` is the no-theme starting point: plain ANSI colors
+that render on any terminal.
+
+## Keyboard
+
+Editing comes from [`ratatui-textarea`](https://crates.io/crates/ratatui-textarea),
+so its readline-style keys apply:
+
+| Keys | Does |
+|---|---|
+| `←` `→` `↑` `↓` &nbsp;`Ctrl+B` `Ctrl+F` `Ctrl+P` `Ctrl+N` | Move one character or one row |
+| `Ctrl+←` `Ctrl+→` &nbsp;`Alt+B` `Alt+F` | Move one word |
+| `Home` `End` &nbsp;`Ctrl+A` `Ctrl+E` | Move to the start / end of the line |
+| `Ctrl+↑` `Ctrl+↓` | Move one paragraph |
+| `Alt+<` `Alt+>` | Move to the top / bottom of the text |
+| `Page Up` `Page Down` | Move one page |
+| `Shift` + a movement | Select |
+| `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
+| `Ctrl+W` `Alt+Backspace` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
+| `Ctrl+K` &nbsp;/&nbsp; `Ctrl+J` | Delete to the end / start of the line |
+| `Ctrl+C` `Ctrl+X` `Ctrl+Y` | Copy, cut, and paste within the field |
+| `Enter` | Insert a line break |
+| `Ctrl+Enter` | Submit |
+
+`Ctrl+C`, `Ctrl+X`, and `Ctrl+Y` use the editor's own buffer, not the system
+clipboard — and a host that quits on `Ctrl+C`, as the demos do, takes that key
+before the field sees it.
+
+The field leaves these alone, so they reach focus traversal, an enclosing
+dialog, and your app:
+
+- <kbd>Tab</kbd> and <kbd>Shift+Tab</kbd>, <kbd>Esc</kbd>, and the function
+  keys. Tab moves focus; it does not indent.
+- <kbd>Ctrl+U</kbd> and <kbd>Ctrl+R</kbd>, the editor's undo and redo, which
+  the field does not offer.
+- Any other <kbd>Ctrl</kbd> or <kbd>Alt</kbd> chord that changes nothing here,
+  which is how `Ctrl+S` reaches your save handler through a focused field.
+
+Plain typing and movement are always the field's: <kbd>↑</kbd> on the first
+line is consumed rather than handed to whatever encloses it, and so is every
+letter, `j` and `k` included. See [Keyboard](../concepts/keyboard) for the
+rules the other components follow.
+
+## Mouse
+
+A click focuses the field and places the cursor on the character clicked,
+counting wrapped rows and scrolled lines as they are on screen. The cursor
+moves on the release, not on the press. A drag selects from the character
+pressed to the one under the pointer, across lines, and keeps extending —
+scrolling the text — while the pointer moves on past an edge of the field.
+
+The wheel scrolls the text three rows a notch and needs no focus. The cursor
+has to stay in view, so scrolling it off the edge moves it along with the text.
+Once the text has no further to go the wheel is left to whatever encloses the
+field, so a form scrolls on from there.
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+
+## Paste
+
+A paste is inserted at the cursor with its line breaks and tabs kept, whichever
+line ending the terminal sent; every other control character is dropped. Pastes
+only arrive as such when the host asks for them — bracketed paste in a
+terminal, a paste listener in the browser. See
+[Host integration](../concepts/host-integration). Without it, a terminal
+delivers a paste as keystrokes.
+
+## Paint-only widget
+
+`TextAreaWidget` draws a field without focus or events. It is an ordinary
+Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime: it
+paints the `TextAreaState` it is given over the whole area, scrolled to keep
+the cursor in view, and you supply the interaction states.
+
+```rust
+use ratcn::TextAreaWidget;
+
+frame.render_widget(
+    TextAreaWidget::new(&state.notes)
+        .title("Notes")
+        .placeholder("What happened today?")
+        .focused(is_focused)
+        .hovered(is_hovered)
+        .themed(&theme),
+    area,
+);
+```
+
+`.wrap_mode(...)`, `.invalid(...)`, and `.disabled(...)` match the component's.
+Replace `.themed(...)` with `.style(...)` to supply exact colors. Driving the
+editing is then yours: `ratcn::text_edit` holds the key conversion and the
+editor types a text component of your own builds on.
+
+## Limits
+
+- **No undo or redo.** A state is replaced on every keystroke, which is the
+  wrong place to keep a history. An app that wants undo keeps its own stack of
+  states.
+- **No maximum length.** Check the value in `update` and keep the previous
+  state if the new one is too long.
+- **No double-click word selection**, and no system clipboard beyond the host's
+  paste.
+- **Ctrl+Enter** submits only on a terminal that reports it, as above.
+- Text fields currently build against a fork of `ratatui-textarea`, until
+  upstream releases two fixes they depend on.
+
+## Full API
+
+Every method, with binding requirements and edge-case detail:
+[`TextArea`](https://docs.rs/ratcn/latest/ratcn/struct.TextArea.html),
+[`TextAreaWidget`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaWidget.html),
+[`TextAreaStyle`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaStyle.html),
+[`TextAreaState`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaState.html).
+
+## See also
+
+Use [Input](./input) for a single line: Enter submits there, and a paste is
+flattened to one line.

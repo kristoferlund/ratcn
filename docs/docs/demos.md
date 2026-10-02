@@ -96,6 +96,8 @@ the previews embedded on the [component pages](./components/button).
 | Component | Demos |
 |---|---|
 | [Button](./components/button) | `button-small`, `button-large` — the five variants at each size |
+| [Input](./components/input) | `input` — a sign-up form: a validated email, a masked password, Enter to submit |
+| [TextArea](./components/textarea) | `textarea` — a wrapping notes field with a live count and a Save button |
 | [List](./components/list) | `list` (cursor and selection kept separate), `list-multi` (checkbox multi-selection), `list-people` (two-line custom rows) |
 | [ScrollArea](./components/scroll-area) | `scroll-area` — ten buttons in a viewport three of them tall |
 | [Select](./components/select) | `select` — the dropdown panel |

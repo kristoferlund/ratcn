@@ -68,11 +68,23 @@ ScrollArea does not claim arrows, Vim letters, or Ctrl navigation chords.
 Unlike item navigation, a scrolling key that cannot change the offset bubbles
 to the app. Tab traversal reveals a focused descendant that was offscreen.
 
+### Text fields
+
+[Input](../components/input) and [TextArea](../components/textarea) take every
+unmodified key as text or cursor movement — `j`, `h`, and Space are characters
+there — and consume a movement key even at the edge of the text. They leave
+Tab, Shift+Tab, Esc, and the function keys alone, along with any Ctrl or Alt
+chord that changes nothing in the field, so traversal, dialogs, and app hotkeys
+keep working around a focused field. Input also leaves Up, Down, PageUp, and
+PageDown. Each page lists its editing keys.
+
 ### Commit and dismiss
 
 | Key | Does |
 |---|---|
 | `Enter` &nbsp;`Space` | Press a [Button](../components/button), toggle a [Checkbox](../components/checkbox), advance a Cycle, or commit the cursor in List, Select, or Tabs |
+| `Enter` | Submit an Input |
+| `Ctrl+Enter` | Submit a TextArea, where Enter is a line break |
 | `Esc` | Request dismissal of a [Dialog](../components/dialog), an open Select, or a [Tooltip](../components/tooltip) with an open-change binding |
 
 `Dialog`'s dismiss key is rebindable with
