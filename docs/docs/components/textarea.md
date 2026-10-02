@@ -90,8 +90,8 @@ a second way to submit — the demo has a Save button.
 
 ## Placeholder and title
 
-`.placeholder(...)` is the muted text shown while the field is empty and not
-focused; a focused empty field shows its cursor instead. `.title(...)` draws a
+`.placeholder(...)` is the muted text shown while the field is empty, focused
+or not; a focused field shows its cursor in front of it. `.title(...)` draws a
 border with the title on it, and the text then loses a row and a column on each
 side.
 
@@ -227,9 +227,30 @@ frame.render_widget(
 ```
 
 `.wrap_mode(...)`, `.invalid(...)`, and `.disabled(...)` match the component's.
-Replace `.themed(...)` with `.style(...)` to supply exact colors. Driving the
-editing is then yours: `ratcn::text_edit` holds the key conversion and the
-editor types a text component of your own builds on.
+Replace `.themed(...)` with `.style(...)` to supply exact colors.
+
+Driving the editing is then yours, and `ratcn::text_edit` holds the key
+conversion. Only the editor that was painted knows the view — how far it is
+scrolled, how tall a page is, and where lines wrap — so paint with
+`.paint(...)`, which hands that editor back, edit it, and store the result:
+
+```rust
+use ratcn::{TextAreaState, text_edit::{Editor, editor_input}};
+
+// In draw(), keep the editor the paint hands back, in an
+// `Option<Editor<'static>>` of your own:
+self.painted = Some(
+    TextAreaWidget::new(&self.notes)
+        .focused(true)
+        .paint(area, frame.buffer_mut()),
+);
+
+// On a key the field takes, edit that editor and store the result:
+if let (Some(mut editor), Some(input)) = (self.painted.take(), editor_input(&key)) {
+    editor.input(input);
+    self.notes = TextAreaState::from_editor(editor);
+}
+```
 
 ## Limits
 

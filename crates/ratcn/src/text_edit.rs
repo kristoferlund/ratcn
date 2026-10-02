@@ -15,7 +15,10 @@
 //! is the wrong place to keep a stack of past states. An app that wants undo
 //! keeps its own history of states.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    fmt,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 pub use ratatui_textarea::{
     CursorMove, DataCursor, Input as EditorInput, Key as EditorKey, Scrolling, TextArea as Editor,
@@ -34,11 +37,11 @@ fn next_version() -> u64 {
 /// state.
 ///
 /// What [`Input`](crate::Input) reads and emits. It stays one line: a line
-/// break is rejected at construction, and the component never inserts one.
+/// break becomes a space at construction, and the component never inserts one.
 ///
 /// There is no `PartialEq`, because the editor has none. Two states with the
 /// same [`version`](Self::version) are the same state.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InputState {
     // Boxed so the state stays small: it travels inside the app's message.
     editor: Box<Editor<'static>>,
@@ -52,36 +55,30 @@ impl Default for InputState {
 }
 
 impl InputState {
-    /// A state holding `value`, with the cursor at its end.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `value` contains a line break.
+    /// A state holding `value`, with the cursor at its end. Each line break in
+    /// `value` — `\r\n`, `\n`, or `\r` — becomes a space.
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
-        let value = value.into();
-        assert!(
-            !value.contains(['\n', '\r']),
-            "an InputState holds one line; the value contains a line break"
-        );
+        let value = value.into().replace("\r\n", " ").replace(['\n', '\r'], " ");
         let mut editor = Editor::new(vec![value]);
         editor.move_cursor(CursorMove::End);
-        Self::edited(editor)
+        Self::from_editor(editor)
     }
 
     /// The state an edit produced: `editor` adopted as it is, under a fresh
     /// version.
     ///
-    /// This is how a component hands back the editor it changed — a clone of
-    /// [`editor`](Self::editor) with a key or a paste applied. Nothing is
-    /// rebuilt from the text, so the editor's selection and scroll position
-    /// carry over. Undo history is switched off.
+    /// This is how a component hands back the editor it changed — the one it
+    /// painted, or a clone of [`editor`](Self::editor), with a key or a paste
+    /// applied. Nothing is rebuilt from the text, so the editor's selection
+    /// and scroll position carry over. Undo history is switched off.
     ///
     /// # Panics
     ///
-    /// Panics unless `editor` holds exactly one line.
+    /// Panics unless `editor` holds exactly one line: a multi-line editor
+    /// here is a programming error, not data.
     #[must_use]
-    pub fn edited(mut editor: Editor<'static>) -> Self {
+    pub fn from_editor(mut editor: Editor<'static>) -> Self {
         assert!(
             editor.lines().len() == 1,
             "an InputState holds one line; the editor holds {}",
@@ -125,7 +122,7 @@ impl InputState {
 ///
 /// The multi-line counterpart of [`InputState`], with the same contract: no
 /// `PartialEq`, and a [`version`](Self::version) that identifies the state.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TextAreaState {
     // Boxed so the state stays small: it travels inside the app's message.
     editor: Box<Editor<'static>>,
@@ -151,13 +148,13 @@ impl TextAreaState {
         );
         editor.move_cursor(CursorMove::Bottom);
         editor.move_cursor(CursorMove::End);
-        Self::edited(editor)
+        Self::from_editor(editor)
     }
 
     /// The state an edit produced: `editor` adopted as it is, under a fresh
-    /// version. See [`InputState::edited`].
+    /// version. See [`InputState::from_editor`].
     #[must_use]
-    pub fn edited(mut editor: Editor<'static>) -> Self {
+    pub fn from_editor(mut editor: Editor<'static>) -> Self {
         editor.set_max_histories(0);
         Self {
             editor: Box::new(editor),
@@ -194,6 +191,26 @@ impl TextAreaState {
     #[must_use]
     pub const fn version(&self) -> u64 {
         self.version
+    }
+}
+
+impl fmt::Debug for InputState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InputState")
+            .field("value", &self.value())
+            .field("cursor", &self.cursor())
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for TextAreaState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextAreaState")
+            .field("value", &self.value())
+            .field("cursor", &self.cursor())
+            .field("version", &self.version)
+            .finish_non_exhaustive()
     }
 }
 
@@ -379,55 +396,75 @@ mod tests {
         assert_ne!(first.version(), second.version());
         assert_eq!(first.clone().version(), first.version());
 
-        let edited = InputState::edited(first.editor().clone());
+        let edited = InputState::from_editor(first.editor().clone());
         assert_ne!(edited.version(), first.version());
 
         let area = TextAreaState::new("same");
         assert_ne!(area.version(), TextAreaState::new("same").version());
         assert_ne!(
-            TextAreaState::edited(area.editor().clone()).version(),
+            TextAreaState::from_editor(area.editor().clone()).version(),
             area.version()
         );
         assert_ne!(InputState::default().version(), area.version());
     }
 
     /// A state is replaced on every keystroke, so an undo stack inside it
-    /// would be copied with each one. `edited` is the only way in, and it
+    /// would be copied with each one. `from_editor` is the only way in, and it
     /// switches history off whatever the editor arrived with.
     #[test]
     fn history_is_off_in_every_state() {
         assert_eq!(InputState::new("a").editor().max_histories(), 0);
         assert_eq!(TextAreaState::new("a").editor().max_histories(), 0);
         assert_eq!(
-            InputState::edited(Editor::default())
+            InputState::from_editor(Editor::default())
                 .editor()
                 .max_histories(),
             0
         );
         assert_eq!(
-            TextAreaState::edited(Editor::default())
+            TextAreaState::from_editor(Editor::default())
                 .editor()
                 .max_histories(),
             0
         );
     }
 
+    /// A value often comes from data the app does not control — a record,
+    /// a file, a paste through some other route — and a line break in it is
+    /// no reason to crash. Each one becomes a space, as a paste's would.
     #[test]
-    #[should_panic(expected = "an InputState holds one line")]
-    fn an_input_state_rejects_a_line_feed() {
-        let _ = InputState::new("one\ntwo");
+    fn an_input_state_flattens_line_breaks_to_spaces() {
+        let state = InputState::new("one\r\ntwo\nthree\rfour");
+        assert_eq!(state.value(), "one two three four");
+        assert_eq!(state.cursor(), 18);
     }
 
+    /// A state's debug output is for reading: the text, the cursor, and the
+    /// version, not the editor's whole configuration.
     #[test]
-    #[should_panic(expected = "an InputState holds one line")]
-    fn an_input_state_rejects_a_carriage_return() {
-        let _ = InputState::new("one\rtwo");
+    fn debug_shows_the_value_cursor_and_version() {
+        let input = InputState::new("ab");
+        assert_eq!(
+            format!("{input:?}"),
+            format!(
+                "InputState {{ value: \"ab\", cursor: 2, version: {}, .. }}",
+                input.version()
+            )
+        );
+        let area = TextAreaState::new("a\nb");
+        assert_eq!(
+            format!("{area:?}"),
+            format!(
+                "TextAreaState {{ value: \"a\\nb\", cursor: (1, 1), version: {}, .. }}",
+                area.version()
+            )
+        );
     }
 
     #[test]
     #[should_panic(expected = "an InputState holds one line")]
     fn an_input_state_rejects_a_multi_line_editor() {
-        let _ = InputState::edited(Editor::from(["one", "two"]));
+        let _ = InputState::from_editor(Editor::from(["one", "two"]));
     }
 
     #[test]

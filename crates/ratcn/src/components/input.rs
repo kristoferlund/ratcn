@@ -18,7 +18,7 @@ use std::{fmt, rc::Rc};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Position, Rect},
+    layout::{Alignment, Position, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Widget},
@@ -32,7 +32,9 @@ use crate::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, Modifiers,
         MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions,
     },
-    text_edit::{CursorMove, DataCursor, Editor, InputState, editor_input, is_editor_binding},
+    text_edit::{
+        CursorMove, DataCursor, Editor, InputState, WrapMode, editor_input, is_editor_binding,
+    },
     theme::resolve_style,
 };
 
@@ -183,7 +185,7 @@ const fn field_rows(area: Rect, titled: bool) -> Rect {
 /// The cells of `area` the text is drawn in: the field's rows, inside the
 /// border when there is one. Paint draws the editor here and the mouse is
 /// read against it, so the two cannot drift apart.
-fn text_area(area: Rect, titled: bool) -> Rect {
+fn text_rect(area: Rect, titled: bool) -> Rect {
     let field = field_rows(area, titled);
     if titled {
         Block::bordered().inner(field)
@@ -197,8 +199,9 @@ fn text_area(area: Rect, titled: bool) -> Rect {
 ///
 /// It paints the [`InputState`] it is given: the text, scrolled to keep the
 /// cursor in view, the cursor when [`focused`](Self::focused), and any
-/// selection. Driving the editing is the caller's business; [`Input`] is the
-/// field that does it for you, and paints through this widget.
+/// selection. Driving the editing is the caller's business, from the editor
+/// [`paint`](Self::paint) hands back; [`Input`] is the field that does it for
+/// you, and paints through this widget.
 #[derive(Debug)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -247,8 +250,8 @@ impl<'a> InputWidget<'a> {
         self
     }
 
-    /// The muted text shown while the field is empty and not focused. A
-    /// focused empty field shows its cursor instead.
+    /// The muted text shown while the field is empty, focused or not. A
+    /// focused field shows its cursor in front of it.
     #[must_use]
     pub const fn placeholder(mut self, placeholder: &'a str) -> Self {
         self.placeholder = placeholder;
@@ -300,9 +303,35 @@ impl<'a> InputWidget<'a> {
     }
 
     /// Paint the field and hand back the editor it was painted from, which
-    /// now knows the view it was drawn in. [`Input`] keeps it, so the next
-    /// edit starts from what is on screen.
-    fn paint(mut self, area: Rect, buf: &mut Buffer) -> Editor<'static> {
+    /// now knows the view it was drawn in: how far it is scrolled.
+    ///
+    /// Rendering as a [`Widget`] throws that editor away. A loop that drives
+    /// the editing itself edits this one instead, and stores the result with
+    /// [`InputState::from_editor`], so the next paint scrolls from what is on
+    /// screen. [`Input`] does exactly that.
+    ///
+    /// ```
+    /// use ratatui::{buffer::Buffer, layout::Rect};
+    /// use ratcn::{
+    ///     InputState, InputWidget,
+    ///     runtime::{KeyCode, KeyEvent},
+    ///     text_edit::editor_input,
+    /// };
+    ///
+    /// let mut state = InputState::new("Ada Lovelace");
+    /// let area = Rect::new(0, 0, 8, 1);
+    /// let mut buf = Buffer::empty(area);
+    ///
+    /// // Each frame, keep the editor the paint hands back…
+    /// let mut editor = InputWidget::new(&state).focused(true).paint(area, &mut buf);
+    /// // …and edit it when a key arrives.
+    /// if let Some(input) = editor_input(&KeyEvent::new(KeyCode::Left)) {
+    ///     editor.input(input);
+    ///     state = InputState::from_editor(editor);
+    /// }
+    /// assert_eq!(state.cursor(), 11);
+    /// ```
+    pub fn paint(mut self, area: Rect, buf: &mut Buffer) -> Editor<'static> {
         let style = self
             .style
             .resolve(self.focused, self.hovered, self.disabled, self.invalid);
@@ -312,22 +341,37 @@ impl<'a> InputWidget<'a> {
                 .title(Line::styled(title, style.title))
                 .render(field_rows(area, true), buf);
         }
-        let field = text_area(area, self.title.is_some());
+        let field = text_rect(area, self.title.is_some());
         buf.set_style(field, style.text);
 
-        match self.mask_char {
-            Some(mask_char) => self.editor.set_mask_char(mask_char),
-            None => self.editor.clear_mask_char(),
+        // The field paints its own look over whatever editor the state was
+        // built from: a block, line numbers, or another alignment would move
+        // the text off the cells a click is read against. The setters that
+        // re-measure the text run only when the setting differs.
+        let editor = &mut self.editor;
+        editor.remove_block();
+        if editor.line_number_style().is_some() {
+            editor.remove_line_number();
         }
-        self.editor.set_style(style.text);
-        self.editor.set_cursor_style(style.cursor);
-        self.editor.set_cursor_line_style(Style::default());
-        self.editor.set_selection_style(style.selection);
-        if self.editor.is_empty() && !self.focused {
-            Line::styled(self.placeholder, style.placeholder).render(field, buf);
-        } else {
-            (&self.editor).render(field, buf);
+        if editor.alignment() != Alignment::Left {
+            editor.set_alignment(Alignment::Left);
         }
+        if editor.wrap_mode() != WrapMode::None {
+            editor.set_wrap_mode(WrapMode::None);
+        }
+        if editor.mask_char() != self.mask_char {
+            match self.mask_char {
+                Some(mask_char) => editor.set_mask_char(mask_char),
+                None => editor.clear_mask_char(),
+            }
+        }
+        editor.set_style(style.text);
+        editor.set_cursor_style(style.cursor);
+        editor.set_cursor_line_style(Style::default());
+        editor.set_selection_style(style.selection);
+        editor.set_placeholder_text(self.placeholder);
+        editor.set_placeholder_style(style.placeholder);
+        (&*editor).render(field, buf);
         self.editor
     }
 }
@@ -451,8 +495,8 @@ impl<S, M> Input<S, M> {
         self
     }
 
-    /// The muted text shown while the field is empty and not focused. A
-    /// focused empty field shows its cursor instead.
+    /// The muted text shown while the field is empty, focused or not. A
+    /// focused field shows its cursor in front of it.
     #[must_use]
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
@@ -534,7 +578,7 @@ impl<S, M> Input<S, M> {
             editor.yank_text(),
         );
         Some(if modified || before != after {
-            EventResult::Emit(InputState::edited(editor))
+            EventResult::Emit(InputState::from_editor(editor))
         } else {
             EventResult::Consumed
         })
@@ -548,7 +592,7 @@ impl<S, M> Input<S, M> {
         }
         let mut editor = self.editor(state);
         editor.insert_str(text);
-        Some(EventResult::Emit(InputState::edited(editor)))
+        Some(EventResult::Emit(InputState::from_editor(editor)))
     }
 
     /// The mouse policy. A press on the text claims the rest of the gesture
@@ -564,7 +608,7 @@ impl<S, M> Input<S, M> {
         state: &InputState,
         ctx: &mut EventCtx<'_>,
     ) -> Option<EventResult<InputState>> {
-        let text = text_area(ctx.area(), self.title.is_some());
+        let text = text_rect(ctx.area(), self.title.is_some());
         let mut editor = self.editor(state);
         let before = (editor.cursor(), editor.selection_range());
         match mouse.kind {
@@ -596,7 +640,7 @@ impl<S, M> Input<S, M> {
         Some(if before == (editor.cursor(), editor.selection_range()) {
             EventResult::Consumed
         } else {
-            EventResult::Emit(InputState::edited(editor))
+            EventResult::Emit(InputState::from_editor(editor))
         })
     }
 }
@@ -1459,18 +1503,25 @@ mod tests {
         assert_eq!(paint(false), style.background);
     }
 
-    /// The placeholder says what belongs in an empty field, and gives way
-    /// to the cursor once the field is focused and to the text once there
-    /// is any.
+    /// The placeholder says what belongs in an empty field, and stays while
+    /// it is empty: a field that dropped it on focus would lose its label
+    /// the moment the user arrived to fill it in. Focused, the cursor sits
+    /// on the first cell, before the placeholder; text replaces both.
     #[test]
-    fn the_placeholder_shows_in_an_empty_unfocused_field() {
-        let row = |state: &InputState, focused| {
-            let area = Rect::new(0, 0, 8, 1);
+    fn the_placeholder_shows_while_the_field_is_empty() {
+        let theme = Theme::default_dark();
+        let style = InputStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 8, 1);
+        let paint = |state: &InputState, focused| {
             let mut buffer = Buffer::empty(area);
             InputWidget::new(state)
+                .themed(&theme)
                 .placeholder("Name")
                 .focused(focused)
                 .render(area, &mut buffer);
+            buffer
+        };
+        let symbols = |buffer: &Buffer| {
             buffer
                 .content
                 .iter()
@@ -1478,9 +1529,67 @@ mod tests {
                 .collect::<String>()
         };
 
-        assert_eq!(row(&InputState::default(), false), "Name    ");
-        assert_eq!(row(&InputState::default(), true), "        ");
-        assert_eq!(row(&InputState::new("Ada"), false), "Ada     ");
+        let unfocused = paint(&InputState::default(), false);
+        assert_eq!(symbols(&unfocused), " Name   ");
+        assert_eq!(unfocused[(1, 0)].fg, style.placeholder_foreground);
+        let focused = paint(&InputState::default(), true);
+        assert_eq!(symbols(&focused), " Name   ");
+        assert_eq!(focused[(0, 0)].bg, style.cursor_background);
+        assert_eq!(focused[(1, 0)].fg, style.placeholder_foreground);
+        assert_eq!(symbols(&paint(&InputState::new("Ada"), true)), "Ada     ");
+    }
+
+    /// A paint-only field driven by hand keeps its view only if the loop
+    /// edits the editor that was painted, which alone knows how far the view
+    /// is scrolled. `paint` hands it back for exactly that.
+    #[test]
+    fn a_standalone_loop_edits_the_painted_editor_and_keeps_its_view() {
+        let area = FIELD;
+        let shown = |buffer: &Buffer| {
+            buffer
+                .content
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+        };
+        let mut buffer = Buffer::empty(area);
+        let mut editor = InputWidget::new(&InputState::new("abcdefghij"))
+            .focused(true)
+            .paint(area, &mut buffer);
+        assert_eq!(shown(&buffer), "fghij ");
+
+        editor.input(editor_input(&KeyEvent::new(KeyCode::Left)).expect("an editor key"));
+        let state = InputState::from_editor(editor);
+        let mut buffer = Buffer::empty(area);
+        InputWidget::new(&state)
+            .focused(true)
+            .render(area, &mut buffer);
+        assert_eq!(shown(&buffer), "fghij ", "the view must not shift");
+    }
+
+    /// A state can be built from any editor, configured any way. The field
+    /// paints its own look over whatever it was given: a border, line
+    /// numbers, or right alignment left in place would move the text away
+    /// from where a click is read, and the click would land on the wrong
+    /// character.
+    #[test]
+    fn a_foreign_editors_settings_do_not_reach_the_paint() {
+        let mut foreign = Editor::from(["hello"]);
+        foreign.set_block(Block::bordered());
+        foreign.set_line_number_style(Style::default());
+        foreign.set_alignment(ratatui::layout::Alignment::Right);
+        foreign.set_wrap_mode(crate::text_edit::WrapMode::WordOrGlyph);
+        foreign.set_mask_char('*');
+        let mut driver = driver();
+        let mut state = State {
+            name: InputState::from_editor(foreign),
+            ..State::default()
+        };
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), "hello ");
+
+        click(&mut driver, &mut state, 3, 0);
+        assert_eq!(state.name.cursor(), 3);
     }
 
     /// A titled field is three rows, and the whole frame is the field: the

@@ -72,8 +72,8 @@ filled.value();  // "Ada Lovelace"
 filled.cursor(); // 12, a character index
 ```
 
-An `InputState` is one line: `InputState::new` panics on a value containing a
-line break. To clear or replace the text — a form reset, loading a record —
+An `InputState` is one line: `InputState::new` turns each line break in the
+value into a space. To clear or replace the text — a form reset, loading a record —
 assign a new state. There is no `PartialEq`; compare `.value()`.
 
 ## Submitting
@@ -84,8 +84,8 @@ action, for instance.
 
 ## Placeholder and title
 
-`.placeholder(...)` is the muted text shown while the field is empty and not
-focused; a focused empty field shows its cursor instead. `.title(...)` is the
+`.placeholder(...)` is the muted text shown while the field is empty, focused
+or not; a focused field shows its cursor in front of it. `.title(...)` is the
 label on the border.
 
 ## Masking
@@ -227,9 +227,30 @@ frame.render_widget(
 ```
 
 `.mask_char(...)`, `.invalid(...)`, and `.disabled(...)` match the component's.
-Replace `.themed(...)` with `.style(...)` to supply exact colors. Driving the
-editing is then yours: `ratcn::text_edit` holds the key conversion and the
-editor types a text component of your own builds on.
+Replace `.themed(...)` with `.style(...)` to supply exact colors.
+
+Driving the editing is then yours, and `ratcn::text_edit` holds the key
+conversion. Only the editor that was painted knows the view — how far it is
+scrolled — so paint with `.paint(...)`, which hands that editor back, edit it,
+and store the result:
+
+```rust
+use ratcn::{InputState, text_edit::{Editor, editor_input}};
+
+// In draw(), keep the editor the paint hands back, in an
+// `Option<Editor<'static>>` of your own:
+self.painted = Some(
+    InputWidget::new(&self.name)
+        .focused(true)
+        .paint(area, frame.buffer_mut()),
+);
+
+// On a key the field takes, edit that editor and store the result:
+if let (Some(mut editor), Some(input)) = (self.painted.take(), editor_input(&key)) {
+    editor.input(input);
+    self.name = InputState::from_editor(editor);
+}
+```
 
 ## Limits
 
