@@ -49,8 +49,9 @@ Msg::Name(name) => state.name = name,
 ```
 
 An untitled Input is one row; `.title(...)` draws a border with the title on
-it, and the field is then three. Either way it sits at the top of the area it
-is declared in and ignores rows below that.
+it, and the field is then three. `.height()` answers which, for a layout
+constraint. Either way it sits at the top of the area it is declared in and
+ignores rows below that.
 
 ## State
 
@@ -72,8 +73,8 @@ filled.value();  // "Ada Lovelace"
 filled.cursor(); // 12, a character index
 ```
 
-An `InputState` is one line: `InputState::new` turns each line break in the
-value into a space. To clear or replace the text — a form reset, loading a record —
+An `InputState` is one line: `InputState::new` turns each line break and tab
+in the value into a space. To clear or replace the text — a form reset, loading a record —
 assign a new state. There is no `PartialEq`; compare `.value()`.
 
 ## Submitting
@@ -181,7 +182,8 @@ The field also leaves these alone, whatever the editor binds them to:
   editor's chords for the same moves — <kbd>Ctrl+N</kbd>, <kbd>Ctrl+P</kbd>,
   <kbd>Ctrl+V</kbd>, <kbd>Alt+V</kbd>, and the <kbd>Alt</kbd> chords for
   paragraphs and the top and bottom: one line has no vertical movement to make.
-- <kbd>Ctrl+J</kbd>, which is how a terminal reports a line feed, and which the
+- <kbd>Ctrl+M</kbd> and a raw line break, which would split the line, and
+  <kbd>Ctrl+J</kbd>, which is how a terminal reports a line feed, and which the
   editor would take as "delete to the start".
 
 See [Keyboard](../concepts/keyboard) for the rules the other components follow.
@@ -230,27 +232,51 @@ frame.render_widget(
 Replace `.themed(...)` with `.style(...)` to supply exact colors.
 
 Driving the editing is then yours, and `ratcn::text_edit` holds the key
-conversion. Only the editor that was painted knows the view — how far it is
-scrolled — so paint with `.paint(...)`, which hands that editor back, edit it,
-and store the result:
+conversion and the editor's binding table. Only the editor that was painted
+knows the view — how far it is scrolled — so paint with `.paint(...)`, which
+hands that editor back, edit it, and store the result. Which keys reach the
+editor is your policy; this is the least of one:
 
 ```rust
-use ratcn::{InputState, text_edit::{Editor, editor_input}};
+use ratcn::{
+    InputState,
+    runtime::KeyCode,
+    text_edit::{Editor, editor_input, is_editor_binding},
+};
 
-// In draw(), keep the editor the paint hands back, in an
-// `Option<Editor<'static>>` of your own:
+// Beside the state, the editor the last paint handed back:
+painted: Option<Editor<'static>>,
+
+// In draw():
 self.painted = Some(
     InputWidget::new(&self.name)
         .focused(true)
         .paint(area, frame.buffer_mut()),
 );
 
-// On a key the field takes, edit that editor and store the result:
-if let (Some(mut editor), Some(input)) = (self.painted.take(), editor_input(&key)) {
-    editor.input(input);
-    self.name = InputState::from_editor(editor);
+// On a key:
+match key.code {
+    KeyCode::Enter => self.submit(),
+    // Focus traversal, the enclosing view, and keys with nowhere to go on
+    // one line.
+    KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc | KeyCode::Up | KeyCode::Down => {}
+    // Line breaks: Ctrl+J is a terminal's line feed.
+    KeyCode::Char('j' | 'm') if key.modifiers.ctrl => {}
+    KeyCode::Char('\n' | '\r') => {}
+    _ => {
+        if let Some(input) = editor_input(&key).filter(is_editor_binding) {
+            // The painted editor, until the state moves on without a paint
+            // between. If you replace the state yourself, clear `painted`.
+            let mut editor = self.painted.take().unwrap_or_else(|| self.name.editor().clone());
+            editor.input(input);
+            self.name = InputState::from_editor(editor);
+        }
+    }
 }
 ```
+
+An editor that does end up with a second line — a key that split it — comes
+back from `InputState::from_editor` as one, its lines joined with spaces.
 
 ## Limits
 

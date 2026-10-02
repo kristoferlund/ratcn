@@ -28,7 +28,7 @@ pub use ratatui_textarea::{
     CursorMove, DataCursor, Input as EditorInput, Key as EditorKey, TextArea as Editor, WrapMode,
 };
 
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Alignment, Position, Rect};
 
 use crate::runtime::{KeyCode, KeyEvent, Modifiers};
 
@@ -61,10 +61,14 @@ impl Default for InputState {
 
 impl InputState {
     /// A state holding `value`, with the cursor at its end. Each line break in
-    /// `value` — `\r\n`, `\n`, or `\r` — becomes a space.
+    /// `value` — `\r\n`, `\n`, or `\r` — becomes a space, and so does each
+    /// tab, as in a paste.
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
-        let value = value.into().replace("\r\n", " ").replace(['\n', '\r'], " ");
+        let value = value
+            .into()
+            .replace("\r\n", " ")
+            .replace(['\n', '\r', '\t'], " ");
         let mut editor = Editor::new(vec![value]);
         editor.move_cursor(CursorMove::End);
         Self::from_editor(editor)
@@ -76,20 +80,31 @@ impl InputState {
     /// This is how a component hands back the editor it changed — the one it
     /// painted, or a clone of [`editor`](Self::editor), with a key or a paste
     /// applied. Nothing is rebuilt from the text, so the editor's selection
-    /// and scroll position carry over. Undo history is switched off.
+    /// and scroll position carry over. Undo history is switched off, and the
+    /// settings a field paints its own way are cleared: a block, line numbers,
+    /// an alignment other than left, and the editor's placeholder.
     ///
-    /// # Panics
-    ///
-    /// Panics unless `editor` holds exactly one line: a multi-line editor
-    /// here is a programming error, not data.
+    /// An editor holding more than one line — a key handed to it split the
+    /// line, say — is the exception: its lines are joined with spaces, and the
+    /// state starts over from that text with the cursor on the character it
+    /// was on. Its selection and scroll do not carry over.
     #[must_use]
     pub fn from_editor(mut editor: Editor<'static>) -> Self {
-        assert!(
-            editor.lines().len() == 1,
-            "an InputState holds one line; the editor holds {}",
-            editor.lines().len()
-        );
-        editor.set_max_histories(0);
+        if editor.lines().len() > 1 {
+            let DataCursor(row, column) = editor.cursor();
+            let lines = editor.lines();
+            let cursor = lines[..row]
+                .iter()
+                .map(|line| line.chars().count() + 1)
+                .sum::<usize>()
+                + column;
+            editor = Editor::new(vec![lines.join(" ")]);
+            editor.move_cursor(CursorMove::Jump(
+                0,
+                u16::try_from(cursor).unwrap_or(u16::MAX),
+            ));
+        }
+        adopt(&mut editor);
         Self {
             editor: Box::new(editor),
             version: next_version(),
@@ -141,26 +156,23 @@ impl Default for TextAreaState {
 }
 
 impl TextAreaState {
-    /// A state holding `value`, split into lines at each `\n` or `\r\n`, with
-    /// the cursor at the end of the text.
+    /// A state holding `value`, split into lines at each `\n`, `\r\n`, or
+    /// `\r`, as in a paste, with the cursor at the end of the text.
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
-        let value = value.into();
-        let mut editor = Editor::from(
-            value
-                .split('\n')
-                .map(|line| line.strip_suffix('\r').unwrap_or(line)),
-        );
+        let value = value.into().replace("\r\n", "\n").replace('\r', "\n");
+        let mut editor = Editor::from(value.split('\n'));
         editor.move_cursor(CursorMove::Bottom);
         editor.move_cursor(CursorMove::End);
         Self::from_editor(editor)
     }
 
     /// The state an edit produced: `editor` adopted as it is, under a fresh
-    /// version. See [`InputState::from_editor`].
+    /// version, with undo history switched off and the settings a field
+    /// paints its own way cleared. See [`InputState::from_editor`].
     #[must_use]
     pub fn from_editor(mut editor: Editor<'static>) -> Self {
-        editor.set_max_histories(0);
+        adopt(&mut editor);
         Self {
             editor: Box::new(editor),
             version: next_version(),
@@ -197,6 +209,24 @@ impl TextAreaState {
     pub const fn version(&self) -> u64 {
         self.version
     }
+}
+
+/// Ready `editor` to be a state, once, as it becomes one. History goes: a
+/// state is replaced on every keystroke. So does whatever would draw the text
+/// somewhere other than the cells a field reads clicks against — a block, line
+/// numbers, another alignment — and the editor's placeholder, which a field
+/// paints itself. The setters that re-measure the text run only when the
+/// setting differs.
+fn adopt(editor: &mut Editor<'static>) {
+    editor.set_max_histories(0);
+    editor.remove_block();
+    if editor.line_number_style().is_some() {
+        editor.remove_line_number();
+    }
+    if editor.alignment() != Alignment::Left {
+        editor.set_alignment(Alignment::Left);
+    }
+    editor.set_placeholder_text("");
 }
 
 impl fmt::Debug for InputState {
@@ -436,6 +466,11 @@ mod tests {
             ["one", "two", ""],
             "a Windows line ending must not leave a carriage return in the line"
         );
+        assert_eq!(
+            TextAreaState::new("one\rtwo").lines(),
+            ["one", "two"],
+            "a bare carriage return breaks the line, as it does in a paste"
+        );
     }
 
     /// The version is how a component tells "the state I painted" from "a
@@ -484,12 +519,13 @@ mod tests {
 
     /// A value often comes from data the app does not control — a record,
     /// a file, a paste through some other route — and a line break in it is
-    /// no reason to crash. Each one becomes a space, as a paste's would.
+    /// no reason to crash. Each one becomes a space, as a paste's would, and
+    /// so does a tab.
     #[test]
     fn an_input_state_flattens_line_breaks_to_spaces() {
-        let state = InputState::new("one\r\ntwo\nthree\rfour");
-        assert_eq!(state.value(), "one two three four");
-        assert_eq!(state.cursor(), 18);
+        let state = InputState::new("one\r\ntwo\nthree\rfour\tfive");
+        assert_eq!(state.value(), "one two three four five");
+        assert_eq!(state.cursor(), 23);
     }
 
     /// A state's debug output is for reading: the text, the cursor, and the
@@ -514,10 +550,16 @@ mod tests {
         );
     }
 
+    /// An editor reaches `from_editor` with a line break in it when a key
+    /// split its line — Enter handed to it by a loop of the app's own. That
+    /// is no reason to crash: the lines are joined, as `new` would join them,
+    /// and the cursor stays on the character it was on.
     #[test]
-    #[should_panic(expected = "an InputState holds one line")]
-    fn an_input_state_rejects_a_multi_line_editor() {
-        let _ = InputState::from_editor(Editor::from(["one", "two"]));
+    fn an_input_state_joins_a_multi_line_editor() {
+        let mut editor = Editor::from(["one", "two"]);
+        editor.move_cursor(CursorMove::Jump(1, 1));
+        let state = InputState::from_editor(editor);
+        assert_eq!((state.value(), state.cursor()), ("one two", 5));
     }
 
     #[test]

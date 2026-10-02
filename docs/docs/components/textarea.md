@@ -71,7 +71,7 @@ filled.lines();  // ["Met Ada today.", "She counts."]
 filled.cursor(); // (1, 11): the line, then the character within it
 ```
 
-`TextAreaState::new` splits at `\n` and `\r\n`. To clear or replace the text,
+`TextAreaState::new` splits at `\n`, `\r\n`, and `\r`. To clear or replace the text,
 assign a new state. There is no `PartialEq`; compare `.value()`.
 
 ## Submitting
@@ -230,25 +230,45 @@ frame.render_widget(
 Replace `.themed(...)` with `.style(...)` to supply exact colors.
 
 Driving the editing is then yours, and `ratcn::text_edit` holds the key
-conversion. Only the editor that was painted knows the view — how far it is
-scrolled, how tall a page is, and where lines wrap — so paint with
-`.paint(...)`, which hands that editor back, edit it, and store the result:
+conversion and the editor's binding table. Only the editor that was painted
+knows the view — how far it is scrolled, how tall a page is, and where lines
+wrap — so paint with `.paint(...)`, which hands that editor back, edit it, and
+store the result. Which keys reach the editor is your policy; this is the
+least of one:
 
 ```rust
-use ratcn::{TextAreaState, text_edit::{Editor, editor_input}};
+use ratcn::{
+    TextAreaState,
+    runtime::KeyCode,
+    text_edit::{Editor, editor_input, is_editor_binding},
+};
 
-// In draw(), keep the editor the paint hands back, in an
-// `Option<Editor<'static>>` of your own:
+// Beside the state, the editor the last paint handed back:
+painted: Option<Editor<'static>>,
+
+// In draw():
 self.painted = Some(
     TextAreaWidget::new(&self.notes)
         .focused(true)
         .paint(area, frame.buffer_mut()),
 );
 
-// On a key the field takes, edit that editor and store the result:
-if let (Some(mut editor), Some(input)) = (self.painted.take(), editor_input(&key)) {
-    editor.input(input);
-    self.notes = TextAreaState::from_editor(editor);
+// On a key:
+match key.code {
+    // Enter is a line break, so submitting takes a chord; Ctrl+J is how a
+    // terminal that sends a line feed reports Ctrl+Enter.
+    KeyCode::Enter | KeyCode::Char('j') if key.modifiers.ctrl => self.save(),
+    // Focus traversal and the enclosing view.
+    KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc => {}
+    _ => {
+        if let Some(input) = editor_input(&key).filter(is_editor_binding) {
+            // The painted editor, until the state moves on without a paint
+            // between. If you replace the state yourself, clear `painted`.
+            let mut editor = self.painted.take().unwrap_or_else(|| self.notes.editor().clone());
+            editor.input(input);
+            self.notes = TextAreaState::from_editor(editor);
+        }
+    }
 }
 ```
 

@@ -20,7 +20,7 @@ use std::{fmt, rc::Rc};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Margin, Position, Rect},
+    layout::{Margin, Position, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Widget},
@@ -320,26 +320,42 @@ impl<'a> TextAreaWidget<'a> {
     /// Rendering as a [`Widget`] throws that editor away. A loop that drives
     /// the editing itself edits this one instead, and stores the result with
     /// [`TextAreaState::from_editor`], so the next paint scrolls from what is
-    /// on screen. [`TextArea`] does exactly that.
+    /// on screen. Which keys reach the editor is the loop's own policy; this
+    /// is the least of one, and [`TextArea`] has the whole of it.
     ///
     /// ```
     /// use ratatui::{buffer::Buffer, layout::Rect};
     /// use ratcn::{
     ///     TextAreaState, TextAreaWidget,
     ///     runtime::{KeyCode, KeyEvent},
-    ///     text_edit::editor_input,
+    ///     text_edit::{Editor, editor_input, is_editor_binding},
     /// };
     ///
     /// let mut state = TextAreaState::new("Met Ada today.\nShe counts.");
     /// let area = Rect::new(0, 0, 20, 4);
     /// let mut buf = Buffer::empty(area);
     ///
-    /// // Each frame, keep the editor the paint hands back…
-    /// let mut editor = TextAreaWidget::new(&state).focused(true).paint(area, &mut buf);
-    /// // …and edit it when a key arrives.
-    /// if let Some(input) = editor_input(&KeyEvent::new(KeyCode::Up)) {
-    ///     editor.input(input);
-    ///     state = TextAreaState::from_editor(editor);
+    /// // Each frame, keep the editor the paint hands back.
+    /// let mut painted: Option<Editor<'static>> =
+    ///     Some(TextAreaWidget::new(&state).focused(true).paint(area, &mut buf));
+    ///
+    /// // When a key arrives:
+    /// let key = KeyEvent::new(KeyCode::Up);
+    /// match key.code {
+    ///     // Enter is a line break, so submitting takes a chord; Ctrl+J is how
+    ///     // a terminal that sends a line feed reports Ctrl+Enter.
+    ///     KeyCode::Enter | KeyCode::Char('j') if key.modifiers.ctrl => { /* submit */ }
+    ///     // Focus traversal and the enclosing view.
+    ///     KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc => {}
+    ///     _ => {
+    ///         if let Some(input) = editor_input(&key).filter(is_editor_binding) {
+    ///             // The painted editor, until the state moves on without a
+    ///             // paint between.
+    ///             let mut editor = painted.take().unwrap_or_else(|| state.editor().clone());
+    ///             editor.input(input);
+    ///             state = TextAreaState::from_editor(editor);
+    ///         }
+    ///     }
     /// }
     /// assert_eq!(state.cursor(), (0, 11));
     /// ```
@@ -356,18 +372,10 @@ impl<'a> TextAreaWidget<'a> {
         buf.set_style(well(area, self.title.is_some()), style.text);
         let field = text_rect(area, self.title.is_some());
 
-        // The field paints its own look over whatever editor the state was
-        // built from: a block, line numbers, or another alignment would move
-        // the text off the cells a click is read against. The setters that
-        // re-measure the text run only when the setting differs.
+        // The state cleared the editor's own look when it adopted it; what
+        // is left is what this field decides. The setters that re-measure the
+        // text run only when the setting differs.
         let editor = &mut self.editor;
-        editor.remove_block();
-        if editor.line_number_style().is_some() {
-            editor.remove_line_number();
-        }
-        if editor.alignment() != Alignment::Left {
-            editor.set_alignment(Alignment::Left);
-        }
         if editor.wrap_mode() != self.wrap_mode {
             editor.set_wrap_mode(self.wrap_mode);
         }
@@ -378,12 +386,12 @@ impl<'a> TextAreaWidget<'a> {
         editor.set_cursor_style(style.cursor);
         editor.set_cursor_line_style(Style::default());
         editor.set_selection_style(style.selection);
+        (&*editor).render(field, buf);
         // The field paints the placeholder itself: the editor's would start a
         // cell late, behind a cursor of its own.
-        editor.set_placeholder_text("");
-        (&*editor).render(field, buf);
         if editor.is_empty() && !self.placeholder.is_empty() {
-            for (line, y) in self.placeholder.lines().zip(field.y..field.bottom()) {
+            let placeholder = pasted_text(self.placeholder).replace('\t', " ");
+            for (line, y) in placeholder.split('\n').zip(field.y..field.bottom()) {
                 buf.set_stringn(
                     field.x,
                     y,
@@ -752,7 +760,9 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
             .disabled(self.disabled)
             .invalid(self.invalid)
             .style(style);
-        widget.title = self.title.as_deref();
+        if let Some(title) = &self.title {
+            widget = widget.title(title);
+        }
         let editor = ctx.with_buffer(ctx.area(), |area, buf| widget.paint(area, buf));
         self.painted = Some((state.version(), editor));
     }
@@ -811,8 +821,8 @@ const fn bubbles(key: KeyEvent) -> bool {
     )
 }
 
-/// A paste as text a field can hold: one kind of line break, and no control
-/// character but that and the tab. Terminals send a pasted break as `\r\n`,
+/// A paste, or a placeholder, as text a field can hold: one kind of line
+/// break, and no control character but that and the tab. Terminals send a pasted break as `\r\n`,
 /// `\n`, or a bare `\r`; left in a line, a carriage return — or an escape, or
 /// a bell — would be text the user cannot see.
 fn pasted_text(text: &str) -> String {
@@ -1798,6 +1808,23 @@ mod tests {
                 assert_eq!(second, (text.0, text.1 + 1), "the second line");
             }
         }
+    }
+
+    /// A placeholder line breaks wherever a typed one would, a bare carriage
+    /// return included, and shows no control character: a tab is a space.
+    #[test]
+    fn the_placeholder_is_plain_text() {
+        let area = Rect::new(0, 0, 8, 3);
+        let mut buffer = Buffer::empty(area);
+        TextAreaWidget::new(&TextAreaState::default())
+            .placeholder("a\rb\tc\nd\u{1b}e")
+            .render(area, &mut buffer);
+        let symbols: String = buffer
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert_eq!(symbols, " a       b c     de     ");
     }
 
     /// A focused empty field still shows where typing goes: the cursor

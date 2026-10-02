@@ -18,7 +18,7 @@ use std::{fmt, rc::Rc};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Margin, Position, Rect},
+    layout::{Margin, Position, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Widget},
@@ -179,10 +179,15 @@ struct ResolvedStyle {
     title: Style,
 }
 
-/// The rows a field occupies in `area`: one, or three with a titled border.
-/// Shorter than that and there is no field at all.
+/// How many rows a field is: one, or three with a titled border.
+const fn field_height(titled: bool) -> u16 {
+    if titled { 3 } else { 1 }
+}
+
+/// The rows a field occupies in `area`. Shorter than the field and there is
+/// no field at all.
 const fn field_rows(area: Rect, titled: bool) -> Rect {
-    fixed_height(area, if titled { 3 } else { 1 })
+    fixed_height(area, field_height(titled))
 }
 
 /// The cells of `area` the field's background fills: its rows, inside the
@@ -285,6 +290,12 @@ impl<'a> InputWidget<'a> {
         self
     }
 
+    /// Rows the field occupies: 1, or 3 with a [`title`](Self::title).
+    #[must_use]
+    pub const fn height(&self) -> u16 {
+        field_height(self.title.is_some())
+    }
+
     /// Paint the focused background and show the cursor.
     #[must_use]
     pub const fn focused(mut self, focused: bool) -> Self {
@@ -319,26 +330,44 @@ impl<'a> InputWidget<'a> {
     /// Rendering as a [`Widget`] throws that editor away. A loop that drives
     /// the editing itself edits this one instead, and stores the result with
     /// [`InputState::from_editor`], so the next paint scrolls from what is on
-    /// screen. [`Input`] does exactly that.
+    /// screen. Which keys reach the editor is the loop's own policy; this is
+    /// the least of one, and [`Input`] has the whole of it.
     ///
     /// ```
     /// use ratatui::{buffer::Buffer, layout::Rect};
     /// use ratcn::{
     ///     InputState, InputWidget,
     ///     runtime::{KeyCode, KeyEvent},
-    ///     text_edit::editor_input,
+    ///     text_edit::{Editor, editor_input, is_editor_binding},
     /// };
     ///
     /// let mut state = InputState::new("Ada Lovelace");
     /// let area = Rect::new(0, 0, 8, 1);
     /// let mut buf = Buffer::empty(area);
     ///
-    /// // Each frame, keep the editor the paint hands back…
-    /// let mut editor = InputWidget::new(&state).focused(true).paint(area, &mut buf);
-    /// // …and edit it when a key arrives.
-    /// if let Some(input) = editor_input(&KeyEvent::new(KeyCode::Left)) {
-    ///     editor.input(input);
-    ///     state = InputState::from_editor(editor);
+    /// // Each frame, keep the editor the paint hands back.
+    /// let mut painted: Option<Editor<'static>> =
+    ///     Some(InputWidget::new(&state).focused(true).paint(area, &mut buf));
+    ///
+    /// // When a key arrives:
+    /// let key = KeyEvent::new(KeyCode::Left);
+    /// match key.code {
+    ///     KeyCode::Enter => { /* submit */ }
+    ///     // Focus traversal, the enclosing view, and keys with nowhere to go
+    ///     // on one line.
+    ///     KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc | KeyCode::Up | KeyCode::Down => {}
+    ///     // Line breaks: Ctrl+J is a terminal's line feed.
+    ///     KeyCode::Char('j' | 'm') if key.modifiers.ctrl => {}
+    ///     KeyCode::Char('\n' | '\r') => {}
+    ///     _ => {
+    ///         if let Some(input) = editor_input(&key).filter(is_editor_binding) {
+    ///             // The painted editor, until the state moves on without a
+    ///             // paint between.
+    ///             let mut editor = painted.take().unwrap_or_else(|| state.editor().clone());
+    ///             editor.input(input);
+    ///             state = InputState::from_editor(editor);
+    ///         }
+    ///     }
     /// }
     /// assert_eq!(state.cursor(), 11);
     /// ```
@@ -355,18 +384,10 @@ impl<'a> InputWidget<'a> {
         buf.set_style(well(area, self.title.is_some()), style.text);
         let field = text_rect(area, self.title.is_some());
 
-        // The field paints its own look over whatever editor the state was
-        // built from: a block, line numbers, or another alignment would move
-        // the text off the cells a click is read against. The setters that
-        // re-measure the text run only when the setting differs.
+        // The state cleared the editor's own look when it adopted it; what
+        // is left is what this field decides. The setters that re-measure the
+        // text run only when the setting differs.
         let editor = &mut self.editor;
-        editor.remove_block();
-        if editor.line_number_style().is_some() {
-            editor.remove_line_number();
-        }
-        if editor.alignment() != Alignment::Left {
-            editor.set_alignment(Alignment::Left);
-        }
         if editor.wrap_mode() != WrapMode::None {
             editor.set_wrap_mode(WrapMode::None);
         }
@@ -380,15 +401,14 @@ impl<'a> InputWidget<'a> {
         editor.set_cursor_style(style.cursor);
         editor.set_cursor_line_style(Style::default());
         editor.set_selection_style(style.selection);
+        (&*editor).render(field, buf);
         // The field paints the placeholder itself: the editor's would start a
         // cell late, behind a cursor of its own.
-        editor.set_placeholder_text("");
-        (&*editor).render(field, buf);
         if editor.is_empty() && !self.placeholder.is_empty() {
             buf.set_stringn(
                 field.x,
                 field.y,
-                self.placeholder,
+                single_line(self.placeholder),
                 usize::from(field.width),
                 style.placeholder,
             );
@@ -546,6 +566,12 @@ impl<S, M> Input<S, M> {
         self
     }
 
+    /// Rows the field occupies: 1, or 3 with a [`title`](Self::title).
+    #[must_use]
+    pub const fn height(&self) -> u16 {
+        field_height(self.title.is_some())
+    }
+
     /// Paint muted, out of focus traversal, ignoring every event.
     #[must_use]
     pub const fn disabled(mut self, disabled: bool) -> Self {
@@ -694,8 +720,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
             .disabled(self.disabled)
             .invalid(self.invalid)
             .style(style);
-        widget.title = self.title.as_deref();
-        widget.mask_char = self.mask_char;
+        if let Some(title) = &self.title {
+            widget = widget.title(title);
+        }
+        if let Some(mask_char) = self.mask_char {
+            widget = widget.mask_char(mask_char);
+        }
         let editor = ctx.with_buffer(ctx.area(), |area, buf| widget.paint(area, buf));
         self.painted = Some((state.version(), editor));
     }
@@ -771,8 +801,8 @@ fn bubbles(key: KeyEvent) -> bool {
     }
 }
 
-/// A paste as one line: each line break and each tab becomes a space, and
-/// every other control character is dropped.
+/// A paste, or a placeholder, as one line: each line break and each tab
+/// becomes a space, and every other control character is dropped.
 fn single_line(text: &str) -> String {
     text.replace("\r\n", "\n")
         .chars()
@@ -1621,6 +1651,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A placeholder is one row, like the text it stands in for: a line
+    /// break or a tab in it shows as a space rather than whatever the
+    /// terminal makes of a control character.
+    #[test]
+    fn the_placeholder_is_one_line_of_plain_text() {
+        let area = Rect::new(0, 0, 12, 1);
+        let mut buffer = Buffer::empty(area);
+        InputWidget::new(&InputState::default())
+            .placeholder("a\nb\r\nc\td\u{1b}e")
+            .render(area, &mut buffer);
+        let symbols: String = buffer
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert_eq!(symbols, " a b c de   ");
+    }
+
+    /// A layout sizes the field from what it will draw: one row, or three
+    /// with a titled border.
+    #[test]
+    fn the_height_counts_the_border() {
+        let state = InputState::default();
+        assert_eq!(InputWidget::new(&state).height(), 1);
+        assert_eq!(InputWidget::new(&state).title("Name").height(), 3);
+        assert_eq!(input().height(), 1);
+        assert_eq!(input().title("Name").height(), 3);
     }
 
     /// A focused empty field still shows where typing goes: the cursor
