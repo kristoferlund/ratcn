@@ -101,6 +101,10 @@ pub static ENTRIES: &[Entry] = &[
         open: || Box::new(effects::App::new()),
     },
     Entry {
+        name: "input",
+        open: || Box::new(input::App::new()),
+    },
+    Entry {
         name: "kanban",
         open: || Box::new(kanban::App::new()),
     },
@@ -151,6 +155,10 @@ pub static ENTRIES: &[Entry] = &[
     Entry {
         name: "tabs-large",
         open: || Box::new(tabs_large::App::new()),
+    },
+    Entry {
+        name: "textarea",
+        open: || Box::new(textarea::App::new()),
     },
     Entry {
         name: "toast",
