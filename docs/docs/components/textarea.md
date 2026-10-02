@@ -8,7 +8,7 @@ A multi-line text field: the text in a well as tall as the area it is given, a
 block cursor while focused, and an optional titled border around it. It wraps a
 line longer than it is wide and scrolls to keep the cursor in view.
 
-<div class="ratcn-preview-window" style="--ratcn-preview-height: 380px">
+<div class="ratcn-preview-window" style="--ratcn-preview-height: 320px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
     <span class="ratcn-dot"></span>
     <span class="ratcn-dot"></span>
@@ -49,7 +49,8 @@ Msg::Notes(notes) => state.notes = notes,
 ```
 
 It is the multi-line sibling of [Input](./input), bound the same way. Unlike an
-Input, it fills the whole area it is declared in.
+Input, it fills the whole area it is declared in. The text sits one cell in from
+each side of the well, and a click on that cell still lands on the field.
 
 ## State
 
@@ -158,7 +159,7 @@ so its readline-style keys apply:
 | `Page Up` `Page Down` &nbsp;`Alt+V` `Ctrl+V` | Move one page up / down |
 | `Shift` + a movement | Select |
 | `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
-| `Ctrl+W` `Alt+Backspace` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
+| `Ctrl+W` `Alt+Backspace` `Alt+H` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
 | `Ctrl+K` | Delete to the end of the line |
 | `Ctrl+C` `Ctrl+X` `Ctrl+Y` | Copy, cut, and paste within the field |
 | `Enter` | Insert a line break |

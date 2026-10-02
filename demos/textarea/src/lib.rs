@@ -21,11 +21,13 @@ use ratatui::{
 use ratcn::{
     Button, TextArea, TextAreaState, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
+    text_width::display_width_u16,
 };
 
 const DEMO_WIDTH: u16 = 48;
 const DEMO_HEIGHT: u16 = 13;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
+const SAVED: &str = "Saved";
 
 #[derive(Default)]
 struct AppState {
@@ -119,7 +121,7 @@ impl demo_shared::Demo for App {
             let save = Button::new("Save").on_press(|| Msg::Save);
             let [count_area, saved_area, save_area] = Layout::horizontal([
                 Constraint::Fill(1),
-                Constraint::Length(5),
+                Constraint::Length(display_width_u16(SAVED)),
                 Constraint::Length(save.width()),
             ])
             .spacing(1)
@@ -135,7 +137,7 @@ impl demo_shared::Demo for App {
             // "Saved" is a claim about the text on screen, so it is checked
             // against it each frame.
             if state.saved.as_deref() == Some(state.notes.value().as_str()) {
-                ctx.paint_widget(Line::from("Saved").style(theme.foreground), saved_area);
+                ctx.paint_widget(Line::from(SAVED).style(theme.foreground), saved_area);
             }
             ctx.component("save", save, save_area);
 

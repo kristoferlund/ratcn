@@ -8,7 +8,7 @@ A single-line text field: the value in a well, a block cursor while focused,
 and an optional titled border around it. Typing, selection, and scrolling a
 value longer than the field are handled; what the text means is yours.
 
-<div class="ratcn-preview-window" style="--ratcn-preview-height: 460px">
+<div class="ratcn-preview-window" style="--ratcn-preview-height: 400px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
     <span class="ratcn-dot"></span>
     <span class="ratcn-dot"></span>
@@ -51,7 +51,8 @@ Msg::Name(name) => state.name = name,
 An untitled Input is one row; `.title(...)` draws a border with the title on
 it, and the field is then three. `.height()` answers which, for a layout
 constraint. Either way it sits at the top of the area it is declared in and
-ignores rows below that.
+ignores rows below that. The text sits one cell in from each side of the well,
+and a click on that cell still lands on the field.
 
 ## State
 
@@ -157,7 +158,7 @@ so its readline-style keys apply:
 | `Home` `End` &nbsp;`Ctrl+A` `Ctrl+E` | Move to the start / end |
 | `Shift` + a movement | Select |
 | `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
-| `Ctrl+W` `Alt+Backspace` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
+| `Ctrl+W` `Alt+Backspace` `Alt+H` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
 | `Ctrl+K` | Delete to the end |
 | `Ctrl+C` `Ctrl+X` `Ctrl+Y` | Copy, cut, and paste within the field |
 | `Enter` | Submit |

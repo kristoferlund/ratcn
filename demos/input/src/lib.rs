@@ -27,7 +27,7 @@ use ratcn::{
 };
 
 const DEMO_WIDTH: u16 = 44;
-const DEMO_HEIGHT: u16 = 17;
+const DEMO_HEIGHT: u16 = 18;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
 
 /// Child ids, named once so declarations and focus jumps can't drift.
@@ -175,10 +175,36 @@ impl demo_shared::Demo for App {
                 });
             });
 
-            // A titled field is three rows: its border, and the text inside.
-            // Each has a row beneath it for its hint. On a short screen the
-            // footer gives way first, then the hints; the fields keep their
-            // rows the longest.
+            let name = Input::new()
+                .value(|s: &AppState| &s.name, Msg::Name)
+                .title("Name")
+                .placeholder("Ada Lovelace")
+                .invalid(name_problem.is_some())
+                .on_submit(|| Msg::Submit);
+            let email = Input::new()
+                .value(|s: &AppState| &s.email, Msg::Email)
+                .title("Email")
+                .placeholder("ada@example.com")
+                .invalid(email_problem.is_some())
+                .on_submit(|| Msg::Submit);
+            let password = Input::new()
+                .value(|s: &AppState| &s.password, Msg::Password)
+                .title("Password")
+                .placeholder("Choose a password")
+                .mask_char('•')
+                .on_submit(|| Msg::Submit);
+
+            // Each field has a row beneath it: a hint's, or the gap before the
+            // footer. On a short screen the padding gives way first, then the
+            // footer, then those rows, all together so the gaps stay even.
+            let field = name.height();
+            let form = 3 * field + 3;
+            let content = if demo.height >= DEMO_HEIGHT {
+                demo.inner(CONTENT_PADDING)
+            } else {
+                demo.inner(Margin::new(CONTENT_PADDING.horizontal, 0))
+            };
+            let gap = u16::from(content.height >= form);
             let [
                 name_area,
                 name_hint,
@@ -188,58 +214,33 @@ impl demo_shared::Demo for App {
                 _,
                 footer,
             ] = Layout::vertical([
-                Constraint::Min(3),
-                Constraint::Length(1),
-                Constraint::Min(3),
-                Constraint::Length(1),
-                Constraint::Min(3),
-                Constraint::Length(1),
+                Constraint::Length(field),
+                Constraint::Length(gap),
+                Constraint::Length(field),
+                Constraint::Length(gap),
+                Constraint::Length(field),
+                Constraint::Length(gap),
                 Constraint::Fill(1),
             ])
-            .areas(demo.inner(CONTENT_PADDING));
+            .areas(content);
 
-            ctx.component(
-                ids::NAME,
-                Input::new()
-                    .value(|s: &AppState| &s.name, Msg::Name)
-                    .title("Name")
-                    .placeholder("Ada Lovelace")
-                    .invalid(name_problem.is_some())
-                    .on_submit(|| Msg::Submit),
-                name_area,
-            );
+            ctx.component(ids::NAME, name, name_area);
+            ctx.component(ids::EMAIL, email, email_area);
+            ctx.component(ids::PASSWORD, password, password_area);
 
-            ctx.component(
-                ids::EMAIL,
-                Input::new()
-                    .value(|s: &AppState| &s.email, Msg::Email)
-                    .title("Email")
-                    .placeholder("ada@example.com")
-                    .invalid(email_problem.is_some())
-                    .on_submit(|| Msg::Submit),
-                email_area,
-            );
-
-            ctx.component(
-                ids::PASSWORD,
-                Input::new()
-                    .value(|s: &AppState| &s.password, Msg::Password)
-                    .title("Password")
-                    .placeholder("Choose a password")
-                    .mask_char('•')
-                    .on_submit(|| Msg::Submit),
-                password_area,
-            );
-
-            // A hint starts under the field's text, one column in from its
-            // border.
+            // A hint starts under the field's text: past the border, and past
+            // the cell the field leaves before its text.
             for (problem, hint_area) in [(name_problem, name_hint), (email_problem, email_hint)] {
                 if let Some(problem) = problem {
                     ctx.paint_widget(
                         Line::from(problem).style(theme.destructive),
-                        hint_area.inner(Margin::new(1, 0)),
+                        hint_area.inner(Margin::new(2, 0)),
                     );
                 }
+            }
+            // Without room for the gaps there is none for the footer.
+            if gap == 0 {
+                return;
             }
 
             // "Signed up" holds only while the fields still say what was sent.
@@ -247,8 +248,12 @@ impl demo_shared::Demo for App {
                 .signed_up
                 .as_ref()
                 .filter(|(name, email)| name == state.name.value() && email == state.email.value());
-            let [status_area, help_area] =
-                Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(footer);
+            let [status_area, _, help_area] = Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .areas(footer);
             if let Some((name, email)) = signed_up {
                 ctx.paint_widget(
                     Text::from(vec![
@@ -391,7 +396,8 @@ mod tests {
     }
 
     /// A hint has a row of its own, between its field and the next, and
-    /// starts under the field's text rather than against the border.
+    /// starts in the column the field's text does, so it reads as part of
+    /// the field rather than of the border.
     #[test]
     fn a_hint_sits_on_its_own_row_under_its_field() {
         let mut app = app();
@@ -400,8 +406,13 @@ mod tests {
         let screen = screen(&mut app);
         let hint_row = screen.iter().position(|row| row.contains(NAME_HINT));
         let hint_row = hint_row.expect("the name hint is shown");
-        let border_column = screen[hint_row - 1].find('└').unwrap();
-        assert_eq!(screen[hint_row].find(NAME_HINT), Some(border_column + 1));
+        assert!(screen[hint_row - 1].contains('└'), "{screen:#?}");
+        let column = |row: &str, text| row.find(text).map(|at| row[..at].chars().count());
+        assert_eq!(
+            column(&screen[hint_row], NAME_HINT),
+            column(&screen[hint_row - 2], "Ada Lovelace"),
+            "the hint starts where the placeholder does: {screen:#?}"
+        );
         assert!(screen[hint_row + 1].contains("┌Email"), "{screen:#?}");
     }
 
@@ -445,19 +456,70 @@ mod tests {
         assert!(!shows(&screen(&mut app), "Signed up"));
     }
 
-    /// On a short screen the help line and the hints give way; the three
-    /// fields are what the demo is for, so they stay whole.
+    /// On a short screen the padding, the footer, and the hint rows give
+    /// way, in that order; the three fields are what the demo is for, so
+    /// they stay whole. The hint rows go all together: one field with a gap
+    /// beneath it and one without would look like a layout bug, and a field
+    /// drawn invalid with its hint dropped would not say what is wrong.
     #[test]
-    fn a_short_screen_keeps_every_field() {
+    fn a_short_screen_keeps_every_field_and_spaces_them_evenly() {
         let mut app = app();
         press(&mut app, KeyCode::Enter);
 
-        let screen = screen_of(&mut app, Rect::new(0, 0, 40, 12));
-
-        for title in ["┌Name", "┌Email", "┌Password"] {
-            assert!(shows(&screen, title), "{title} is missing: {screen:#?}");
+        for height in 9..=20 {
+            let screen = screen_of(&mut app, Rect::new(0, 0, 40, height));
+            let rows = |symbol| {
+                screen
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| row.contains(symbol))
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>()
+            };
+            let (tops, bottoms) = (rows('┌'), rows('└'));
+            assert_eq!((tops.len(), bottoms.len()), (3, 3), "{screen:#?}");
+            assert_eq!(
+                tops[1] - bottoms[0],
+                tops[2] - bottoms[1],
+                "uneven gaps at {height} rows: {screen:#?}"
+            );
+            let hints = shows(&screen, NAME_HINT) && shows(&screen, EMAIL_HINT);
+            if height >= 12 {
+                assert!(hints, "a hint dropped at {height} rows: {screen:#?}");
+            }
+            if shows(&screen, "Tab between fields") {
+                assert!(
+                    hints,
+                    "help kept over the hints at {height} rows: {screen:#?}"
+                );
+            }
         }
-        assert_eq!(screen.iter().filter(|row| row.contains('└')).count(), 3);
+    }
+
+    /// The summary is two lines of its own, set off from the help line
+    /// beneath it.
+    #[test]
+    fn the_summary_is_set_off_from_the_help_line() {
+        let mut app = app();
+        type_text(&mut app, "Ada");
+        press(&mut app, KeyCode::Tab);
+        type_text(&mut app, "ada@example.com");
+        press(&mut app, KeyCode::Enter);
+
+        let screen = screen(&mut app);
+        let email_row = screen
+            .iter()
+            .position(|row| row.trim() == "ada@example.com")
+            .expect("the summary shows the address");
+        assert!(
+            screen[email_row - 1].contains("Signed up Ada."),
+            "{screen:#?}"
+        );
+        assert_eq!(screen[email_row + 1].trim(), "", "{screen:#?}");
+        assert!(
+            screen[email_row + 2].contains("Tab between fields"),
+            "{screen:#?}"
+        );
     }
 
     /// The host delivers pastes because the demo asks for them, and a field
