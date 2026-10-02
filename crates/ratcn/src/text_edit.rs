@@ -1,5 +1,6 @@
-//! The text your app stores for an [`Input`](crate::Input) or a text area, and
-//! the pieces a text component is built from.
+//! The text your app stores for an [`Input`](crate::Input) or a
+//! [`TextArea`](crate::TextArea), and the pieces a text component is built
+//! from.
 //!
 //! Text fields are controlled like everything else: the content lives in app
 //! state as an [`InputState`] or a [`TextAreaState`]. A keystroke takes the
@@ -9,11 +10,14 @@
 //! Editing, cursor movement, selection, and scrolling belong to the
 //! [`ratatui_textarea`] editor each state wraps. This module re-exports the
 //! editor types a component needs, so a component copied into your project
-//! depends on `ratcn` and `ratatui` alone.
+//! depends on `ratcn` and `ratatui` alone, and holds the mechanics both fields
+//! share: the key conversion, the editor's binding table, and the mapping from
+//! a pointer to a place in the text.
 //!
 //! Undo history is switched off: a state is replaced on every keystroke, which
 //! is the wrong place to keep a stack of past states. An app that wants undo
-//! keeps its own history of states.
+//! keeps its own history of states, at the cost of a whole editor, text
+//! included, for each one.
 
 use std::{
     fmt,
@@ -223,7 +227,9 @@ impl fmt::Debug for TextAreaState {
 ///
 /// - **`AltGr`.** Some terminals report `AltGr` as Ctrl+Alt, so `@`, `{`, or
 ///   `€` arrive looking like a chord. Ctrl+Alt with anything but an ASCII
-///   letter or digit converts to the plain character.
+///   letter or digit converts to the plain character. The trade-off: a real
+///   Ctrl+Alt chord on punctuation, Ctrl+Alt+`[` say, is typed rather than
+///   delivered as a shortcut.
 /// - **Chord letters.** The editor matches chords by lowercase letter, while
 ///   a backend reports Ctrl+Shift+A as `A`. A letter with Ctrl or Alt held
 ///   is lowercased; Shift stays set.

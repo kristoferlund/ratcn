@@ -31,8 +31,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as `Event::Paste`.
 - `Input` and `TextArea`, single-line and multi-line text fields, each with its
   paint widget and style. Their text lives in app state as an `InputState` or a
-  `TextAreaState`; `text_edit` holds the state types and the key conversion a
-  text component of your own builds on.
+  `TextAreaState`; `text_edit` holds the state types and the editing mechanics
+  a text component of your own builds on.
 
 ### Fixed
 

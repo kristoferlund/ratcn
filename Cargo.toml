@@ -40,8 +40,9 @@ wasm-bindgen = "0.2.122"
 wasm-bindgen-futures = "0.4.72"
 web-sys = { version = "0.3.99", features = ["AbortController", "AbortSignal", "Headers", "Request", "RequestInit", "Response", "Window"] }
 
-# Input and TextArea need fixes that upstream has not released yet: the masked
-# width fix and the `screen_to_data` hit test. Until a release carries them,
+# Input and TextArea need changes that upstream has not released yet: the
+# masked width fix, the `screen_to_data` hit test, and `scroll_offset`
+# (upstream #30, merged but unreleased). Until a release carries them,
 # the crates.io name resolves to the `ratcn` branch of our fork. Remove this
 # block, and bump the version above, once upstream ships them. ratcn cannot be
 # published while this patch is in place.

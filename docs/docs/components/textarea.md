@@ -263,7 +263,7 @@ if let (Some(mut editor), Some(input)) = (self.painted.take(), editor_input(&key
   paste.
 - **Ctrl+Enter** submits only on a terminal that reports it, as above.
 - Text fields currently build against a fork of `ratatui-textarea`, until
-  upstream releases two fixes they depend on.
+  upstream releases the changes they depend on.
 
 ## Full API
 

@@ -19,10 +19,10 @@
 //!   configures terminal Cargo packages and can install a starter only over Cargo's
 //!   untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
 //!   you want to own its source.
-//! - **Fourteen components are available:** [`Button`],
-//!   [`Input`], [`TextArea`], [`List`], [`Select`], [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget),
-//!   [`BarChartWidget`], [`Tooltip`], [`ScrollArea`], [`Checkbox`], [`Cycle`],
-//!   and [`ProgressWidget`].
+//! - **Fourteen components are available:** [`Button`], [`Input`],
+//!   [`TextArea`], [`List`], [`Select`], [`Tabs`], [`Dialog`],
+//!   [`Toaster`](ToasterWidget), [`BarChartWidget`], [`Tooltip`],
+//!   [`ScrollArea`], [`Checkbox`], [`Cycle`], and [`ProgressWidget`].
 //!
 //! # Getting started
 //!
@@ -80,20 +80,21 @@
 //! # Where things live
 //!
 //! Components, themes, and the state types you store ([`ToasterState`],
-//! [`InputState`], [`Theme`]) are at the crate root. Runtime types — the
-//! engine, focus, events, and the traits for writing your own components — are
-//! under [`runtime`].
+//! [`InputState`], [`TextAreaState`], [`Theme`]) are at the crate root.
+//! Runtime types — the engine, focus, events, and the traits for writing your
+//! own components — are under [`runtime`].
 //!
 //! Beside them sit the copy-support modules: [`button_shape`], [`color`],
 //! [`geometry`], [`linear_nav`], [`list_core`], [`selection_indicator`],
-//! [`text_edit`], and [`text_width`]. They hold the pieces more than one component needs — the
-//! button idiom's cap and fill rows, the color arithmetic every focus, hover,
-//! and disabled state derives through, area arithmetic, item-index movement,
-//! value-keyed items and their row viewport, the radio and checkbox markers,
-//! the text states and their key conversion, display-width measurement — so a component module depends on the crate root
-//! and these, and on no sibling component. That is what lets you copy one
-//! component module into your own project and have it compile against `ratcn`
-//! alone.
+//! [`text_edit`], and [`text_width`]. They hold the pieces more than one
+//! component needs — the button idiom's cap and fill rows, the color
+//! arithmetic every focus, hover, and disabled state derives through, area
+//! arithmetic, item-index movement, value-keyed items and their row viewport,
+//! the radio and checkbox markers, the text states and their editing
+//! mechanics, display-width measurement — so a component module depends on the
+//! crate root and these, and on no sibling component. That is what lets you
+//! copy one component module into your own project and have it compile against
+//! `ratcn` alone.
 //!
 //! # Examples
 //! ```no_run
