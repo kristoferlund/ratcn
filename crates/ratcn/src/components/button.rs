@@ -9,10 +9,10 @@ use ratatui::{
 };
 
 use crate::Theme;
-use crate::button_shape::{
-    FilledStyle, filled_middle, label_style, paint_filled_shape, shape_width,
+use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, label_style, shape_width};
+use crate::color::{
+    DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, ghost_fills, nearest_to,
 };
-use crate::color::{HOVER_SHIFT, away_from, dim, ghost_fills, nearest_to};
 use crate::geometry::fixed_height;
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton,
@@ -158,24 +158,27 @@ impl ButtonStyle {
         let pressed = nearest_to(theme.background);
         let raised = away_from(theme.background);
         match variant {
-            ButtonVariant::Default => Self::filled(FilledStyle::themed(
+            ButtonVariant::Default => Self::filled(
                 theme.primary,
                 theme.primary_foreground,
-                pressed,
+                dim(theme.primary, pressed, FOCUS_SHIFT),
+                dim(theme.primary, pressed, HOVER_SHIFT),
                 theme,
-            )),
-            ButtonVariant::Secondary => Self::filled(FilledStyle::themed(
+            ),
+            ButtonVariant::Secondary => Self::filled(
                 theme.secondary,
                 theme.secondary_foreground,
-                raised,
+                dim(theme.secondary, raised, FOCUS_SHIFT),
+                dim(theme.secondary, raised, HOVER_SHIFT),
                 theme,
-            )),
-            ButtonVariant::Destructive => Self::filled(FilledStyle::themed(
+            ),
+            ButtonVariant::Destructive => Self::filled(
                 theme.destructive,
                 theme.destructive_foreground,
-                pressed,
+                dim(theme.destructive, pressed, FOCUS_SHIFT),
+                dim(theme.destructive, pressed, HOVER_SHIFT),
                 theme,
-            )),
+            ),
             ButtonVariant::Outline => Self {
                 foreground: theme.foreground,
                 background: Color::Reset,
@@ -211,22 +214,28 @@ impl ButtonStyle {
         }
     }
 
-    /// A filled variant: `filled`'s colors, with no border in any state. Its
-    /// disabled fill keeps the variant's hue, so a disabled destructive button
-    /// still reads as destructive.
-    const fn filled(filled: FilledStyle) -> Self {
+    const fn filled(
+        background: Color,
+        foreground: Color,
+        focused_background: Color,
+        hovered_background: Color,
+        theme: &Theme,
+    ) -> Self {
+        // Disabled keeps the variant's hue, dimmed toward the surface, so a
+        // disabled destructive button still reads as destructive.
+        let disabled_background = dim(background, theme.surface, DISABLED_DIM);
         Self {
-            foreground: filled.foreground,
-            background: filled.background,
+            foreground,
+            background,
             border: None,
-            focused_foreground: filled.focused_foreground,
-            focused_background: filled.focused_background,
+            focused_foreground: foreground,
+            focused_background,
             focused_border: None,
-            hovered_foreground: filled.hovered_foreground,
-            hovered_background: filled.hovered_background,
+            hovered_foreground: foreground,
+            hovered_background,
             hovered_border: None,
-            disabled_foreground: filled.disabled_foreground,
-            disabled_background: filled.disabled_background,
+            disabled_foreground: theme.muted_foreground,
+            disabled_background,
             disabled_border: None,
         }
     }
@@ -469,13 +478,24 @@ impl Widget for ButtonWidget<'_> {
 
 impl ButtonWidget<'_> {
     fn paint_filled(self, resolved: &ResolvedButtonStyle, area: Rect, buf: &mut Buffer) {
-        paint_filled_shape(
-            self.label,
-            resolved.foreground,
-            resolved.background,
-            area,
-            buf,
-        );
+        let width = area.width as usize;
+
+        if self.size == ButtonSize::Large {
+            Line::from(cap_row(resolved.background, TOP_CAP, width))
+                .style(Style::default().fg(resolved.background))
+                .render(Rect::new(area.x, area.y, area.width, 1), buf);
+
+            Line::from(cap_row(resolved.background, BOTTOM_CAP, width))
+                .style(Style::default().fg(resolved.background))
+                .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
+        }
+
+        Line::from(filled_middle(self.label, width))
+            .style(resolved.content_style())
+            .render(
+                Rect::new(area.x, area.y + self.content_y_offset(), area.width, 1),
+                buf,
+            );
     }
 
     fn paint_bordered(
@@ -503,6 +523,13 @@ impl ButtonWidget<'_> {
             .alignment(Alignment::Center)
             .style(content_style)
             .render(area, buf);
+    }
+
+    const fn content_y_offset(&self) -> u16 {
+        match self.size {
+            ButtonSize::Small => 0,
+            ButtonSize::Large => 1,
+        }
     }
 }
 
