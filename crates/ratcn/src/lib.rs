@@ -19,8 +19,8 @@
 //!   configures terminal Cargo packages and can install a starter only over Cargo's
 //!   untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
 //!   you want to own its source.
-//! - **Thirteen components are available:** [`Button`],
-//!   [`Input`], [`List`], [`Select`], [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget),
+//! - **Fourteen components are available:** [`Button`],
+//!   [`Input`], [`TextArea`], [`List`], [`Select`], [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget),
 //!   [`BarChartWidget`], [`Tooltip`], [`ScrollArea`], [`Checkbox`], [`Cycle`],
 //!   and [`ProgressWidget`].
 //!
@@ -181,6 +181,7 @@ pub use components::{
     scroll_area::{ScrollArea, ScrollAreaStyle},
     select::{Select, SelectStyle, SelectWidget},
     tabs::{Tab, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget},
+    textarea::{TextArea, TextAreaStyle, TextAreaWidget},
     toast::{ToastPosition, ToasterStyle, ToasterWidget},
     tooltip::{Tooltip, TooltipSide, TooltipStyle, TooltipWidget},
 };

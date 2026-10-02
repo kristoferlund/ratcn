@@ -29,9 +29,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `runtime::BrowserPasteListener` (`ratzilla` feature) forwards browser pastes
   as `Event::Paste`.
-- `Input`, a single-line text field, with `InputWidget` and `InputStyle`. Its
-  text lives in app state as an `InputState`; `text_edit` holds the state types
-  and the key conversion a text component of your own builds on.
+- `Input` and `TextArea`, single-line and multi-line text fields, each with its
+  paint widget and style. Their text lives in app state as an `InputState` or a
+  `TextAreaState`; `text_edit` holds the state types and the key conversion a
+  text component of your own builds on.
 
 ### Fixed
 
