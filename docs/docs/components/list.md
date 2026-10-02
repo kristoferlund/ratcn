@@ -264,8 +264,11 @@ its window, but `disabled_items` is a positional mask and has to be padded up to
 the window: entry *n* describes item *n*, and entries past the end of the slice
 read as enabled.
 
-`.disabled(true)` dims the whole widget, as `.disabled_items(...)` does for
-single rows. Replace `.themed(...)` with `.style(...)` to supply exact widget
+`.focused(...)` picks the focus backdrop and shows the cursor row and focus
+symbol. While there is a cursor, the symbol's column is reserved in front of
+every row, so the text does not shift when the cursor scrolls out of the
+window. `.disabled(true)` dims the whole widget, as `.disabled_items(...)` does
+for single rows. Replace `.themed(...)` with `.style(...)` to supply exact widget
 colors instead of deriving them from a theme.
 
 ## Full API

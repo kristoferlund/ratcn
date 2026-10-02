@@ -87,8 +87,8 @@ impl demo_shared::Demo for App {
             );
             ctx.paint(move |ctx| {
                 let surface = ctx.theme.surface;
-                ctx.with_buffer(|buf| {
-                    buf.set_style(demo, Style::default().bg(surface));
+                ctx.with_buffer(demo, |area, buf| {
+                    buf.set_style(area, Style::default().bg(surface));
                 });
             });
 

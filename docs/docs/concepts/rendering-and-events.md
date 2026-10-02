@@ -43,9 +43,10 @@ decoration and cannot.
 Pass a pane's rectangle as `area` to host a tree, or `frame.area()` to use the
 whole frame. `ctx.frame_area()` reports those root bounds, translated into
 logical coordinates inside a viewport. Floating components place themselves
-within them; layer copies and modal dimming are clipped to them. This is not
-a paint sandbox: base widgets can paint outside their rects, and unprojected
-base `PaintCtx::with_buffer` exposes the whole destination buffer. Events still
+within them; layer paint and modal dimming are clipped to them. This is not
+a paint sandbox: base widgets can paint outside their rects, and
+`PaintCtx::with_buffer` in base paint outside viewports and layers exposes the
+whole destination buffer. Events still
 arrive in screen coordinates; routing input between hosted trees stays yours.
 
 Declaring does not paint. `ctx.paint` queues a `'static` closure at the point it
@@ -62,12 +63,15 @@ Declaring is also how things appear and disappear: an `if` around a `component`
 call adds or removes that component for the frame. There is no separate
 mount/unmount step.
 
-The closure runs exactly once per frame and is `FnOnce`, so it may have side
-effects, consume what it captures, and move owned values into the components it
-declares. What it cannot read is a focus flag — whether a declaration is
-focused, or contains focus, is offered to `PaintCtx`, once the tree is complete
-and focus has resolved. Hover is the exception: `DeclareCtx::pointer_within()`
-answers it while declaring.
+The closure is `FnMut`. It usually runs once per frame, and runs a second time
+on a frame where focus lands on content a viewport has scrolled away and the
+viewport scrolls to reveal it: the first declaration is discarded whole and the
+second one, built with the revealed offset, is painted. Build what the
+declaration consumes inside the closure, and keep side effects out of it. What
+it cannot read is a focus flag — whether a declaration is focused, or contains
+focus, is offered to `PaintCtx`, once the tree is complete and focus has
+resolved. Hover is the exception: `DeclareCtx::pointer_within()` answers it
+while declaring.
 
 ## Offscreen rendering
 
@@ -95,7 +99,7 @@ logical-coordinate transforms.
 
 Copying a visible window to the terminal and translating pointer positions back
 into buffer coordinates before `handle_event` are the host's responsibilities.
-The bounds contract is unchanged: floating placement, layer copies, and modal
+The bounds contract is unchanged: floating placement, layer paint, and modal
 dimming respect `area`, but arbitrary base paint is not sandboxed and raw base
 buffer access still reaches the whole destination.
 

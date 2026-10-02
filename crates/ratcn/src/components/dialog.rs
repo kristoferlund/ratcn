@@ -72,12 +72,9 @@ struct DialogDims<'a> {
     footer_width: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "these are three distinct rects; the `_area` suffix reads clearly"
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct DialogLayout {
+    base: Rect,
     box_area: Rect,
     main_area: Rect,
     footer_area: Rect,
@@ -111,20 +108,18 @@ fn dialog_box_base(area: Rect, dims: &DialogDims<'_>) -> Rect {
     // The dialog only ever measures — a stated content height, or a
     // description's wrapped lines. Custom content without a height is
     // rejected at declaration, so there is no branch that guesses.
-    let automatic_height = if let Some(content_height) = dims.content_height {
-        content_height
-            .saturating_add(footer_block)
-            .saturating_add(EDGE * 2)
-            .max(3)
-    } else {
-        wrapped_height(dims.description, inner_width)
-            .saturating_add(footer_block)
-            .saturating_add(EDGE * 2)
-            .max(3)
-    };
     let outer_height = dims
         .height
-        .map_or(automatic_height, |height| height.max(1))
+        .map_or_else(
+            || {
+                dims.content_height
+                    .unwrap_or_else(|| wrapped_height(dims.description, inner_width))
+                    .saturating_add(footer_block)
+                    .saturating_add(EDGE * 2)
+                    .max(3)
+            },
+            |height| height.max(1),
+        )
         .min(area.height);
 
     area.centered(
@@ -136,11 +131,7 @@ fn dialog_box_base(area: Rect, dims: &DialogDims<'_>) -> Rect {
 fn dialog_layout(area: Rect, offset: CellOffset, dims: &DialogDims<'_>) -> DialogLayout {
     let base = dialog_box_base(area, dims);
     if base.width == 0 || base.height == 0 {
-        return DialogLayout {
-            box_area: Rect::ZERO,
-            main_area: Rect::ZERO,
-            footer_area: Rect::ZERO,
-        };
+        return DialogLayout::default();
     }
     let box_area = offset_rect(area, base, offset);
     let inner = Rect {
@@ -161,6 +152,7 @@ fn dialog_layout(area: Rect, offset: CellOffset, dims: &DialogDims<'_>) -> Dialo
         (inner, Rect::ZERO)
     };
     DialogLayout {
+        base,
         box_area,
         main_area,
         footer_area,
@@ -196,9 +188,8 @@ type ActionFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>, Rect)>;
 
 /// What fills the dialog's main area.
 ///
-/// The closure is `FnOnce` and gone once painted, but the variant and its
-/// height outlive it: `handle_event` recomputes the same box geometry between
-/// frames and needs to know what the main area was sized for.
+/// The closure is `FnOnce` and consumed during declaration; the variant records
+/// whether the dialog paints a description or its children fill the body.
 enum DialogBody<S, M> {
     /// The [`description`](Dialog::description) paragraph, possibly empty.
     Description,
@@ -221,8 +212,7 @@ enum DialogFooter<S, M> {
 }
 
 /// One standard action: its measured size, and the declaration that puts it on
-/// screen. The size stays readable after the declaration is consumed, because
-/// event-time geometry sizes the action row from it.
+/// screen. Its size determines the action row's declaration-time layout.
 struct ActionSlot<S, M> {
     declare: Option<ActionFn<S, M>>,
     size: ratatui::layout::Size,
@@ -309,6 +299,8 @@ pub struct Dialog<S, M> {
     style: Option<StyleFn>,
     /// The area the dialog was last declared in; drag offsets are clamped to it.
     paint_area: Rect,
+    /// Resolved once during declaration, shared by paint and drag clamping.
+    layout: DialogLayout,
 }
 
 impl<S: 'static, M: 'static> fmt::Debug for Dialog<S, M> {
@@ -327,6 +319,7 @@ impl<S: 'static, M: 'static> fmt::Debug for Dialog<S, M> {
             .field("tab_wrap", &self.tab_wrap)
             .field("style", &self.style.is_some())
             .field("paint_area", &self.paint_area)
+            .field("layout", &self.layout)
             .finish()
     }
 }
@@ -350,6 +343,7 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
             tab_wrap: TabWrap::Wrap,
             style: None,
             paint_area: Rect::default(),
+            layout: DialogLayout::default(),
         }
     }
 
@@ -405,6 +399,8 @@ impl<S: 'static, M: 'static> Dialog<S, M> {
     ///
     /// The closure is `FnOnce`, so it may consume owned values, but it is stored
     /// on the retained component and so must capture only `'static` values.
+    /// The render closure is `FnMut`, so build those values inside it: it
+    /// builds them afresh each time it runs.
     #[must_use]
     pub fn content(
         mut self,
@@ -640,6 +636,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         let area = ctx.area();
         self.paint_area = area;
         let layout = dialog_layout(area, self.offset, &self.dims());
+        self.layout = layout;
         match &mut self.body {
             DialogBody::Description => {}
             DialogBody::Content { declare, .. } => {
@@ -682,7 +679,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
-        let layout = dialog_layout(ctx.area(), self.offset, &self.dims());
+        let layout = self.layout;
         let style = resolve_style(self.style.as_deref(), ctx.theme, DialogStyle::from_theme);
         // Queued where the dialog was declared, so the box lands beneath
         // everything declared inside it without being painted first here.
@@ -702,7 +699,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         // A dialog itself is only a useful fallback focus target when it can
         // handle its dismiss key. Descendants remain independently focusable.
         ScopeOptions::default()
@@ -710,7 +707,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
             .focusable(self.on_dismiss.is_some())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         dialog_layout(area, self.offset, &self.dims()).box_area
     }
 
@@ -732,7 +729,6 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         // EventCtx exposes the narrowed interaction area; paint_area retains
         // the original allocation needed to clamp the app-owned offset.
         let box_area = ctx.area();
-        let base = dialog_box_base(self.paint_area, &self.dims());
         let can_start = self.drag_enabled() && is_border(box_area, mouse.column, mouse.row);
         match ctx.drag(mouse, DragOptions::new(self.offset).start_if(can_start)) {
             DragPhase::Down | DragPhase::Ended { .. } => EventResult::Consumed,
@@ -742,7 +738,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
                     .map_or(EventResult::Consumed, |on_offset_change| {
                         EventResult::Emit(on_offset_change(clamp_offset(
                             self.paint_area,
-                            base,
+                            self.layout.base,
                             offset,
                         )))
                     })
@@ -839,7 +835,7 @@ mod tests {
             }
         }
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &State) -> ScopeOptions {
             ScopeOptions::default().focusable(!self.disabled)
         }
     }
@@ -1188,7 +1184,7 @@ mod tests {
         // press lands on that box's top-left border corner.
         let area = Rect::new(0, 0, 60, 10);
         let mut fixed = Dialog::<State, Msg>::new().title("Confirm");
-        let box_area = fixed.interaction_area(area);
+        let box_area = fixed.interaction_area(area, &State::default());
         assert_eq!(box_area, Rect::new(6, 3, 48, 4));
         let border = |button| mouse(MouseKind::Down(button), box_area.x, box_area.y);
         assert_eq!(
@@ -1254,16 +1250,13 @@ mod tests {
         );
     }
 
-    struct PreparedComposite {
-        resolves: Arc<AtomicUsize>,
+    struct CountedComposite {
+        declares: Arc<AtomicUsize>,
     }
 
-    impl Component<State, Msg> for PreparedComposite {
-        fn prepare(&mut self, _state: &State) {
-            self.resolves.fetch_add(1, Ordering::SeqCst);
-        }
-
+    impl Component<State, Msg> for CountedComposite {
         fn declare(&mut self, ctx: &mut DeclareCtx<'_, State, Msg>) {
+            self.declares.fetch_add(1, Ordering::SeqCst);
             let area = ctx.area();
             ctx.component(
                 ChildId::Static("inner"),
@@ -1272,15 +1265,15 @@ mod tests {
             );
         }
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &State) -> ScopeOptions {
             ScopeOptions::default()
         }
     }
 
     #[test]
     fn dialog_declares_composite_child_once_and_routes_to_its_descendant() {
-        let resolves = Arc::new(AtomicUsize::new(0));
-        let child_resolves = Arc::clone(&resolves);
+        let declares = Arc::new(AtomicUsize::new(0));
+        let child_declares = Arc::clone(&declares);
         let state = State {
             focus: FocusState::intent([
                 ChildId::Static("dialog"),
@@ -1292,15 +1285,15 @@ mod tests {
         let mut driver = driver(30, 8);
         let area = driver.area();
         driver.render(&state, |ctx| {
-            let child_resolves = Arc::clone(&child_resolves);
+            let child_declares = Arc::clone(&child_declares);
             ctx.modal(
                 ChildId::Static("dialog"),
                 Dialog::new().footer(1, move |ctx| {
                     let area = ctx.area();
                     ctx.component(
                         ChildId::Static("composite"),
-                        PreparedComposite {
-                            resolves: Arc::clone(&child_resolves),
+                        CountedComposite {
+                            declares: Arc::clone(&child_declares),
                         },
                         area,
                     );
@@ -1311,7 +1304,7 @@ mod tests {
 
         // Once: the frame declares once, so a body closure hands its child
         // over exactly one time.
-        assert_eq!(resolves.load(Ordering::SeqCst), 1);
+        assert_eq!(declares.load(Ordering::SeqCst), 1);
         assert_eq!(
             driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
             EventResult::Emit(Msg::Activated)
@@ -1323,7 +1316,7 @@ mod tests {
     impl Component<State, Msg> for OptionFocusable {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, State, Msg>) {}
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &State) -> ScopeOptions {
             ScopeOptions::default().focusable(true)
         }
 

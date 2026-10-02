@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::Theme;
-use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, shape_width};
+use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, label_style, shape_width};
 use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
 use crate::geometry::fixed_height;
 use crate::linear_nav::{self, Axis};
@@ -426,7 +426,7 @@ impl TabsWidget<'_> {
                 );
             }
             Line::from(filled_middle(self.labels[index], rect.width as usize))
-                .style(Style::default().fg(foreground).bg(fill))
+                .style(label_style(foreground, fill))
                 .render(Rect::new(rect.x, rect.y + label_offset, rect.width, 1), buf);
         }
         for (marker, slot) in [(LEFT_MARKER, layout.left), (RIGHT_MARKER, layout.right)] {
@@ -469,6 +469,7 @@ pub type Tab<T> = list_core::ListItem<T>;
 type ReadFn<S, T> = Box<dyn Fn(&S) -> Option<T>>;
 /// Builds the app's message from a tab value.
 type OnChangeFn<T, M> = Box<dyn Fn(T) -> M>;
+type ItemBinding<S, T, M> = (ReadFn<S, T>, OnChangeFn<T, M>);
 /// Resolves the tabs' style from the active theme (the style override).
 type StyleFn = Box<dyn Fn(&Theme) -> TabsStyle>;
 
@@ -523,10 +524,8 @@ type StyleFn = Box<dyn Fn(&Theme) -> TabsStyle>;
 pub struct Tabs<T, S, M> {
     items: Vec<Tab<T>>,
     /// Current semantic state bindings; events re-read these between frames.
-    focused_item: Option<ReadFn<S, T>>,
-    on_focus_change: Option<OnChangeFn<T, M>>,
-    selected: Option<ReadFn<S, T>>,
-    on_select: Option<OnChangeFn<T, M>>,
+    focused_item: Option<ItemBinding<S, T, M>>,
+    selected: Option<ItemBinding<S, T, M>>,
     activation: TabsActivation,
     size: TabsSize,
     style: Option<StyleFn>,
@@ -565,9 +564,7 @@ impl<T, S, M> Tabs<T, S, M> {
         Self {
             items: tabs.into_iter().map(Into::into).collect(),
             focused_item: None,
-            on_focus_change: None,
             selected: None,
-            on_select: None,
             activation: TabsActivation::Manual,
             size: TabsSize::Small,
             style: None,
@@ -600,8 +597,7 @@ impl<T, S, M> Tabs<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_change: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.focused_item = Some(Box::new(read));
-        self.on_focus_change = Some(Box::new(on_change));
+        self.focused_item = Some((Box::new(read), Box::new(on_change)));
         self
     }
 
@@ -623,8 +619,7 @@ impl<T, S, M> Tabs<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_select: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.selected = Some(Box::new(read));
-        self.on_select = Some(Box::new(on_select));
+        self.selected = Some((Box::new(read), Box::new(on_select)));
         self
     }
 
@@ -716,7 +711,8 @@ where
     /// The index of the selected tab, or `None` when nothing is selected yet or
     /// the stored value matches no tab (render/route defensively).
     fn selected_index(&self, state: &S) -> Option<usize> {
-        let value = (self.selected.as_ref()?)(state)?;
+        let (read, _) = self.selected.as_ref()?;
+        let value = read(state)?;
         self.index_of(&value)
     }
 
@@ -728,7 +724,7 @@ where
             TabsActivation::Manual => self
                 .focused_item
                 .as_ref()
-                .and_then(|read| self.index_of(&read(state)?)),
+                .and_then(|(read, _)| self.index_of(&read(state)?)),
         }
     }
 
@@ -742,8 +738,8 @@ where
 
     /// Commit the tab at `index` as the selection when wired.
     fn select(&self, index: usize) -> EventResult<M> {
-        match &self.on_select {
-            Some(on_select) => EventResult::Emit(on_select(self.items[index].value().clone())),
+        match &self.selected {
+            Some((_, on_select)) => EventResult::Emit(on_select(self.items[index].value().clone())),
             None => EventResult::Ignored,
         }
     }
@@ -751,8 +747,8 @@ where
     /// Move focus to the tab at `index`, or let the event bubble when no focus
     /// handler is wired.
     fn move_focus(&self, index: usize) -> EventResult<M> {
-        match &self.on_focus_change {
-            Some(on_focus_change) => {
+        match &self.focused_item {
+            Some((_, on_focus_change)) => {
                 EventResult::Emit(on_focus_change(self.items[index].value().clone()))
             }
             None => EventResult::Ignored,
@@ -784,15 +780,12 @@ impl<T, S, M> Component<S, M> for Tabs<T, S, M>
 where
     T: Clone + PartialEq,
 {
-    fn prepare(&mut self, _state: &S) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         // Quadratic in the tab count and re-derived on every frame's fresh
         // instance, so a release build takes the tabs on trust.
         if cfg!(debug_assertions) {
             list_core::assert_unique_values(self.items.iter().map(Tab::value), "Tabs");
         }
-    }
-
-    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let state = ctx.state();
         let selected = self.selected_index(state);
         let cursor = self.cursor_index(state);
@@ -889,11 +882,11 @@ where
         }
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         fixed_height(area, self.height())
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(
             !self.disabled
                 && self.keyboard_enabled()
@@ -1210,7 +1203,7 @@ mod tests {
         ])
         .selection(|s: &State| Some(s.selected), Msg::Selected);
         let state = State::default();
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default(),),
             EventResult::Ignored
@@ -1223,7 +1216,7 @@ mod tests {
             .item_focus(|_: &State| Some(Screen::A), Msg::Focused);
         let state = State::default();
 
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored
@@ -1237,7 +1230,7 @@ mod tests {
                 .activation(TabsActivation::Automatic);
         let state = State::default();
 
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored
@@ -1691,7 +1684,7 @@ mod tests {
         ]);
         let state = State::default();
 
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default(),),
             EventResult::Ignored
@@ -1704,15 +1697,15 @@ mod tests {
             Tabs::new([Tab::new(Screen::A, "A")]).size(TabsSize::Large);
 
         assert_eq!(
-            tabs.interaction_area(Rect::new(0, 0, 1, 2)),
+            tabs.interaction_area(Rect::new(0, 0, 1, 2), &State::default()),
             Rect::default()
         );
         assert_eq!(
-            tabs.interaction_area(Rect::new(2, 3, 1, 5)),
+            tabs.interaction_area(Rect::new(2, 3, 1, 5), &State::default()),
             Rect::new(2, 3, 1, 3)
         );
         assert_eq!(
-            tabs.interaction_area(Rect::new(0, 0, 0, 3)),
+            tabs.interaction_area(Rect::new(0, 0, 0, 3), &State::default()),
             Rect::default()
         );
     }
@@ -2300,11 +2293,17 @@ mod tests {
     #[test]
     #[cfg(debug_assertions)]
     fn duplicate_tab_values_panic_with_the_shared_message() {
-        let mut tabs: Tabs<Screen, State, Msg> =
-            Tabs::new([Tab::new(Screen::A, "First"), Tab::new(Screen::A, "Second")]);
+        let mut driver = Driver::<State, Msg>::new(20, TabsSize::Small.height());
+        let area = driver.area();
 
         let panic = catch_unwind(AssertUnwindSafe(|| {
-            Component::prepare(&mut tabs, &State::default());
+            driver.render(&State::default(), |ctx| {
+                ctx.component(
+                    ChildId::Static("tabs"),
+                    Tabs::new([Tab::new(Screen::A, "First"), Tab::new(Screen::A, "Second")]),
+                    area,
+                );
+            });
         }))
         .expect_err("duplicate tab values must panic");
         let message = panic
@@ -2329,7 +2328,7 @@ mod tests {
         );
         let state = State::default();
 
-        assert!(!tabs.scope_options().focusable);
+        assert!(!tabs.scope_options(&state).focusable);
         assert_eq!(
             tabs.handle_event(&key(KeyCode::Right), &state, &mut EventCtx::default()),
             EventResult::Ignored
@@ -2417,5 +2416,154 @@ mod tests {
             driver.event(key(KeyCode::Enter), &state),
             EventResult::Emit(RoutedMsg::Pressed)
         );
+    }
+
+    /// A tab is painted as a button: in every shipped theme, the selected tab
+    /// is a `Default` button and the others `Secondary` ones, in every state
+    /// and at both sizes — fill, label, and caps.
+    #[test]
+    fn every_tab_state_paints_as_the_matching_button_in_every_theme() {
+        use crate::{ButtonSize, ButtonVariant, ButtonWidget};
+
+        let labels = ["Tab"];
+        for theme in Theme::presets() {
+            for (tabs_size, button_size) in [
+                (TabsSize::Small, ButtonSize::Small),
+                (TabsSize::Large, ButtonSize::Large),
+            ] {
+                for (selected, variant) in [
+                    (true, ButtonVariant::Default),
+                    (false, ButtonVariant::Secondary),
+                ] {
+                    // Rest, focused, hovered, disabled — and hovered over
+                    // focused, which hover wins.
+                    for (focused, hovered, disabled) in [
+                        (false, false, false),
+                        (true, false, false),
+                        (false, true, false),
+                        (true, true, false),
+                        (false, false, true),
+                    ] {
+                        let area = Rect::new(0, 0, shape_width("Tab"), tabs_size.height());
+                        let mut tab = Buffer::empty(area);
+                        TabsWidget::new(&labels)
+                            .selected_item(selected.then_some(0))
+                            .focused_item(Some(0))
+                            .focused(focused)
+                            .hovered_item(hovered.then_some(0))
+                            .disabled(disabled)
+                            .size(tabs_size)
+                            .themed(theme)
+                            .render(area, &mut tab);
+                        let mut button = Buffer::empty(area);
+                        ButtonWidget::new("Tab")
+                            .variant(variant)
+                            .focused(focused)
+                            .hovered(hovered)
+                            .disabled(disabled)
+                            .size(button_size)
+                            .themed(theme)
+                            .render(area, &mut button);
+                        assert_eq!(
+                            tab, button,
+                            "{} {tabs_size:?} selected={selected} focused={focused} \
+                             hovered={hovered} disabled={disabled}",
+                            theme.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A `Reset` fill has no color of its own to paint, so a tab with one
+    /// leaves the surface it sits on showing — as a button does — rather than
+    /// punching the terminal default into a dialog or pane.
+    #[test]
+    fn a_reset_fill_keeps_the_surface_beneath_the_label() {
+        let surface = Color::Blue;
+        let area = Rect::new(0, 0, shape_width("Tab"), 1);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_style(area, Style::default().bg(surface));
+        // The fallback's disabled, unselected tab is filled with `Reset`.
+        TabsWidget::new(&["Tab"])
+            .disabled(true)
+            .render(area, &mut buffer);
+        assert_eq!(buffer.cell((2, 0)).expect("label cell").bg, surface);
+    }
+
+    /// Tabs and buttons each paint their own filled shape. This frame pins
+    /// both, so a change to either painter shows up as moved pixels.
+    fn painted_tabs_and_buttons() -> String {
+        use crate::{ButtonSize, ButtonWidget};
+
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 44, 8));
+        let labels = ["One", "Two", "Three", "Four"];
+        for (size, y) in [(TabsSize::Small, 0), (TabsSize::Large, 1)] {
+            TabsWidget::new(&labels)
+                .selected_item(Some(0))
+                .focused_item(Some(1))
+                .focused(true)
+                .hovered_item(Some(2))
+                .disabled_items(&[false, false, false, true])
+                .size(size)
+                .themed(&theme)
+                .render(Rect::new(0, y, 44, size.height()), &mut buffer);
+        }
+        // Too narrow for every tab: the selected one stays, with markers.
+        TabsWidget::new(&labels)
+            .selected_item(Some(3))
+            .themed(&theme)
+            .render(Rect::new(0, 4, 14, 1), &mut buffer);
+        for (x, button) in [
+            (0, ButtonWidget::new("Go").focused(true)),
+            (10, ButtonWidget::new("Go").secondary().hovered(true)),
+            (20, ButtonWidget::new("Go").destructive().disabled(true)),
+            (30, ButtonWidget::new("Go")),
+        ] {
+            button
+                .size(ButtonSize::Large)
+                .themed(&theme)
+                .render(Rect::new(x, 5, 8, 3), &mut buffer);
+        }
+        crate::test_support::styled_snapshot(&buffer)
+    }
+
+    const RECORDED_TABS_AND_BUTTONS: &str = r"  One     Two     Three     Four            |
+▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄▄          |
+  One     Two     Three     Four            |
+▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀▀          |
+‹   Four                                    |
+▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄      |
+   Go        Go        Go        Go         |
+▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀      |
+aaaaaaabcccccccbdddddddddbeeeeeeeebbbbbbbbbb
+fffffffbgggggggbhhhhhhhhhbiiiiiiiibbbbbbbbbb
+aaaaaaabcccccccbdddddddddbeeeeeeeebbbbbbbbbb
+fffffffbgggggggbhhhhhhhhhbiiiiiiiibbbbbbbbbb
+jbaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+kkkkkkkkbbhhhhhhhhbbllllllllbbffffffffbbbbbb
+mmmmmmmmbbddddddddbbnnnnnnnnbbaaaaaaaabbbbbb
+kkkkkkkkbbhhhhhhhhbbllllllllbbffffffffbbbbbb
+a: #171717 on #E5E5E5 NONE
+b: Reset on Reset NONE
+c: #FAFAFA on #333333 NONE
+d: #FAFAFA on #404040 NONE
+e: #A1A1A1 on #1C1C1C NONE
+f: #E5E5E5 on Reset NONE
+g: #333333 on Reset NONE
+h: #404040 on Reset NONE
+i: #1C1C1C on Reset NONE
+j: #FAFAFA on Reset NONE
+k: #D7D7D7 on Reset NONE
+l: #893B3D on Reset NONE
+m: #171717 on #D7D7D7 NONE
+n: #A1A1A1 on #893B3D NONE
+";
+
+    #[test]
+    fn tabs_and_buttons_paint_exactly_as_recorded() {
+        assert_eq!(painted_tabs_and_buttons(), RECORDED_TABS_AND_BUTTONS);
     }
 }

@@ -5,8 +5,9 @@ description: "A tooltip for Ratatui apps: a short explanation floated beside the
 # Tooltip
 
 A short explanation floated beside the content it describes. The bubble is
-declared in a hint layer: painted above everything else, but inert — a click
-over it reaches the control underneath, and it never takes focus.
+declared in a hint layer: painted above the content around it (beneath a modal
+it sits outside of), but inert — a click over it reaches the control underneath,
+and it never takes focus.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 340px">
   <div class="ratcn-preview-chrome" aria-hidden="true">

@@ -77,7 +77,7 @@ let area = frame.area();
 ratcn.render(frame, area, &state, &theme, |ctx| {
     // ... base content first ...
     if state.modals.is_open("confirm") {
-        ctx.modal("confirm", dialog, ctx.area());
+        ctx.modal("confirm", confirm_dialog(), ctx.area());
     }
 });
 ```

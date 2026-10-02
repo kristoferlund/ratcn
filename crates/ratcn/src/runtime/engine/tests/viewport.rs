@@ -1,12 +1,75 @@
 //! The contract [`DeclareCtx::viewport`] holds to, independent of any
 //! component that opens one.
 
+use std::cell::Cell;
+
 use ratatui::{
     style::Style,
-    widgets::{Paragraph, StatefulWidget, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 use super::*;
+
+#[test]
+fn viewport_clipping_never_leaves_a_wide_glyph_over_host_cells() {
+    use ratatui::{buffer::CellWidth, text::Line};
+
+    for offset in [0, 2] {
+        let mut driver = Driver::<(), ()>::new(4, 1);
+        driver.render(&(), |ctx| {
+            ctx.paint_widget(Line::from("HHHH"), Rect::new(0, 0, 4, 1));
+            ctx.viewport(Rect::new(1, 0, 1, 1), 4, offset, |ctx| {
+                ctx.paint_widget(Line::from("界"), Rect::new(1, offset, 2, 1));
+            });
+        });
+        assert_eq!(
+            driver.cell(1, 0).symbol(),
+            " ",
+            "the clipped glyph must be blanked"
+        );
+        assert!(driver.cell(1, 0).cell_width() <= 1);
+        assert_eq!(driver.cell(0, 0).symbol(), "H");
+        assert_eq!(driver.cell(2, 0).symbol(), "H");
+    }
+}
+
+#[test]
+fn viewport_left_clip_copies_only_the_blank_tail_of_a_wide_glyph() {
+    use ratatui::text::Line;
+
+    let mut driver = Driver::<(), ()>::new(4, 1);
+    driver.render(&(), |ctx| {
+        ctx.paint_widget(Line::from("HHHH"), Rect::new(0, 0, 4, 1));
+        ctx.viewport(Rect::new(1, 0, 2, 1), 1, 0, |ctx| {
+            ctx.paint_widget(Line::from("界"), Rect::new(0, 0, 2, 1));
+        });
+    });
+    assert_eq!(driver.cell(0, 0).symbol(), "H");
+    assert_eq!(driver.cell(1, 0).symbol(), " ");
+    assert_eq!(driver.cell(2, 0).symbol(), "H");
+}
+
+#[test]
+fn viewport_style_overlay_preserves_an_intact_wide_glyph() {
+    use ratatui::{
+        style::{Color, Style},
+        text::Line,
+    };
+
+    let mut driver = Driver::<(), ()>::new(4, 1);
+    driver.render(&(), |ctx| {
+        ctx.viewport(Rect::new(1, 0, 2, 1), 1, 0, |ctx| {
+            ctx.paint_widget(Line::from("界"), Rect::new(1, 0, 2, 1));
+            ctx.paint(|ctx| {
+                ctx.with_buffer(Rect::new(1, 0, 1, 1), |area, buffer| {
+                    buffer.set_style(area, Style::default().fg(Color::Red));
+                });
+            });
+        });
+    });
+    assert_eq!(driver.cell(1, 0).symbol(), "界");
+    assert_eq!(driver.cell(1, 0).fg, Color::Red);
+}
 use crate::test_support::{key, key_with};
 
 #[derive(Default)]
@@ -95,7 +158,6 @@ fn paint_inside_a_viewport_keeps_the_cells_its_widget_leaves_alone() {
 #[derive(Debug, Clone, Copy)]
 enum CaughtViewportFailure {
     Widget,
-    StatefulWidget,
     WithBuffer,
 }
 
@@ -122,7 +184,7 @@ impl Component<State, Msg> for Leaf {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &State) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -138,14 +200,16 @@ fn a_paint_inside_a_viewport_reads_blanks_where_it_has_not_written() {
     let read = Rc::clone(&seen);
     let mut driver = Driver::<State, Msg>::new(4, 1);
     driver.render(&State, move |ctx| {
+        let read = Rc::clone(&read);
         ctx.viewport(Rect::new(0, 0, 4, 1), 4, 0, move |ctx| {
-            ctx.paint(|ctx| {
-                ctx.with_buffer(|buffer| {
+            let row = Rect::new(0, 3, 4, 1);
+            ctx.paint(move |ctx| {
+                ctx.with_buffer(row, |_, buffer| {
                     buffer[(0, 3)].set_symbol("X");
                 });
             });
             ctx.paint(move |ctx| {
-                ctx.with_buffer(|buffer| {
+                ctx.with_buffer(row, |_, buffer| {
                     read.borrow_mut().push_str(buffer[(0, 3)].symbol());
                 });
             });
@@ -153,40 +217,6 @@ fn a_paint_inside_a_viewport_reads_blanks_where_it_has_not_written() {
     });
 
     assert_eq!(*seen.borrow(), " ");
-}
-
-/// Paint that escaped a viewport's clip addresses the surface it lands on,
-/// read in logical coordinates: the frame shifted down by the scroll offset.
-/// A popup declared inside a viewport therefore reaches every row of its own
-/// canvas, including the rows the viewport itself does not show — the
-/// viewport's content rectangle is the allocation of the content it clips,
-/// and says nothing about what left the clip.
-#[test]
-fn escaped_paint_is_allocated_the_whole_surface_in_logical_coordinates() {
-    let mut driver = Driver::<State, Msg>::new(10, 4);
-    driver.render(&State, |ctx| {
-        ctx.viewport(Rect::new(0, 0, 6, 2), 8, 3, |ctx| {
-            ctx.popup(
-                "pop",
-                Rect::new(0, 3, 10, 4),
-                PopupOptions::default(),
-                |ctx| {
-                    ctx.defer_paint(|ctx| {
-                        let area = ctx.area();
-                        ctx.with_buffer(move |buffer| {
-                            buffer.set_string(area.x, area.y, "T", Style::default());
-                            buffer.set_string(area.x, area.bottom() - 1, "B", Style::default());
-                        });
-                    });
-                },
-            );
-        });
-    });
-
-    // Logical row 3 is the frame's first row at offset 3, and logical row 6
-    // its last.
-    assert_eq!(driver.row(0), "T         ");
-    assert_eq!(driver.row(3), "B         ");
 }
 
 struct PanicWidget;
@@ -198,14 +228,6 @@ impl Widget for PanicWidget {
     }
 }
 
-impl StatefulWidget for PanicWidget {
-    type State = ();
-
-    fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
-        Widget::render(self, area, buf);
-    }
-}
-
 /// A paint panic a component catches is the component's own business: the
 /// pass finishes and commits. What the panicking paint wrote still never
 /// reaches the frame, because a paint inside a viewport lays out in a
@@ -214,7 +236,6 @@ impl StatefulWidget for PanicWidget {
 fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
     for failure in [
         CaughtViewportFailure::Widget,
-        CaughtViewportFailure::StatefulWidget,
         CaughtViewportFailure::WithBuffer,
     ] {
         let mut driver = Driver::<State, Msg>::new(10, 3);
@@ -240,11 +261,8 @@ fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
                                         CaughtViewportFailure::Widget => {
                                             ctx.widget(PanicWidget, area);
                                         }
-                                        CaughtViewportFailure::StatefulWidget => {
-                                            ctx.stateful_widget(PanicWidget, area, &mut ());
-                                        }
                                         CaughtViewportFailure::WithBuffer => {
-                                            ctx.with_buffer(|buffer| {
+                                            ctx.with_buffer(area, |_, buffer| {
                                                 buffer[(0, 0)].set_symbol("X");
                                                 panic!("component paint failed");
                                             });
@@ -271,8 +289,9 @@ fn a_caught_viewport_paint_panic_writes_nothing_and_commits() {
     }
 }
 
-/// A layer canvas holds the same guarantee: a write the panic left
-/// unrecorded composites nowhere.
+/// Layer paint holds the same guarantee: it is clipped to the render area
+/// through the same scratch buffer, so a write the panic left behind lands
+/// nowhere.
 #[test]
 fn a_caught_layer_paint_panic_composites_nothing_and_commits() {
     let mut driver = Driver::<State, Msg>::new(10, 3);
@@ -403,22 +422,6 @@ fn a_captured_drag_reports_travel_at_the_coordinate_limit() {
     );
 }
 
-#[test]
-fn deferred_paint_inside_a_viewport_projects_onto_the_frame() {
-    let mut driver = Driver::<State, Msg>::new(2, 6);
-    driver.render(&State, |ctx| {
-        ctx.viewport(Rect::new(0, 0, 2, 3), u16::MAX, u16::MAX, |ctx| {
-            ctx.defer_paint(|ctx| {
-                ctx.with_buffer(|buffer| {
-                    buffer.set_string(0, u16::MAX - 3, "D", Style::default());
-                });
-            });
-        });
-    });
-
-    assert_eq!(&driver.row(0)[..1], "D");
-}
-
 /// A viewport's clip travels with its content's paint: rows declared
 /// below the ones on screen land nowhere, leaving what is painted beneath
 /// the scroll area alone.
@@ -441,23 +444,28 @@ fn content_below_the_visible_rows_leaves_the_frame_beneath_it_alone() {
     );
 }
 
-/// A free-form paint inside a viewport covers the whole logical content,
-/// so it may address rows the viewport is not showing.
+/// A raw write inside a viewport pays for the area it names, not for the
+/// whole logical content: the buffer it is handed covers exactly that area,
+/// so a write outside it lands nowhere.
 #[test]
-fn with_buffer_inside_a_viewport_covers_the_whole_logical_content() {
+fn with_buffer_inside_a_viewport_covers_only_the_area_it_names() {
     let mut driver = Driver::<State, Msg>::new(4, 2);
     driver.render(&State, |ctx| {
-        ctx.viewport(Rect::new(0, 0, 4, 2), 6, 4, |ctx| {
+        ctx.viewport(Rect::new(0, 0, 4, 2), 1000, 4, |ctx| {
             ctx.paint(|ctx| {
-                ctx.with_buffer(|buffer| {
-                    buffer.set_string(0, 0, "hi", Style::default());
+                ctx.with_buffer(Rect::new(0, 4, 4, 1), |area, buffer| {
+                    assert_eq!(buffer.area, area, "one row, not a thousand");
                     buffer.set_string(0, 4, "ok", Style::default());
+                    if let Some(cell) = buffer.cell_mut((0, 5)) {
+                        cell.set_symbol("X");
+                    }
                 });
             });
         });
     });
 
     assert_eq!(driver.row(0), "ok  ");
+    assert_eq!(driver.row(1), "    ", "a write outside the named area");
 }
 
 /// A layer opened inside a viewport escaped that clip, and paints where
@@ -539,13 +547,13 @@ fn a_modal_declared_from_a_scrolled_off_row_opens_on_the_screen() {
     assert_eq!(driver.row(0), "MODAL ");
 }
 
-/// The edge a scrolled-past row is held against is the viewport's own top, so
-/// a viewport that starts partway down the screen keeps the modal inside it.
+/// A modal translates by the offset like every layer: a row the scroll
+/// carries above the viewport's top edge lands above it, not held against it.
 #[test]
-fn a_modal_held_against_the_top_lands_on_the_viewport_not_the_screen() {
+fn a_modal_above_its_viewport_top_sits_where_the_offset_puts_it() {
     let mut driver = Driver::<State, Msg>::new(6, 5);
     driver.render(&State, |ctx| {
-        ctx.viewport(Rect::new(0, 2, 6, 3), 20, 17, |ctx| {
+        ctx.viewport(Rect::new(0, 2, 6, 3), 20, 2, |ctx| {
             ctx.modal_scope(
                 "dialog",
                 Rect::new(0, 3, 6, 1),
@@ -558,16 +566,8 @@ fn a_modal_held_against_the_top_lands_on_the_viewport_not_the_screen() {
         });
     });
 
-    assert_eq!(
-        driver.row(2),
-        "MODAL ",
-        "held against the viewport's top row"
-    );
-    assert_eq!(
-        driver.row(0),
-        "      ",
-        "the rows above the viewport are free"
-    );
+    assert_eq!(driver.row(1), "MODAL ", "translated by the offset");
+    assert_eq!(driver.row(2), "      ", "not held against the top edge");
 }
 
 /// A modal leaves its viewport only while it is being declared. The offset is
@@ -624,34 +624,100 @@ fn a_viewport_inside_a_modal_inside_a_viewport_declares_and_paints() {
     assert_eq!(driver.row(2), "BBB   ");
 }
 
-/// A popup escapes the clip and keeps the coordinates: it is projected out of
-/// its viewport once, and what it declares is still in that viewport's
-/// logical space. A viewport declared inside one is therefore a viewport
-/// inside a viewport, and says so.
+/// A popup leaves its viewport the way a modal does, so a scroll area inside
+/// a popup inside a scroll area is ordinary nesting: it declares, paints
+/// through its own clip, and routes the pointer through its own offset.
 #[test]
-fn a_viewport_inside_a_popup_inside_a_viewport_is_still_nested() {
+fn a_viewport_inside_a_popup_inside_a_viewport_declares_paints_and_hits() {
     let mut driver = Driver::<State, Msg>::new(6, 4);
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        driver.render(&State, |ctx| {
-            ctx.viewport(Rect::new(0, 0, 6, 2), 10, 0, |ctx| {
-                ctx.popup(
-                    "panel",
-                    Rect::new(0, 0, 6, 4),
-                    PopupOptions::default(),
-                    |ctx| {
-                        ctx.viewport(Rect::new(0, 1, 6, 2), 4, 2, |_| {});
-                    },
-                );
-            });
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 0, 6, 2), 10, 4, |ctx| {
+            ctx.popup(
+                "panel",
+                Rect::new(0, 4, 6, 4),
+                PopupOptions::default(),
+                |ctx| {
+                    ctx.viewport(Rect::new(0, 1, 6, 2), 4, 2, |ctx| {
+                        ctx.paint_widget(
+                            Paragraph::new("top\nhid\nAAA\nBBB"),
+                            Rect::new(0, 1, 3, 4),
+                        );
+                        ctx.component("leaf", Leaf, Rect::new(0, 4, 6, 1));
+                    });
+                },
+            );
         });
-    }));
-    let panic = result.expect_err("a nested viewport must panic");
-    assert!(
-        panic_message(panic.as_ref()).contains("a viewport cannot be declared inside another"),
-        "{}",
-        panic_message(panic.as_ref())
+    });
+
+    assert_eq!(driver.row(1), "AAA   ");
+    assert_eq!(driver.row(2), "stable");
+    assert_eq!(
+        driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 2), &State),
+        EventResult::Emit(Msg::Pressed),
+        "the inner viewport's offset maps the press onto its logical row"
     );
 }
+
+/// Every layer belongs to the screen, whatever its kind. A layer opened
+/// inside a scrolled viewport takes its area with the scroll undone and
+/// declares in screen coordinates from there, the frame included — so
+/// content that paints at the area it was given lands where the layer is.
+#[test]
+fn every_layer_kind_declares_in_screen_coordinates() {
+    for kind in ["modal", "popup", "hint"] {
+        let seen = Rc::new(Cell::new((Rect::ZERO, Rect::ZERO)));
+        let record = Rc::clone(&seen);
+        let mut driver = Driver::<State, Msg>::new(6, 4);
+        driver.render(&State, move |ctx| {
+            let record = Rc::clone(&record);
+            ctx.viewport(Rect::new(0, 0, 6, 4), 10, 3, move |ctx| {
+                let layer = Rect::new(0, 5, 5, 1);
+                let content = move |ctx: &mut DeclareCtx<'_, State, Msg>| {
+                    record.set((ctx.area(), ctx.frame_area()));
+                    let area = ctx.area();
+                    ctx.paint_widget(Paragraph::new("LAYER"), area);
+                };
+                match kind {
+                    "modal" => ctx.modal_scope("layer", layer, ScopeOptions::default(), content),
+                    "popup" => ctx.popup("layer", layer, PopupOptions::default(), content),
+                    _ => ctx.hint("layer", layer, ScopeOptions::default(), content),
+                }
+            });
+        });
+
+        assert_eq!(
+            seen.get(),
+            (Rect::new(0, 2, 5, 1), Rect::new(0, 0, 6, 4)),
+            "a {kind} declares in screen coordinates"
+        );
+        assert_eq!(driver.row(2), "LAYER ", "a {kind} paints at its own area");
+    }
+}
+
+/// A layer whose anchor is scrolled partly above its viewport sits where the
+/// offset puts it, above the viewport's top edge, rather than being pushed
+/// down onto content it does not belong to.
+#[test]
+fn a_layer_above_its_viewport_top_sits_where_the_offset_puts_it() {
+    let mut driver = Driver::<State, Msg>::new(6, 5);
+    driver.render(&State, |ctx| {
+        ctx.viewport(Rect::new(0, 2, 6, 3), 20, 3, |ctx| {
+            ctx.popup(
+                "pop",
+                Rect::new(0, 4, 6, 1),
+                PopupOptions::default(),
+                |ctx| {
+                    let area = ctx.area();
+                    ctx.paint_widget(Paragraph::new("POPUP"), area);
+                },
+            );
+        });
+    });
+
+    assert_eq!(driver.row(1), "POPUP ", "translated by the offset");
+    assert_eq!(driver.row(2), "      ", "not held against the top edge");
+}
+
 #[derive(Default)]
 struct RevealState {
     focus: FocusState,
@@ -660,6 +726,8 @@ struct RevealState {
     late: bool,
     /// Whether a modal covers the area this frame.
     modal: bool,
+    /// Whether the bottom row is declared unable to take focus.
+    inert_bottom: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -680,18 +748,33 @@ struct RevealArea {
 impl Component<RevealState, RevealMsg> for RevealArea {
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, RevealState, RevealMsg>) {
         let area = ctx.area();
-        let late = ctx.state().late;
+        let (late, inert_bottom) = (ctx.state().late, ctx.state().inert_bottom);
         ctx.viewport(area, 6, self.offset, move |ctx| {
             ctx.component("top", RevealLeaf, Rect::new(0, 0, 4, 1));
-            ctx.component("bottom", RevealLeaf, Rect::new(0, 5, 4, 1));
+            if inert_bottom {
+                ctx.scope(
+                    "bottom",
+                    Rect::new(0, 5, 4, 1),
+                    ScopeOptions::default(),
+                    |_| {},
+                );
+            } else {
+                ctx.component("bottom", RevealLeaf, Rect::new(0, 5, 4, 1));
+            }
             if late {
                 ctx.component("late", RevealLeaf, Rect::new(0, 3, 4, 1));
             }
         });
     }
 
-    fn reveal_in_viewport(&mut self, target: Rect, _state: &RevealState, _ctx: &mut EventCtx<'_>) {
+    fn reveal_in_viewport(
+        &mut self,
+        target: Rect,
+        _state: &RevealState,
+        _ctx: &mut EventCtx<'_>,
+    ) -> bool {
         self.log.borrow_mut().push(target);
+        false
     }
 }
 
@@ -700,7 +783,7 @@ struct RevealLeaf;
 impl Component<RevealState, RevealMsg> for RevealLeaf {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, RevealState, RevealMsg>) {}
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &RevealState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -729,12 +812,12 @@ fn render_reveal(
     state: &RevealState,
     log: &RevealLog,
 ) {
-    let area = RevealArea {
-        offset: state.offset,
-        log: Rc::clone(log),
-    };
-    let modal = state.modal;
-    driver.render(state, move |ctx| {
+    let (offset, modal) = (state.offset, state.modal);
+    driver.render(state, |ctx| {
+        let area = RevealArea {
+            offset,
+            log: Rc::clone(log),
+        };
         ctx.component("area", area, Rect::new(0, 0, 4, 3));
         if modal {
             ctx.modal("dialog", RevealLeaf, Rect::new(0, 0, 4, 1));
@@ -860,10 +943,10 @@ fn focus_that_stayed_put_is_not_revealed_again() {
 }
 
 /// A focus the app is already holding when the first frame declares its target
-/// is revealed by the frame after: the reveal is answered by a surface, and
-/// the first frame opens with none.
+/// is revealed by that frame: the reveal answers against the tree just
+/// declared, not the surface the frame opened with.
 #[test]
-fn focus_held_before_its_target_was_ever_declared_reveals_one_frame_later() {
+fn focus_held_before_its_target_was_ever_declared_reveals_in_the_first_frame() {
     let log = RevealLog::default();
     let mut driver = reveal_driver();
     let state = RevealState {
@@ -871,19 +954,15 @@ fn focus_held_before_its_target_was_ever_declared_reveals_one_frame_later() {
         ..RevealState::default()
     };
     render_reveal(&mut driver, &state, &log);
-    assert!(
-        log.borrow().is_empty(),
-        "the first frame opened with no surface to answer against"
-    );
-
-    render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
+    render_reveal(&mut driver, &state, &log);
+    assert_eq!(log.borrow().len(), 1, "a settled reveal is not asked again");
 }
 
-/// The same when the target appears in the frame that focuses it: the surface
-/// that opens the frame has never declared it, so the frame after reveals it.
+/// The same when the target appears in the frame that focuses it — a row
+/// appended and focused by one update.
 #[test]
-fn focus_onto_a_target_declared_that_same_frame_reveals_one_frame_later() {
+fn focus_onto_a_target_declared_that_same_frame_reveals_in_that_frame() {
     let log = RevealLog::default();
     let mut driver = reveal_driver();
     let mut state = RevealState {
@@ -897,20 +976,14 @@ fn focus_onto_a_target_declared_that_same_frame_reveals_one_frame_later() {
     state.late = true;
     state.focus = FocusState::intent(["area", "late"]);
     render_reveal(&mut driver, &state, &log);
-    assert!(
-        log.borrow().is_empty(),
-        "the row is declared for the first time by this very frame"
-    );
-
-    render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
 }
 
-/// Focus handed back to a clipped row as a modal closes: the frame opens with
-/// the modal still retained, which resolves focus into the modal, so the
-/// reveal falls to the frame after.
+/// Focus handed back to a clipped row as a modal closes is revealed by the
+/// frame that closes it, although the surface it opened with still held the
+/// modal.
 #[test]
-fn focus_returned_as_a_modal_closes_reveals_one_frame_later() {
+fn focus_returned_as_a_modal_closes_reveals_in_that_frame() {
     let log = RevealLog::default();
     let mut driver = reveal_driver();
     let mut state = RevealState {
@@ -925,13 +998,61 @@ fn focus_returned_as_a_modal_closes_reveals_one_frame_later() {
     state.modal = false;
     state.focus = FocusState::intent(["area", "bottom"]);
     render_reveal(&mut driver, &state, &log);
-    assert!(
-        log.borrow().is_empty(),
-        "the retained surface still holds the modal, which owns focus"
-    );
-
-    render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 5, 4, 1)]);
+}
+
+/// A viewport owner that keeps the trait's default reveal: it never scrolls.
+struct StillArea;
+
+impl Component<RevealState, RevealMsg> for StillArea {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, RevealState, RevealMsg>) {
+        let area = ctx.area();
+        ctx.viewport(area, 6, 0, |ctx| {
+            ctx.component("top", RevealLeaf, Rect::new(0, 0, 4, 1));
+            ctx.component("bottom", RevealLeaf, Rect::new(0, 5, 4, 1));
+        });
+    }
+}
+
+/// The second run of the render closure exists to rebuild the tree at a new
+/// offset. An owner that did not move its offset leaves nothing to rebuild,
+/// so focus onto content it clips costs the frame one run, not two.
+#[test]
+fn an_owner_that_does_not_scroll_is_declared_once() {
+    let runs = Cell::new(0);
+    let mut driver = reveal_driver();
+    let mut state = RevealState {
+        focus: FocusState::intent(["area", "top"]),
+        ..RevealState::default()
+    };
+    let render = |driver: &mut Driver<RevealState, RevealMsg>, state: &RevealState| {
+        runs.set(0);
+        driver.render(state, |ctx| {
+            runs.set(runs.get() + 1);
+            ctx.component("area", StillArea, Rect::new(0, 0, 4, 3));
+        });
+        runs.get()
+    };
+    render(&mut driver, &state);
+
+    state.focus = FocusState::intent(["area", "bottom"]);
+    assert_eq!(render(&mut driver, &state), 1);
+}
+
+/// A stored path whose target cannot take focus is kept, but it is not
+/// focus: nothing asks the viewport to show it, and the frame declares once.
+#[test]
+fn a_stored_path_onto_a_target_that_cannot_take_focus_reveals_nothing() {
+    let log = RevealLog::default();
+    let mut driver = reveal_driver();
+    let state = RevealState {
+        focus: FocusState::intent(["area", "bottom"]),
+        inert_bottom: true,
+        ..RevealState::default()
+    };
+    render_reveal(&mut driver, &state, &log);
+    render_reveal(&mut driver, &state, &log);
+    assert!(log.borrow().is_empty());
 }
 
 /// A focus path nothing declares whole parks, and a parked path names no
@@ -1012,12 +1133,6 @@ fn a_target_declared_frames_after_the_app_focused_it_is_revealed_when_it_appears
     );
 
     state.late = true;
-    render_reveal(&mut driver, &state, &log);
-    assert!(
-        log.borrow().is_empty(),
-        "the surface that declares the row is only now retained"
-    );
-
     render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
 }

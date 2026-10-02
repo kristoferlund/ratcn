@@ -21,11 +21,11 @@ use std::{
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect, Size};
-use ratatui::widgets::{StatefulWidget, Widget};
+use ratatui::widgets::Widget;
 
 use crate::Theme;
 
-use super::engine::{DeclarationEnv, LayerKind, RenderPass};
+use super::engine::{DeclarationEnv, LayerKind, Projection, RenderPass};
 use super::gesture::Press;
 use super::{ChildId, Event, EventResult, KeyChord, MouseButton, MouseEvent, TabWrap};
 
@@ -65,7 +65,7 @@ pub struct DeclareCtx<'a, State, Msg> {
     /// The active theme supplied to [`Ratcn::render`](super::Ratcn::render).
     pub theme: &'a Theme,
     pub(crate) hover_position: Option<Position>,
-    pub(crate) transients: &'a mut TransientMap,
+    pub(crate) transients: &'a TransientMap,
     pub(crate) pass: &'a mut RenderPass<State, Msg>,
     pub(crate) state: &'a State,
 }
@@ -108,9 +108,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// walk, at the point in the queue where this call was reached — so it
     /// paints in declaration order relative to the components around it, and
     /// before anything declared after it. Inside a [`modal`](Self::modal),
-    /// [`popup`](Self::popup), or [`hint`](Self::hint) layer it lands on that
-    /// layer's canvas and composites above everything declared outside;
-    /// otherwise it lands on the frame.
+    /// [`popup`](Self::popup), or [`hint`](Self::hint) layer it paints with
+    /// that layer, above everything declared outside it.
     ///
     /// Because it runs after declaration has ended, the closure has to own
     /// what it draws with: it is `'static` and gets a [`PaintCtx`] rather
@@ -133,8 +132,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// The shorthand for the common single-write case: exactly
     /// `self.paint(move |ctx| ctx.widget(widget, area))`, queued at the same
     /// point and painted under the same rules — declaration order against the
-    /// components around it, onto the enclosing layer's canvas when there is
-    /// one.
+    /// components around it, with the enclosing layer when there is one.
     ///
     /// Reach for it when a write is independent: one widget, one area, nothing
     /// else in the op. Use [`paint`](Self::paint) when several writes share
@@ -166,13 +164,14 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Unlike [`area`](Self::area), this is not changed by component, scope,
     /// or popup declarations. Inside a [`viewport`](Self::viewport), it is
     /// the root area shifted into logical coordinates by the scroll offset,
-    /// not the viewport's visible or content rectangle. A modal leaves the
+    /// not the viewport's visible or content rectangle. A layer leaves the
     /// viewport and reads the root area in screen coordinates again.
     ///
     /// Floating components use these bounds to stay within their host's pane
     /// rather than the whole terminal. This does not sandbox base-layer paint:
     /// widgets may paint outside their rects, and [`PaintCtx::with_buffer`]
-    /// gives unprojected base paint the whole destination buffer.
+    /// gives base paint outside viewports and layers the whole destination
+    /// buffer.
     #[must_use]
     pub const fn frame_area(&self) -> Rect {
         self.frame_area
@@ -204,51 +203,48 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
                 .is_some_and(|position| self.area.contains(position))
     }
 
-    /// Read the transient stored at the current declaration's identity path,
-    /// if an event handler stored one.
+    /// The transient of type `T` kept at the current declaration's identity —
+    /// the declaration-time counterpart of [`EventCtx::transient`], with the
+    /// same ownership rules: scratch that means nothing to the app, gone as
+    /// soon as its path stops being declared.
     ///
-    /// The declaration-time counterpart of [`EventCtx::transient`]: event
-    /// handlers write scratch values that mean nothing to the app — a
-    /// wheel-scrolled viewport offset, say — and the next declaration reads
-    /// them here to lay out accordingly.
+    /// Event handlers write it — a wheel-scrolled offset, say — and the next
+    /// declaration reads it here to lay out accordingly. A declaration may
+    /// also settle it, for presentation state only the layout can answer:
+    /// whether a wheel-scrolled view still holds, given where the cursor now
+    /// is, is the built-in example — [`List`](crate::List) settles it in its
+    /// `declare`. Anything the app should read, persist, or act on belongs in
+    /// app state; prefer writing from [`EventCtx::transient`] whenever an
+    /// event can carry the change.
     ///
-    /// `None` when no event handler has stored a `T` at this path. Like every
-    /// transient, the value disappears as soon as its path stops being
-    /// declared — see [`EventCtx::transient`] for the ownership rules; semantic
-    /// state does not belong here.
+    /// Nothing stored yet reads as `T::default()`. A write is made on a clone
+    /// and published only when the render commits, so a rejected pass leaves
+    /// the stored value as it was; `Clone` must isolate what the declaration
+    /// changes, since a write through shared interior state cannot be taken
+    /// back.
     ///
-    /// Use [`transient_mut`](Self::transient_mut) when the declaration must
-    /// also settle the value it reads.
-    #[must_use]
-    pub fn transient<T: 'static>(&self) -> Option<&T> {
-        slot_ref(self.transients, self.pass.current_path()?)
-    }
-
-    /// [`transient`](Self::transient), for the rare value a declaration has to
-    /// settle rather than merely read.
+    /// # Panics
     ///
-    /// Some presentation state can only be resolved once the layout is known,
-    /// because only the layout answers it: whether a wheel-scrolled viewport
-    /// still holds, given where the cursor now is, is the built-in example —
-    /// [`List`](crate::List) settles it in its `declare`, alongside the
-    /// arithmetic that produces the offset it stores.
-    ///
-    /// The write lands once per frame, where the declaration makes it, and is
-    /// read back by the next frame's declaration — and by any event handler
-    /// that writes it in between. Settling a flag
-    /// (`if moved { held = false }`) or storing a computed offset is what
-    /// this is for; anything the app should read, persist, or act on belongs
-    /// in app state.
-    ///
-    /// Prefer writing from [`EventCtx::transient`] whenever an event can carry
-    /// the change instead.
-    ///
-    /// `None` until an event handler has stored a value: this never inserts
-    /// one, which is what keeps a transient's lifetime tied to the events
-    /// that created it rather than to a pass that may yet fail.
-    pub fn transient_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        let path = self.pass.current_path()?;
-        slot_mut(self.transients, path)
+    /// When called from the root declaration, which has no identity to keep a
+    /// transient at.
+    pub fn transient<T: Clone + Default + 'static>(&mut self) -> &mut T {
+        let path = self
+            .pass
+            .current_path()
+            .expect("a transient is kept at a component's identity; the root declaration has none")
+            .to_vec();
+        if slot_ref::<T>(&self.pass.settled_transients, &path).is_none() {
+            let value = slot_ref::<T>(self.transients, &path)
+                .cloned()
+                .unwrap_or_default();
+            self.pass
+                .settled_transients
+                .entry(path.clone())
+                .or_default()
+                .insert(TypeId::of::<T>(), Box::new(value));
+        }
+        slot_mut(&mut self.pass.settled_transients, &path)
+            .expect("the settled value was staged just above")
     }
 
     /// The app state supplied to the current declaration pass.
@@ -283,17 +279,14 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// in the same logical coordinates, and paint outside the logical content
     /// is clipped away.
     ///
-    /// A [`popup`](Self::popup), [`hint`](Self::hint), or
-    /// [`defer_paint`](Self::defer_paint) closure declared inside escapes the
-    /// clip and keeps these logical coordinates, projected into screen
-    /// coordinates once. A popup or hint anchored to a declaration the
-    /// viewport has scrolled out of sight is skipped for the frame, and comes
-    /// back with its anchor.
-    ///
-    /// A [`modal`](Self::modal) goes further and leaves the viewport behind:
-    /// it takes its area in these coordinates like any other layer, opens at
-    /// the place on screen they name, and declares in screen coordinates from
-    /// there — so it may hold a viewport of its own.
+    /// A layer — [`modal`](Self::modal), [`popup`](Self::popup), or
+    /// [`hint`](Self::hint) — declared inside leaves the viewport behind: it
+    /// takes its area in these coordinates, opens at the place on screen they
+    /// name, and declares in screen coordinates from there. Its content
+    /// therefore paints at its own [`area`](Self::area), not at a rectangle
+    /// captured before it opened, and it may hold a viewport of its own. A
+    /// popup or hint anchored to a declaration the viewport has scrolled out
+    /// of sight is skipped for the frame, and comes back with its anchor.
     ///
     /// This is the mechanism behind [`ScrollArea`](crate::ScrollArea), and
     /// what a component of your own builds a viewport from. The offset such a
@@ -303,11 +296,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// # Panics
     ///
     /// Panics when a viewport is declared inside another, and when the
-    /// logical content exceeds 262,144 cells. A [`modal`](Self::modal)
-    /// declared between the two ends the enclosing viewport, so a scroll area
-    /// inside a dialog inside a scroll area is ordinary nesting; a
-    /// [`popup`](Self::popup) or [`hint`](Self::hint) keeps the viewport it
-    /// was declared in, and a viewport inside one of those is nested.
+    /// logical content exceeds 262,144 cells. A layer declared between the
+    /// two ends the enclosing viewport, so a scroll area inside a dialog or a
+    /// popup inside a scroll area is ordinary nesting.
     pub fn viewport(
         &mut self,
         screen: Rect,
@@ -332,7 +323,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
             area,
             state: self.state,
             theme: self.theme,
-            transients: &mut *self.transients,
+            transients: self.transients,
         };
         (&mut *self.pass, env)
     }
@@ -399,10 +390,10 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// The modal becomes a child of whatever is currently declaring, so its
     /// identity path, focus scope, and event bubbling anchor there, and a
     /// component can own its own confirmation dialog with one declaration
-    /// guarded by one app-state flag. Layers composite in declaration order,
+    /// guarded by one app-state flag. Layers paint in declaration order,
     /// wherever in the tree they are declared — except that a layer declared
-    /// outside the topmost modal composites beneath it whatever the order,
-    /// and is dimmed with everything else the modal covers.
+    /// outside the topmost modal paints beneath it whatever the order, and is
+    /// dimmed with everything else the modal covers.
     ///
     /// Modal policy: the area behind the modal is dimmed, events outside it
     /// are consumed rather than routed, and Tab wraps
@@ -421,11 +412,10 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// An empty interaction area retains the modal path but excludes the modal
     /// and its descendants from focus, hit-testing, and event routing.
     ///
-    /// A modal escapes a [`viewport`](Self::viewport) it is declared inside.
-    /// `area` is in the coordinates of the declaration that gave it, as every
-    /// layer's is, and the modal opens at the place on screen those
-    /// coordinates name; a row the viewport has scrolled past the top names
-    /// the viewport's top edge. From there the modal is screen-level: its
+    /// A modal escapes a [`viewport`](Self::viewport) it is declared inside,
+    /// as every layer does. `area` is in the coordinates of the declaration
+    /// that gave it, and the modal opens at the place on screen those
+    /// coordinates name. From there the modal is screen-level: its
     /// [`area`](Self::area), its [`frame_area`](Self::frame_area), and
     /// anything it declares are in screen coordinates, and it may open a
     /// viewport of its own.
@@ -447,8 +437,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
         pass.modal(id.into(), component, env);
     }
 
-    /// Declare a hint layer: a subtree painted above everything else that
-    /// takes no input at all.
+    /// Declare a hint layer: a subtree painted above everything declared
+    /// outside it, beneath a modal it sits outside of, that takes no input at
+    /// all.
     ///
     /// This is the layer for tooltips and other content that explains rather
     /// than acts. Like [`modal`](Self::modal) and [`popup`](Self::popup) it is
@@ -466,7 +457,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// A hint anchors to the declaration it was reached from, and follows it
     /// out of sight: when a [`viewport`](Self::viewport) has scrolled that
     /// declaration off screen, the hint is skipped for the frame and returns
-    /// when its anchor does.
+    /// when its anchor does. Like every layer it leaves that viewport and
+    /// declares in screen coordinates.
     ///
     /// Because it takes no input, a hint has no dismissal of its own: whatever
     /// opened it — hover, focus — is what closes it, through your own state.
@@ -498,9 +490,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// - Nothing is dimmed, and nothing outside the popup is captured: a
     ///   press outside its footprint routes to whatever is visibly there — a
     ///   button under the pointer still presses.
-    /// - The popup occludes exactly its own footprint. A press inside it that
-    ///   nothing handles is consumed at the popup root, never delivered to
-    ///   the control it covers.
+    /// - The popup blocks pointer input over exactly its own footprint. A
+    ///   press inside it that nothing handles is consumed at the popup root,
+    ///   never delivered to the control it covers.
     /// - Focus is never stolen. Move focus into the popup through your own
     ///   messages, in the same update that opens it.
     /// - A press outside the popup emits the
@@ -514,7 +506,8 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// A popup anchors to the declaration it was reached from, and follows it
     /// out of sight: when a [`viewport`](Self::viewport) has scrolled that
     /// declaration off screen, the popup is skipped for the frame and returns
-    /// when its anchor does.
+    /// when its anchor does. Like every layer it leaves that viewport and
+    /// declares in screen coordinates.
     ///
     /// # Panics
     ///
@@ -572,32 +565,6 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
         let (pass, env) = self.declaring(area);
         pass.modal_scope(id.into(), options, env, declare);
     }
-
-    /// Schedule paint that should land on top of everything else in this layer.
-    ///
-    /// Ordinary paint happens in declaration order, so a component cannot draw
-    /// over siblings declared after it. This defers a closure until the
-    /// current layer has finished declaring: deferred paint registered inside
-    /// a [`modal`](Self::modal) or [`popup`](Self::popup) flushes into that
-    /// layer's canvas and composites with it, while deferred paint registered
-    /// in the base declaration flushes after every layer has composited —
-    /// making it the topmost decoration slot, where toast stacks and drag
-    /// ghosts live.
-    ///
-    /// Deferred paint is decoration only: it has no identity, geometry, focus,
-    /// hover, or hit target, and cannot be clicked. Its [`PaintCtx`] therefore
-    /// reports all four interaction flags as false, and
-    /// [`area`](PaintCtx::area) is the layer's footprint inside a layer, the
-    /// supplied render area otherwise, expressed in the paint's coordinates.
-    /// That area does not clip base-layer paint.
-    ///
-    /// Because the closure runs after the declaration pass has ended, it does
-    /// not get a `DeclareCtx`. It is `'static` and receives a [`PaintCtx`],
-    /// which carries the theme and the app state the pass was declared with;
-    /// anything else it needs must be moved into the closure here.
-    pub fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
-        self.pass.defer_paint(paint);
-    }
 }
 
 /// Options for a [`popup`](DeclareCtx::popup) layer.
@@ -654,164 +621,101 @@ impl<Msg> PopupOptions<Msg> {
     }
 }
 
-/// The surface paint lands on: the frame for the base layer, a layer's canvas
-/// for paint that belongs to that layer.
-enum PaintSurface<'a> {
-    Frame(&'a mut Buffer),
-    Canvas(&'a mut super::engine::Canvas),
-}
-
-impl PaintSurface<'_> {
-    /// The rectangle this surface covers.
-    fn area(&self) -> Rect {
-        match self {
-            Self::Frame(buffer) => buffer.area,
-            Self::Canvas(canvas) => canvas.buffer.area,
-        }
-    }
-}
-
 /// Where paint lands, how it is projected on the way there, and the buffer it
 /// lays out in when it is projected.
-///
-/// The three write forms are implemented once, here, because routing is the
-/// only thing they do that [`PaintCtx`] does not.
 pub(crate) struct PaintTarget<'a> {
-    surface: PaintSurface<'a>,
-    projection: Option<super::engine::Projection>,
-    /// Where projected paint lays out before it is copied back. One buffer
-    /// serves the whole frame's paint calls, resized and blanked per call.
+    buffer: &'a mut Buffer,
+    route: PaintRoute,
+    /// Where projected or clipped paint lays out before it is copied back.
+    /// One buffer serves the whole frame's paint calls, resized and blanked
+    /// per call.
     scratch: &'a mut Buffer,
 }
 
+/// How one paint reaches the frame's buffer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PaintRoute {
+    /// Straight onto the buffer: base paint outside any viewport, which the
+    /// render area does not sandbox.
+    Direct,
+    /// Laid out against the declared area, then projected: paint inside a
+    /// viewport, whose content can be far taller than what shows.
+    Projected(Projection),
+    /// Laid out against the declared area clipped to this rectangle, the
+    /// render area: layer paint outside any viewport, which never reaches
+    /// past it.
+    Clipped(Rect),
+}
+
 impl<'a> PaintTarget<'a> {
-    pub(crate) fn frame(
-        buffer: &'a mut Buffer,
-        projection: Option<super::engine::Projection>,
-        scratch: &'a mut Buffer,
-    ) -> Self {
+    pub(crate) fn new(buffer: &'a mut Buffer, route: PaintRoute, scratch: &'a mut Buffer) -> Self {
         Self {
-            surface: PaintSurface::Frame(buffer),
-            projection,
+            buffer,
+            route,
             scratch,
         }
     }
 
-    pub(crate) fn canvas(
-        canvas: &'a mut super::engine::Canvas,
-        projection: Option<super::engine::Projection>,
-        scratch: &'a mut Buffer,
-    ) -> Self {
-        Self {
-            surface: PaintSurface::Canvas(canvas),
-            projection,
-            scratch,
-        }
-    }
-
-    /// Paint `area` through this target: `paint` receives the buffer to write
-    /// and the rectangle to write it in.
-    ///
-    /// The three write forms differ only in what they hand that closure, so
-    /// routing — which buffer, which clip, which projection, what counts as
-    /// painted — is settled once, here.
-    fn paint_at<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
-        let surface = self.surface.area();
-        match (&mut self.surface, self.projection) {
-            (PaintSurface::Frame(buffer), None) => paint(area, buffer),
-            (PaintSurface::Frame(buffer), Some(projection)) => {
-                with_projected_buffer(buffer, self.scratch, projection, surface, area, |buffer| {
+    /// Paint `area` through this target: `paint` receives the rectangle and
+    /// the buffer to write it in.
+    fn with_buffer<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
+        match self.route {
+            PaintRoute::Direct => paint(area, self.buffer),
+            PaintRoute::Projected(projection) => {
+                let cells = area.area();
+                assert!(
+                    cells <= super::engine::MAX_VIEWPORT_CELLS,
+                    "a viewport paint covers {area}, {cells} cells; the maximum is {}",
+                    super::engine::MAX_VIEWPORT_CELLS
+                );
+                with_projected_buffer(self.buffer, self.scratch, projection, area, |buffer| {
                     paint(area, buffer)
                 })
             }
-            (PaintSurface::Canvas(canvas), None) => {
-                let clipped = canvas.clip(area);
-                let result = paint(clipped, &mut canvas.buffer);
-                canvas.mark_painted(clipped);
-                result
-            }
-            (PaintSurface::Canvas(canvas), Some(projection)) => {
-                let painted = projection.project_rect(area, surface);
-                let result = with_projected_buffer(
-                    &mut canvas.buffer,
-                    self.scratch,
-                    projection,
-                    surface,
-                    area,
-                    |buffer| paint(area, buffer),
-                );
-                canvas.mark_painted(painted);
-                result
+            // Bounded by the render area, which the caller allocated.
+            PaintRoute::Clipped(clip) => {
+                let area = area.intersection(clip);
+                let projection = Projection::clipped(clip);
+                with_projected_buffer(self.buffer, self.scratch, projection, area, |buffer| {
+                    paint(area, buffer)
+                })
             }
         }
     }
-
-    /// The whole of what this target writes, in the coordinates its paint
-    /// closure uses — the allocation a free-form [`Self::with_buffer`] covers.
-    pub(crate) fn whole_area(&mut self) -> Rect {
-        let surface = self.surface.area();
-        self.projection
-            .map_or(surface, |projection| projection.allocation(surface))
-    }
-
-    fn widget(&mut self, widget: impl Widget, area: Rect) {
-        self.paint_at(area, |area, buffer| widget.render(area, buffer));
-    }
-
-    fn stateful_widget<W: StatefulWidget>(&mut self, widget: W, area: Rect, state: &mut W::State) {
-        self.paint_at(area, |area, buffer| widget.render(area, buffer, state));
-    }
-
-    fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        let area = self.whole_area();
-        self.paint_at(area, |_, buffer| paint(buffer))
-    }
 }
 
-/// Paint `logical` into `target` through `projection`.
+/// Paint `area` into `target` through `projection`.
 ///
-/// The closure sees `scratch` covering exactly the logical rectangle, so a
-/// widget lays out against its declared allocation. `scratch` is blanked
-/// first, so a widget reads a blank wherever it has written nothing. The
-/// cells the projection reaches are then seeded from the target beforehand
-/// and copied back afterwards, so what the closure leaves untouched keeps
-/// whatever was already there, and what falls outside the projection's clip
-/// stays out of the target.
+/// The closure sees `scratch` covering exactly `area`, so a widget lays out
+/// against its declared allocation. `scratch` is blanked first, so a widget
+/// reads a blank wherever it has written nothing. The cells the projection
+/// keeps are then seeded from the target beforehand and copied back
+/// afterwards, so what the closure leaves untouched keeps whatever was
+/// already there, and what falls outside the projection's clip stays out of
+/// the target.
 fn with_projected_buffer<R>(
     target: &mut Buffer,
     scratch: &mut Buffer,
-    projection: super::engine::Projection,
-    surface: Rect,
-    logical: Rect,
+    projection: Projection,
+    area: Rect,
     paint: impl FnOnce(&mut Buffer) -> R,
 ) -> R {
-    let cells = logical.area();
-    assert!(
-        cells <= super::engine::MAX_VIEWPORT_CELLS,
-        "a paint inside a viewport covers {logical}, {cells} cells; the maximum is {}",
-        super::engine::MAX_VIEWPORT_CELLS
-    );
-    scratch.resize(logical);
+    scratch.resize(area);
     scratch.reset();
-    for (logical_position, screen_position) in projection.projected_positions(logical, surface) {
-        if let (Some(source), Some(destination)) = (
-            target.cell(screen_position),
-            scratch.cell_mut(logical_position),
-        ) {
-            *destination = source.clone();
+    for (source, screen) in projection.projected_positions(area) {
+        if let (Some(from), Some(to)) = (target.cell(screen), scratch.cell_mut(source)) {
+            *to = from.clone();
         }
     }
 
     let result = paint(scratch);
 
-    for (logical_position, screen_position) in projection.projected_positions(logical, surface) {
-        if let (Some(source), Some(destination)) = (
-            scratch.cell(logical_position),
-            target.cell_mut(screen_position),
-        ) {
-            *destination = source.clone();
-        }
-    }
+    super::buffer::copy_cells(
+        scratch,
+        target,
+        projection.projected_positions(area),
+        projection.clip(),
+    );
     result
 }
 
@@ -826,8 +730,7 @@ fn with_projected_buffer<R>(
 /// derived from that resolution, and there is nothing to derive them from
 /// while the tree is still being built.
 ///
-/// Painting goes through [`widget`](Self::widget),
-/// [`stateful_widget`](Self::stateful_widget), and
+/// Painting goes through [`widget`](Self::widget) and
 /// [`with_buffer`](Self::with_buffer). The context keeps the frame's buffer
 /// to itself, so a paint call can read `ctx.theme`,
 /// [`ctx.state()`](Self::state), and the interaction flags while building its
@@ -854,7 +757,7 @@ impl<State> fmt::Debug for PaintCtx<'_, State> {
 }
 
 impl<'a, State> PaintCtx<'a, State> {
-    /// Paint a ratatui widget onto the active paint surface.
+    /// Paint a ratatui widget onto the frame.
     ///
     /// The widget is consumed here; nothing is deferred or allocated. Because
     /// the context never lends out the buffer, the widget expression may read
@@ -862,39 +765,37 @@ impl<'a, State> PaintCtx<'a, State> {
     /// in argument position.
     ///
     /// Inside a [`modal`](DeclareCtx::modal), [`popup`](DeclareCtx::popup), or
-    /// [`hint`](DeclareCtx::hint) layer the paint lands on that layer's canvas
-    /// and composites above everything declared outside it; otherwise it
-    /// lands on the frame. A layer composites the widget's whole declared
-    /// `area` opaquely — cells the widget left unwritten come through as
-    /// empty rather than transparent, so paint a panel background first, as
-    /// the built-in layers do.
+    /// [`hint`](DeclareCtx::hint) layer the paint lands above everything
+    /// declared outside the layer, clipped to the render area. Layers are
+    /// transparent: cells the widget leaves unwritten keep whatever is
+    /// beneath them, so a layer that should hide what it covers paints a
+    /// background first — `Clear`, then a filled block — as the built-in
+    /// layers do.
     pub fn widget(&mut self, widget: impl Widget, area: Rect) {
-        self.target.widget(widget, area);
+        self.with_buffer(area, |area, buffer| widget.render(area, buffer));
     }
 
-    /// Paint a ratatui stateful widget onto the active paint surface.
-    ///
-    /// The escape hatch for widgets that need a `&mut` widget state during
-    /// paint (e.g. ratatui's `List` with `ListState`). Targets the same
-    /// surface as [`widget`](Self::widget).
-    pub fn stateful_widget<W: StatefulWidget>(
-        &mut self,
-        widget: W,
-        area: Rect,
-        state: &mut W::State,
-    ) {
-        self.target.stateful_widget(widget, area, state);
-    }
-
-    /// Run a paint closure over the active paint surface's raw cell buffer.
+    /// Run a paint closure over the raw cells of `area`.
     ///
     /// The escape hatch for direct cell writes (`set_string`, `set_style`,
-    /// per-cell edits). The closure receives only the buffer, so values read
-    /// from `ctx` must be taken as arguments or moved in. Inside a layer, the
-    /// buffer is the layer's canvas and the whole layer footprint counts as
-    /// painted for compositing.
-    pub fn with_buffer<R>(&mut self, paint: impl FnOnce(&mut Buffer) -> R) -> R {
-        self.target.with_buffer(paint)
+    /// per-cell edits) and for widgets that take more than an area — a
+    /// `StatefulWidget` renders as
+    /// `ctx.with_buffer(area, |area, buf| widget.render(area, buf, &mut state))`.
+    /// The closure receives `area` and the buffer to write it in, so values
+    /// read from `ctx` must be taken as arguments or moved in.
+    ///
+    /// Inside a [`viewport`](DeclareCtx::viewport), the buffer covers exactly
+    /// `area`, in the paint's own coordinates: a write outside it lands
+    /// nowhere, and the call costs what `area` does, however tall the content
+    /// around it. Layer paint outside a viewport receives `area` clipped to
+    /// the render area, and a buffer covering just that: it lays out against
+    /// the part that shows. Layer paint lands above everything declared
+    /// outside the layer and, like [`widget`](Self::widget), touches only the
+    /// cells it writes. Base paint
+    /// outside both writes straight onto the frame's buffer, which the render
+    /// area does not sandbox.
+    pub fn with_buffer<R>(&mut self, area: Rect, paint: impl FnOnce(Rect, &mut Buffer) -> R) -> R {
+        self.target.with_buffer(area, paint)
     }
 
     /// The area of the declaration this paint belongs to: a component's paint
@@ -962,8 +863,8 @@ impl<'a, State> PaintCtx<'a, State> {
 /// The runtime reads these from [`Component::scope_options`] *before* the
 /// component declares, because it must know the shape of the scope before
 /// descendants are declared into it. They therefore cannot depend on anything
-/// computed during paint — use [`Component::prepare`] if a claim depends on
-/// app state.
+/// computed during paint; a claim that depends on app state reads the state
+/// the component is declared with, which the runtime passes in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScopeOptions {
     pub(crate) tab_wrap: TabWrap,
@@ -989,11 +890,11 @@ impl ScopeOptions {
     ///
     /// An interactive leaf answers from the props it was declared with, so a
     /// disabled button says `false`; anything that has to be derived from app
-    /// state is settled in [`Component::prepare`] first. A container asks for
-    /// it when it is a Tab stop in its own right — a scrollable pane with
-    /// nothing focusable inside it, for instance. Focus still prefers a
-    /// focusable descendant when there is one, so this only makes the scope a
-    /// target when there isn't.
+    /// state reads the state [`Component::scope_options`] receives. A
+    /// container asks for it when it is a Tab stop in its own right — a
+    /// scrollable pane with nothing focusable inside it, for instance. Focus
+    /// still prefers a focusable descendant when there is one, so this only
+    /// makes the scope a target when there isn't.
     ///
     /// The runtime also requires a non-empty
     /// [`Component::interaction_area`]; a zero-area declaration never
@@ -1143,10 +1044,10 @@ impl Default for TransientStore<'_> {
 /// The pointer facts one dispatch carries into an [`EventCtx`].
 #[derive(Default)]
 pub(crate) struct PointerInputs<'a> {
-    /// Where a [`EventCtx::capture_pointer`] claim is recorded.
-    pub(crate) capture: Option<&'a mut Option<Vec<ChildId>>>,
-    /// The button holding the capture this event belongs to.
-    pub(crate) button: Option<MouseButton>,
+    /// The button a `Down` pressed, and where an
+    /// [`EventCtx::capture_pointer`] claim on its gesture is recorded.
+    /// `None` for every other event: only a press begins a gesture.
+    pub(crate) claim: Option<(MouseButton, &'a mut Option<Vec<ChildId>>)>,
     /// The event as it arrived, before any declaration-space projection.
     pub(crate) screen_mouse: Option<MouseEvent>,
     /// The press that opened the gesture this event continues, when the
@@ -1163,7 +1064,10 @@ impl fmt::Debug for EventCtx<'_> {
                 "transients_available",
                 &matches!(self.transients, TransientStore::Runtime(_)),
             )
-            .field("capture_button", &self.pointer.button)
+            .field(
+                "capture_button",
+                &self.pointer.claim.as_ref().map(|(button, _)| *button),
+            )
             .field("screen_mouse", &self.pointer.screen_mouse)
             .finish()
     }
@@ -1260,8 +1164,8 @@ impl<'a> EventCtx<'a> {
     /// The next declaration reads the same value back with
     /// [`DeclareCtx::transient`](DeclareCtx::transient), which is how a wheel
     /// scroll survives a redraw. Write from here whenever an event can carry
-    /// the change; [`DeclareCtx::transient_mut`](DeclareCtx::transient_mut) is
-    /// the narrow exception, for a value only the layout can settle.
+    /// the change; settling it in the declaration is the narrow exception, for
+    /// a value only the layout can settle.
     ///
     /// In a context built without a dispatch — `EventCtx::default()` in a
     /// component unit test — the value lives and dies with that context, so a
@@ -1318,18 +1222,14 @@ impl<'a> EventCtx<'a> {
     /// [`Ratcn`](super::Ratcn) event dispatch — capture can only begin a
     /// gesture, not join one in progress.
     pub fn capture_pointer(&mut self, button: MouseButton) {
-        assert_eq!(
-            self.pointer.button,
-            Some(button),
-            "EventCtx::capture_pointer({button:?}) requires the matching MouseKind::Down"
-        );
-        let capture = self
-            .pointer
-            .capture
-            .as_deref_mut()
-            .expect("EventCtx::capture_pointer is unavailable outside Ratcn event dispatch");
-        if capture.is_none() {
-            *capture = Some(self.path.clone());
+        let claim = match &mut self.pointer.claim {
+            Some((pressed, claim)) if *pressed == button => claim,
+            _ => panic!(
+                "EventCtx::capture_pointer({button:?}) requires the matching MouseKind::Down"
+            ),
+        };
+        if claim.is_none() {
+            **claim = Some(self.path.clone());
         }
     }
 
@@ -1380,52 +1280,33 @@ pub enum Step {
 ///
 /// # What happens each frame
 ///
-/// 1. [`prepare`](Self::prepare) — pin what the steps below read out of app
-///    state.
-/// 2. [`scope_options`](Self::scope_options) — read *before* any painting,
+/// 1. [`scope_options`](Self::scope_options) — read *before* any painting,
 ///    because focus for the whole frame is decided in one pass.
-/// 3. [`interaction_area`](Self::interaction_area) — derive the geometry used
+/// 2. [`interaction_area`](Self::interaction_area) — derive the geometry used
 ///    for focus, hit-testing, and events from the final paint area.
-/// 4. [`declare`](Self::declare) — lay out, and declare descendants if any.
-/// 5. [`paint`](Self::paint) — draw, once the whole tree has been declared
+/// 3. [`declare`](Self::declare) — lay out, and declare descendants if any.
+/// 4. [`paint`](Self::paint) — draw, once the whole tree has been declared
 ///    and focus has resolved.
+///
+/// The first two receive the app state the component is declared with, so a
+/// claim that depends on app state reads it there rather than from a copy
+/// pinned on the instance.
 ///
 /// The instances from the last successful pass are then retained, and those are
 /// the instances [`handle_event`](Self::handle_event) is called on afterwards —
 /// possibly against app state newer than the one they were declared with.
 pub trait Component<State, Msg> {
-    /// Prepare this component from the state it is being declared with.
-    ///
-    /// The runtime runs this once per declaration, before it reads either of
-    /// [`scope_options`](Component::scope_options) or
-    /// [`interaction_area`](Component::interaction_area) — so a component may
-    /// answer both from state computed here.
-    ///
-    /// That is what the hook is for: pinning declaration-time state once,
-    /// rather than deriving it again in every answer.
-    /// [`Select`](crate::Select) resolves here whether it is open. It is also
-    /// where the built-ins fail loud on a malformed declaration —
-    /// [`List`](crate::List), [`Select`](crate::Select), and
-    /// [`Tabs`](crate::Tabs) assert their item values are unique — so the
-    /// panic names the declaring component rather than surfacing later as a
-    /// routing oddity. Put a check whose answer changes only with the props
-    /// behind `cfg!(debug_assertions)`: every frame declares a fresh instance,
-    /// so every frame runs this hook.
-    ///
-    /// Leaf components take their props as plain values at declaration and can
-    /// ignore it.
-    fn prepare(&mut self, _state: &State) {}
-
     /// The scope this component opens around its descendants. Read once, before
-    /// [`declare`](Component::declare), so it cannot depend on paint.
-    fn scope_options(&self) -> ScopeOptions {
+    /// [`declare`](Component::declare), so it cannot depend on paint; `state`
+    /// is the app state this component is being declared with.
+    fn scope_options(&self, _state: &State) -> ScopeOptions {
         ScopeOptions::default()
     }
 
     /// Return the area used for focus, hit-testing, and event routing.
     ///
     /// The runtime calls this once with the final area passed to
-    /// [`DeclareCtx::component`], after [`prepare`](Self::prepare) and
+    /// [`DeclareCtx::component`], and the app state it is being declared with,
     /// before [`declare`](Self::declare). Painting still receives the original
     /// area. Returning an area with zero width or height keeps the component's
     /// identity and still calls `declare`, but excludes its whole subtree from
@@ -1442,7 +1323,7 @@ pub trait Component<State, Msg> {
     /// [`Ratcn::render`](super::Ratcn::render) panics if this returns a non-empty
     /// area that is not fully contained in `area`. The failed pass does not
     /// replace the previous retained surface.
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &State) -> Rect {
         area
     }
 
@@ -1497,22 +1378,30 @@ pub trait Component<State, Msg> {
     /// [`viewport`](DeclareCtx::viewport).
     ///
     /// The runtime calls this on the component that declared the viewport
-    /// whenever focus lands on a descendant the viewport is clipping, at the
-    /// start of a frame. Every way focus moves arrives here: Tab, a press, and
-    /// a path the app's update function stores. `target` is the descendant's
-    /// logical area, in the coordinates the viewport was declared with.
+    /// whenever focus lands on a descendant the viewport is clipping. Every way
+    /// focus moves arrives here: Tab, a press, and a path the app's update
+    /// function stores. `target` is the descendant's logical area, in the
+    /// coordinates the viewport was declared with.
     ///
-    /// The first frame whose retained surface can place the target reveals
-    /// it. Focus arriving together with the surface that first declares its
-    /// target — an app's startup focus, focus handed back as a modal closes, a
-    /// row declared for the first time — is answered one frame later, by the
-    /// render after that surface is retained.
+    /// It is called on the instance the frame just declared, once that
+    /// declaration is complete, so a target declared for the first time is
+    /// revealed by the same frame.
     ///
     /// The offset the component chooses belongs in an
-    /// [`EventCtx::transient`], which the declaration that follows reads. The
-    /// reveal is a channel of its own: the app's focus message is emitted
-    /// whatever happens here.
-    fn reveal_in_viewport(&mut self, _target: Rect, _state: &State, _ctx: &mut EventCtx<'_>) {}
+    /// [`EventCtx::transient`]. Return whether it moved: when it did, the
+    /// frame declares once more, and that declaration reads it; when it did
+    /// not, the declaration already built stands. The reveal is a channel of
+    /// its own: the app's focus message is emitted whatever happens here.
+    ///
+    /// The default moves nothing and returns `false`.
+    fn reveal_in_viewport(
+        &mut self,
+        _target: Rect,
+        _state: &State,
+        _ctx: &mut EventCtx<'_>,
+    ) -> bool {
+        false
+    }
 }
 
 /// A [`Component`] that can report its preferred size before it is declared.

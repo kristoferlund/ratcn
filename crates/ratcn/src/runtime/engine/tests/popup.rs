@@ -3,6 +3,70 @@
 
 use super::*;
 
+#[test]
+fn stored_focus_cannot_activate_or_highlight_a_hint() {
+    let state = FocusTestState {
+        focus: FocusState::intent(["tip", "button"]),
+    };
+    let rendered = Rc::new(RefCell::new(Vec::new()));
+    let mut driver = focus_driver(10, 2);
+    let area = driver.area();
+    // Keep identity stable while the layer becomes inert, then interactive again.
+    for hint in [false, true, false] {
+        driver.render(&state, |ctx| {
+            let content = |ctx: &mut DeclareCtx<'_, FocusTestState, FocusTestMsg>| {
+                ctx.component("button", FocusLeaf::recording(Rc::clone(&rendered)), area);
+            };
+            if hint {
+                ctx.hint("tip", area, ScopeOptions::default(), content);
+            } else {
+                ctx.scope("tip", area, ScopeOptions::default(), content);
+            }
+        });
+        assert_eq!(
+            driver.event(Event::Key(KeyEvent::new(KeyCode::Enter)), &state),
+            if hint {
+                EventResult::Ignored
+            } else {
+                EventResult::Emit(FocusTestMsg::Activated(vec!["tip".into(), "button".into()]))
+            },
+            "stored intent must not bypass the layer's interaction policy"
+        );
+        assert_eq!(rendered.borrow().last(), Some(&(!hint, !hint)));
+    }
+}
+
+#[test]
+fn capture_is_cancelled_when_its_layer_becomes_a_hint() {
+    let mut driver = Driver::<PointerState, PointerMsg>::new(10, 2);
+    let area = driver.area();
+    let render = |driver: &mut Driver<PointerState, PointerMsg>, hint| {
+        driver.render(&PointerState, |ctx| {
+            let content = |ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>| {
+                ctx.component("drag", Draggable { name: "drag" }, area);
+            };
+            if hint {
+                ctx.hint("layer", area, ScopeOptions::default(), content);
+            } else {
+                ctx.scope("layer", area, ScopeOptions::default(), content);
+            }
+        });
+    };
+    render(&mut driver, false);
+    driver.event(
+        mouse(MouseKind::Down(MouseButton::Left), 1, 0),
+        &PointerState,
+    );
+    render(&mut driver, true);
+    assert!(
+        !matches!(
+            driver.event(mouse(MouseKind::Moved, 2, 0), &PointerState),
+            EventResult::Emit(_)
+        ),
+        "an inert layer cannot retain a gesture claim"
+    );
+}
+
 fn render_popup_over_leaf(
     driver: &mut Driver<PointerState, PointerMsg>,
     state: &PointerState,
@@ -119,7 +183,7 @@ fn a_hint_layer_is_inert_to_the_pointer_and_to_focus() {
     impl Component<PointerState, PointerMsg> for FocusableLeaf {
         fn declare(&mut self, _ctx: &mut DeclareCtx<'_, PointerState, PointerMsg>) {}
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &PointerState) -> ScopeOptions {
             ScopeOptions::default().focusable(true)
         }
     }
@@ -222,6 +286,37 @@ fn an_outside_press_dismisses_the_innermost_nested_popup() {
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 9, 3), &state),
         EventResult::Emit(PointerMsg::Routed("inner", MouseKind::Moved, 0)),
         "the innermost popup is the topmost, so it is what a press outside dismisses"
+    );
+}
+
+/// A popup with no dismiss hook — one opened only to paint above its
+/// neighbours — has nothing to say about an outside press, so it must not
+/// stand between that press and the menu it is nested in: the menu still
+/// closes.
+#[test]
+fn a_hookless_nested_popup_does_not_block_its_parents_dismissal() {
+    let state = PointerState;
+    let mut driver = Driver::<PointerState, PointerMsg>::new(10, 4);
+    driver.render(&state, |ctx| {
+        ctx.popup(
+            ChildId::Static("menu"),
+            Rect::new(0, 0, 5, 2),
+            PopupOptions::default().on_dismiss(|| PointerMsg::Dismissed),
+            |ctx| {
+                ctx.popup(
+                    ChildId::Static("nested"),
+                    Rect::new(0, 0, 3, 1),
+                    PopupOptions::default(),
+                    |_| {},
+                );
+            },
+        );
+    });
+
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 9, 3), &state),
+        EventResult::Emit(PointerMsg::Dismissed),
+        "the menu's dismiss hook must fire past a hookless popup above it"
     );
 }
 

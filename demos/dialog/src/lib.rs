@@ -143,7 +143,7 @@ impl demo_shared::Demo for App {
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         let now = demo_shared::monotonic_time();
-        let _ = self.state.toasts.prune_expired(now);
+        self.state.toasts.prune_expired(now);
 
         buffer.set_style(area, Style::default().bg(theme.background));
         self.ratcn

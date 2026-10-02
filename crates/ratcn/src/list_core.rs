@@ -64,8 +64,7 @@ pub const SCROLL_STEP: usize = 3;
 ///
 /// - [`hold`](Self::hold) records a wheel scroll: the view moves to `offset`
 ///   and holds there while the list stays as it was.
-/// - [`settle`](Self::settle) runs once per frame, where the component
-///   declares. It releases the hold for good once anything has moved, and
+/// - [`settle`](Self::settle) runs where the component declares. It releases the hold for good once anything has moved, and
 ///   answers with the offset that declaration paints from. Releasing is
 ///   permanent: without it, moving the cursor away and back would revive a
 ///   stale hold and throw the cursor off-screen again.
@@ -73,7 +72,7 @@ pub const SCROLL_STEP: usize = 3;
 /// The declaration settles it rather than event handling because only the
 /// declaration sees every cursor change: a select's options are scrolled by
 /// the panel but moved by the keys its trigger handles. The hold is stored
-/// through [`DeclareCtx::transient_mut`](crate::runtime::DeclareCtx::transient_mut),
+/// through [`DeclareCtx::transient`](crate::runtime::DeclareCtx::transient),
 /// so it survives between frames and the wheel's own event handler writes it
 /// from the other side.
 ///
@@ -168,14 +167,14 @@ impl<T: Clone + PartialEq> WheelHold<T> {
 
 impl<T: Clone + PartialEq + 'static> WheelHold<T> {
     /// [`settle`](Self::settle) the hold stored at the current declaration's
-    /// identity, or an unheld view when nothing is stored there.
+    /// identity, starting from an unheld view at the top when nothing is
+    /// stored there yet.
     ///
-    /// A hold is written by a wheel event and read back by the next declaration,
-    /// so a declaration that has never been wheeled finds nothing — and must
-    /// still resolve the offset it paints from. Settling through here is what
-    /// makes the absent hold mean "unheld" rather than "no offset", in the one
-    /// place both list-shaped components reach for it.
-    pub fn settle_transient<S, M>(
+    /// The settled offset is stored back even when nothing holds the view: a
+    /// component that owns its scrolling resumes from it next frame, so a
+    /// cursor moving within the visible rows leaves the view where it is —
+    /// the same view a bound offset would keep.
+    pub fn settle_in<S, M>(
         ctx: &mut DeclareCtx<'_, S, M>,
         items: &[ListItem<T>],
         cursor: Option<usize>,
@@ -183,9 +182,7 @@ impl<T: Clone + PartialEq + 'static> WheelHold<T> {
         viewport: &mut RowViewport,
         area: Rect,
     ) {
-        let mut unheld = Self::default();
-        ctx.transient_mut::<Self>()
-            .unwrap_or(&mut unheld)
+        ctx.transient::<Self>()
             .settle(items, cursor, requested, viewport, area);
     }
 }
@@ -497,8 +494,8 @@ pub fn disabled_at<T>(items: &[ListItem<T>], index: usize) -> bool {
 
 /// Panic if two of the given item values are equal.
 ///
-/// Call it from a component's declaration-time validation (`prepare`) with an
-/// iterator over the identifying values — e.g. `items.iter().map(ListItem::value)`
+/// Call it from a component's `declare` with an iterator over the identifying
+/// values — e.g. `items.iter().map(ListItem::value)`
 /// for [`ListItem`]s, or the equivalent for any other value-keyed item type.
 /// Duplicate values make focus, selection, and pointer actions ambiguous — two
 /// rows answer to the same identity — so declaration panics. `component` names
@@ -548,6 +545,7 @@ pub fn assert_unique_values<'a, T: PartialEq + 'a>(
 pub struct RowViewport {
     rows_per_item: u16,
     painted_offset: usize,
+    pending_offset: Option<usize>,
 }
 
 impl RowViewport {
@@ -558,6 +556,7 @@ impl RowViewport {
         Self {
             rows_per_item: if row_height == 0 { 1 } else { row_height },
             painted_offset: 0,
+            pending_offset: None,
         }
     }
 
@@ -579,6 +578,7 @@ impl RowViewport {
     /// hit-test against it.
     pub const fn record_painted_offset(&mut self, offset: usize) {
         self.painted_offset = offset;
+        self.pending_offset = None;
     }
 
     /// How many whole items fit in `area`. This is the unit paging and
@@ -607,11 +607,11 @@ impl RowViewport {
         linear_nav::index_at_row(len, self.painted_offset, local_row / rows_per_item)
     }
 
-    /// Scroll one wheel notch in `direction`: the view moves [`SCROLL_STEP`]
-    /// items from the painted offset and is held there against `items` as the
-    /// `cursor` sits in them (see [`WheelHold::hold`]), and this viewport
-    /// records the new offset so hit-testing stays aligned with the next
-    /// paint. Answers the held offset, or `None` for a horizontal notch, which
+    /// Scroll one wheel notch in `direction`: the pending view moves
+    /// [`SCROLL_STEP`] items and is held there against `items` as the `cursor`
+    /// sits in them (see [`WheelHold::hold`]). Successive notches accumulate,
+    /// but hit-testing keeps using the painted offset until the next render.
+    /// Answers the held offset, or `None` for a horizontal notch, which
     /// a column of rows leaves alone.
     ///
     /// The cursor never moves on the wheel; what the control emits about the
@@ -627,12 +627,12 @@ impl RowViewport {
         let next = linear_nav::wheel_offset(
             items.len(),
             self.visible_items(area),
-            self.painted_offset,
+            self.pending_offset.unwrap_or(self.painted_offset),
             direction,
             SCROLL_STEP,
         )?;
         ctx.transient::<WheelHold<T>>().hold(next, items, cursor);
-        self.painted_offset = next;
+        self.pending_offset = Some(next);
         Some(next)
     }
 
@@ -875,7 +875,6 @@ mod tests {
             .open(|(): &()| true, Msg::Opened)
             .item_focus(|(): &()| Some('a'), Msg::Focused)
             .selection(|(): &()| None, Msg::Selected);
-        select.prepare(&state);
         let mut tabs = Tabs::new(items())
             .item_focus(|(): &()| Some('a'), Msg::Focused)
             .selection(|(): &()| None, Msg::Selected);

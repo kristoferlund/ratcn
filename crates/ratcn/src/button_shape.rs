@@ -1,5 +1,5 @@
 //! The shared pixels of the button idiom: half-block cap rows, the centered
-//! filled middle row, and the width formula.
+//! filled middle row, the label style, and the width formula.
 //!
 //! `Button` paints with these directly; `Tabs` uses the same vocabulary
 //! because a tab is painted as a button. Sharing the code here keeps the two
@@ -7,9 +7,22 @@
 
 use std::borrow::Cow;
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
 
 use crate::text_width::{display_width, display_width_u16, truncate_to_width};
+
+/// The style a label paints in over `background`. A [`Color::Reset`]
+/// background is left unset, so the surface the control sits on shows through
+/// instead of the terminal default.
+#[must_use]
+pub fn label_style(foreground: Color, background: Color) -> Style {
+    let style = Style::default().fg(foreground);
+    if background == Color::Reset {
+        style
+    } else {
+        style.bg(background)
+    }
+}
 
 /// Glyph for the top cap row of the large shape.
 pub const TOP_CAP: &str = "▄";

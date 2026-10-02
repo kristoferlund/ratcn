@@ -20,7 +20,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::Text,
-    widgets::{Block, BorderType, Borders, Widget},
+    widgets::{Block, BorderType, Borders, Clear, Widget},
 };
 
 use crate::Theme;
@@ -537,22 +537,24 @@ type ReadOpenFn<S> = Rc<dyn Fn(&S) -> bool>;
 type OnOpenChangeFn<M> = Rc<dyn Fn(bool) -> M>;
 type OpenBinding<S, M> = (ReadOpenFn<S>, OnOpenChangeFn<M>);
 type OnChangeFn<T, M> = Rc<dyn Fn(T) -> M>;
+type ItemBinding<S, T, M> = (ReadFn<S, T>, OnChangeFn<T, M>);
 type PaintItemFn<S, T> = Rc<dyn for<'a> Fn(&S, ListItemState<'a, T>) -> Text<'static>>;
 type StyleFn = Rc<dyn Fn(&Theme) -> SelectStyle>;
 
-fn bound_index<T: PartialEq, S>(
+fn bound_index<T: PartialEq, S, M>(
     items: &[ListItem<T>],
     state: &S,
-    read: Option<&ReadFn<S, T>>,
+    binding: Option<&ItemBinding<S, T, M>>,
 ) -> Option<usize> {
-    list_core::index_of(items, &(read?)(state)?)
+    let (read, _) = binding?;
+    list_core::index_of(items, &read(state)?)
 }
 
-fn resolved_cursor_index<T: PartialEq, S>(
+fn resolved_cursor_index<T: PartialEq, S, M>(
     items: &[ListItem<T>],
     state: &S,
-    focused: Option<&ReadFn<S, T>>,
-    selected: Option<&ReadFn<S, T>>,
+    focused: Option<&ItemBinding<S, T, M>>,
+    selected: Option<&ItemBinding<S, T, M>>,
 ) -> Option<usize> {
     // A bound value is never second-guessed: a cursor resting on a disabled
     // option stays there and is painted there, exactly as in `List`, and the
@@ -562,12 +564,12 @@ fn resolved_cursor_index<T: PartialEq, S>(
         .or_else(|| linear_nav::first_enabled(items.len(), |i| list_core::disabled_at(items, i)))
 }
 
-fn emit_item<T: Clone, M>(
-    handler: Option<&OnChangeFn<T, M>>,
+fn emit_item<T: Clone, S, M>(
+    binding: Option<&ItemBinding<S, T, M>>,
     items: &[ListItem<T>],
     index: usize,
 ) -> EventResult<M> {
-    handler.map_or(EventResult::Ignored, |handler| {
+    binding.map_or(EventResult::Ignored, |(_, handler)| {
         EventResult::Emit(handler(items[index].value().clone()))
     })
 }
@@ -610,18 +612,12 @@ fn emit_item<T: Clone, M>(
 /// Other modified keys are ignored so app shortcuts can handle
 /// them after they bubble through the popup. Paste events bubble for the same
 /// reason; Select has no text-editing behavior.
-#[expect(
-    clippy::struct_field_names,
-    reason = "on_select matches the public selection binding vocabulary"
-)]
 pub struct Select<T, S, M> {
     items: Rc<[ListItem<T>]>,
     placeholder: String,
     open: Option<OpenBinding<S, M>>,
-    focused_item: Option<ReadFn<S, T>>,
-    on_focus_change: Option<OnChangeFn<T, M>>,
-    selected: Option<ReadFn<S, T>>,
-    on_select: Option<OnChangeFn<T, M>>,
+    focused_item: Option<ItemBinding<S, T, M>>,
+    selected: Option<ItemBinding<S, T, M>>,
     max_visible: u16,
     disabled: bool,
     paint_item: Option<PaintItemFn<S, T>>,
@@ -630,7 +626,6 @@ pub struct Select<T, S, M> {
     selected_marker: Option<String>,
     unselected_marker: Option<String>,
     style: Option<StyleFn>,
-    resolved_open: bool,
     page_size: usize,
 }
 
@@ -658,9 +653,7 @@ impl<T, S, M> Select<T, S, M> {
             placeholder: String::new(),
             open: None,
             focused_item: None,
-            on_focus_change: None,
             selected: None,
-            on_select: None,
             max_visible: DEFAULT_MAX_VISIBLE_ITEMS,
             disabled: false,
             paint_item: None,
@@ -668,7 +661,6 @@ impl<T, S, M> Select<T, S, M> {
             selected_marker: None,
             unselected_marker: None,
             style: None,
-            resolved_open: false,
             page_size: 1,
         }
     }
@@ -721,8 +713,7 @@ impl<T, S, M> Select<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_change: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.focused_item = Some(Rc::new(read));
-        self.on_focus_change = Some(Rc::new(on_change));
+        self.focused_item = Some((Rc::new(read), Rc::new(on_change)));
         self
     }
 
@@ -738,8 +729,7 @@ impl<T, S, M> Select<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_select: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.selected = Some(Rc::new(read));
-        self.on_select = Some(Rc::new(on_select));
+        self.selected = Some((Rc::new(read), Rc::new(on_select)));
         self
     }
 
@@ -865,8 +855,10 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
         )
     }
 
+    /// Whether the panel shows: a disabled Select stays closed whatever its
+    /// binding reads.
     fn is_open(&self, state: &S) -> bool {
-        self.open.as_ref().is_some_and(|(read, _)| read(state))
+        !self.disabled && self.open.as_ref().is_some_and(|(read, _)| read(state))
     }
 
     fn toggle(&self, open: bool) -> EventResult<M> {
@@ -878,11 +870,11 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
     }
 
     fn move_cursor(&self, index: usize) -> EventResult<M> {
-        emit_item(self.on_focus_change.as_ref(), &self.items, index)
+        emit_item(self.focused_item.as_ref(), &self.items, index)
     }
 
     fn select(&self, index: usize) -> EventResult<M> {
-        emit_item(self.on_select.as_ref(), &self.items, index)
+        emit_item(self.selected.as_ref(), &self.items, index)
     }
 
     fn keyboard_enabled(&self) -> bool {
@@ -963,17 +955,14 @@ impl<T: Clone + PartialEq, S, M> Select<T, S, M> {
 }
 
 impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for Select<T, S, M> {
-    fn prepare(&mut self, state: &S) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         // Quadratic in the option count and re-derived on every frame's fresh
         // instance, so a release build takes the items on trust.
         if cfg!(debug_assertions) {
             list_core::assert_unique_values(self.items.iter().map(ListItem::value), "Select");
         }
-        self.resolved_open = !self.disabled && self.is_open(state);
-    }
-
-    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
-        let Some((open, on_open_change)) = self.open.as_ref().filter(|_| self.resolved_open) else {
+        let is_open = self.is_open(ctx.state());
+        let Some((open, on_open_change)) = self.open.as_ref().filter(|_| is_open) else {
             return;
         };
         let area = trigger_area(ctx.area());
@@ -987,29 +976,38 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         ) else {
             return;
         };
-        let inner = Block::new().borders(Borders::ALL).inner(panel_area);
-        self.page_size = viewport.visible_items(inner).max(1);
-        let panel = SelectPanel {
-            items: Rc::clone(&self.items),
-            open: Rc::clone(open),
-            focused_item: self.focused_item.clone(),
-            on_focus_change: self.on_focus_change.clone(),
-            selected: self.selected.clone(),
-            on_select: self.on_select.clone(),
-            paint_item: self.paint_item.clone(),
-            selected_marker: self.selected_marker.clone(),
-            unselected_marker: self.unselected_marker.clone(),
-            style,
-            panel_area,
-            inner,
-            viewport,
-        };
+        self.page_size = viewport.visible_items(panel_inner(panel_area)).max(1);
+        let items = Rc::clone(&self.items);
+        let open = Rc::clone(open);
+        let focused_item = self.focused_item.clone();
+        let selected = self.selected.clone();
+        let paint_item = self.paint_item.clone();
+        let selected_marker = self.selected_marker.clone();
+        let unselected_marker = self.unselected_marker.clone();
         let on_open_change = Rc::clone(on_open_change);
         ctx.popup(
             "panel",
             panel_area,
             PopupOptions::default().on_dismiss(move || on_open_change(false)),
-            move |ctx| ctx.component("options", panel, panel_area),
+            move |ctx| {
+                // The popup declares in screen coordinates, so the panel is
+                // measured against the area it opened at, not the one laid
+                // out above in the declaring viewport's.
+                let area = ctx.area();
+                let panel = SelectPanel {
+                    items,
+                    open,
+                    focused_item,
+                    selected,
+                    paint_item,
+                    selected_marker,
+                    unselected_marker,
+                    style,
+                    inner: panel_inner(area),
+                    viewport,
+                };
+                ctx.component("options", panel, area);
+            },
         );
     }
 
@@ -1021,7 +1019,7 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         let value = selected.map(|index| self.items[index].label());
         let trigger = SelectWidget::new(value)
             .placeholder(&self.placeholder)
-            .open(self.resolved_open)
+            .open(self.is_open(state))
             .focused(ctx.focused())
             .hovered(ctx.hovered())
             .disabled(self.disabled)
@@ -1049,29 +1047,31 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default()
             .focusable(self.keyboard_enabled() && !self.disabled && self.has_enabled_item())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         trigger_area(area)
     }
+}
+
+/// `panel` inside its border.
+fn panel_inner(panel: Rect) -> Rect {
+    Block::new().borders(Borders::ALL).inner(panel)
 }
 
 struct SelectPanel<T, S, M> {
     items: Rc<[ListItem<T>]>,
     open: ReadOpenFn<S>,
-    focused_item: Option<ReadFn<S, T>>,
-    on_focus_change: Option<OnChangeFn<T, M>>,
-    selected: Option<ReadFn<S, T>>,
-    on_select: Option<OnChangeFn<T, M>>,
+    focused_item: Option<ItemBinding<S, T, M>>,
+    selected: Option<ItemBinding<S, T, M>>,
     paint_item: Option<PaintItemFn<S, T>>,
     selected_marker: Option<String>,
     unselected_marker: Option<String>,
     style: SelectStyle,
-    panel_area: Rect,
-    /// `panel_area` inside its border: the rows the options themselves occupy.
+    /// The panel inside its border: the rows the options themselves occupy.
     /// Carried rather than re-derived so declaration, paint, hit-testing, and
     /// wheel arithmetic all measure the panel's capacity against one rect.
     inner: Rect,
@@ -1101,7 +1101,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         // The panel owns its scrolling, so the hold supplies the offset: the
         // view stays where the wheel left it — cursor visible or not — until
         // the cursor or the options move, and the hold dies with the popup.
-        WheelHold::settle_transient(
+        WheelHold::settle_in(
             ctx,
             &self.items,
             cursor,
@@ -1113,8 +1113,6 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let state = ctx.state();
-        let labels: Vec<&str> = self.items.iter().map(ListItem::label).collect();
-        let disabled: Vec<bool> = self.items.iter().map(ListItem::is_disabled).collect();
         let cursor = self.cursor(state);
         let selected = bound_index(&self.items, state, self.selected.as_ref());
         let rows_per_item = self.viewport.rows_per_item();
@@ -1126,6 +1124,11 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         let last_option = first_option
             .saturating_add(self.viewport.visible_items(self.inner))
             .min(self.items.len());
+        // Adapt only the painted window, with widget-local indices. The row
+        // callback above the widget boundary keeps its whole-list identity.
+        let visible = &self.items[first_option..last_option];
+        let labels: Vec<&str> = visible.iter().map(ListItem::label).collect();
+        let disabled: Vec<bool> = visible.iter().map(ListItem::is_disabled).collect();
         let rows: Option<Vec<Text<'static>>> = self.paint_item.as_ref().map(|paint_item| {
             list_core::windowed_rows(
                 &self.items,
@@ -1141,10 +1144,9 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
             .open(true)
             .options(&labels)
             .row_height(rows_per_item)
-            .focused_item(cursor)
-            .selected_item(selected)
+            .focused_item(cursor.and_then(|index| index.checked_sub(first_option)))
+            .selected_item(selected.and_then(|index| index.checked_sub(first_option)))
             .disabled_items(&disabled)
-            .first_item(self.viewport.painted_offset())
             .style(self.style);
         if let Some(marker) = self.selected_marker.as_deref() {
             widget = widget.selected_marker(marker);
@@ -1155,7 +1157,11 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         if let Some(rows) = &rows {
             widget = widget.visible_item_rows(rows);
         }
-        ctx.widget(SelectPanelWidget(widget), self.panel_area);
+        // Layers are transparent: the panel clears its footprint so nothing
+        // beneath shows through.
+        let area = ctx.area();
+        ctx.widget(Clear, area);
+        ctx.widget(SelectPanelWidget(widget), area);
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
@@ -1184,15 +1190,15 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                 &self.items,
                 option,
                 cursor,
-                self.on_select.is_some(),
+                self.selected.is_some(),
             ) {
                 RowIntent::BlockPress => EventResult::Consumed,
-                RowIntent::Commit(index) => emit_item(self.on_select.as_ref(), &self.items, index),
+                RowIntent::Commit(index) => emit_item(self.selected.as_ref(), &self.items, index),
                 // Motion means nothing without a cursor to move: a panel bound
                 // for pointer selection alone lets it through to whatever is
                 // under it, rather than swallowing every drift over an option.
                 RowIntent::Focus(index) if self.focused_item.is_some() => {
-                    emit_item(self.on_focus_change.as_ref(), &self.items, index)
+                    emit_item(self.focused_item.as_ref(), &self.items, index)
                 }
                 RowIntent::Stay if self.focused_item.is_some() => EventResult::Consumed,
                 // The popup occludes exactly its own footprint, so a click
@@ -1357,7 +1363,7 @@ mod tests {
     ) {
         let items = items.to_vec();
         driver.render(state, |ctx| {
-            ctx.component("fruit", select(items), area);
+            ctx.component("fruit", select(items.clone()), area);
             ctx.paint(|ctx| {
                 ctx.widget(Line::from("later sibling"), Rect::new(0, 4, 20, 1));
             });
@@ -1377,6 +1383,43 @@ mod tests {
         assert!(driver.row(4).contains("Mango"), "{}", driver.row(4));
         assert!(!driver.row(4).contains("later sibling"));
         assert!(driver.row(5).contains("Papaya"));
+    }
+
+    /// Every framed box on screen hides what was painted beneath it: no `x`
+    /// of the background survives between a box's left and right border.
+    fn assert_boxes_hide_the_background(driver: &Driver<State, Msg>, height: u16) {
+        let mut boxed = 0;
+        for row in 0..height {
+            let cells: Vec<char> = driver.row(row).chars().collect();
+            let left = cells.iter().position(|c| "╭│╰".contains(*c));
+            let right = cells.iter().rposition(|c| "╮│╯".contains(*c));
+            if let (Some(left), Some(right)) = (left, right) {
+                boxed += 1;
+                assert!(
+                    !cells[left..=right].contains(&'x'),
+                    "the background shows through row {row}: {}",
+                    driver.row(row)
+                );
+            }
+        }
+        assert!(boxed > 0, "no box was painted");
+    }
+
+    /// Layers are transparent, so the panel clears its own footprint before
+    /// drawing: nothing painted beneath it shows through.
+    #[test]
+    fn the_open_panel_hides_what_is_painted_beneath_it() {
+        let mut driver = Driver::<State, Msg>::new(20, 8);
+        let state = State {
+            open: true,
+            ..State::default()
+        };
+        driver.render(&state, |ctx| {
+            let background = vec![Line::from("x".repeat(20)); 8];
+            ctx.paint_widget(ratatui::widgets::Paragraph::new(background), ctx.area());
+            ctx.component("fruit", select(items()), Rect::new(0, 0, 20, 1));
+        });
+        assert_boxes_hide_the_background(&driver, 8);
     }
 
     #[test]
@@ -1434,7 +1477,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items());
-        component.prepare(&open);
         let key = |code, modifiers| Event::Key(KeyEvent { code, modifiers });
 
         for code in [KeyCode::Tab, KeyCode::BackTab] {
@@ -1513,7 +1555,6 @@ mod tests {
             KeyCode::Down,
         ] {
             let mut component = select(items());
-            component.prepare(&closed);
             assert_eq!(
                 component.handle_event(
                     &Event::Key(KeyEvent::new(code)),
@@ -1531,7 +1572,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items());
-        component.prepare(&open);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Esc)),
@@ -1616,6 +1656,11 @@ mod tests {
             EventResult::Consumed,
             "the wheel scrolls the view without emitting a cursor move"
         );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 3, 1), &state),
+            EventResult::Emit(Msg::Selected(Fruit::Mango)),
+            "a wheel event cannot change the identity of an option still on screen"
+        );
         render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &items());
         assert!(
             driver.row(1).contains("Lychee") && driver.row(2).contains("Durian"),
@@ -1635,6 +1680,29 @@ mod tests {
         assert!(
             driver.row(1).contains("Papaya"),
             "the cursor scrolls back into view: {}",
+            driver.row(1)
+        );
+    }
+
+    /// The panel owns its offset, so a cursor moving within the visible
+    /// options must not drag the view back toward the top.
+    #[test]
+    fn the_panel_keeps_its_view_while_the_cursor_stays_visible() {
+        let mut driver = driver(20, 4);
+        let mut state = State {
+            open: true,
+            cursor: Some(Fruit::Durian),
+            ..State::default()
+        };
+        let area = Rect::new(0, 0, 20, 1);
+        render_select(&mut driver, &state, area, &items());
+        assert!(driver.row(1).contains("Lychee"), "{}", driver.row(1));
+
+        state.cursor = Some(Fruit::Lychee);
+        render_select(&mut driver, &state, area, &items());
+        assert!(
+            driver.row(1).contains("Lychee"),
+            "the cursor is still visible, so the view stays put: {}",
             driver.row(1)
         );
     }
@@ -1776,6 +1844,7 @@ mod tests {
         let draw = |driver: &mut Driver<State, Msg>,
                     recorded: Rc<std::cell::RefCell<Vec<usize>>>| {
             driver.render(&state, |ctx| {
+                let recorded = Rc::clone(&recorded);
                 ctx.component(
                     "fruit",
                     select(items()).paint_item(move |_: &State, row: ListItemState<'_, Fruit>| {
@@ -1821,7 +1890,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items);
-        component.prepare(&state);
 
         // The cursor really is on the disabled option: moving up from it
         // reaches Mango. A retargeted cursor would already be on Mango and
@@ -1860,7 +1928,6 @@ mod tests {
             .collect();
         let closed = State::default();
         let mut component = select(items);
-        component.prepare(&closed);
 
         for code in [
             KeyCode::Enter,
@@ -1917,7 +1984,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items());
-        component.prepare(&state);
 
         for code in [KeyCode::Delete, KeyCode::Backspace, KeyCode::F(5)] {
             assert_eq!(
@@ -2031,7 +2097,6 @@ mod tests {
             ..State::default()
         };
         let mut component = select(items());
-        component.prepare(&closed);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Char('j'))),
@@ -2058,9 +2123,8 @@ mod tests {
         let mut component = Select::new(items())
             .open(|state: &State| state.open, Msg::Open)
             .selection(|state: &State| state.selected, Msg::Selected);
-        component.prepare(&state);
 
-        assert!(!component.scope_options().focusable);
+        assert!(!component.scope_options(&state).focusable);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Down)),
@@ -2085,9 +2149,8 @@ mod tests {
         let mut component = Select::new(items())
             .open(|state: &State| state.open, Msg::Open)
             .item_focus(|state: &State| state.cursor, Msg::Focused);
-        component.prepare(&state);
 
-        assert!(!component.scope_options().focusable);
+        assert!(!component.scope_options(&state).focusable);
         assert_eq!(
             component.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Down)),
@@ -2164,8 +2227,7 @@ mod tests {
     fn a_disabled_select_is_not_focusable_and_ignores_keys() {
         let state = State::default();
         let mut disabled = select(items()).disabled(true);
-        disabled.prepare(&state);
-        assert!(!disabled.scope_options().focusable);
+        assert!(!disabled.scope_options(&state).focusable);
         assert_eq!(
             disabled.handle_event(
                 &Event::Key(KeyEvent::new(KeyCode::Enter)),
@@ -2173,6 +2235,386 @@ mod tests {
                 &mut EventCtx::default()
             ),
             EventResult::Ignored
+        );
+    }
+
+    /// What a select looks like, pinned: a change to how options are painted
+    /// must leave every one of these frames exactly as recorded.
+    fn painted_select_frames() -> [String; 3] {
+        use crate::test_support::styled_snapshot;
+        use ratatui::style::Stylize;
+
+        let with_durian_disabled = || {
+            let mut items = items();
+            items[3] = ListItem::new(Fruit::Durian, "Durian").disabled(true);
+            items
+        };
+        let fixed = |open: bool, cursor: Fruit, selected: Option<Fruit>| {
+            Select::new(with_durian_disabled())
+                .placeholder("Pick a fruit")
+                .open(move |_: &State| open, Msg::Open)
+                .item_focus(move |_: &State| Some(cursor), Msg::Focused)
+                .selection(move |_: &State| selected, Msg::Selected)
+        };
+
+        // Closed: a placeholder, a focused value, and a disabled value.
+        let state = State {
+            focus: FocusState::intent(["valued"]),
+            ..State::default()
+        };
+        let mut closed = driver(16, 3);
+        closed.render(&state, |ctx| {
+            ctx.component(
+                "placeholder",
+                fixed(false, Fruit::Mango, None),
+                Rect::new(0, 0, 16, 1),
+            );
+            ctx.component(
+                "valued",
+                fixed(false, Fruit::Mango, Some(Fruit::Papaya)),
+                Rect::new(0, 1, 16, 1),
+            );
+            ctx.component(
+                "disabled",
+                fixed(false, Fruit::Mango, Some(Fruit::Papaya)).disabled(true),
+                Rect::new(0, 2, 16, 1),
+            );
+        });
+
+        // Open: default markers over a disabled option; custom markers
+        // scrolled to the cursor; custom two-row options with an explicit
+        // span color.
+        let mut open = driver(48, 8);
+        open.render(&state, |ctx| {
+            ctx.component(
+                "markers",
+                fixed(true, Fruit::Papaya, Some(Fruit::Mango)),
+                Rect::new(0, 3, 16, 1),
+            );
+            ctx.component(
+                "custom",
+                fixed(true, Fruit::Lychee, Some(Fruit::Papaya))
+                    .max_visible_items(2)
+                    .selected_marker("[x]")
+                    .unselected_marker("[ ]"),
+                Rect::new(16, 3, 16, 1),
+            );
+            ctx.component(
+                "painted",
+                Select::new(items())
+                    .open(|_: &State| true, Msg::Open)
+                    .item_focus(|_: &State| Some(Fruit::Durian), Msg::Focused)
+                    .selection(|_: &State| Some(Fruit::Mango), Msg::Selected)
+                    .max_visible_items(2)
+                    .row_height(2)
+                    .paint_item(|_, row| {
+                        Text::from(vec![
+                            Line::from(row.label.to_string()),
+                            Line::from(format!(" #{}", row.index).magenta()),
+                        ])
+                    }),
+                Rect::new(32, 3, 16, 1),
+            );
+        });
+
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 32, 6));
+        standalone_widgets(&theme, &mut buffer);
+        [
+            styled_snapshot(closed.buffer()),
+            styled_snapshot(open.buffer()),
+            styled_snapshot(&buffer),
+        ]
+    }
+
+    /// The paint-only widget on its own: a scrolled panel with the default
+    /// markers, and a panel of custom two-row options too tall to show both.
+    fn standalone_widgets(theme: &Theme, buffer: &mut Buffer) {
+        let options = ["Mango", "Papaya", "Lychee", "Durian"];
+        SelectWidget::new(Some("Papaya"))
+            .open(true)
+            .options(&options)
+            .first_item(1)
+            .focused_item(Some(2))
+            .selected_item(Some(1))
+            .disabled_items(&[false, false, false, true])
+            .focused(true)
+            .themed(theme)
+            .render(Rect::new(0, 0, 16, 6), buffer);
+        let rows = [
+            Text::from(vec![Line::from("Mango"), Line::from(" sweet")]),
+            Text::from(vec![Line::from("Papaya"), Line::from(" soft")]),
+        ];
+        SelectWidget::new(None)
+            .placeholder("Pick")
+            .open(true)
+            .options(&options[..2])
+            .visible_item_rows(&rows)
+            .row_height(2)
+            .focused_item(Some(0))
+            .themed(theme)
+            .render(Rect::new(16, 0, 16, 6), buffer);
+    }
+
+    const RECORDED_SELECT_FRAMES: [&str; 3] = [
+        r" Pick a fruit ∨ |
+ Papaya       ∨ |
+ Papaya       ∨ |
+abbbbbbbbbbbbaba
+cddddddcccccccec
+fggggggfffffffgf
+a: Reset on #1F1F1F NONE
+b: #A1A1A1 on #1F1F1F NONE
+c: Reset on #282828 NONE
+d: #FAFAFA on #282828 NONE
+e: #A1A1A1 on #282828 NONE
+f: Reset on #151515 NONE
+g: #565656 on #151515 NONE
+",
+        r"                                                |
+                                                |
+╭──────────────╮╭──────────────╮╭──────────────╮|
+│ ● Mango      ││ [x] Papaya   ││Lychee        │|
+│ ○ Papaya     ││ [ ] Lychee   ││ #2           │|
+│ ○ Lychee     │╰──────────────╯│Durian        │|
+│ ○ Durian     │                │ #3           │|
+╰──────────────╯                ╰──────────────╯|
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bccddddddddddddbbccccddddddddddbbeeeeeeeeeeeeeeb
+bffggggggggggggbbffffggggggggggbbhhheeeeeeeeeeeb
+beeeeeeeeeeeeeebbbbbbbbbbbbbbbbbbggggggggggggggb
+biiiiiiiiiiiiiibaaaaaaaaaaaaaaaabjjjgggggggggggb
+bbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb
+a: Reset on Reset NONE
+b: #5E5E5E on #282828 NONE
+c: #E5E5E5 on #282828 NONE
+d: #FAFAFA on #282828 NONE
+e: #A1A1A1 on #282828 NONE
+f: #A1A1A1 on #484848 NONE
+g: #FAFAFA on #484848 NONE
+h: Magenta on #282828 NONE
+i: #565656 on #151515 NONE
+j: Magenta on #484848 NONE
+",
+        r" Papaya       ∧  Pick         ∧ |
+╭──────────────╮╭──────────────╮|
+│ ● Papaya     ││Mango         │|
+│ ○ Lychee     ││ sweet        │|
+│ ○ Durian     │╰──────────────╯|
+╰──────────────╯                |
+abbbbbbaaaaaaacadeeeeddddddddded
+ffffffffffffffffffffffffffffffff
+fggbbbbbbbbbbbbffhhhhhhhhhhhhhhf
+fiihhhhhhhhhhhhffhhhhhhhhhhhhhhf
+fjjjjjjjjjjjjjjfffffffffffffffff
+ffffffffffffffffkkkkkkkkkkkkkkkk
+a: Reset on #282828 NONE
+b: #FAFAFA on #282828 NONE
+c: #A1A1A1 on #282828 NONE
+d: Reset on #1F1F1F NONE
+e: #A1A1A1 on #1F1F1F NONE
+f: #5E5E5E on #282828 NONE
+g: #E5E5E5 on #282828 NONE
+h: #FAFAFA on #484848 NONE
+i: #A1A1A1 on #484848 NONE
+j: #565656 on #151515 NONE
+k: Reset on Reset NONE
+",
+    ];
+
+    #[test]
+    fn select_frames_paint_exactly_as_recorded() {
+        for (painted, recorded) in painted_select_frames().iter().zip(RECORDED_SELECT_FRAMES) {
+            assert_eq!(painted, recorded);
+        }
+    }
+
+    fn painted(widget: SelectWidget<'_>, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        widget.render(area, &mut buffer);
+        crate::test_support::styled_snapshot(&buffer)
+    }
+
+    const FRUITS: [&str; 5] = ["Mango", "Papaya", "Lychee", "Durian", "Guava"];
+
+    // The paint-only widget's frames, pinned: a plain-ratatui caller must
+    // keep seeing exactly these cells.
+
+    #[test]
+    fn standalone_open_panel_paints_default_markers_and_row_states() {
+        let widget = SelectWidget::new(Some("Papaya"))
+            .open(true)
+            .options(&FRUITS)
+            .focused_item(Some(2))
+            .selected_item(Some(1))
+            // Shorter than the options: the rest are enabled.
+            .disabled_items(&[false, false, false, true])
+            .focused(true)
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 16, 8),
+            r" Papaya       ∧ |
+╭──────────────╮|
+│ ○ Mango      │|
+│ ● Papaya     │|
+│ ○ Lychee     │|
+│ ○ Durian     │|
+│ ○ Guava      │|
+╰──────────────╯|
+abbbbbbaaaaaaaca
+dddddddddddddddd
+dccccccccccccccd
+deebbbbbbbbbbbbd
+dffggggggggggggd
+dhhhhhhhhhhhhhhd
+dccccccccccccccd
+dddddddddddddddd
+a: Reset on #282828 NONE
+b: #FAFAFA on #282828 NONE
+c: #A1A1A1 on #282828 NONE
+d: #5E5E5E on #282828 NONE
+e: #E5E5E5 on #282828 NONE
+f: #A1A1A1 on #484848 NONE
+g: #FAFAFA on #484848 NONE
+h: #565656 on #151515 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_first_item_near_the_end_leaves_blank_panel_rows() {
+        let widget = SelectWidget::new(None)
+            .open(true)
+            .options(&FRUITS)
+            .first_item(3)
+            .focused_item(Some(4))
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 16, 8),
+            r"              ∧ |
+╭──────────────╮|
+│ ○ Durian     │|
+│ ○ Guava      │|
+│              │|
+│              │|
+│              │|
+╰──────────────╯|
+aaaaaaaaaaaaaaba
+cccccccccccccccc
+cddddddddddddddc
+ceeffffffffffffc
+cggggggggggggggc
+cggggggggggggggc
+cggggggggggggggc
+cccccccccccccccc
+a: Reset on #1F1F1F NONE
+b: #A1A1A1 on #1F1F1F NONE
+c: #5E5E5E on #282828 NONE
+d: #A1A1A1 on #282828 NONE
+e: #A1A1A1 on #484848 NONE
+f: #FAFAFA on #484848 NONE
+g: Reset on #282828 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_item_rows_pad_clip_and_leave_missing_rows_blank() {
+        let rows = [
+            Text::from(vec![Line::from("Mango"), Line::from(" sweet")]),
+            Text::from("Papaya"),
+            Text::from(vec![
+                Line::from("Lychee"),
+                Line::from(" pink"),
+                Line::from(" gone"),
+            ]),
+        ];
+        let widget = SelectWidget::new(None)
+            .placeholder("Pick")
+            .open(true)
+            .options(&FRUITS[..4])
+            .visible_item_rows(&rows)
+            .row_height(2)
+            .focused_item(Some(0))
+            .selected_item(Some(1))
+            .disabled_items(&[false, false, true])
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 16, 11),
+            r" Pick         ∧ |
+╭──────────────╮|
+│Mango         │|
+│ sweet        │|
+│Papaya        │|
+│              │|
+│Lychee        │|
+│ pink         │|
+│              │|
+│              │|
+╰──────────────╯|
+abbbbaaaaaaaaaba
+cccccccccccccccc
+cddddddddddddddc
+cddddddddddddddc
+ceeeeeeeeeeeeeec
+ceeeeeeeeeeeeeec
+cffffffffffffffc
+cffffffffffffffc
+cggggggggggggggc
+cggggggggggggggc
+cccccccccccccccc
+a: Reset on #1F1F1F NONE
+b: #A1A1A1 on #1F1F1F NONE
+c: #5E5E5E on #282828 NONE
+d: #FAFAFA on #484848 NONE
+e: #FAFAFA on #282828 NONE
+f: #565656 on #151515 NONE
+g: #A1A1A1 on #282828 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_explicit_style_and_row_height_zero_reading_as_one() {
+        let mut style = SelectStyle::fallback();
+        style.panel_background = Color::Blue;
+        style.focused_option_background = Color::Rgb(9, 8, 7);
+        style.selected_marker = Color::Red;
+        let widget = SelectWidget::new(Some("Mango"))
+            .open(true)
+            .options(&FRUITS[..2])
+            .row_height(0)
+            .focused_item(Some(1))
+            .selected_item(Some(0))
+            .style(style);
+
+        assert_eq!(
+            painted(widget, 12, 5),
+            r" Mango    ∧ |
+╭──────────╮|
+│ ● Mango  │|
+│ ○ Papaya │|
+╰──────────╯|
+abbbbbaaaaca
+dddddddddddd
+deeffffffffd
+dgghhhhhhhhd
+dddddddddddd
+a: Reset on Reset NONE
+b: White on Reset NONE
+c: DarkGray on Reset NONE
+d: DarkGray on Blue NONE
+e: Red on Blue NONE
+f: White on Blue NONE
+g: DarkGray on #090807 NONE
+h: Black on #090807 NONE
+"
         );
     }
 }

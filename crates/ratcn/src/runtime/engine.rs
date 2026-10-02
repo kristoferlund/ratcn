@@ -11,15 +11,15 @@
 //! input against it.
 //!
 //! Supporting types sit with the one that uses them: viewports and
-//! projections before [`Surface`], and the paint queue and its canvases
-//! before [`RenderPass`]. What the pointer is doing between a press and its
-//! release lives in [`gesture`](super::gesture), which [`Ratcn`] drives.
+//! projections before [`Surface`], and the paint queue before [`RenderPass`].
+//! What the pointer is doing between a press and its release lives in
+//! [`gesture`](super::gesture), which [`Ratcn`] drives.
 
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, ops::Range};
 
 use ratatui::{
     Frame,
-    buffer::{Buffer, CellDiffOption, CellWidth},
+    buffer::Buffer,
     layout::{Position, Rect},
 };
 
@@ -29,20 +29,14 @@ use crate::backdrop::dim_background;
 use super::{
     ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyEvent, ModalState,
     MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
-    component::{InteractionFlags, PaintTarget, PointerInputs, TransientMap},
+    component::{InteractionFlags, PaintRoute, PaintTarget, PointerInputs, TransientMap},
     focus,
-    gesture::{Gestures, Press},
+    gesture::Gestures,
 };
 
-/// `begin_node`'s node kind, spelled out at each call site: a component node
-/// occupies the area it was declared with and carries a [`Component`]; a scope
-/// node is kept for identity and parents a subtree.
-const COMPONENT_NODE: bool = false;
-const SCOPE_NODE: bool = true;
-
 // The largest rectangle a viewport declares as its content, and the largest a
-// single paint inside one covers: each becomes a scratch buffer of one Ratatui
-// cell per cell.
+// single paint inside one or inside a layer covers: a paint becomes a scratch
+// buffer of one Ratatui cell per cell.
 pub(crate) const MAX_VIEWPORT_CELLS: u32 = 262_144;
 
 type ModalRead<State> = Box<dyn Fn(&State) -> &ModalState>;
@@ -150,34 +144,22 @@ impl Viewport {
         }
     }
 
-    /// A logical rectangle in screen coordinates, clipped to `clip`. Rows that
-    /// project above the screen are dropped.
-    fn project_rect(self, area: Rect, clip: Rect) -> Rect {
-        let above = self.offset.saturating_sub(area.y);
-        if above >= area.height {
-            return Rect::ZERO;
-        }
-        // `max` then subtract: both operands are at least `offset`.
-        let projected = Rect::new(
-            area.x,
-            area.y.max(self.offset) - self.offset,
-            area.width,
-            area.height - above,
-        )
-        .intersection(clip);
-        if projected.is_empty() {
-            Rect::ZERO
-        } else {
-            projected
+    /// How paint declared inside this viewport reaches the screen: shifted
+    /// up by the offset, onto the rows it shows.
+    fn projection(self) -> Projection {
+        Projection {
+            offset: self.offset,
+            clip: self.visible_screen(),
         }
     }
 
     /// `area` with this viewport's scroll undone: the screen rectangle those
-    /// logical rows sit at, held against the viewport's top edge where the
-    /// offset would carry them above it.
+    /// logical rows sit at, unclipped — above or below the viewport's own
+    /// rows included. Only the coordinate origin holds a row the offset would
+    /// carry past it.
     fn unscrolled(self, area: Rect) -> Rect {
         Rect {
-            y: area.y.saturating_sub(self.offset).max(self.screen.y),
+            y: area.y.saturating_sub(self.offset),
             ..area
         }
     }
@@ -191,78 +173,73 @@ impl Viewport {
     }
 }
 
-/// A viewport as one paint carries it: whether the viewport's clip still
-/// applies to that paint.
+/// How one paint reaches the frame when it may not write straight onto it:
+/// laid out in its own coordinates, shifted up by `offset` rows, and kept
+/// only where it lands inside `clip`.
 ///
-/// The rectangle escaped paint addresses is the surface it lands on — the
-/// frame, or a layer's canvas — so the methods that need it take it as
-/// `surface` from whoever holds that surface.
+/// Paint inside a viewport carries the viewport's offset and the rows it
+/// shows; layer paint carries the render area as its clip, so what a layer
+/// paints never reaches past it. See [`PaintTarget`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Projection {
-    /// Content declared inside the viewport. It addresses the whole logical
-    /// content and reaches the rows the viewport shows.
-    Clipped(Viewport),
-    /// Paint that escaped the clip — a layer opened inside the viewport, or a
-    /// closure deferred from inside it. It addresses the surface it paints
-    /// on, read in logical coordinates, and reaches all of it.
-    Escaped(Viewport),
+pub(crate) struct Projection {
+    offset: u16,
+    clip: Rect,
 }
 
 impl Projection {
-    const fn viewport(self) -> Viewport {
-        match self {
-            Self::Clipped(viewport) | Self::Escaped(viewport) => viewport,
+    /// Paint in screen coordinates, kept inside `clip`.
+    pub(crate) const fn clipped(clip: Rect) -> Self {
+        Self { offset: 0, clip }
+    }
+
+    /// The same projection, reaching no further than `bound` as well.
+    fn within(self, bound: Rect) -> Self {
+        Self {
+            clip: self.clip.intersection(bound),
+            ..self
         }
     }
 
-    /// The screen rectangle paint carrying this reaches, given the `surface`
-    /// it lands on.
-    fn clip(self, surface: Rect) -> Rect {
-        match self {
-            Self::Clipped(viewport) => viewport.visible_screen(),
-            Self::Escaped(_) => surface,
+    /// The screen rectangle paint through this reaches.
+    pub(crate) const fn clip(self) -> Rect {
+        self.clip
+    }
+
+    /// A rectangle in paint coordinates, in screen coordinates and clipped.
+    /// Rows that project above the screen are dropped.
+    fn project_rect(self, area: Rect) -> Rect {
+        let above = self.offset.saturating_sub(area.y);
+        if above >= area.height {
+            return Rect::ZERO;
+        }
+        // `max` then subtract: both operands are at least `offset`.
+        let projected = Rect::new(
+            area.x,
+            area.y.max(self.offset) - self.offset,
+            area.width,
+            area.height - above,
+        )
+        .intersection(self.clip);
+        if projected.is_empty() {
+            Rect::ZERO
+        } else {
+            projected
         }
     }
 
-    /// The whole logical rectangle paint carrying this may write in, given
-    /// the `surface` it lands on.
-    pub(crate) fn allocation(self, surface: Rect) -> Rect {
-        match self {
-            Self::Clipped(viewport) => viewport.content(),
-            Self::Escaped(viewport) => viewport.logical_frame(surface),
-        }
-    }
-
-    /// A logical rectangle in screen coordinates, clipped.
-    pub(crate) fn project_rect(self, area: Rect, surface: Rect) -> Rect {
-        self.viewport().project_rect(area, self.clip(surface))
-    }
-
-    /// `point` in logical coordinates. Content counts only where the viewport
-    /// shows it; paint that escaped the clip counts wherever the pointer is.
-    fn to_logical(self, point: Position) -> Option<Position> {
-        match self {
-            Self::Clipped(viewport) => viewport.visible_to_logical(point),
-            Self::Escaped(viewport) => viewport.to_logical(point),
-        }
-    }
-
-    /// Every cell of `logical` this projection carries, paired with the
-    /// screen cell it lands on.
+    /// Every cell of `area` this projection keeps, paired with the screen
+    /// cell it lands on.
     pub(crate) fn projected_positions(
         self,
-        logical: Rect,
-        surface: Rect,
+        area: Rect,
     ) -> impl Iterator<Item = (Position, Position)> {
-        let offset = self.viewport().offset;
-        self.project_rect(logical, surface)
-            .positions()
-            .map(move |screen| {
-                (
-                    Position::new(screen.x, screen.y.saturating_add(offset)),
-                    screen,
-                )
-            })
+        let offset = self.offset;
+        self.project_rect(area).positions().map(move |screen| {
+            (
+                Position::new(screen.x, screen.y.saturating_add(offset)),
+                screen,
+            )
+        })
     }
 }
 
@@ -272,34 +249,30 @@ struct ViewportRecord {
     /// The declaration that opened it. `None` when the root closure declared
     /// it, which no component owns and so nothing can be asked to scroll.
     owner: Option<usize>,
-    /// The layer open at declaration. A descendant on another layer escaped
-    /// the clip.
-    layer: Option<usize>,
 }
 
-impl ViewportRecord {
-    /// How a node or a paint on `layer` reads this viewport. A viewport clips
-    /// what was declared on its own layer; a layer opened inside it carries
-    /// its content past the clip. The one place that rule is stated.
-    fn projection(&self, layer: Option<usize>) -> Projection {
-        if self.layer == layer {
-            Projection::Clipped(self.viewport)
-        } else {
-            Projection::Escaped(self.viewport)
-        }
-    }
-}
-
-/// What the finished tree resolved this frame: the focus path paint styles
-/// from, and the path the pointer rests on.
+/// What the finished tree resolved this frame: the node paint styles as
+/// focused, and the node the pointer rests on, each `None` where there is
+/// none.
 ///
 /// Both are answered once declaring has ended, from the tree the pass built,
 /// and both travel into the replay together because every paint reads them
 /// together.
 #[derive(Debug, Clone, Copy)]
-struct Resolved<'a> {
-    focus: &'a FocusState,
-    hover: &'a [ChildId],
+struct Resolved {
+    focus: Option<usize>,
+    hover: Option<usize>,
+}
+
+/// What asking to reveal focus in a tree came to.
+enum Reveal {
+    /// The tree does not declare the focused path; a later one may.
+    Absent,
+    /// Nothing scrolled: no focus, a target on screen, no owner to ask, or
+    /// an owner that left its offset where it was.
+    Settled,
+    /// The viewport's owner moved its offset.
+    Scrolled,
 }
 
 enum FocusAdvance {
@@ -311,157 +284,132 @@ enum FocusAdvance {
 /// What kind of layer a node roots, when it roots one.
 ///
 /// A layer is a subtree painted above everything declared outside it. Every
-/// kind shares the mechanism — a tag, a canvas, compositing order — and they
-/// differ only in policy: a modal dims what is beneath it, consumes events
-/// outside itself, and takes focus; a popup does none of that and instead
-/// observes outside presses through its dismiss hook; a hint takes no input at
-/// all. The differences live in [`LayerKind::policy`] and nowhere else.
+/// kind shares that mechanism — a tag, paint order, and screen coordinates:
+/// a layer undoes the scroll of the viewport that declared it once, over its
+/// own area, and declares from there in screen coordinates. The kinds differ
+/// only in what they do to interaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LayerKind {
+    /// Takes the screen over: what lies beneath it dims, events landing
+    /// outside it are consumed, focus resolves into it, Tab is trapped at its
+    /// root, and keys stop there too.
     Modal,
+    /// Holds the pointer over its own footprint and, when it carries a
+    /// dismiss hook, emits it on a press outside itself — but never steals
+    /// focus and lets keys reach its declarer. Anchored: skipped while its
+    /// declaration is scrolled out of sight.
     Popup,
+    /// Says something and takes nothing: not a pointer target, so a press
+    /// goes to whatever it covers, and not a focus target, so Tab passes it by
+    /// even if what is inside claims to be focusable. Anchored, like a popup.
     Hint,
 }
 
-/// What a layer does to interaction, as data rather than as branches.
-///
-/// A layer is one mechanism — a tagged subtree with its own canvas. This is
-/// the only thing that differs between kinds, so adding a kind means adding a
-/// row to [`LayerKind::policy`] and nothing else. The base layer everything
-/// else is declared into has [`LayerPolicy::base`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "a policy table: one column per behavior, one row per layer kind"
-)]
-struct LayerPolicy {
-    /// This layer takes the screen over: what lies beneath it dims, events
-    /// landing outside it are consumed, focus resolves into it, Tab is
-    /// trapped at its root, and keys stop there too. One decision with five
-    /// consequences, so they travel together.
-    takes_over: bool,
-    /// The pointer can hit this layer at all. A layer that cannot is inert
-    /// decoration: presses fall through to whatever is beneath it.
-    hit_testable: bool,
-    /// Anything inside this layer may hold focus. A layer that does not allow
-    /// it is skipped by Tab and by every explicit focus request, whatever its
-    /// contents claim through [`ScopeOptions::focusable`].
-    allows_focus: bool,
-    /// A press outside this layer emits its dismiss hook.
-    dismiss_on_outside_press: bool,
-    /// This layer's coordinates are the screen's. It undoes the scroll of the
-    /// viewport it was declared in, once, over its own area, and declares from
-    /// there in screen coordinates — free to open a viewport of its own. The
-    /// anchored kinds keep that viewport's coordinates and are projected out
-    /// of it once.
-    screen_level: bool,
-}
-
-impl LayerPolicy {
-    /// What everything declared outside any layer gets: no policy at all,
-    /// except that it can be clicked.
-    const fn base() -> Self {
-        Self {
-            takes_over: false,
-            hit_testable: true,
-            allows_focus: true,
-            dismiss_on_outside_press: false,
-            screen_level: false,
-        }
-    }
-}
-
 impl LayerKind {
-    /// The whole difference between the layer kinds, in one table.
-    const fn policy(self) -> LayerPolicy {
-        match self {
-            // Takes the screen over: dims, claims interaction, holds focus,
-            // swallows keys, and belongs to the screen rather than to whatever
-            // viewport declared it.
-            Self::Modal => LayerPolicy {
-                takes_over: true,
-                screen_level: true,
-                ..LayerPolicy::base()
-            },
-            // Occludes its own footprint and dismisses on an outside press,
-            // but never steals focus and lets keys reach its declarer.
-            Self::Popup => LayerPolicy {
-                dismiss_on_outside_press: true,
-                ..LayerPolicy::base()
-            },
-            // Says something and takes nothing: not a pointer target, so a
-            // press goes to whatever it covers, and not a focus target, so Tab
-            // passes it by even if what is inside claims to be focusable.
-            Self::Hint => LayerPolicy {
-                hit_testable: false,
-                allows_focus: false,
-                ..LayerPolicy::base()
-            },
-        }
+    /// Whether this kind takes the screen over — see [`Self::Modal`].
+    const fn takes_over(self) -> bool {
+        matches!(self, Self::Modal)
+    }
+
+    /// Whether this kind is inert: neither the pointer nor focus can land
+    /// inside it — see [`Self::Hint`].
+    const fn inert(self) -> bool {
+        matches!(self, Self::Hint)
     }
 }
 
 pub(crate) struct Node<State, Msg> {
-    /// This node's own segment of its identity path; [`Surface::path_of`]
-    /// derives the whole path from the parent chain.
-    id: ChildId,
+    /// Where this node's identity path sits in [`Surface::path_ids`]: the
+    /// whole path, outermost first, ending in the node's own id.
+    path: Range<usize>,
     parent: Option<usize>,
-    children: Vec<usize>,
+    /// One past the last index of this node's subtree. Declaration order is
+    /// pre-order, so the subtree is exactly `index..subtree_end`.
+    subtree_end: usize,
     area: Rect,
     /// Index into [`Surface::viewports`] of the innermost viewport this node
     /// was declared inside.
     viewport: Option<usize>,
     options: ScopeOptions,
-    is_scope: bool,
+    /// The component declared here; `None` for a scope, which is kept for
+    /// identity and parents a subtree.
     component: Option<Box<dyn Component<State, Msg>>>,
-    /// The layer this node's paint lands on, indexing [`Surface::layers`]
-    /// and the pass's canvases. `None` outside any layer.
+    /// The layer this node was declared on, indexing [`Surface::layers`].
+    /// `None` outside any layer.
     layer: Option<usize>,
+    /// Whether this node takes part in the frame's interaction at all: every
+    /// ancestor does, and it is a scope or has geometry to occupy. Settled by
+    /// [`Surface::finish`], like `focusable`.
+    live: bool,
+    /// Whether focus can land anywhere in this subtree — on the node itself
+    /// or on any descendant. [`Surface::takes_focus`] answers for the node
+    /// alone.
+    focusable: bool,
+    /// Whether focus comes to rest here: the node takes focus itself and no
+    /// descendant can. Every descent ends on one, and traversal steps
+    /// between them in declaration order.
+    focus_leaf: bool,
 }
 
 impl<State, Msg> fmt::Debug for Node<State, Msg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
-            .field("id", &self.id)
+            .field("path", &self.path)
             .field("parent", &self.parent)
-            .field("children", &self.children)
+            .field("subtree_end", &self.subtree_end)
             .field("area", &self.area)
             .field("viewport", &self.viewport)
             .field("options", &self.options)
-            .field("is_scope", &self.is_scope)
             .field("component", &self.component.is_some())
             .field("layer", &self.layer)
+            .field("live", &self.live)
+            .field("focusable", &self.focusable)
+            .field("focus_leaf", &self.focus_leaf)
             .finish()
     }
 }
 
-/// One declared layer: the node rooting its subtree, and what it does.
+/// One declared layer: the node rooting its subtree, where it sits, and what
+/// it does.
 struct Layer<Msg> {
     root: usize,
     kind: LayerKind,
-    /// The message a press outside the layer emits, on the kinds that
-    /// dismiss.
+    /// The area it was declared over, in screen coordinates: what a layer
+    /// taking the screen over dims beneath itself.
+    area: Rect,
+    /// The message a press outside the layer emits: only ever a popup's, and
+    /// only when the app bound one.
     on_dismiss: Option<Box<dyn Fn() -> Msg>>,
 }
 
 pub(crate) struct Surface<State, Msg> {
     nodes: Vec<Node<State, Msg>>,
-    roots: Vec<usize>,
+    /// Scoped identity lookup: a node by its parent and its own id.
+    child_index: HashMap<(Option<usize>, ChildId), usize>,
     /// Every layer, in declaration order, indexed by the layer number nodes
     /// carry. Nesting appends, so scanning backwards reaches the topmost
     /// first.
     layers: Vec<Layer<Msg>>,
     /// Every viewport declared this pass, in declaration order.
     viewports: Vec<ViewportRecord>,
+    /// Every node's identity path, laid end to end, each indexed by its
+    /// node's `path`.
+    path_ids: Vec<ChildId>,
+    /// The root of the layer that has taken the screen over, if one is open:
+    /// everything outside it is inert, unfocusable, and unreachable by a key.
+    /// Settled by [`Self::finish`].
+    takeover: Option<usize>,
 }
 
 impl<State, Msg> Default for Surface<State, Msg> {
     fn default() -> Self {
         Self {
             nodes: Vec::new(),
-            roots: Vec::new(),
+            child_index: HashMap::new(),
             layers: Vec::new(),
             viewports: Vec::new(),
+            path_ids: Vec::new(),
+            takeover: None,
         }
     }
 }
@@ -470,71 +418,66 @@ impl<State, Msg> fmt::Debug for Surface<State, Msg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Surface")
             .field("nodes", &self.nodes.len())
-            .field("roots", &self.roots.len())
+            .field("child_index", &self.child_index.len())
             .field("layers", &self.layers.len())
             .field("viewports", &self.viewports.len())
+            .field("path_ids", &self.path_ids.len())
+            .field("takeover", &self.takeover)
             .finish()
     }
 }
 
 impl<State, Msg> Surface<State, Msg> {
-    /// The identity path of `index`, outermost first. [`Self::inside`] and
-    /// [`Self::path_is_prefix_of`] answer structural questions without
-    /// building one.
-    fn path_of(&self, index: usize) -> Vec<ChildId> {
-        let mut path = Vec::with_capacity(self.depth(index));
-        let mut current = Some(index);
-        while let Some(node) = current {
-            path.push(self.nodes[node].id.clone());
-            current = self.nodes[node].parent;
+    /// Answer, once the tree is complete, every per-node question that needs
+    /// the whole of it: which nodes are live, which subtrees focus can land
+    /// in, and which layer has taken the screen over. The predicates below
+    /// then read these facts instead of walking the tree.
+    fn finish(&mut self) {
+        self.takeover = self
+            .top_layer(|layer| layer.kind.takes_over())
+            .map(|layer| layer.root);
+        // Every parent precedes its children, so one forward walk settles
+        // liveness down the tree and one reverse walk settles focusability up
+        // it.
+        for index in 0..self.nodes.len() {
+            let node = &self.nodes[index];
+            let live = (node.component.is_none() || !node.area.is_empty())
+                && node.parent.is_none_or(|parent| self.nodes[parent].live);
+            self.nodes[index].live = live;
         }
-        path.reverse();
-        path
-    }
-
-    /// How many ids `index`'s identity path has.
-    fn depth(&self, index: usize) -> usize {
-        let mut depth = 0;
-        let mut current = Some(index);
-        while let Some(node) = current {
-            depth += 1;
-            current = self.nodes[node].parent;
-        }
-        depth
-    }
-
-    /// Whether `index`'s identity path is exactly `path`.
-    ///
-    /// It walks the parent chain against `path` back to front, so neither
-    /// side is materialized. [`Self::path_is_prefix_of`] is the same walk
-    /// with the prefix trimmed to the node's own depth first.
-    fn path_is(&self, index: usize, path: &[ChildId]) -> bool {
-        let mut current = Some(index);
-        let mut rest = path;
-        while let Some(node) = current {
-            let Some((last, head)) = rest.split_last() else {
-                return false;
-            };
-            if self.nodes[node].id != *last {
-                return false;
+        for index in (0..self.nodes.len()).rev() {
+            // So far `focusable` holds whether any child is.
+            let beneath = self.nodes[index].focusable;
+            let takes_focus = self.takes_focus(index);
+            let node = &mut self.nodes[index];
+            node.focusable = takes_focus || beneath;
+            node.focus_leaf = takes_focus && !beneath;
+            if let (true, Some(parent)) = (node.focusable, node.parent) {
+                self.nodes[parent].focusable = true;
             }
-            current = self.nodes[node].parent;
-            rest = head;
         }
-        rest.is_empty()
     }
 
-    /// Whether `index`'s identity path is `path` or a prefix of it — the
-    /// question `path.starts_with(node_path)` asks, without building either.
+    /// The identity path of `index`, outermost first.
+    fn path_of(&self, index: usize) -> &[ChildId] {
+        &self.path_ids[self.nodes[index].path.clone()]
+    }
+
+    /// `index`'s own segment of its identity path.
+    fn id_of(&self, index: usize) -> &ChildId {
+        &self.path_ids[self.nodes[index].path.end - 1]
+    }
+
+    /// Whether `index`'s identity path is `path` or a prefix of it.
     fn path_is_prefix_of(&self, index: usize, path: &[ChildId]) -> bool {
-        self.path_match(index, path).1
+        path.starts_with(self.path_of(index))
     }
 
     /// Where `index` sits in this frame's resolved focus and hover — the four
     /// flags [`PaintCtx`] reports.
-    fn interaction_flags(&self, index: usize, resolved: Resolved<'_>) -> InteractionFlags {
-        let (focused, contains_focus) = self.path_match(index, resolved.focus.path());
-        let (hovered, contains_hover) = self.path_match(index, resolved.hover);
+    fn interaction_flags(&self, index: usize, resolved: Resolved) -> InteractionFlags {
+        let (focused, contains_focus) = self.leaf_match(index, resolved.focus);
+        let (hovered, contains_hover) = self.leaf_match(index, resolved.hover);
         InteractionFlags {
             focused,
             contains_focus,
@@ -543,31 +486,18 @@ impl<State, Msg> Surface<State, Msg> {
         }
     }
 
-    /// Whether `index`'s identity path *is* `path`, and whether it is a
-    /// prefix of it — the leaf question and the within question, as a pair.
-    fn path_match(&self, index: usize, path: &[ChildId]) -> (bool, bool) {
-        let depth = self.depth(index);
-        if depth > path.len() {
-            return (false, false);
-        }
-        let within = self.path_is(index, &path[..depth]);
-        (within && depth == path.len(), within)
-    }
-
-    fn has_hit_geometry(&self, index: usize) -> bool {
-        !self.nodes[index].area.is_empty()
-    }
-
-    fn participates(&self, index: usize) -> bool {
-        let node = &self.nodes[index];
-        (node.is_scope || self.has_hit_geometry(index))
-            && node.parent.is_none_or(|parent| self.participates(parent))
+    /// Whether `leaf` *is* `index`, and whether it lies in `index`'s subtree
+    /// — the leaf question and the within question, as a pair.
+    fn leaf_match(&self, index: usize, leaf: Option<usize>) -> (bool, bool) {
+        leaf.map_or((false, false), |leaf| {
+            (leaf == index, self.inside(leaf, index))
+        })
     }
 
     /// Whether `index` takes part in this frame's interaction at all: it and
     /// every ancestor are still declared, and it has geometry to occupy.
     fn present(&self, index: usize) -> bool {
-        self.participates(index) && self.has_hit_geometry(index)
+        self.nodes[index].live && !self.nodes[index].area.is_empty()
     }
 
     /// Whether the pointer can land on `index`: present, inside whatever layer
@@ -577,14 +507,8 @@ impl<State, Msg> Surface<State, Msg> {
     fn hittable(&self, index: usize) -> bool {
         self.present(index)
             && self.interactive(index)
-            && self.policy(self.nodes[index].layer).hit_testable
+            && !self.on_inert_layer(index)
             && self.viewport_visibility(index) != ViewportVisibility::Hidden
-    }
-
-    fn children(&self, parent: Option<usize>) -> &[usize] {
-        parent.map_or(self.roots.as_slice(), |index| {
-            self.nodes[index].children.as_slice()
-        })
     }
 
     /// Whether this node is inside the layer that has taken the screen over,
@@ -598,14 +522,15 @@ impl<State, Msg> Surface<State, Msg> {
     /// interaction targets (hit, focus leaves), not on ancestors: a nested
     /// layer root's ancestors provide identity and structure, not interaction.
     fn interactive(&self, index: usize) -> bool {
-        self.takeover_root()
-            .is_none_or(|root| self.inside(index, root))
+        self.takeover.is_none_or(|root| self.inside(index, root))
     }
 
-    /// What the layer `layer` names does to interaction. `None` is the base
-    /// layer everything outside any layer is declared into.
-    fn policy(&self, layer: Option<usize>) -> LayerPolicy {
-        layer.map_or_else(LayerPolicy::base, |index| self.layers[index].kind.policy())
+    /// Whether `index` was declared on an inert layer, which neither the
+    /// pointer nor focus reaches. Nothing outside any layer is inert.
+    fn on_inert_layer(&self, index: usize) -> bool {
+        self.nodes[index]
+            .layer
+            .is_some_and(|layer| self.layers[layer].kind.inert())
     }
 
     /// The topmost open layer that satisfies `wants`.
@@ -613,15 +538,8 @@ impl<State, Msg> Surface<State, Msg> {
         self.layers.iter().rev().find(|layer| wants(layer))
     }
 
-    /// The layer that has taken the screen over, if one is open: everything
-    /// outside it is inert, unfocusable, and unreachable by a key.
-    fn takeover_root(&self) -> Option<usize> {
-        self.top_layer(|layer| layer.kind.policy().takes_over)
-            .map(|layer| layer.root)
-    }
-
-    /// Whether the canvas `index` backs lies beneath the layer that has taken
-    /// the screen over, when one is open.
+    /// Whether layer `index` lies beneath the layer that has taken the screen
+    /// over, when one is open.
     fn covered_by_takeover(&self, index: usize, takeover: Option<usize>) -> bool {
         takeover.is_some_and(|root| !self.inside(self.layers[index].root, root))
     }
@@ -631,36 +549,30 @@ impl<State, Msg> Surface<State, Msg> {
     fn modal_roots(&self) -> impl Iterator<Item = usize> + '_ {
         self.layers
             .iter()
-            .filter(|layer| layer.kind == LayerKind::Modal)
+            .filter(|layer| layer.kind.takes_over())
             .map(|layer| layer.root)
     }
 
     /// Whether `index` is `root` or one of its descendants.
     ///
-    /// The one containment test, answered by walking parent indices: identity
-    /// paths are unique, so this is what comparing paths would say, without
-    /// touching an id. Layer numbers order paint and must never be used to
-    /// answer it — a layer declared after another takes a higher number
-    /// without being inside it.
+    /// The one containment test, answered by the subtree's index range:
+    /// identity paths are unique, so this is what comparing paths would say,
+    /// without touching an id. Layer numbers order paint and must never be
+    /// used to answer it — a layer declared after another takes a higher
+    /// number without being inside it.
     fn inside(&self, index: usize, root: usize) -> bool {
-        let mut current = Some(index);
-        while let Some(node) = current {
-            if node == root {
-                return true;
-            }
-            current = self.nodes[node].parent;
-        }
-        false
+        self.subtree(root).contains(&index)
     }
 
     /// The node `path` names, or `None` when this surface does not declare it
     /// whole. The empty path names no node: every declaration has at least its
     /// own id.
     fn leaf_of(&self, path: &[ChildId]) -> Option<usize> {
-        let matched = self.nodes_along_path(path);
-        (matched.len() == path.len())
-            .then(|| matched.last().copied())
-            .flatten()
+        let mut parent = None;
+        for id in path {
+            parent = Some(*self.child_index.get(&(parent, id.clone()))?);
+        }
+        parent
     }
 
     /// The node indices along `path`, outermost first, stopping at the first
@@ -670,12 +582,7 @@ impl<State, Msg> Surface<State, Msg> {
         let mut parent = None;
         let mut matched = Vec::new();
         for id in path {
-            let Some(index) = self
-                .children(parent)
-                .iter()
-                .copied()
-                .find(|&index| self.nodes[index].id == *id)
-            else {
+            let Some(&index) = self.child_index.get(&(parent, id.clone())) else {
                 break;
             };
             matched.push(index);
@@ -731,83 +638,51 @@ impl<State, Msg> Surface<State, Msg> {
     /// have hit geometry, sit inside the layer that has taken the screen over
     /// if one is open, and belong to a layer that allows focus at all.
     ///
-    /// See [`Self::focusable`] for the same question about a node *or any of
+    /// See [`Node::focusable`] for the same question about a node *or any of
     /// its descendants*.
     fn takes_focus(&self, index: usize) -> bool {
         self.present(index)
             && self.interactive(index)
-            && self.policy(self.nodes[index].layer).allows_focus
+            && !self.on_inert_layer(index)
             && self.nodes[index].options.focusable
     }
 
-    /// Whether focus can land anywhere in this subtree — on the node itself
-    /// or on any descendant. Traversal uses this to decide whether a container
-    /// is worth descending into; [`Self::takes_focus`] answers for the node
-    /// alone.
-    fn focusable(&self, index: usize) -> bool {
-        self.participates(index)
-            && (self.takes_focus(index)
-                || self.nodes[index]
-                    .children
-                    .iter()
-                    .any(|&child| self.focusable(child)))
+    /// `index`'s subtree, as the index range declaration order gives it.
+    fn subtree(&self, index: usize) -> Range<usize> {
+        index..self.nodes[index].subtree_end
     }
 
-    /// The first focusable index among `candidates`, scanning declaration order
-    /// forward or reverse per `direction`.
-    fn find_focusable(&self, candidates: &[usize], direction: Step) -> Option<usize> {
-        let mut iter = candidates.iter().copied();
+    /// The first focus leaf in `range`, scanning declaration order forward or
+    /// in reverse per `direction`.
+    fn leaf_in(&self, range: Range<usize>, direction: Step) -> Option<usize> {
+        let mut leaves = range.filter(|&index| self.nodes[index].focus_leaf);
         match direction {
-            Step::Forward => iter.find(|&index| self.focusable(index)),
-            Step::Backward => iter.rfind(|&index| self.focusable(index)),
+            Step::Forward => leaves.next(),
+            Step::Backward => leaves.next_back(),
         }
     }
 
-    /// The first focusable child of `parent` in `direction`. With no parent
-    /// the candidates are the tree roots — or, while a layer has taken the
-    /// screen over, that layer's root alone, which traps Tab inside it.
-    fn edge_child(&self, parent: Option<usize>, direction: Step) -> Option<usize> {
-        match (parent, self.takeover_root()) {
-            (Some(index), _) => self.find_focusable(&self.nodes[index].children, direction),
-            (None, Some(root)) => self.focusable(root).then_some(root),
-            (None, None) => self.find_focusable(&self.roots, direction),
-        }
+    /// The focus that lands on `leaf`.
+    fn focus_on(&self, leaf: usize) -> FocusState {
+        FocusState::intent(self.path_of(leaf).iter().cloned())
     }
 
-    fn extend_to_edge(&self, index: usize, direction: Step, path: &mut Vec<ChildId>) -> bool {
-        path.push(self.nodes[index].id.clone());
-        if let Some(child) = self.edge_child(Some(index), direction) {
-            return self.extend_to_edge(child, direction, path);
-        }
-        if self.takes_focus(index) {
-            true
-        } else {
-            path.pop();
-            false
-        }
-    }
-
-    /// The focus path produced by descending into the first focusable child
-    /// of `parent` — the traversal roots when there is no parent. The other
-    /// primitive: an edge, with no request behind it.
-    fn edge_focus(&self, parent: Option<usize>, direction: Step) -> Option<FocusState> {
-        let index = self.edge_child(parent, direction)?;
-        self.descend_focus(index, direction)
-    }
-
-    /// The focus path produced by descending from `index` to its first
-    /// focusable leaf, seeded with the node's own ancestor prefix — correct
-    /// whether the node is a tree root or a nested layer root.
+    /// The focus path produced by descending from `index` to the first focus
+    /// leaf of its subtree in `direction`.
     ///
     /// The primitive every focus policy ends at: the path it answers with is
-    /// a leaf this surface declares, walked to here on the surface's own
-    /// terms.
+    /// a leaf this surface declares, reached on the surface's own terms.
     fn descend_focus(&self, index: usize, direction: Step) -> Option<FocusState> {
-        let mut path = self.nodes[index]
-            .parent
-            .map_or_else(Vec::new, |parent| self.path_of(parent));
-        self.extend_to_edge(index, direction, &mut path)
-            .then(|| FocusState::intent(path))
+        self.leaf_in(self.subtree(index), direction)
+            .map(|leaf| self.focus_on(leaf))
+    }
+
+    /// The first focus leaf of the whole tree in `direction` — the other
+    /// primitive: an edge, with no request behind it. While a layer holds
+    /// the screen that is its edge, since nothing outside it takes focus.
+    fn edge_focus(&self, direction: Step) -> Option<FocusState> {
+        self.leaf_in(0..self.nodes.len(), direction)
+            .map(|leaf| self.focus_on(leaf))
     }
 
     /// Resolve an app-held focus path against this surface's actual structure
@@ -834,7 +709,7 @@ impl<State, Msg> Surface<State, Msg> {
         if stored.is_none() {
             return FocusState::none();
         }
-        if let Some(root) = self.takeover_root()
+        if let Some(root) = self.takeover
             && !self.path_is_prefix_of(root, stored.path())
         {
             // The layer steals focus from an empty path and from paths it
@@ -852,12 +727,12 @@ impl<State, Msg> Surface<State, Msg> {
             });
         }
         if stored.path().is_empty() {
-            return self.edge_focus(None, Step::Forward).unwrap_or_default();
+            return self.edge_focus(Step::Forward).unwrap_or_default();
         }
         let Some(target) = self.leaf_of(stored.path()) else {
             return stored.clone();
         };
-        self.edge_focus(Some(target), Step::Forward)
+        self.descend_focus(target, Step::Forward)
             .unwrap_or_else(|| stored.clone())
     }
 
@@ -874,9 +749,9 @@ impl<State, Msg> Surface<State, Msg> {
         if matched.len() != path.len() {
             return None;
         }
-        // A descent that succeeds ends on a leaf that participates, and
-        // participation runs the whole parent chain, so every node along
-        // `path` is focusable whenever this answers with one at all.
+        // A descent that succeeds ends on a leaf that is live, and liveness
+        // runs the whole parent chain, so every node along `path` is
+        // focusable whenever this answers with one at all.
         self.descend_focus(*matched.last()?, Step::Forward)
     }
 
@@ -923,19 +798,16 @@ impl<State, Msg> Surface<State, Msg> {
             })
     }
 
-    /// The viewport that clips `index`, if one does. A node declared on a
-    /// layer opened inside a viewport escaped that clip and has none.
+    /// The viewport that clips `index`, if one does. A layer leaves the
+    /// viewport it was opened in, so what it declares is clipped only by a
+    /// viewport of its own.
     fn clipping_viewport(&self, index: usize) -> Option<&ViewportRecord> {
-        let node = &self.nodes[index];
-        let record = &self.viewports[node.viewport?];
-        matches!(record.projection(node.layer), Projection::Clipped(_)).then_some(record)
+        Some(&self.viewports[self.nodes[index].viewport?])
     }
 
-    /// The projection `index` was declared through, and `None` where no
-    /// viewport carries it.
-    fn projection_of(&self, index: usize) -> Option<Projection> {
-        let node = &self.nodes[index];
-        Some(self.viewports[node.viewport?].projection(node.layer))
+    /// The viewport `index` was declared inside, and `None` where none is.
+    fn viewport_of(&self, index: usize) -> Option<Viewport> {
+        self.clipping_viewport(index).map(|record| record.viewport)
     }
 
     /// How much of `index` its viewport shows. The one answer behind pointer
@@ -949,8 +821,8 @@ impl<State, Msg> Surface<State, Msg> {
 
     /// `point` in the coordinate space `index` was declared with.
     fn logical_point(&self, index: usize, point: Position) -> Option<Position> {
-        self.projection_of(index)
-            .map_or(Some(point), |projection| projection.to_logical(point))
+        self.viewport_of(index)
+            .map_or(Some(point), |viewport| viewport.visible_to_logical(point))
     }
 
     fn next_focus(
@@ -964,83 +836,98 @@ impl<State, Msg> Surface<State, Msg> {
         // consulting its `tab_wrap` would let a wrapping pane swallow Tab
         // forever with the layer unreachable. Start from that layer's own
         // edge instead.
-        if let Some(root) = self.takeover_root()
+        if let Some(root) = self.takeover
             && !self.path_is_prefix_of(root, focus.path())
         {
             return self
-                .edge_focus(None, direction)
+                .descend_focus(root, direction)
                 .map_or(FocusAdvance::Consumed, FocusAdvance::Move);
         }
         let matched = self.nodes_along_path(focus.path());
-        if matched.len() != focus.path().len() {
-            let parent = matched.last().copied();
-            if let Some(next) = self.edge_focus(parent, direction) {
+        let Some(&current) = matched.last() else {
+            if let Some(next) = self.edge_focus(direction) {
                 return FocusAdvance::Move(next);
             }
-            let options = parent.map_or(root_options, |index| &self.nodes[index].options);
-            if options.tab_wrap == TabWrap::Wrap {
+            // An absent path is parked in the root scope, which decides; the
+            // empty path asks for nothing.
+            let parked = !focus.path().is_empty();
+            return if parked && root_options.tab_wrap == TabWrap::Wrap {
+                FocusAdvance::Consumed
+            } else {
+                FocusAdvance::Ignored
+            };
+        };
+        if matched.len() != focus.path().len() {
+            // Parked beneath `current`: its own descendants come first, and a
+            // wrapping `current` keeps the step even when it has none.
+            let beneath = current + 1..self.nodes[current].subtree_end;
+            if let Some(leaf) = self.leaf_in(beneath, direction) {
+                return FocusAdvance::Move(self.focus_on(leaf));
+            }
+            if self.nodes[current].options.tab_wrap == TabWrap::Wrap {
                 return FocusAdvance::Consumed;
             }
-            let Some(current) = parent else {
-                return FocusAdvance::Ignored;
-            };
-            return self.next_from_scope(current, direction, root_options);
         }
-
-        let Some(current) = matched.last().copied() else {
-            return self
-                .edge_focus(None, direction)
-                .map_or(FocusAdvance::Ignored, FocusAdvance::Move);
-        };
-        self.next_from_scope(current, direction, root_options)
+        self.next_from(current, direction, root_options)
     }
 
-    /// The next focusable node after `current`, walking outwards until a
-    /// scope wraps or the root runs out.
+    /// The next focus leaf past `start`, inside the window Tab wraps in,
+    /// wrapping to the window's edge when there is none.
+    ///
+    /// The window is [`Self::wrap_window`]'s. With none, the whole tree is
+    /// scanned and a step past its last leaf escapes as `Ignored`. Stepping
+    /// backward skips `start`'s own ancestors: they precede it in declaration
+    /// order, but hold it rather than come before it.
     ///
     /// A step that lands back on the node it started from is still a
     /// `Move`; the caller compares it against the current focus.
-    fn next_from_scope(
+    fn next_from(
         &self,
-        mut current: usize,
+        start: usize,
         direction: Step,
         root_options: &ScopeOptions,
     ) -> FocusAdvance {
-        loop {
-            let parent = self.nodes[current].parent;
-            let siblings = self.children(parent);
-            let position = siblings
-                .iter()
-                .position(|&index| index == current)
-                .expect("focused node is registered under its parent");
-            let remaining = match direction {
-                Step::Forward => &siblings[position + 1..],
-                Step::Backward => &siblings[..position],
-            };
-            if let Some(next) = self.find_focusable(remaining, direction)
-                && let Some(focus) = self.descend_focus(next, direction)
-            {
-                return FocusAdvance::Move(focus);
-            }
+        let window = self.wrap_window(start, root_options);
+        let bounds = window.clone().unwrap_or(0..self.nodes.len());
+        let next = match direction {
+            Step::Forward => self.leaf_in(self.nodes[start].subtree_end..bounds.end, direction),
+            Step::Backward => (bounds.start..start).rev().find(|&index| {
+                self.nodes[index].focus_leaf && self.nodes[index].subtree_end <= start
+            }),
+        };
+        match (next, window) {
+            (Some(leaf), _) => FocusAdvance::Move(self.focus_on(leaf)),
+            (None, Some(window)) => self
+                .leaf_in(window, direction)
+                .map_or(FocusAdvance::Consumed, |leaf| {
+                    FocusAdvance::Move(self.focus_on(leaf))
+                }),
+            (None, None) => FocusAdvance::Ignored,
+        }
+    }
 
-            // The root of a layer holding the screen traps Tab regardless of
-            // where it sits in the tree; otherwise the enclosing scope decides.
-            let tab_wrap = if self.takeover_root() == Some(current) {
-                TabWrap::Wrap
-            } else {
-                parent.map_or(root_options.tab_wrap, |index| {
-                    self.nodes[index].options.tab_wrap
-                })
-            };
-            if tab_wrap == TabWrap::Wrap {
-                return self
-                    .edge_focus(parent, direction)
-                    .map_or(FocusAdvance::Consumed, FocusAdvance::Move);
+    /// The nodes Tab wraps within from `start`, walking outwards: the
+    /// descendants of the innermost enclosing scope that wraps, the whole
+    /// tree when only the root options do, and `None` when nothing does.
+    ///
+    /// The root of a layer holding the screen traps Tab regardless of where
+    /// it sits in the tree, so reaching it closes the window over its own
+    /// subtree before any scope above it is asked.
+    fn wrap_window(&self, start: usize, root_options: &ScopeOptions) -> Option<Range<usize>> {
+        let mut current = start;
+        loop {
+            if self.takeover == Some(current) {
+                return Some(self.subtree(current));
             }
-            let Some(parent) = parent else {
-                return FocusAdvance::Ignored;
-            };
-            current = parent;
+            match self.nodes[current].parent {
+                Some(parent) if self.nodes[parent].options.tab_wrap == TabWrap::Wrap => {
+                    return Some(parent + 1..self.nodes[parent].subtree_end);
+                }
+                Some(parent) => current = parent,
+                None => {
+                    return (root_options.tab_wrap == TabWrap::Wrap).then_some(0..self.nodes.len());
+                }
+            }
         }
     }
 }
@@ -1060,15 +947,15 @@ struct QueuedPaint<State> {
     paint: DeclaredPaint<State>,
 }
 
-/// The surface an op paints onto, and the projection it paints through.
+/// The layer an op paints on, and the viewport it paints through.
 ///
 /// Both are fixed where the op was queued, so an op belongs to the layer that
 /// was open at its declaration whatever is open at replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PaintSlot {
-    /// The layer canvas the op paints onto, `None` for the frame.
+    /// The layer the op paints on, `None` for the base declaration.
     layer: Option<usize>,
-    projection: Option<Projection>,
+    viewport: Option<Viewport>,
 }
 
 /// One declaration's own paint.
@@ -1080,9 +967,8 @@ struct PaintSlot {
 enum DeclaredPaint<State> {
     /// Call [`Component::paint`] on the component installed at this node.
     Node { index: usize, area: Rect },
-    /// Run a closure queued through [`DeclareCtx::paint`] or
-    /// [`DeclareCtx::defer_paint`]. `node` is the declaration it was reached
-    /// from, or `None` at the root and for deferred paint, which have no
+    /// Run a closure queued through [`DeclareCtx::paint`]. `node` is the
+    /// declaration it was reached from, or `None` at the root, which has no
     /// identity and therefore no flags.
     Thunk {
         node: Option<usize>,
@@ -1108,42 +994,6 @@ impl<State> DeclaredPaint<State> {
     }
 }
 
-/// A private paint surface: a buffer, and the rectangles written into it.
-///
-/// A layer subtree is declared inline, wherever its owner lives in the tree,
-/// and paints *above* everything declared outside it — including siblings
-/// declared later. It paints here and composites once the pass is over:
-/// `painted` records the rects paint wrote through, only those rects blit —
-/// so a modal declared over the full screen composites just the box it
-/// painted — and each rect composites opaquely, unwritten cells included.
-pub(crate) struct Canvas {
-    pub(crate) buffer: Buffer,
-    painted: Vec<Rect>,
-}
-
-impl Canvas {
-    fn new(area: Rect) -> Self {
-        Self {
-            buffer: Buffer::empty(area),
-            painted: Vec::new(),
-        }
-    }
-
-    /// The part of `area` this canvas can hold. Paint outside it is clipped
-    /// away.
-    pub(crate) fn clip(&self, area: Rect) -> Rect {
-        area.intersection(self.buffer.area)
-    }
-
-    /// Record that `area` was painted, clipped to the canvas.
-    pub(crate) fn mark_painted(&mut self, area: Rect) {
-        let clipped = self.clip(area);
-        if !clipped.is_empty() {
-            self.painted.push(clipped);
-        }
-    }
-}
-
 /// The declaration environment: everything a declaration needs that is not
 /// specific to the node being declared.
 ///
@@ -1161,8 +1011,16 @@ pub(crate) struct DeclarationEnv<'a, State> {
     pub(crate) area: Rect,
     pub(crate) state: &'a State,
     pub(crate) theme: &'a Theme,
-    pub(crate) transients: &'a mut TransientMap,
+    pub(crate) transients: &'a TransientMap,
 }
+
+impl<State> Clone for DeclarationEnv<'_, State> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<State> Copy for DeclarationEnv<'_, State> {}
 
 impl<'a, State> DeclarationEnv<'a, State> {
     /// The environment for a root declaration: the app's own closure, covering
@@ -1171,7 +1029,7 @@ impl<'a, State> DeclarationEnv<'a, State> {
         frame_area: Rect,
         state: &'a State,
         theme: &'a Theme,
-        transients: &'a mut TransientMap,
+        transients: &'a TransientMap,
     ) -> Self {
         Self {
             frame_area,
@@ -1182,33 +1040,19 @@ impl<'a, State> DeclarationEnv<'a, State> {
         }
     }
 
-    /// The same environment reborrowed for the declarations *inside* the node
-    /// just opened, over `area`.
-    fn nested(&mut self, area: Rect) -> DeclarationEnv<'_, State> {
-        DeclarationEnv {
-            frame_area: self.frame_area,
-            area,
-            state: self.state,
-            theme: self.theme,
-            transients: &mut *self.transients,
-        }
+    /// The same environment for the declarations *inside* the node just
+    /// opened, over `area`.
+    const fn nested(self, area: Rect) -> Self {
+        Self { area, ..self }
     }
 }
 
 pub(crate) struct RenderPass<State, Msg> {
     frame_area: Rect,
+    /// Declaration settlements are published only after painting succeeds.
+    pub(crate) settled_transients: TransientMap,
     surface: Surface<State, Msg>,
     parent_stack: Vec<usize>,
-    /// The identity path of the open declaration chain, maintained in step
-    /// with `parent_stack` by [`Self::enter_node`] and [`Self::leave_node`].
-    path_cursor: Vec<ChildId>,
-    /// Deferred paint thunks, each tagged with the layer it was registered
-    /// in. [`Self::finish_frame`] flushes a layer's thunks onto its canvas
-    /// just before that canvas composites, so they cover everything the layer
-    /// declared, and the base layer's onto the frame after every canvas has
-    /// composited, which is what makes root-level `defer_paint` the topmost
-    /// slot.
-    deferred: Vec<QueuedPaint<State>>,
     /// Every paint this frame owes, in the order the declaration walk reached
     /// it, replayed by [`Self::replay_paint`] once the walk is over.
     paint_queue: Vec<QueuedPaint<State>>,
@@ -1221,19 +1065,19 @@ pub(crate) struct RenderPass<State, Msg> {
     /// focus does.
     hover_position: Option<Position>,
     hover_path: Vec<ChildId>,
-    /// Set when any declaration region unwinds — see [`Self::guarded`]. A
-    /// poisoned pass can never commit.
-    failed: bool,
-    /// One canvas per declared layer, in discovery order.
-    canvases: Vec<Canvas>,
+    /// Declaration regions entered and not yet left — see [`Self::guarded`].
+    /// A region that unwinds is never left, so a pass one unwound in can
+    /// never commit.
+    open_regions: usize,
     /// The open viewport, indexing [`Surface::viewports`]. A viewport
     /// declared while one is open panics, so there is at most one.
     open_viewport: Option<usize>,
-    /// The layer canvases open in declaration nesting order; the innermost
-    /// decides where the next paint belongs.
+    /// The layers open in declaration nesting order, indexing
+    /// [`Surface::layers`]; the innermost decides where the next paint
+    /// belongs.
     layer_stack: Vec<usize>,
-    /// The buffer paint inside a viewport lays out in, shared by every paint
-    /// call the frame makes — see [`PaintTarget`].
+    /// The buffer clipped paint lays out in, shared by every paint call the
+    /// frame makes — see [`PaintTarget`].
     scratch: Buffer,
 }
 
@@ -1242,21 +1086,19 @@ impl<State, Msg> RenderPass<State, Msg> {
         Self {
             frame_area,
             surface: Surface::default(),
+            settled_transients: HashMap::new(),
             parent_stack: Vec::new(),
-            path_cursor: Vec::new(),
-            deferred: Vec::new(),
             paint_queue: Vec::new(),
             hover_position: None,
             hover_path: Vec::new(),
-            failed: false,
-            canvases: Vec::new(),
+            open_regions: 0,
             open_viewport: None,
             layer_stack: Vec::new(),
             scratch: Buffer::empty(Rect::ZERO),
         }
     }
 
-    /// The layer currently being declared into, named by its canvas index.
+    /// The layer currently being declared into.
     /// `None` outside any layer.
     fn current_layer(&self) -> Option<usize> {
         self.layer_stack.last().copied()
@@ -1265,7 +1107,8 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// The identity path of the declaration currently being declared into —
     /// the key [`DeclareCtx::transient`] reads the transient store with.
     pub(crate) fn current_path(&self) -> Option<&[ChildId]> {
-        (!self.path_cursor.is_empty()).then_some(self.path_cursor.as_slice())
+        let &index = self.parent_stack.last()?;
+        Some(self.surface.path_of(index))
     }
 
     /// Whether the hovered path runs through the declaration currently open.
@@ -1279,22 +1122,19 @@ impl<State, Msg> RenderPass<State, Msg> {
     }
 
     /// Open `index` as the parent of everything declared until the matching
-    /// [`Self::leave_node`], extending the path cursor by its id.
-    ///
-    /// The two stacks move together and only here, so
-    /// `path_cursor[i] == nodes[parent_stack[i]].id` holds unconditionally and
-    /// the cursor is the open chain's path by construction. That survives a
-    /// nested declaration panic a component catches: neither stack pops while
-    /// unwinding, so both stay equally deep.
+    /// [`Self::leave_node`].
     fn enter_node(&mut self, index: usize) {
-        self.path_cursor.push(self.surface.nodes[index].id.clone());
         self.parent_stack.push(index);
     }
 
-    /// Close the innermost open declaration.
+    /// Close the innermost open declaration: everything declared since it
+    /// opened is its subtree.
     fn leave_node(&mut self) {
-        self.parent_stack.pop();
-        self.path_cursor.pop();
+        let index = self
+            .parent_stack
+            .pop()
+            .expect("a declaration closes only after it opened");
+        self.surface.nodes[index].subtree_end = self.surface.nodes.len();
     }
 
     /// Queue one declaration's paint for the slot currently being declared
@@ -1306,38 +1146,24 @@ impl<State, Msg> RenderPass<State, Msg> {
         });
     }
 
-    /// The slot the layer currently being declared into paints in.
-    /// Content declared inside the open viewport is clipped to what the
-    /// viewport shows; a layer opened inside one escaped that clip and paints
-    /// where the offset puts it.
+    /// The slot the declaration currently open paints in: the layer being
+    /// declared into, and the open viewport, which clips its content to what
+    /// it shows.
     fn active_slot(&self) -> PaintSlot {
-        let layer = self.current_layer();
-        PaintSlot {
-            layer,
-            projection: self
-                .open_viewport
-                .map(|index| self.surface.viewports[index].projection(layer)),
-        }
-    }
-
-    /// The slot paint registered through [`DeclareCtx::defer_paint`] runs in:
-    /// the layer being declared into, and a projection that escapes the open
-    /// viewport's clip.
-    fn escaped_slot(&self) -> PaintSlot {
         PaintSlot {
             layer: self.current_layer(),
-            projection: self
+            viewport: self
                 .open_viewport
-                .map(|index| Projection::Escaped(self.surface.viewports[index].viewport)),
+                .map(|index| self.surface.viewports[index].viewport),
         }
     }
 
     /// Where the pointer is in the coordinates `slot` paints in, and `None`
-    /// where the projection it carries does not reach it.
+    /// where the viewport it carries does not show it.
     fn hover_in(&self, slot: PaintSlot) -> Option<Position> {
         let position = self.hover_position?;
-        match slot.projection {
-            Some(projection) => projection.to_logical(position),
+        match slot.viewport {
+            Some(viewport) => viewport.visible_to_logical(position),
             None => Some(position),
         }
     }
@@ -1386,7 +1212,6 @@ impl<State, Msg> RenderPass<State, Msg> {
             pass.surface.viewports.push(ViewportRecord {
                 viewport,
                 owner: pass.parent_stack.last().copied(),
-                layer: pass.current_layer(),
             });
             env.area = viewport.content();
             env.frame_area = viewport.logical_frame(pass.frame_area);
@@ -1399,13 +1224,12 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// close it.
     ///
     /// The single place the layer lifecycle is written, coordinates included.
-    /// An anchored layer keeps the coordinates of the viewport it was declared
-    /// in, and takes that viewport's projection of `env.area` as its canvas. A
-    /// screen-level one undoes the viewport's scroll once — over its own area,
-    /// and over the frame its subtree reads — and then declares with no
-    /// viewport open at all, so what it declares is in screen coordinates and
-    /// may open a viewport of its own. Either way the viewport is back for
-    /// whatever the declaration goes on to say after the layer.
+    /// Every layer belongs to the screen, whatever its kind: it undoes the
+    /// open viewport's scroll once — over its own area, and over the frame
+    /// its subtree reads — and then declares with no viewport open at all, so
+    /// what it declares is in screen coordinates and may open a viewport of
+    /// its own. The viewport is back for whatever the declaration goes on to
+    /// say after the layer.
     ///
     /// The layer is recorded before `declare_root` opens its root node, so
     /// the subtree beneath declares with the layer already in place.
@@ -1416,26 +1240,19 @@ impl<State, Msg> RenderPass<State, Msg> {
         mut env: DeclarationEnv<'a, State>,
         declare_root: impl FnOnce(&mut Self, DeclarationEnv<'a, State>),
     ) {
-        let enclosing = self.open_viewport;
-        let viewport = enclosing.map(|index| self.surface.viewports[index].viewport);
-        let canvas_area = if kind.policy().screen_level {
-            self.open_viewport = None;
-            env.frame_area = self.frame_area;
-            env.area = viewport.map_or(env.area, |viewport| viewport.unscrolled(env.area));
-            env.area
-        } else {
-            viewport.map_or(env.area, |viewport| {
-                viewport.project_rect(env.area, self.frame_area)
-            })
-        };
-        self.canvases.push(Canvas::new(canvas_area));
-        let canvas = self.canvases.len() - 1;
-        self.layer_stack.push(canvas);
+        let enclosing = self.open_viewport.take();
+        if let Some(index) = enclosing {
+            env.area = self.surface.viewports[index].viewport.unscrolled(env.area);
+        }
+        env.frame_area = self.frame_area;
+        let layer = self.surface.layers.len();
+        self.layer_stack.push(layer);
 
         let root = self.surface.nodes.len();
         self.surface.layers.push(Layer {
             root,
             kind,
+            area: env.area,
             on_dismiss,
         });
         declare_root(self, env);
@@ -1443,7 +1260,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             self.surface
                 .nodes
                 .get(root)
-                .is_some_and(|node| node.layer == Some(canvas)),
+                .is_some_and(|node| node.layer == Some(layer)),
             "a layer's root is the first node its declaration opens"
         );
 
@@ -1452,55 +1269,49 @@ impl<State, Msg> RenderPass<State, Msg> {
     }
 
     /// Run `f` as one declaration region: if it unwinds — a panicking
-    /// component, or the runtime's own validation — the pass is poisoned and
-    /// can never commit, no matter who catches the panic. Every entry point
-    /// that runs user code or validates a declaration goes through here.
+    /// component, or the runtime's own validation — the region is never
+    /// left, and the pass can never commit, no matter who catches the panic.
+    /// Every entry point that runs user code or validates a declaration goes
+    /// through here.
     pub(crate) fn guarded<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
-            Ok(result) => result,
-            Err(payload) => {
-                self.failed = true;
-                std::panic::resume_unwind(payload)
-            }
-        }
+        self.open_regions += 1;
+        let result = f(self);
+        self.open_regions -= 1;
+        result
     }
 
-    fn begin_node(
-        &mut self,
-        id: ChildId,
-        area: Rect,
-        options: ScopeOptions,
-        is_scope: bool,
-    ) -> usize {
+    fn begin_node(&mut self, id: ChildId, area: Rect, options: ScopeOptions) -> usize {
         let parent = self.parent_stack.last().copied();
-        let siblings = parent.map_or(self.surface.roots.as_slice(), |index| {
-            self.surface.nodes[index].children.as_slice()
-        });
+        let index = self.surface.nodes.len();
         assert!(
-            !siblings
-                .iter()
-                .any(|&index| self.surface.nodes[index].id == id),
+            self.surface
+                .child_index
+                .insert((parent, id.clone()), index)
+                .is_none(),
             "duplicate child id `{id}` in one declaration scope"
         );
-        let index = self.surface.nodes.len();
+        let start = self.surface.path_ids.len();
+        if let Some(parent) = parent {
+            let parent_path = self.surface.nodes[parent].path.clone();
+            self.surface.path_ids.extend_from_within(parent_path);
+        }
+        self.surface.path_ids.push(id);
+        let path = start..self.surface.path_ids.len();
         let layer = self.current_layer();
         let viewport = self.open_viewport;
         self.surface.nodes.push(Node {
-            id,
+            path,
             parent,
-            children: Vec::new(),
+            subtree_end: index + 1,
             area,
             viewport,
             options,
-            is_scope,
             component: None,
             layer,
+            live: false,
+            focusable: false,
+            focus_leaf: false,
         });
-        if let Some(parent) = parent {
-            self.surface.nodes[parent].children.push(index);
-        } else {
-            self.surface.roots.push(index);
-        }
         index
     }
 
@@ -1508,7 +1319,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         id: ChildId,
         component: impl Component<State, Msg> + 'static,
-        mut env: DeclarationEnv<'_, State>,
+        env: DeclarationEnv<'_, State>,
     ) {
         let state = env.state;
         self.guarded(|pass| {
@@ -1516,10 +1327,9 @@ impl<State, Msg> RenderPass<State, Msg> {
             // Every claim the runtime needs before descendants exist is read
             // here, in this order: focus for the whole frame is decided in one
             // pass, so none of it may depend on what painting produces.
-            component.prepare(state);
-            let options = component.scope_options();
+            let options = component.scope_options(state);
             let area = env.area;
-            let interaction_area = component.interaction_area(area);
+            let interaction_area = component.interaction_area(area, state);
             assert!(
                 interaction_area.width == 0
                     || interaction_area.height == 0
@@ -1532,7 +1342,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             // The node hit-tests against `interaction_area`, but its children
             // are declared over the full paint `area`: a component may narrow
             // what it responds to without narrowing where it draws.
-            let index = pass.begin_node(id, interaction_area, options, COMPONENT_NODE);
+            let index = pass.begin_node(id, interaction_area, options);
             pass.enter_node(index);
             // Queued before the subtree declares, so the component's own
             // paint replays ahead of its descendants' — the paint-before-
@@ -1555,7 +1365,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             !self
                 .surface
                 .modal_roots()
-                .any(|index| &self.surface.nodes[index].id == id),
+                .any(|index| self.surface.id_of(index) == id),
             "duplicate modal root id `{id}`"
         );
     }
@@ -1594,9 +1404,8 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// Declare a layer whose root is an app-declared scope rather than a
     /// component: the popup and hint form of [`layer`](Self::layer).
     ///
-    /// `on_dismiss` belongs to the caller rather than to the kind, because
-    /// only a kind whose policy has `dismiss_on_outside_press` can ever fire
-    /// one — hints pass `None` instead of carrying a hook that never runs.
+    /// `on_dismiss` belongs to the caller rather than to the kind: only a
+    /// popup carries one, and only when the app bound it.
     pub(crate) fn layer_scope(
         &mut self,
         id: ChildId,
@@ -1607,7 +1416,7 @@ impl<State, Msg> RenderPass<State, Msg> {
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         debug_assert!(
-            on_dismiss.is_none() || kind.policy().dismiss_on_outside_press,
+            on_dismiss.is_none() || kind == LayerKind::Popup,
             "a dismiss hook on a layer kind that never dismisses"
         );
         self.guarded(|pass| {
@@ -1635,12 +1444,12 @@ impl<State, Msg> RenderPass<State, Msg> {
         &mut self,
         id: ChildId,
         options: ScopeOptions,
-        mut env: DeclarationEnv<'_, State>,
+        env: DeclarationEnv<'_, State>,
         declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
     ) {
         self.guarded(|pass| {
             let area = env.area;
-            let index = pass.begin_node(id, area, options, SCOPE_NODE);
+            let index = pass.begin_node(id, area, options);
             pass.enter_node(index);
             pass.with_declare_ctx(env.nested(area), declare);
             pass.leave_node();
@@ -1652,11 +1461,10 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// [`DeclareCtx::in_area`], and [`Component::declare`] all pass through
     /// here.
     ///
-    /// A panic out of `declare` poisons the pass through the [`Self::guarded`]
-    /// region of the declaration entry point that is open — `scope`,
-    /// `component`, `viewport`, or a layer entry, which carries a region of its
-    /// own around the validation and lifecycle it owns. Poisoning is
-    /// idempotent, so crossing several regions reads the same as crossing one.
+    /// A panic out of `declare` leaves open the [`Self::guarded`] region of
+    /// the declaration entry point that is open — `scope`, `component`,
+    /// `viewport`, or a layer entry, which carries a region of its own around
+    /// the validation and lifecycle it owns — and so rejects the pass.
     pub(crate) fn with_declare_ctx(
         &mut self,
         env: DeclarationEnv<'_, State>,
@@ -1682,50 +1490,60 @@ impl<State, Msg> RenderPass<State, Msg> {
         declare(&mut ctx);
     }
 
-    /// Register a deferred closure. It has no identity, so its area is the
-    /// whole surface it writes to.
-    pub(crate) fn defer_paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
-        let slot = self.escaped_slot();
-        let surface = slot
-            .layer
-            .map_or(self.frame_area, |index| self.canvases[index].buffer.area);
-        let area = slot
-            .projection
-            .map_or(surface, |projection| projection.allocation(surface));
-        self.deferred.push(QueuedPaint {
-            slot,
-            paint: DeclaredPaint::Thunk {
-                node: None,
-                area,
-                paint: Box::new(paint),
-            },
-        });
-    }
-
-    /// Run every queued op in declaration order, each onto the surface its
-    /// declaration belonged to, with the flags the finished tree resolved.
+    /// Run every queued op onto the frame with the flags the finished tree
+    /// resolved: the base declaration's ops in declaration order, then each
+    /// layer's in composite order.
+    ///
+    /// Layers are transparent — a layer covers what is beneath it only where
+    /// its own ops write — so compositing is nothing but this order. Layers
+    /// paint in declaration order, except that every layer outside the one
+    /// that has taken the screen over paints before it: what the takeover
+    /// covers is inert, and so must not paint above it either. The takeover
+    /// dims what is beneath it immediately before its own ops run. Ops of one
+    /// layer keep the order they were declared in.
     fn replay_paint(
         &mut self,
         buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
-        resolved: Resolved<'_>,
+        resolved: Resolved,
     ) {
-        for QueuedPaint { slot, paint } in std::mem::take(&mut self.paint_queue) {
-            self.paint_op(paint, slot, buffer, state, theme, resolved);
+        let mut layers: Vec<Vec<QueuedPaint<State>>> =
+            self.surface.layers.iter().map(|_| Vec::new()).collect();
+        for op in std::mem::take(&mut self.paint_queue) {
+            match op.slot.layer {
+                None => self.paint_op(op, buffer, state, theme, resolved),
+                Some(layer) => layers[layer].push(op),
+            }
+        }
+        let takeover = self.surface.takeover;
+        let (covered, uncovered): (Vec<usize>, Vec<usize>) =
+            (0..layers.len()).partition(|&index| self.surface.covered_by_takeover(index, takeover));
+        for index in covered.into_iter().chain(uncovered) {
+            let layer = &self.surface.layers[index];
+            if layer.kind.takes_over() {
+                dim_background(
+                    buffer,
+                    layer.area.intersection(self.frame_area),
+                    theme.background,
+                );
+            }
+            for op in std::mem::take(&mut layers[index]) {
+                self.paint_op(op, buffer, state, theme, resolved);
+            }
         }
     }
 
-    /// Paint one declaration onto the surface its layer names, with the flags
-    /// the finished tree resolved for it.
+    /// Paint one declaration onto the frame, through the viewport and the
+    /// layer clip its slot names, with the flags the finished tree resolved
+    /// for it.
     fn paint_op(
         &mut self,
-        op: DeclaredPaint<State>,
-        slot: PaintSlot,
+        QueuedPaint { slot, paint: op }: QueuedPaint<State>,
         buffer: &mut Buffer,
         state: &State,
         theme: &Theme,
-        resolved: Resolved<'_>,
+        resolved: Resolved,
     ) {
         // Read before the component borrow below, which needs the surface
         // mutably. The root declaration has no node, and so no flags.
@@ -1733,16 +1551,17 @@ impl<State, Msg> RenderPass<State, Msg> {
             self.surface.interaction_flags(index, resolved)
         });
         let hover_position = self.hover_in(slot);
-        let target = match slot.layer {
-            None => PaintTarget::frame(buffer, slot.projection, &mut self.scratch),
-            Some(index) => PaintTarget::canvas(
-                &mut self.canvases[index],
-                slot.projection,
-                &mut self.scratch,
-            ),
+        let route = match (slot.viewport, slot.layer) {
+            (None, None) => PaintRoute::Direct,
+            (Some(viewport), None) => PaintRoute::Projected(viewport.projection()),
+            // Layer paint stays inside the render area, whatever it writes.
+            (None, Some(_)) => PaintRoute::Clipped(self.frame_area),
+            (Some(viewport), Some(_)) => {
+                PaintRoute::Projected(viewport.projection().within(self.frame_area))
+            }
         };
         let mut ctx = PaintCtx {
-            target,
+            target: PaintTarget::new(buffer, route, &mut self.scratch),
             theme,
             area: op.area(),
             flags,
@@ -1750,93 +1569,14 @@ impl<State, Msg> RenderPass<State, Msg> {
             state,
         };
         match op {
-            // `assert_valid`'s completeness check ran before replay, so
-            // every node here has its component.
+            // `assert_valid` saw every region close before replay, and a
+            // component region closes only once its component is installed.
             DeclaredPaint::Node { index, .. } => self.surface.nodes[index]
                 .component
                 .as_deref_mut()
                 .expect("a checked pass installed every node's component")
                 .paint(&mut ctx),
             DeclaredPaint::Thunk { paint, .. } => paint(&mut ctx),
-        }
-    }
-
-    /// Finish the frame's painting: composite every layer canvas over the
-    /// frame — a modal dims what is beneath it first, and the layer's own
-    /// deferred thunks land on its canvas above everything it declared — then
-    /// flush the base declaration's deferred thunks on top of the result,
-    /// making root-level [`DeclareCtx::defer_paint`] the topmost decoration
-    /// slot (toast stacks, drag ghosts).
-    ///
-    /// Layers composite in declaration order, except that every layer outside
-    /// the one that has taken the screen over composites before it: what the
-    /// takeover covers is inert, and so must not paint above it either.
-    fn finish_frame(&mut self, buffer: &mut Buffer, state: &State, theme: &Theme) {
-        let mut deferred = std::mem::take(&mut self.deferred);
-        let takeover = self.surface.takeover_root();
-        for index in 0..self.canvases.len() {
-            if self.surface.covered_by_takeover(index, takeover) {
-                self.composite_layer(index, &mut deferred, buffer, state, theme);
-            }
-        }
-        for index in 0..self.canvases.len() {
-            if !self.surface.covered_by_takeover(index, takeover) {
-                self.composite_layer(index, &mut deferred, buffer, state, theme);
-            }
-        }
-        self.flush_deferred(&mut deferred, None, buffer, state, theme);
-    }
-
-    /// Copy one layer's canvas onto the frame — dimming beneath it first when
-    /// it takes the screen over — and flush the deferred thunks that belong
-    /// to it.
-    fn composite_layer(
-        &mut self,
-        index: usize,
-        deferred: &mut Vec<QueuedPaint<State>>,
-        buffer: &mut Buffer,
-        state: &State,
-        theme: &Theme,
-    ) {
-        if self.surface.policy(Some(index)).takes_over {
-            dim_background(
-                buffer,
-                self.canvases[index]
-                    .buffer
-                    .area
-                    .intersection(self.frame_area),
-                theme.background,
-            );
-        }
-        self.flush_deferred(deferred, Some(index), buffer, state, theme);
-        let frame_area = self.frame_area;
-        let canvas = &self.canvases[index];
-        for &rect in &canvas.painted {
-            copy_rect(&canvas.buffer, buffer, rect, frame_area);
-        }
-    }
-
-    /// Run the thunks `deferred` holds for `layer`, in registration order,
-    /// and leave the rest for the layer they belong to.
-    fn flush_deferred(
-        &mut self,
-        deferred: &mut Vec<QueuedPaint<State>>,
-        layer: Option<usize>,
-        buffer: &mut Buffer,
-        state: &State,
-        theme: &Theme,
-    ) {
-        let (theirs, rest): (Vec<_>, Vec<_>) = std::mem::take(deferred)
-            .into_iter()
-            .partition(|entry| entry.slot.layer == layer);
-        *deferred = rest;
-        // Deferred thunks carry `node: None`, so no flag is ever read from this.
-        let resolved = Resolved {
-            focus: &focus::UNRESOLVED,
-            hover: &[],
-        };
-        for QueuedPaint { slot, paint } in theirs {
-            self.paint_op(paint, slot, buffer, state, theme, resolved);
         }
     }
 
@@ -1848,18 +1588,14 @@ impl<State, Msg> RenderPass<State, Msg> {
     /// own: a panic crossing it unwinds past this check and past the commit,
     /// while a panic a declaration inside it raises was recorded by that
     /// declaration's region before an app closure could catch it.
+    ///
+    /// Every open declaration, layer, and viewport, and every component still
+    /// to be installed, sits inside a region, so regions all closing is also
+    /// what says the tree is complete.
     fn assert_valid(&self) {
-        assert!(!self.failed, "cannot commit a failed declaration pass");
         assert!(
-            self.parent_stack.is_empty() && self.layer_stack.is_empty(),
-            "cannot commit a declaration pass with unclosed components or layers"
-        );
-        assert!(
-            self.surface
-                .nodes
-                .iter()
-                .all(|node| node.is_scope || node.component.is_some()),
-            "cannot commit a declaration pass with incomplete components"
+            self.open_regions == 0,
+            "cannot commit a failed declaration pass"
         );
     }
 }
@@ -1904,11 +1640,16 @@ impl<State, Msg> RenderPass<State, Msg> {
 /// Replacement is atomic, and so is the frame. A pass that panics or fails
 /// validation leaves the previous surface in charge *and* the previous frame
 /// on screen: declaring does not draw, and every reason to reject a pass is
-/// known before the first cell is written. The one thing that cannot be taken
-/// back is a panic thrown by painting itself, after the pass had already been
-/// accepted.
+/// known before the first cell is written. A declaration writes nothing
+/// outside its pass — [`DeclareCtx::transient`] is staged until commit —
+/// so a rejected pass leaves no trace. Two things cannot be taken back: the
+/// offset a [`Component::reveal_in_viewport`] stored for a frame whose second
+/// declaration is then rejected, and a panic thrown by painting itself, after
+/// the pass had already been accepted.
 pub struct Ratcn<State, Msg> {
     surface: Surface<State, Msg>,
+    /// Whether a declaration pass has ever committed. Until one has there is
+    /// no surface to route through, and every event is ignored.
     has_rendered: bool,
     focus_binding: Option<FocusBinding<State, Msg>>,
     modal_binding: Option<ModalRead<State>>,
@@ -1926,11 +1667,10 @@ pub struct Ratcn<State, Msg> {
     hover: Vec<ChildId>,
     /// The focus the retained surface resolved and painted. Comparing a fresh
     /// resolution against it is how a focus change is noticed, whoever made
-    /// it. Between the reveal at the top of a frame and the commit at its end
-    /// it holds what that reveal answered for.
+    /// it.
     resolved_focus: FocusState,
-    /// Whether a reveal is still waiting to be answered: a focus change no
-    /// surface has been able to place yet, or one an event asked for
+    /// Whether a reveal is still waiting to be answered: focus parked on a
+    /// path no surface has declared yet, or a reveal an event asked for
     /// outright. The frame that answers it clears it.
     reveal_pending: bool,
 }
@@ -1998,20 +1738,6 @@ impl<State, Msg> Ratcn<State, Msg> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Whether at least one declaration pass has completed successfully.
-    ///
-    /// Ask this before handing the runtime an event you would otherwise have to
-    /// swallow: a browser paste listener, say, can decline the paste and let the
-    /// page keep it rather than dropping it on a runtime with nothing to route
-    /// through. Events sent before this is `true` are ignored.
-    ///
-    /// A failed first render leaves it `false`. Once it is `true` it stays true —
-    /// a later failed render keeps the previous surface rather than clearing it.
-    #[must_use]
-    pub const fn has_rendered(&self) -> bool {
-        self.has_rendered
     }
 
     /// Tell the runtime where focus lives in app state, and how to ask for a
@@ -2145,7 +1871,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// exists.
     ///
     /// The pass has to finish completely before it counts: declaration,
-    /// component paint, runtime validation, and deferred paint all have to
+    /// component paint, runtime validation, and layer paint all have to
     /// succeed. Only then does the new surface replace the old one, and it
     /// happens in one step. A pass that panics or fails validation leaves the
     /// previous surface handling events, so a bad frame degrades interaction to
@@ -2159,14 +1885,14 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// Pass `frame.area()` for a whole-frame app, or a pane's rectangle for a
     /// hosted tree. Choose an area within the frame; it is passed unchanged
     /// for layout, not silently clamped. Floating components read its bounds
-    /// through [`DeclareCtx::frame_area`]; layer copies and modal backdrop
-    /// dimming are intersected with it. Viewports retain their logical
+    /// through [`DeclareCtx::frame_area`]; layer paint and modal backdrop
+    /// dimming are clipped to it. Viewports retain their logical
     /// coordinate transforms, and input events still use screen coordinates.
     ///
     /// This is not a paint sandbox or a root hit-test boundary. Base-layer
     /// paint is not clipped to `area`: widgets can paint outside their rects,
-    /// and [`PaintCtx::with_buffer`] gives unprojected base paint the whole
-    /// destination buffer. The host still owns input routing between trees.
+    /// and [`PaintCtx::with_buffer`] gives base paint outside viewports and
+    /// layers the whole destination buffer. The host still owns input routing between trees.
     ///
     /// This delegates to [`render_into`](Self::render_into) with the frame's
     /// buffer. Use that entry point for a caller-owned offscreen buffer rather
@@ -2174,8 +1900,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// # Declaring, then drawing
     ///
-    /// The closure runs once, and nothing draws while it does. Declaration
-    /// records what exists and where; [`Component::paint`] and the closures
+    /// Nothing draws while the closure runs. It runs once, or twice when focus
+    /// lands on content a viewport clips and the component that declared the
+    /// viewport scrolls to reveal it: the first declaration is discarded for
+    /// one built with the new offset. Keep side effects out of it.
+    /// Declaration records what exists and where; [`Component::paint`] and the closures
     /// [`DeclareCtx::paint`] queues are replayed afterwards, in the order the
     /// declaration reached them. Focus and hover resolve in between, against
     /// the finished tree, so every interaction flag a paint reads is derived
@@ -2195,11 +1924,13 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// order — a component draws before its own descendants — and it sets
     /// hit-testing order, with later declarations on top — within one layer.
     /// [`modal`](DeclareCtx::modal), [`popup`](DeclareCtx::popup), and
-    /// [`hint`](DeclareCtx::hint) layers are exempt from paint order: each
-    /// paints into its own canvas, and canvases composite over the frame in
-    /// the order the layers were declared, so base content declared *after* a
-    /// layer still paints beneath it. Layers may therefore be declared from
-    /// anywhere in the tree, whenever their owner declares.
+    /// [`hint`](DeclareCtx::hint) layers are exempt from paint order: every
+    /// layer paints after the whole base declaration, in the order the layers
+    /// were declared, so base content declared *after* a layer still paints
+    /// beneath it. Layers may therefore be declared from anywhere in the
+    /// tree, whenever their owner declares. Layers are transparent: a layer
+    /// covers only the cells its content writes, so one that should hide what
+    /// is beneath it paints a background (`Clear`, then a filled block).
     ///
     /// # Panics
     ///
@@ -2215,7 +1946,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         area: Rect,
         state: &State,
         theme: &Theme,
-        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+        declare: impl FnMut(&mut DeclareCtx<'_, State, Msg>),
     ) {
         self.render_into(frame.buffer_mut(), area, state, theme, declare);
     }
@@ -2240,10 +1971,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// translating screen pointer positions back into buffer coordinates before
     /// [`handle_event`](Self::handle_event).
     ///
-    /// `area` supplies floating placement bounds and clips layer copies and
+    /// `area` supplies floating placement bounds and clips layer paint and
     /// modal dimming, not arbitrary base paint or root hit-testing. Base widgets
-    /// can paint outside their rects, and unprojected [`PaintCtx::with_buffer`]
-    /// receives the whole destination buffer, as it does with `render`.
+    /// can paint outside their rects, and [`PaintCtx::with_buffer`] in base
+    /// paint outside viewports and layers receives the whole destination
+    /// buffer, as it does with `render`.
     ///
     /// A bare buffer carries no cursor metadata, and this method reports no
     /// caret position. Future caret-bearing components may require a caret
@@ -2258,25 +1990,67 @@ impl<State, Msg> Ratcn<State, Msg> {
         area: Rect,
         state: &State,
         theme: &Theme,
-        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+        mut declare: impl FnMut(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let focus_snapshot = self.stored_focus(state);
-        // Reveal first: the surface that painted the previous focus is still
-        // the one in hand, and it is the tree that can say where the focus now
-        // sits and what clips it. What it answers is a transient the
-        // declaration below reads. A change this surface cannot place — a path
-        // it never declared — stays pending for the frame that can.
-        self.reveal_moved_focus(focus_snapshot, state);
+        let mut pass = self.declare_pass(area, state, theme, &mut declare);
+        // Focus resolves once, over the finished tree, and only then does
+        // anything learn where it landed.
+        let mut resolved_focus = pass.surface.resolve_focus(focus_snapshot);
+        // Reveal against the tree just declared: it is the one that knows
+        // where the focused target sits, even when this frame declared it for
+        // the first time. The answer is a transient the declaration reads, and
+        // the offset it changes has already placed this tree's layers and
+        // paint, so a reveal that scrolls declares the frame once more. Focus
+        // parked on a path this tree lacks stays pending for one that has it.
+        let mut reveal_pending = false;
+        if self.reveal_pending || resolved_focus != self.resolved_focus {
+            match self.reveal_focus(&mut pass.surface, &resolved_focus, state) {
+                Reveal::Absent => reveal_pending = true,
+                Reveal::Settled => {}
+                Reveal::Scrolled => {
+                    pass = self.declare_pass(area, state, theme, &mut declare);
+                    resolved_focus = pass.surface.resolve_focus(focus_snapshot);
+                    reveal_pending = pass.surface.leaf_of(resolved_focus.path()).is_none();
+                }
+            }
+        }
+        // Hover re-answers its own question against the tree — the pointer has
+        // not moved, but what is under it may have — so paint reports this
+        // frame's hover rather than the one the declaration was built from.
+        let resolved_hover = self.resolve_hover(&pass.surface);
+        let resolved = Resolved {
+            focus: pass
+                .surface
+                .leaf_of(resolved_focus.path())
+                .filter(|&target| pass.surface.takes_focus(target)),
+            hover: pass.surface.leaf_of(&resolved_hover),
+        };
+        pass.replay_paint(buffer, state, theme, resolved);
+        for (path, slots) in pass.settled_transients {
+            self.transients.entry(path).or_default().extend(slots);
+        }
+        self.commit_surface(pass.surface, resolved_hover, resolved_focus, reveal_pending);
+    }
 
-        // Declare. Nothing is drawn and no *focus* flag is read: the walk
-        // builds the tree and queues the paint it owes. Hover is the one
-        // interaction fact that predates the pass, so the declaration may ask
-        // for it — see [`DeclareCtx::pointer_within`].
+    /// Declare and validate one pass. Nothing is drawn and no *focus* flag is
+    /// read: the walk builds the tree and queues the paint it owes, and
+    /// writes nothing outside the pass, so a pass can be dropped — rejected,
+    /// or superseded by a reveal — without trace. Hover is the one
+    /// interaction fact that predates the pass, so the declaration may ask
+    /// for it — see [`DeclareCtx::pointer_within`].
+    fn declare_pass(
+        &self,
+        area: Rect,
+        state: &State,
+        theme: &Theme,
+        declare: &mut impl FnMut(&mut DeclareCtx<'_, State, Msg>),
+    ) -> RenderPass<State, Msg> {
         let mut pass = RenderPass::new(area);
         pass.hover_position = self.pointer;
         pass.hover_path.clone_from(&self.hover);
         pass.with_declare_ctx(
-            DeclarationEnv::root(area, state, theme, &mut self.transients),
+            DeclarationEnv::root(area, state, theme, &self.transients),
             declare,
         );
         // Every reason to reject a pass is known once declaration ends, and
@@ -2284,25 +2058,9 @@ impl<State, Msg> Ratcn<State, Msg> {
         // pass never reaches the screen at all. They also establish what
         // `resolve_focus` needs: a complete tree.
         pass.assert_valid();
+        pass.surface.finish();
         self.assert_modal_stack(&pass.surface, state);
-        // Focus resolves once, over that tree, and only then does anything
-        // learn where it landed. Hover re-answers its own question against the
-        // same tree — the pointer has not moved, but what is under it may
-        // have — so paint reports this frame's hover rather than the one the
-        // declaration was built from.
-        let resolved_focus = pass.surface.resolve_focus(focus_snapshot);
-        let resolved_hover = self.resolve_hover(&pass.surface);
-        pass.replay_paint(
-            buffer,
-            state,
-            theme,
-            Resolved {
-                focus: &resolved_focus,
-                hover: &resolved_hover,
-            },
-        );
-        pass.finish_frame(buffer, state, theme);
-        self.commit_surface(pass.surface, resolved_hover, resolved_focus);
+        pass
     }
 
     /// What the pointer is on, answered against `surface`.
@@ -2331,7 +2089,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         self.pointer
             .and_then(|position| surface.hit_index(position))
-            .map(|index| surface.path_of(index))
+            .map(|index| surface.path_of(index).to_vec())
             .unwrap_or_default()
     }
 
@@ -2349,7 +2107,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             return;
         };
         let semantic = binding(state).ids();
-        let declared = surface.modal_roots().map(|index| &surface.nodes[index].id);
+        let declared = surface.modal_roots().map(|index| surface.id_of(index));
         assert!(
             semantic.clone().eq(declared),
             "declared modal roots do not match app-owned modal ids: expected {:?}",
@@ -2373,13 +2131,14 @@ impl<State, Msg> Ratcn<State, Msg> {
         next: Surface<State, Msg>,
         hover: Vec<ChildId>,
         focus: FocusState,
+        reveal_pending: bool,
     ) {
         let active_modal_changed = self
             .surface
             .modal_roots()
             .last()
-            .map(|index| &self.surface.nodes[index].id)
-            != next.modal_roots().last().map(|index| &next.nodes[index].id);
+            .map(|index| self.surface.id_of(index))
+            != next.modal_roots().last().map(|index| next.id_of(index));
 
         // Dropped at the end: the previous components drop only after the
         // bookkeeping below has let go of the paths they owned.
@@ -2393,22 +2152,21 @@ impl<State, Msg> Ratcn<State, Msg> {
                 gestures, surface, ..
             } = self;
             gestures.cancel_lost_claims(|path| {
-                surface
-                    .leaf_of(path)
-                    .is_some_and(|index| surface.participates(index))
+                surface.leaf_of(path).is_some_and(|index| {
+                    surface.nodes[index].live
+                        && surface.interactive(index)
+                        && !surface.on_inert_layer(index)
+                })
             });
         }
         self.transients
             .retain(|path, _| self.surface.leaf_of(path).is_some());
-        // The hover and focus this frame painted, published with the surface
-        // they were resolved against — a pass that never got here leaves the
-        // previous ones in charge, exactly as it leaves the previous surface.
+        // The hover, focus, and reveal this frame settled, published with the
+        // surface they were resolved against — a pass that never got here
+        // leaves the previous ones in charge, exactly as it leaves the
+        // previous surface.
         self.hover = hover;
-        // Focus that resolves differently against this surface than against
-        // the one the frame opened with never reached that frame's reveal:
-        // this tree is the first that can answer for it, so the next frame
-        // owes the reveal.
-        self.reveal_pending |= focus != self.resolved_focus;
+        self.reveal_pending = reveal_pending;
         self.resolved_focus = focus;
         drop(previous);
     }
@@ -2498,7 +2256,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let focus = self.surface.resolve_focus(self.stored_focus(state));
         let chain = self.key_bubble_chain(&focus);
 
-        let routed = self.dispatch_chain(&chain, event, state, &mut None, None, None);
+        let routed = self.dispatch_chain(&chain, event, state);
         if !matches!(routed, EventResult::Ignored) {
             return routed;
         }
@@ -2528,11 +2286,21 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// Keys never cross such a layer outward. Bubbling stops at its root,
     /// which doubles as the layer-wide fallback for keys nothing inside
-    /// handled. A popup or a hint leaves keys alone, so an unhandled Esc
-    /// under one still reaches whatever declared it.
+    /// handled. A popup's unhandled keys reach its declaring component. A
+    /// hint is inert: stored intent beneath it may reach an outside ancestor,
+    /// but never the hint's content.
     fn key_bubble_chain(&self, focus: &FocusState) -> Vec<usize> {
         let mut matched = self.surface.nodes_along_path(focus.path());
-        let Some(takeover) = self.surface.takeover_root() else {
+        // Focusability controls traversal, not fallback delivery: an open
+        // Select with no options still needs Esc on its parked path. Layer
+        // inertness, in contrast, blocks delivery regardless of the component.
+        if let Some(position) = matched
+            .iter()
+            .position(|&index| self.surface.on_inert_layer(index))
+        {
+            matched.truncate(position);
+        }
+        let Some(takeover) = self.surface.takeover else {
             return matched;
         };
         match matched.iter().position(|&index| index == takeover) {
@@ -2571,7 +2339,8 @@ impl<State, Msg> Ratcn<State, Msg> {
                 if !binding.chord.matches(key) {
                     continue;
                 }
-                let mut path = scope.map_or_else(Vec::new, |index| self.surface.path_of(index));
+                let mut path =
+                    scope.map_or_else(Vec::new, |index| self.surface.path_of(index).to_vec());
                 path.extend(binding.path.iter().cloned());
                 let Some(next) = self.surface.focus_at_path(&path) else {
                     continue;
@@ -2621,7 +2390,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             let retained = self
                 .surface
                 .modal_roots()
-                .map(|index| &self.surface.nodes[index].id);
+                .map(|index| self.surface.id_of(index));
             binding(state).ids().eq(retained)
         })
     }
@@ -2758,7 +2527,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     fn hit_path(&self, point: Position) -> Option<Vec<ChildId>> {
         self.surface
             .hit_index(point)
-            .map(|index| self.surface.path_of(index))
+            .map(|index| self.surface.path_of(index).to_vec())
     }
 
     /// Offer `event` to each component in `chain`, deepest first, stopping at
@@ -2767,37 +2536,37 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// The one dispatch loop. Keys and pointer events build different chains —
     /// keys from the focus path, the pointer from what it hit — but bubble
     /// through them identically, so this is where "unhandled events bubble up"
-    /// is actually implemented. `capture` receives a component's
-    /// [`EventCtx::capture_pointer`] claim; the key path passes `&mut None`
-    /// because there is no gesture to own.
-    ///
-    /// `chain` is one ancestor line, innermost last, so every node's path is
-    /// a prefix of the last one's.
+    /// is actually implemented. A pointer `Down` is the one event a
+    /// component may claim the gesture of, through
+    /// [`EventCtx::capture_pointer`]; the claim is recorded once the chain
+    /// is done.
     fn dispatch_chain(
         &mut self,
         chain: &[usize],
         event: &Event,
         state: &State,
-        capture: &mut Option<Vec<ChildId>>,
-        capture_button: Option<MouseButton>,
-        captured_press: Option<Press>,
     ) -> EventResult<Msg> {
-        let Some(&innermost) = chain.last() else {
-            return EventResult::Ignored;
-        };
-        let full_path = self.surface.path_of(innermost);
-        let outermost_depth = full_path.len() - chain.len();
-        let capture_owner = match event {
-            Event::Mouse(mouse) => self.gestures.capture_for(mouse.kind).map(ToOwned::to_owned),
+        let mouse = match event {
+            Event::Mouse(mouse) => Some(*mouse),
             _ => None,
         };
-        for (position, &index) in chain.iter().enumerate().rev() {
-            if !self.surface.participates(index) {
+        let pressed = mouse.and_then(|mouse| match mouse.kind {
+            MouseKind::Down(button) => Some(button),
+            _ => None,
+        });
+        let capture_owner = mouse
+            .and_then(|mouse| self.gestures.capture_for(mouse.kind))
+            .map(ToOwned::to_owned);
+        let captured_press = mouse.and_then(|mouse| self.gestures.captured_press(mouse.kind));
+        let mut claim = None;
+        let mut result = EventResult::Ignored;
+        for &index in chain.iter().rev() {
+            if !self.surface.nodes[index].live {
                 continue;
             }
-            let path = full_path[..=outermost_depth + position].to_vec();
+            let path = self.surface.path_of(index).to_vec();
             let area = self.surface.nodes[index].area;
-            let viewport = self.surface.projection_of(index).map(Projection::viewport);
+            let viewport = self.surface.viewport_of(index);
             // Declaration-space for the component, screen-absolute for the
             // gesture tracker `EventCtx::drag` keeps.
             let projected = match (event, viewport) {
@@ -2807,10 +2576,6 @@ impl<State, Msg> Ratcn<State, Msg> {
                 _ => None,
             };
             let delivered = projected.as_ref().unwrap_or(event);
-            let screen_mouse = match event {
-                Event::Mouse(mouse) => Some(*mouse),
-                _ => None,
-            };
             let owns_capture = capture_owner.as_deref().is_some_and(|owner| path == owner);
             let Some(component) = self.surface.nodes[index].component.as_mut() else {
                 continue;
@@ -2820,18 +2585,20 @@ impl<State, Msg> Ratcn<State, Msg> {
                 area,
                 &mut self.transients,
                 PointerInputs {
-                    capture: Some(capture),
-                    button: capture_button,
-                    screen_mouse,
+                    claim: pressed.map(|button| (button, &mut claim)),
+                    screen_mouse: mouse,
                     captured_press: captured_press.filter(|_| owns_capture),
                 },
             );
-            let result = component.handle_event(delivered, state, &mut ctx);
+            result = component.handle_event(delivered, state, &mut ctx);
             if !matches!(result, EventResult::Ignored) {
-                return result;
+                break;
             }
         }
-        EventResult::Ignored
+        if let (Some(button), Some(path)) = (pressed, claim) {
+            self.gestures.claim(button, path);
+        }
+        result
     }
 
     /// Route one *normalized* mouse event through the retained surface, and
@@ -2886,7 +2653,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         };
 
         let chain = self.surface.mouse_bubble_chain(&path);
-        let routed = self.dispatch_pointer(&chain, mouse, state);
+        let routed = self.dispatch_chain(&chain, &Event::Mouse(mouse), state);
         if !matches!(routed, EventResult::Ignored) {
             return routed;
         }
@@ -2921,38 +2688,17 @@ impl<State, Msg> Ratcn<State, Msg> {
             .map(<[ChildId]>::to_vec)
     }
 
-    /// Offer the event to the hit component and its ancestors, and record a
-    /// capture if one of them claims the gesture. Only a `Down` may claim.
-    fn dispatch_pointer(
-        &mut self,
-        chain: &[usize],
-        mouse: MouseEvent,
-        state: &State,
-    ) -> EventResult<Msg> {
-        let capture_button = match mouse.kind {
-            MouseKind::Down(button) => Some(button),
-            _ => None,
-        };
-        let mut capture = None;
-        let captured_press = self.gestures.captured_press(mouse.kind);
-        let result = self.dispatch_chain(
-            chain,
-            &Event::Mouse(mouse),
-            state,
-            &mut capture,
-            capture_button,
-            captured_press,
-        );
-        if let (Some(button), Some(path)) = (capture_button, capture) {
-            self.gestures.claim(button, path);
-        }
-        result
-    }
-
     /// The focus change a primary `Down` produces when no component handled
     /// it, or `None` when this event is not one or nothing along the chain can
     /// take focus. The search runs over the bubble chain rather than the
     /// whole surface, which keeps focus-on-press inside the hit layer.
+    ///
+    /// A press that lands in a scope already holding focus — its dead space,
+    /// or a child that takes none — is consumed and leaves focus alone, with
+    /// no reveal: the user pressed the pane they are in, not its first
+    /// control, and nothing asked to be scrolled into view. Only a focused
+    /// leaf that takes focus holds it; a path parked anywhere else is
+    /// rescued as if the scope held none.
     fn focus_on_press(
         &mut self,
         chain: &[usize],
@@ -2966,30 +2712,43 @@ impl<State, Msg> Ratcn<State, Msg> {
             .iter()
             .rev()
             .copied()
-            .find(|&index| self.surface.focusable(index))?;
+            .find(|&index| self.surface.nodes[index].focusable)?;
 
+        let current = self.surface.resolve_focus(self.stored_focus(state));
+        // Held means a leaf that really takes focus: a path parked on
+        // something that takes none, or on nothing declared, is left for the
+        // press to rescue.
+        let held = self
+            .surface
+            .leaf_of(current.path())
+            .filter(|&leaf| self.surface.takes_focus(leaf));
+        if held.is_some_and(|leaf| leaf != target)
+            && self.surface.path_is_prefix_of(target, current.path())
+        {
+            return Some(EventResult::Consumed);
+        }
         // Focus lands on a leaf, so a focusable container hands off to its
         // first focusable descendant.
         let focus = self.surface.descend_focus(target, Step::Forward)?;
-        let current = self.surface.resolve_focus(self.stored_focus(state));
         Some(self.focus_transition_result(focus, &current))
     }
 
-    /// The dismiss message of the topmost popup the press landed outside of,
-    /// if any, with `target` naming what it hit. "Outside" is containment, not
-    /// depth: the press hit nothing, or hit something that is not inside the
-    /// popup's subtree. Popups an open modal covers are inert and never
-    /// dismiss.
+    /// The dismiss message of the topmost popup with a dismiss hook that the
+    /// press landed outside of, if any, with `target` naming what it hit.
+    /// "Outside" is containment, not depth: the press hit nothing, or hit
+    /// something that is not inside the popup's subtree. A popup without a
+    /// hook has nothing to say and does not shadow one beneath it. Popups an
+    /// open modal covers are inert and never dismiss.
     fn popup_dismissal(&self, target: Option<&[ChildId]>) -> Option<Msg> {
         // Innermost first, and keep looking: the layer the press landed
         // inside is not dismissed, but one it landed outside of still is.
         let top = self.surface.top_layer(|layer| {
-            layer.kind.policy().dismiss_on_outside_press
+            layer.on_dismiss.is_some()
                 && self.surface.interactive(layer.root)
-                && self.surface.participates(layer.root)
+                && self.surface.nodes[layer.root].live
                 && target.is_none_or(|hit| !self.surface.path_is_prefix_of(layer.root, hit))
         })?;
-        top.on_dismiss.as_ref().map(|f| f())
+        top.on_dismiss.as_ref().map(|dismiss| dismiss())
     }
 
     /// The focus change a motion onto `path` produces when it crosses a
@@ -3014,64 +2773,53 @@ impl<State, Msg> Ratcn<State, Msg> {
             })
     }
 
-    /// Reveal focus that has moved since the last frame, or that an event
-    /// asked to see again, while the surface it moved across is still the one
-    /// in hand.
+    /// Ask the component that declared the viewport clipping `focus`'s target
+    /// in `surface` to bring it into view.
     ///
     /// Every reveal in the runtime happens here, whatever moved focus: a Tab
     /// the runtime resolved, a press, a [`focus_path`](Self::focus_path) the
     /// app looked up, or a [`FocusState`] its update function stored. What
-    /// they share is that the app holds the new path by the time this frame
-    /// starts. The component's answer is a transient, which the declaration
-    /// that follows reads back and lays out from.
+    /// they share is that the app holds the new path by the time the frame
+    /// is declared.
     ///
-    /// The first frame whose surface can place the focused target reveals it.
-    /// A surface that does not declare the focused leaf has no geometry to
-    /// answer with, so the reveal stays pending and each frame asks its own
-    /// surface again.
-    fn reveal_moved_focus(&mut self, stored: &FocusState, state: &State) {
-        let focus = self.surface.resolve_focus(stored);
-        if std::mem::take(&mut self.reveal_pending) || focus != self.resolved_focus {
-            self.reveal_pending = !self.reveal_focus(&focus, state);
-        }
-        self.resolved_focus = focus;
-    }
-
-    /// Ask the component that declared the viewport clipping `focus`'s target
-    /// to bring it into view. A target that is already fully on screen, or
-    /// that no viewport clips, reaches nobody.
-    ///
-    /// `false` when this surface does not declare the focused leaf: it has no
-    /// geometry to answer with, and whatever prefix of the path it does
-    /// declare belongs to a different node. Focus sits on a whole path or
-    /// nowhere, and so does the reveal.
-    /// Explicit no-focus completes immediately: there is no target to wait for.
-    fn reveal_focus(&mut self, focus: &FocusState, state: &State) -> bool {
+    /// Focus sits on a whole path or nowhere, and so does the reveal: a
+    /// surface that declares only a prefix of the path answers
+    /// [`Reveal::Absent`], never for the prefix's node.
+    fn reveal_focus(
+        &mut self,
+        surface: &mut Surface<State, Msg>,
+        focus: &FocusState,
+        state: &State,
+    ) -> Reveal {
         if focus.is_none() {
-            return true;
+            return Reveal::Settled;
         }
-        let Some(target) = self.surface.leaf_of(focus.path()) else {
-            return false;
+        let Some(target) = surface.leaf_of(focus.path()) else {
+            return Reveal::Absent;
         };
-        if self.surface.viewport_visibility(target) == ViewportVisibility::Full {
-            return true;
+        if !surface.takes_focus(target)
+            || surface.viewport_visibility(target) == ViewportVisibility::Full
+        {
+            return Reveal::Settled;
         }
-        let Some(owner) = self
-            .surface
+        let Some(owner) = surface
             .clipping_viewport(target)
             .and_then(|record| record.owner)
         else {
-            return true;
+            return Reveal::Settled;
         };
-        let reveal = self.surface.nodes[target].area;
-        let path = self.surface.path_of(owner);
-        let area = self.surface.nodes[owner].area;
-        let Some(component) = self.surface.nodes[owner].component.as_mut() else {
-            return true;
+        let reveal = surface.nodes[target].area;
+        let path = surface.path_of(owner).to_vec();
+        let area = surface.nodes[owner].area;
+        let Some(component) = surface.nodes[owner].component.as_mut() else {
+            return Reveal::Settled;
         };
         let mut ctx = EventCtx::at(path, area, &mut self.transients, PointerInputs::default());
-        component.reveal_in_viewport(reveal, state, &mut ctx);
-        true
+        if component.reveal_in_viewport(reveal, state, &mut ctx) {
+            Reveal::Scrolled
+        } else {
+            Reveal::Settled
+        }
     }
 
     /// The result of a focus step that resolved to `next`.
@@ -3102,25 +2850,8 @@ impl<State, Msg> Ratcn<State, Msg> {
 
     fn declared_paths(&self) -> Vec<Vec<ChildId>> {
         (0..self.surface.nodes.len())
-            .map(|index| self.surface.path_of(index))
+            .map(|index| self.surface.path_of(index).to_vec())
             .collect()
-    }
-}
-
-/// Copy `area` through `clip`, blanking glyphs cut by the composite boundary.
-/// A paint rect may cover only part of an otherwise intact glyph.
-fn copy_rect(source: &Buffer, destination: &mut Buffer, area: Rect, clip: Rect) {
-    let clip = clip
-        .intersection(source.area)
-        .intersection(destination.area);
-    let area = area.intersection(clip);
-    for position in area.positions() {
-        let cell = &source[position];
-        let target = &mut destination[position];
-        *target = cell.clone();
-        if cell.cell_width() > clip.right() - position.x {
-            target.set_symbol(" ").set_diff_option(CellDiffOption::None);
-        }
     }
 }
 

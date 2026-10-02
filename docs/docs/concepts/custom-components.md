@@ -20,15 +20,13 @@ it never uses.
 ## The trait
 
 ```rust
-// A frame reaches the first five in this order. `handle_event` runs on the
-// retained instance between frames, and `reveal_in_viewport` opens the frame
-// that answers a focus move.
+// A frame reaches the first four in this order. `handle_event` runs on the
+// retained instance between frames, and `reveal_in_viewport` runs between a
+// frame's declaration and its paint when focus has moved.
 impl Component<AppState, Msg> for MyComponent {
-    fn prepare(&mut self, state: &AppState) { ... }
+    fn scope_options(&self, state: &AppState) -> ScopeOptions { ... }
 
-    fn scope_options(&self) -> ScopeOptions { ... }
-
-    fn interaction_area(&self, area: Rect) -> Rect { ... }
+    fn interaction_area(&self, area: Rect, state: &AppState) -> Rect { ... }
 
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, AppState, Msg>) { ... }
 
@@ -46,7 +44,7 @@ impl Component<AppState, Msg> for MyComponent {
         target: Rect,
         state: &AppState,
         ctx: &mut EventCtx<'_>,
-    ) { ... }
+    ) -> bool { ... }
 }
 ```
 
@@ -59,18 +57,16 @@ resolved — which is why the interaction flags (`ctx.focused()`,
 complete to resolve against yet. Hover is the exception, because it predates
 the frame rather than following from it: `DeclareCtx::pointer_within()` reports
 whether the pointer is inside this declaration, for the rare component whose
-*structure* depends on it. Both methods run once per frame, so anything
-`handle_event` reads back must be recorded in `declare`, and must therefore not
-depend on those flags.
+*structure* depends on it. Neither method sees the frame's resolved flags, so
+anything `handle_event` reads back must be recorded in `declare`, and must
+therefore not depend on those flags.
 
 Every method except `declare` has a default:
 
-- [`prepare`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.prepare)
-  runs once per declaration, before `scope_options` and `interaction_area`
-  are read, so both can answer from state it pins.
 - [`scope_options`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.scope_options)
   carries the focus claim: `ScopeOptions::default().focusable(true)` is how a
-  component takes part in Tab traversal. The same options shape a composite's
+  component takes part in Tab traversal. It and `interaction_area` receive the
+  state the component is declared with. The same options shape a composite's
   scope (below).
 - [`interaction_area`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.interaction_area)
   returns the supplied paint area; override it when the interactive pixels
@@ -82,9 +78,13 @@ Every method except `declare` has a default:
   ignores the event, letting it bubble to the parent.
 - [`reveal_in_viewport`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.reveal_in_viewport)
   is called on the component that declared a viewport when focus lands on a
-  descendant the viewport clips, so it can scroll that descendant into view.
-  [Layers and modals](./layers-and-modals) covers when the call arrives,
-  including the focus changes it answers on the frame after.
+  descendant the viewport clips, so it can scroll that descendant into view;
+  it returns whether it moved. The offset lives in a transient: the reveal
+  writes the new one through `ctx.transient::<Offset>()` on its `EventCtx`,
+  and `declare` reads it back with the same `ctx.transient::<Offset>()` on
+  its `DeclareCtx` to open the viewport there. A
+  reveal that returns `true` has the frame declared again with that offset.
+  [Layers and modals](./layers-and-modals) covers when the call arrives.
 
 [`MeasuredComponent`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.MeasuredComponent.html)
 adds a `measure` method so containers such as the Dialog action row can size a
@@ -139,9 +139,10 @@ kept for as long as that path keeps being declared. Each type has its own slot,
 so a component's transients never collide with those `ctx.drag` keeps. See
 [Dragging](./dragging) for the standard use.
 
-`declare` can read the same value back with `DeclareCtx::transient::<T>()` — that
-is how a wheel scroll survives a redraw. Prefer writing from the event side,
-where a single event carries the change.
+`declare` reaches the same value with `ctx.transient::<T>()` on its
+`DeclareCtx` — that is how a wheel scroll survives a redraw. A declaration may
+settle it too; its write lands only when the frame commits. Prefer writing from
+the event side, where a single event carries the change.
 
 ## Handling events
 
@@ -180,9 +181,11 @@ The queue position is fixed, so decoration that has to cover a composite's
 *descendants* — a dimming wash — cannot come from `Component::paint` at all,
 which is queued before them. A `ctx.paint` closure reached *after* those
 declarations is queued after them, on the same layer, and is the usual answer.
-`ctx.defer_paint` goes one step further, flushing after the current layer has
-finished declaring, which is what decoration that must also cover *later
-siblings* — a drag ghost — needs; it has no identity or geometry of its own.
+Decoration that must also cover *later siblings* — a drag ghost — goes one step
+further: declare it as a `ctx.hint` layer, which paints above everything
+declared outside it and takes no input. Layers are transparent, so paint only
+the cells the decoration covers, and a background first if it should hide what
+is beneath.
 
 What still follows declaration order is hit-testing, and it knows nothing about
 pixels: a later sibling painted underneath another still takes the clicks over
@@ -203,7 +206,9 @@ a plain block (`Block::bordered().padding(p).inner(area)`, which depends only on
 borders and padding) and build the styled one inside the closure.
 
 **Caller-supplied bodies.** A region the caller fills is a closure, and it
-should be `FnOnce` so the caller can move owned values into it. Store it as
+should be `FnOnce` so the caller can move owned values into it. The render
+closure that declares the composite is `FnMut`, so the caller builds those
+values inside it, afresh each time it runs. Store it as
 `Option<Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>>` and `take()` it in
 `declare`, then hand it the area you chose for it with
 `ctx.in_area(area, body)`. The body's children land in the composite's own
@@ -249,7 +254,6 @@ what you can use too.
 - Everything that paints: `paint`, styled from its interaction flags.
 - Interactive geometry within the paint area: express it with `interaction_area`.
 - Gesture mechanics that outlive the instance: `ctx.transient`.
-- The focus claim in `scope_options` answers from the props alone, and
-  reflects the same condition that makes events ignored. Settle anything
-  state-dependent in `prepare`.
+- The focus claim in `scope_options` reflects the same condition that makes
+  events ignored, read from the props and the declared state it receives.
 - One `Emit` per event; `Ignored` only when a parent should get a chance.

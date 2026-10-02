@@ -45,7 +45,7 @@ impl<State, Msg> Driver<State, Msg> {
     pub(crate) fn render(
         &mut self,
         state: &State,
-        declare: impl FnOnce(&mut DeclareCtx<'_, State, Msg>),
+        declare: impl FnMut(&mut DeclareCtx<'_, State, Msg>),
     ) {
         let theme = Theme::default_dark();
         let Self { terminal, ratcn } = self;
@@ -76,6 +76,45 @@ impl<State, Msg> Driver<State, Msg> {
     pub(crate) fn cell(&self, column: u16, row: u16) -> &Cell {
         self.buffer().cell((column, row)).expect("cell")
     }
+}
+
+/// Everything `buffer` shows, as text a test can pin: each row's symbols, then
+/// the same row with every cell replaced by a letter naming its style, then
+/// what each letter stands for.
+///
+/// A refactor that must not change a pixel compares against this, so a
+/// regression reads as the rows and colors that moved rather than a bare
+/// inequality.
+pub(crate) fn styled_snapshot(buffer: &Buffer) -> String {
+    use std::fmt::Write;
+
+    let letter = |index: usize| char::from(b'a' + u8::try_from(index).expect("few styles"));
+    let mut styles = Vec::new();
+    let mut symbols = String::new();
+    let mut letters = String::new();
+    for y in buffer.area.top()..buffer.area.bottom() {
+        for x in buffer.area.left()..buffer.area.right() {
+            let cell = buffer.cell((x, y)).expect("cell");
+            let style = (cell.fg, cell.bg, cell.modifier);
+            let index = styles
+                .iter()
+                .position(|seen| *seen == style)
+                .unwrap_or_else(|| {
+                    styles.push(style);
+                    styles.len() - 1
+                });
+            symbols.push_str(cell.symbol());
+            letters.push(letter(index));
+        }
+        // Closed off, so a row's trailing blanks survive an editor.
+        symbols.push_str("|\n");
+        letters.push('\n');
+    }
+    let mut snapshot = symbols + &letters;
+    for (index, (fg, bg, modifier)) in styles.iter().enumerate() {
+        writeln!(snapshot, "{}: {fg} on {bg} {modifier:?}", letter(index)).expect("infallible");
+    }
+    snapshot
 }
 
 /// A mouse event at one cell, with no modifiers held.

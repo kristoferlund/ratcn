@@ -128,8 +128,8 @@ impl demo_shared::Demo for App {
             let content = state.selected.content();
             ctx.paint(move |ctx| {
                 let surface = ctx.theme.surface;
-                ctx.with_buffer(|buf| {
-                    buf.set_style(content_area, Style::default().bg(surface));
+                ctx.with_buffer(content_area, |area, buf| {
+                    buf.set_style(area, Style::default().bg(surface));
                 });
                 ctx.widget(
                     Paragraph::new(content).wrap(Wrap { trim: true }),

@@ -25,7 +25,7 @@ use ratcn::{
     Theme,
     runtime::{
         CellOffset, ChildId, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx,
-        EventResult, MouseKind, PaintCtx, Ratcn, offset_rect,
+        EventResult, MouseKind, PaintCtx, Ratcn, ScopeOptions, offset_rect,
     },
 };
 
@@ -241,8 +241,8 @@ struct KanbanCard {
 impl Component<AppState, Msg> for KanbanCard {
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, AppState, Msg>) {
         // The ghost follows the pointer over every card declared after this
-        // one, so it is deferred to the top of the frame rather than painted
-        // in place.
+        // one, so it is a hint layer: painted above them all, and inert, so
+        // the drag's own events still reach this card.
         let Some(active_drag) = ctx
             .state()
             .active_drag
@@ -253,10 +253,13 @@ impl Component<AppState, Msg> for KanbanCard {
         };
         let dragged_card_area = offset_rect(self.board_layout.area, ctx.area(), active_drag.offset);
         let dragged_card_id = self.card_id.clone();
-        ctx.defer_paint(move |ctx| {
-            let theme = ctx.theme;
-            ctx.with_buffer(|buf| {
-                paint_card(buf, dragged_card_area, &dragged_card_id, theme);
+        ctx.hint("ghost", dragged_card_area, ScopeOptions::default(), |ctx| {
+            let area = ctx.area();
+            ctx.paint(move |ctx| {
+                let theme = ctx.theme;
+                ctx.with_buffer(area, |area, buf| {
+                    paint_card(buf, area, &dragged_card_id, theme);
+                });
             });
         });
     }
@@ -278,7 +281,9 @@ impl Component<AppState, Msg> for KanbanCard {
                 area,
             );
         } else {
-            ctx.with_buffer(|buf| paint_card(buf, area, &self.card_id, theme));
+            ctx.with_buffer(area, |area, buf| {
+                paint_card(buf, area, &self.card_id, theme)
+            });
         }
     }
 

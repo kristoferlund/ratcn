@@ -85,7 +85,7 @@ impl Component<ModalTestState, ModalTestMsg> for ModalRoute {
         EventResult::Emit(ModalTestMsg::Routed(self.0))
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &ModalTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -112,7 +112,7 @@ impl Component<ModalTestState, ModalTestMsg> for ModalFocusRoute {
         EventResult::Emit(ModalTestMsg::Routed("dialog"))
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &ModalTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -125,7 +125,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusModal {
         ctx.component(ChildId::Static("leaf"), FocusLeaf::enabled(), area);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().tab_wrap(TabWrap::Wrap)
     }
 }
@@ -139,7 +139,7 @@ impl Component<FocusTestState, FocusTestMsg> for EscapeFocusModal {
         ctx.component(ChildId::Static("second"), FocusLeaf::enabled(), area);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().tab_wrap(TabWrap::Escape)
     }
 }
@@ -166,7 +166,7 @@ impl Component<FocusTestState, FocusTestMsg> for RecordingFocusModal {
         );
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default()
     }
 }
@@ -720,7 +720,7 @@ impl Component<ModalTestState, ModalTestMsg> for ModalFocusLeaf {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &ModalTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -971,7 +971,7 @@ fn caught_modal_boundary_failure_is_sticky_and_atomic() {
     let failed = catch_unwind(AssertUnwindSafe(|| {
         let area = driver.area();
         driver.render(&(), |ctx| {
-            ctx.defer_paint(|_| panic!("base overlay failed"));
+            ctx.paint(|_| panic!("base paint failed"));
             let caught = catch_unwind(AssertUnwindSafe(|| {
                 ctx.modal(ChildId::Static("modal"), Leaf, area);
             }));
@@ -987,7 +987,7 @@ fn caught_modal_boundary_failure_is_sticky_and_atomic() {
 }
 
 #[test]
-fn caught_lower_modal_overlay_flush_failure_preserves_retained_interaction() {
+fn caught_lower_modal_paint_failure_preserves_retained_interaction() {
     let state = PointerState;
     let mut driver = Driver::new(10, 2);
     let area = driver.area();
@@ -1013,7 +1013,7 @@ fn caught_lower_modal_overlay_flush_failure_preserves_retained_interaction() {
                 },
                 area,
             );
-            ctx.defer_paint(|_| panic!("lower modal overlay failed"));
+            ctx.paint(|_| panic!("lower modal paint failed"));
             let caught = catch_unwind(AssertUnwindSafe(|| {
                 ctx.modal(ChildId::Static("top"), RouteLeaf("top"), area);
             }));
@@ -1124,33 +1124,9 @@ fn a_modal_covering_and_uncovering_moves_hover_without_motion() {
 }
 
 #[test]
-fn passive_overlay_never_becomes_a_hit_target() {
-    let state = PointerState;
-    let mut driver = Driver::new(5, 2);
-    let area = driver.area();
-    driver.render(&state, |ctx| {
-        ctx.component(ChildId::Static("base"), RouteLeaf("base"), area);
-        ctx.defer_paint(|ctx| {
-            ctx.with_buffer(|buf| {
-                buf[(0, 0)].set_symbol("overlay");
-            });
-        });
-    });
-
-    assert_eq!(
-        driver.event(mouse(MouseKind::Down(MouseButton::Left), 0, 0), &state),
-        EventResult::Emit(PointerMsg::Routed(
-            "base",
-            MouseKind::Down(MouseButton::Left),
-            0,
-        ))
-    );
-}
-
-#[test]
 fn duplicate_modal_root_ids_fail_before_entering_their_layer() {
     for ids in [&["a", "a"][..], &["a", "b", "a"][..]] {
-        let pending_overlay = Arc::new(AtomicBool::new(false));
+        let pending_paint = Arc::new(AtomicBool::new(false));
         let mut driver = Driver::<(), ()>::new(5, 2);
         render_leaf(&mut driver, &ChildId::Static("stable"));
         let failed = catch_unwind(AssertUnwindSafe(|| {
@@ -1159,8 +1135,8 @@ fn duplicate_modal_root_ids_fail_before_entering_their_layer() {
                 for (position, id) in ids.iter().enumerate() {
                     ctx.modal(ChildId::Static(id), Leaf, area);
                     if position + 1 == ids.len() - 1 {
-                        let painted = Arc::clone(&pending_overlay);
-                        ctx.defer_paint(move |_| {
+                        let painted = Arc::clone(&pending_paint);
+                        ctx.paint(move |_| {
                             painted.store(true, Ordering::SeqCst);
                         });
                     }
@@ -1168,7 +1144,7 @@ fn duplicate_modal_root_ids_fail_before_entering_their_layer() {
             });
         }));
         assert!(failed.is_err());
-        assert!(!pending_overlay.load(Ordering::SeqCst));
+        assert!(!pending_paint.load(Ordering::SeqCst));
         assert_eq!(
             driver.ratcn.declared_paths(),
             vec![vec![ChildId::Static("stable")]]
@@ -1204,7 +1180,7 @@ fn a_duplicate_modal_id_nested_inside_a_modal_fails() {
 }
 
 #[test]
-fn base_and_modal_root_id_collision_fails_before_base_overlay_flush() {
+fn base_and_modal_root_id_collision_fails_before_base_paint() {
     let painted = Arc::new(AtomicBool::new(false));
     let mut driver = Driver::<(), ()>::new(5, 2);
     render_leaf(&mut driver, &ChildId::Static("stable"));
@@ -1212,8 +1188,8 @@ fn base_and_modal_root_id_collision_fails_before_base_overlay_flush() {
         let area = driver.area();
         driver.render(&(), |ctx| {
             ctx.component(ChildId::Static("same"), Leaf, area);
-            let deferred = Arc::clone(&painted);
-            ctx.defer_paint(move |_| deferred.store(true, Ordering::SeqCst));
+            let queued = Arc::clone(&painted);
+            ctx.paint(move |_| queued.store(true, Ordering::SeqCst));
             ctx.modal(ChildId::Static("same"), Leaf, area);
         });
     }));

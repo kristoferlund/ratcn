@@ -126,7 +126,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusComposite {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default()
     }
 }
@@ -145,7 +145,7 @@ impl Component<FocusTestState, FocusTestMsg> for EmptyComposite {
             .push((ctx.focused(), ctx.contains_focus()));
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(self.focusable)
     }
 }
@@ -888,7 +888,7 @@ fn events_before_the_first_render_are_ignored() {
     let state = FocusTestState::default();
     let mut driver = focus_driver(10, 3);
 
-    assert!(!driver.ratcn.has_rendered());
+    assert!(!driver.ratcn.has_rendered);
 
     assert_eq!(
         driver.event(Event::Key(KeyEvent::new(KeyCode::Tab)), &state),
@@ -899,11 +899,11 @@ fn events_before_the_first_render_are_ignored() {
         driver.render(&state, |_| panic!("first render failed"));
     }));
     assert!(failed.is_err());
-    assert!(!driver.ratcn.has_rendered());
+    assert!(!driver.ratcn.has_rendered);
 
     driver.render(&state, |_| {});
 
-    assert!(driver.ratcn.has_rendered());
+    assert!(driver.ratcn.has_rendered);
 }
 
 #[test]
@@ -1000,7 +1000,7 @@ impl Component<FocusTestState, FocusTestMsg> for HoverFocusComposite {
         ctx.component(ChildId::Static("leaf"), FocusLeaf::enabled(), area);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default()
     }
 }
@@ -1069,7 +1069,7 @@ impl Component<FocusTestState, FocusTestMsg> for ThunkProbe {
         });
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }

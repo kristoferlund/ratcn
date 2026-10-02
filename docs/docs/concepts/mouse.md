@@ -104,7 +104,8 @@ need:
   return `Ignored`, the runtime focuses the innermost eligible target. Capturing
   the pointer does not consume the event, so capture plus `Ignored` still gets
   this fallback. `Consumed` vetoes it, while `Emit` returns the component's
-  message instead.
+  message instead. A press inside a scope that already holds focus — its empty
+  space, or a child that takes none — leaves focus where it is.
 - **Hover** is the runtime's own path, separate from focus and from your
   state: there is nothing to bind. `PaintCtx::hovered` and `contains_hover`
   let a component highlight under the pointer **without stealing focus**, so

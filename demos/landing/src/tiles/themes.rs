@@ -175,7 +175,9 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
                     width,
                     ..column
                 };
-                ctx.with_buffer(|buf| buf.set_style(square, Style::default().bg(*color)));
+                ctx.with_buffer(square, |area, buf| {
+                    buf.set_style(area, Style::default().bg(*color));
+                });
             }
         }
     });

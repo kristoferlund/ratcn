@@ -11,6 +11,7 @@ use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
     style::Style,
     text::{Line, Span, Text},
+    widgets::Widget,
 };
 use ratcn::{
     Theme, Toast, ToasterState, ToasterWidget,
@@ -215,7 +216,7 @@ impl demo_shared::Demo for App {
         // frame's theme reaches the state before anything reads it.
         self.state.resolved_theme = *theme;
         let now = demo_shared::monotonic_time();
-        let _ = self.state.toasts.prune_expired(now);
+        self.state.toasts.prune_expired(now);
 
         let theme = self.state.theme();
         buffer.set_style(area, Style::default().bg(theme.background));
@@ -235,14 +236,12 @@ impl demo_shared::Demo for App {
             if state.modals_state.is_open(screensaver::ID) {
                 screensaver::declare(ctx, area, now);
             }
-            ctx.defer_paint(move |ctx| {
-                let state = ctx.state();
-                ctx.widget(
-                    ToasterWidget::new(&state.toasts, now).themed(&state.theme()),
-                    area,
-                );
-            });
         });
+        // Painted after the runtime is done, so toasts sit above every layer,
+        // the screensaver included.
+        ToasterWidget::new(&self.state.toasts, now)
+            .themed(&theme)
+            .render(area, buffer);
     }
 }
 

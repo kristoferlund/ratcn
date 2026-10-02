@@ -8,6 +8,7 @@ use ratatui::{
 
 use super::*;
 use crate::{ListItem, Select, Tooltip, TooltipSide};
+use ratatui::buffer::CellWidth;
 
 const ROOT: Rect = Rect::new(8, 4, 18, 7);
 
@@ -55,7 +56,8 @@ fn overlapping_style_paint_preserves_a_complete_wide_glyph() {
 
 #[test]
 fn clipped_modal_wide_glyph_does_not_emit_over_host_chrome() {
-    // A split glyph on either edge becomes blank; whole glyphs at the edges survive.
+    // A glyph the edge would split does not fit the clipped allocation, so
+    // the cell keeps what is beneath; whole glyphs at the edges survive.
     for (glyph_x, visible) in [(25, false), (24, true), (7, false), (8, true)] {
         let mut driver = Driver::<(), ()>::new(40, 18);
         driver
@@ -113,7 +115,7 @@ fn clipped_modal_wide_glyph_does_not_emit_over_host_chrome() {
                 let edge = glyph_x.max(ROOT.x);
                 assert_eq!(
                     frame.buffer_mut()[(edge, 7)].symbol(),
-                    if visible { "\u{754c}" } else { " " }
+                    if visible { "\u{754c}" } else { "#" }
                 );
                 if glyph_x >= ROOT.x {
                     assert_eq!(frame.buffer_mut()[(edge, 7)].fg, Color::Green);
@@ -125,8 +127,23 @@ fn clipped_modal_wide_glyph_does_not_emit_over_host_chrome() {
     }
 }
 
+#[test]
+fn a_wide_glyph_written_across_the_clip_edge_is_blanked() {
+    let driver = render_hosted(|ctx| {
+        ctx.modal_scope("modal", ROOT, ScopeOptions::default(), |ctx| {
+            ctx.paint(|ctx| {
+                ctx.with_buffer(ROOT, |_, buffer| {
+                    buffer[(ROOT.right() - 1, 7)].set_symbol("\u{754c}");
+                });
+            });
+        });
+    });
+    // Half a glyph would reach the terminal over host chrome.
+    assert_eq!(driver.cell(ROOT.right() - 1, 7).symbol(), " ");
+}
+
 fn render_hosted(
-    declare: impl FnOnce(&mut DeclareCtx<'_, (), &'static str>),
+    mut declare: impl FnMut(&mut DeclareCtx<'_, (), &'static str>),
 ) -> Driver<(), &'static str> {
     let mut driver = Driver::new(40, 18);
     driver
@@ -250,7 +267,7 @@ fn oversized_modal_dims_and_copies_only_inside_the_root() {
 }
 
 #[test]
-fn viewport_popup_keeps_logical_root_bounds_and_projects_once() {
+fn viewport_popup_restores_screen_root_bounds_and_projects_once() {
     let mut driver = render_hosted(|ctx| {
         ctx.viewport(Rect::new(10, 6, 12, 3), 12, 3, |ctx| {
             let logical_root = Rect::new(8, 7, 18, 7);
@@ -263,17 +280,17 @@ fn viewport_popup_keeps_logical_root_bounds_and_projects_once() {
                 |ctx| {
                     assert_eq!(ctx.frame_area(), logical_root);
                     ctx.popup("popup", logical_root, PopupOptions::default(), |ctx| {
-                        assert_eq!(ctx.area(), logical_root);
-                        assert_eq!(ctx.frame_area(), logical_root);
+                        assert_eq!(ctx.area(), ROOT);
+                        assert_eq!(ctx.frame_area(), ROOT);
                         ctx.component(
                             "button",
                             Button::new("Go").on_press(|| "popup"),
-                            Rect::new(10, 9, 6, 1),
+                            Rect::new(10, 6, 6, 1),
                         );
-                        ctx.defer_paint(move |ctx| {
-                            assert_eq!(ctx.area(), logical_root);
-                            ctx.widget(Line::from("T"), Rect::new(8, 7, 1, 1));
-                            ctx.widget(Line::from("B"), Rect::new(8, 13, 1, 1));
+                        ctx.paint(move |ctx| {
+                            assert_eq!(ctx.area(), ROOT);
+                            ctx.widget(Line::from("T"), Rect::new(8, 4, 1, 1));
+                            ctx.widget(Line::from("B"), Rect::new(8, 10, 1, 1));
                         });
                     });
                 },
@@ -287,7 +304,7 @@ fn viewport_popup_keeps_logical_root_bounds_and_projects_once() {
     assert_eq!(
         driver.event(mouse(MouseKind::Click(MouseButton::Left), 11, 6), &()),
         EventResult::Emit("popup"),
-        "popup input is translated once, just like its paint"
+        "popup input is in the same screen coordinates as its paint"
     );
 }
 
@@ -325,7 +342,7 @@ fn viewport_modal_restores_screen_root_bounds_and_can_open_its_own_viewport() {
 }
 
 #[test]
-fn root_area_guides_deferred_paint_but_does_not_sandbox_base_writes() {
+fn root_area_guides_paint_but_does_not_sandbox_base_writes() {
     let mut driver = Driver::<(), ()>::new(40, 18);
     driver
         .terminal
@@ -335,9 +352,9 @@ fn root_area_guides_deferred_paint_but_does_not_sandbox_base_writes() {
                 .ratcn
                 .render(frame, ROOT, &(), &Theme::default_dark(), |ctx| {
                     ctx.paint_widget(Line::from("W"), Rect::new(1, 0, 1, 1));
-                    ctx.defer_paint(move |ctx| {
+                    ctx.paint(move |ctx| {
                         assert_eq!(ctx.area(), ROOT);
-                        ctx.with_buffer(|buffer| {
+                        ctx.with_buffer(ROOT, |_, buffer| {
                             assert_eq!(buffer.area, destination);
                             buffer[(0, 0)].set_symbol("D");
                         });
@@ -348,4 +365,49 @@ fn root_area_guides_deferred_paint_but_does_not_sandbox_base_writes() {
 
     assert_eq!(driver.cell(0, 0).symbol(), "D");
     assert_eq!(driver.cell(1, 0).symbol(), "W");
+}
+
+#[test]
+fn a_modal_over_a_render_area_past_the_viewport_cap_paints() {
+    // `render_into` exists for pages taller than the window; the render area
+    // is the caller's allocation, so layer paint over it is not capped the
+    // way viewport content is.
+    let area = Rect::new(0, 0, 200, 1400);
+    let mut buffer = Buffer::empty(area);
+    for cell in &mut buffer.content {
+        cell.set_symbol("#");
+    }
+    let mut ratcn = Ratcn::<(), ()>::new();
+    ratcn.render_into(&mut buffer, area, &(), &Theme::default_dark(), |ctx| {
+        ctx.modal_scope("modal", ctx.area(), ScopeOptions::default(), |ctx| {
+            ctx.paint_widget(ratatui::widgets::Clear, ctx.area());
+        });
+    });
+    assert_eq!(buffer[(0, 0)].symbol(), " ");
+    assert_eq!(buffer[(199, 1399)].symbol(), " ");
+}
+
+#[test]
+fn an_oversized_popup_lays_out_and_paints_its_visible_part() {
+    // A popup reaching far past the render area is handed the part it shows,
+    // as a widget sees any allocation clipped to its buffer.
+    let driver = render_hosted(|ctx| {
+        ctx.popup(
+            "popup",
+            Rect::new(0, 0, u16::MAX, u16::MAX),
+            PopupOptions::default(),
+            |ctx| {
+                ctx.paint(|ctx| {
+                    let area = ctx.area();
+                    ctx.with_buffer(area, |area, buffer| {
+                        assert_eq!(area, ROOT, "the paint lays out against what shows");
+                        buffer.set_style(area, Color::Green);
+                    });
+                });
+            },
+        );
+    });
+    for position in ROOT.positions() {
+        assert_eq!(driver.buffer()[position].fg, Color::Green);
+    }
 }

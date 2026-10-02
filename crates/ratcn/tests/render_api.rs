@@ -37,7 +37,7 @@ impl Component<State, Msg> for Probe {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, State>) {
         assert_eq!(ctx.state().marker, 7);
         let area = ctx.area();
-        ctx.with_buffer(|buf| assert!(buf.area.width >= area.width));
+        ctx.with_buffer(area, |_, buf| assert!(buf.area.width >= area.width));
     }
 
     fn handle_event(
@@ -53,7 +53,7 @@ impl Component<State, Msg> for Probe {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &State) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -113,14 +113,14 @@ fn layered_surface(ctx: &mut DeclareCtx<'_, State, Msg>) {
                 |ctx| ctx.paint_widget(Line::from("popup"), ctx.area()),
             );
         });
-        ctx.defer_paint(move |ctx| {
+        ctx.paint(move |ctx| {
             ctx.widget(
                 Line::from("modal"),
                 Rect::new(area.x + 18, area.y + 8, 8, 1),
             );
         });
     });
-    ctx.defer_paint(move |ctx| {
+    ctx.paint(move |ctx| {
         ctx.widget(Line::from("root"), Rect::new(area.x, area.y, 4, 1));
     });
 }

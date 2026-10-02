@@ -24,8 +24,9 @@ use ratatui::{
 };
 
 use crate::{
-    ListStyle, Theme,
+    Theme,
     button_shape::filled_middle,
+    color::{FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, away_from, dim},
     linear_nav::{Axis, step_key},
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
@@ -74,18 +75,19 @@ impl CycleStyle {
         }
     }
 
-    /// Colors derived from a theme: the List's three backdrops, with the value
-    /// keeping the theme's foreground on them.
+    /// Colors derived from a theme: the List's three backdrops — the field,
+    /// shifted away from the page background for focus and further for
+    /// hover — with the value keeping the theme's foreground on them.
     #[must_use]
     pub fn from_theme(theme: &Theme) -> Self {
-        let list = ListStyle::from_theme(theme);
+        let away = away_from(theme.background);
         Self {
-            foreground: list.foreground,
-            background: list.background,
+            foreground: theme.muted_foreground,
+            background: theme.field,
             focused_foreground: theme.foreground,
-            focused_background: list.focused_background,
+            focused_background: dim(theme.field, away, FIELD_FOCUS_SHIFT),
             hovered_foreground: theme.foreground,
-            hovered_background: list.hovered_background,
+            hovered_background: dim(theme.field, away, FIELD_HOVER_SHIFT),
             disabled_foreground: theme.muted_foreground,
         }
     }
@@ -120,8 +122,7 @@ pub struct CycleWidget<'a> {
     focused: bool,
     hovered: bool,
     disabled: bool,
-    theme: Option<Theme>,
-    style: Option<CycleStyle>,
+    style: CycleStyle,
 }
 
 impl<'a> CycleWidget<'a> {
@@ -133,22 +134,21 @@ impl<'a> CycleWidget<'a> {
             focused: false,
             hovered: false,
             disabled: false,
-            theme: None,
-            style: None,
+            style: CycleStyle::fallback(),
         }
     }
 
     /// Take colors from `theme`.
     #[must_use]
-    pub const fn themed(mut self, theme: &Theme) -> Self {
-        self.theme = Some(*theme);
+    pub fn themed(mut self, theme: &Theme) -> Self {
+        self.style = CycleStyle::from_theme(theme);
         self
     }
 
-    /// Exact colors, taking precedence over [`themed`](Self::themed).
+    /// Use these exact colors, ignoring any theme.
     #[must_use]
     pub const fn style(mut self, style: CycleStyle) -> Self {
-        self.style = Some(style);
+        self.style = style;
         self
     }
 
@@ -172,14 +172,6 @@ impl<'a> CycleWidget<'a> {
         self.disabled = disabled;
         self
     }
-
-    fn resolved_style(&self) -> CycleStyle {
-        match (self.style, self.theme) {
-            (Some(style), _) => style,
-            (None, Some(theme)) => CycleStyle::from_theme(&theme),
-            (None, None) => CycleStyle::fallback(),
-        }
-    }
 }
 
 impl Widget for CycleWidget<'_> {
@@ -188,7 +180,7 @@ impl Widget for CycleWidget<'_> {
             return;
         }
         let style = self
-            .resolved_style()
+            .style
             .resolve(self.focused, self.hovered, self.disabled);
         Line::from(filled_middle(self.value, area.width as usize))
             .style(style)
@@ -221,11 +213,6 @@ pub struct Cycle<S, M> {
     style: Option<StyleFn>,
     /// Which edge of the declared area the value hugs.
     align: Alignment,
-    /// The bound selection, resolved and clamped once per declaration.
-    resolved_selected: usize,
-    /// The columns the current option paints — the Cycle is as wide as the
-    /// value it shows, no wider.
-    resolved_width: u16,
 }
 
 impl<S, M> fmt::Debug for Cycle<S, M> {
@@ -249,8 +236,6 @@ impl<S, M> Cycle<S, M> {
             disabled: false,
             style: None,
             align: Alignment::Left,
-            resolved_selected: 0,
-            resolved_width: 0,
         }
     }
 
@@ -266,10 +251,10 @@ impl<S, M> Cycle<S, M> {
         self
     }
 
-    /// The columns that fit every option — the widest value, so an area
-    /// reserved from this never truncates and never shifts as the value
-    /// cycles. What the Cycle paints each frame is narrower: exactly its
-    /// current value.
+    /// The columns that fit every option as painted — the widest value plus
+    /// its column of field on either side — so an area reserved from this
+    /// never truncates and never shifts as the value cycles. What the Cycle
+    /// paints each frame is narrower: exactly its current value, padded.
     #[must_use]
     pub fn width(&self) -> u16 {
         self.options
@@ -277,6 +262,7 @@ impl<S, M> Cycle<S, M> {
             .map(|option| text_width::display_width_u16(option))
             .max()
             .unwrap_or(0)
+            .saturating_add(2)
     }
 
     /// Bind the selection and the message that moves it.
@@ -315,9 +301,11 @@ impl<S, M> Cycle<S, M> {
 
     /// The rect the current value paints in and answers events in: one column
     /// of the List-derived field surrounds either side of the value, hugging
-    /// the [`align`](Self::align) edge of the declared area.
-    fn value_area(&self, area: Rect) -> Rect {
-        let width = self.resolved_width.saturating_add(2).min(area.width);
+    /// the [`align`](Self::align) edge of the declared area. The Cycle is as
+    /// wide as the value it shows, no wider.
+    fn value_area(&self, area: Rect, state: &S) -> Rect {
+        let value = self.current(state).map_or(0, text_width::display_width_u16);
+        let width = value.saturating_add(2).min(area.width);
         let x = self.aligned_x(area, width);
         crate::geometry::fixed_height(Rect { x, width, ..area }, 1)
     }
@@ -335,6 +323,14 @@ impl<S, M> Cycle<S, M> {
             .as_ref()
             .map_or(0, |(read, _)| read(state))
             .min(self.options.len().saturating_sub(1))
+    }
+
+    /// The option shown: the clamped selection, so this is `None` only with
+    /// no options at all.
+    fn current(&self, state: &S) -> Option<&str> {
+        self.options
+            .get(self.selected_index(state))
+            .map(String::as_str)
     }
 
     /// Advance one option. Forward past the end wraps to the first; backward
@@ -373,23 +369,14 @@ impl<S, M> Cycle<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
-    fn prepare(&mut self, state: &S) {
-        self.resolved_selected = self.selected_index(state);
-        self.resolved_width = self
-            .options
-            .get(self.resolved_selected)
-            .map_or(0, |option| text_width::display_width_u16(option));
-    }
-
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {
         // Everything a Cycle is lives on its own node: the paint below and
         // the events answered here. There is nothing to declare inside it.
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
-        // `prepare` clamped the selection, so this is `None` only with no
-        // options at all — nothing to show, nothing to paint.
-        let Some(value) = self.options.get(self.resolved_selected) else {
+        // With no options at all there is nothing to show, nothing to paint.
+        let Some(value) = self.current(ctx.state()) else {
             return;
         };
         let style = resolve_style(self.style.as_deref(), ctx.theme, CycleStyle::from_theme);
@@ -398,7 +385,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
             .hovered(ctx.hovered())
             .disabled(self.disabled)
             .style(style);
-        ctx.widget(widget, self.value_area(ctx.area()));
+        ctx.widget(widget, self.value_area(ctx.area(), ctx.state()));
     }
 
     fn handle_event(
@@ -420,12 +407,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(self.can_act())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
-        self.value_area(area)
+    fn interaction_area(&self, area: Rect, state: &S) -> Rect {
+        self.value_area(area, state)
     }
 }
 
@@ -439,6 +426,7 @@ impl<S: 'static, M: 'static> MeasuredComponent<S, M> for Cycle<S, M> {
 mod tests {
 
     use super::*;
+    use crate::ListStyle;
     use crate::runtime::{ChildId, FocusState, Modifiers, Ratcn};
     use crate::test_support::{Driver, key, key_with, mouse};
 
@@ -644,6 +632,36 @@ mod tests {
         );
     }
 
+    /// The Cycle derives its colors from the theme itself rather than from
+    /// `ListStyle`, and must land on exactly the List's colors in every
+    /// shipped theme.
+    #[test]
+    fn a_themed_cycle_matches_the_list_in_every_theme() {
+        for theme in [
+            Theme::default_dark(),
+            Theme::terminal(),
+            Theme::catppuccin(),
+            Theme::gruvbox(),
+            Theme::nord(),
+            Theme::tokyo_night(),
+            Theme::solarized(),
+        ] {
+            let list = ListStyle::from_theme(&theme);
+            assert_eq!(
+                CycleStyle::from_theme(&theme),
+                CycleStyle {
+                    foreground: list.foreground,
+                    background: list.background,
+                    focused_foreground: theme.foreground,
+                    focused_background: list.focused_background,
+                    hovered_foreground: theme.foreground,
+                    hovered_background: list.hovered_background,
+                    disabled_foreground: theme.muted_foreground,
+                }
+            );
+        }
+    }
+
     /// Disabled is the loudest state: no events, no traversal, no fill.
     #[test]
     fn a_disabled_cycle_is_inert() {
@@ -728,27 +746,44 @@ mod tests {
         );
     }
 
-    /// The component measures the columns that fit every option, so a layout
-    /// reserved from it never truncates and never shifts as the value cycles.
+    /// The component measures the columns that fit every option as painted —
+    /// padding included — so a layout reserved from it never truncates and
+    /// never shifts as the value cycles.
     #[test]
-    fn the_component_measures_its_widest_option() {
-        let cycle: Cycle<State, Msg> = Cycle::new(SIZES);
-        assert_eq!(cycle.width(), 6, "\"Medium\" is the widest option");
-        assert_eq!(cycle.measure(), Size::new(6, 1));
+    fn the_component_measures_its_widest_option_with_its_padding() {
+        let cycle: Cycle<State, Msg> =
+            Cycle::new(SIZES).selection(|state: &State| state.size, Msg::Size);
+        assert_eq!(
+            cycle.width(),
+            8,
+            "\"Medium\" is the widest option, plus a column either side"
+        );
+        assert_eq!(cycle.measure(), Size::new(8, 1));
+
+        let medium = State {
+            size: 1,
+            ..State::default()
+        };
+        let measured = Rect::new(0, 0, cycle.measure().width, 1);
+        assert_eq!(
+            cycle.value_area(measured, &medium),
+            measured,
+            "the widest value paints its padding within the measured area"
+        );
     }
 
     #[test]
     fn a_cycle_pads_its_current_value_by_one_column_on_each_side() {
-        let mut cycle: Cycle<State, Msg> = Cycle::new(SIZES)
+        let cycle: Cycle<State, Msg> = Cycle::new(SIZES)
             .selection(|state: &State| state.size, Msg::Size)
             .align(Alignment::Right);
-        cycle.prepare(&State {
+        let medium = State {
             size: 1,
             ..State::default()
-        });
+        };
 
         assert_eq!(
-            cycle.value_area(Rect::new(2, 2, 20, 1)),
+            cycle.value_area(Rect::new(2, 2, 20, 1), &medium),
             Rect::new(14, 2, 8, 1),
             "a six-column value receives one visible field column on either side"
         );
@@ -794,5 +829,44 @@ mod tests {
             driver.event(key(KeyCode::Char(' ')), &state),
             EventResult::Ignored
         ));
+    }
+
+    /// Colors come from whichever of `themed` and `style` was called last, as
+    /// on every other widget: a later theme is not silently outranked by an
+    /// earlier style, and a later style is not by an earlier theme.
+    #[test]
+    fn the_last_of_themed_and_style_wins() {
+        let theme = Theme::default_dark();
+        let area = Rect::new(0, 0, 10, 1);
+        let paint = |widget: CycleWidget<'_>| {
+            let mut buffer = Buffer::empty(area);
+            widget.focused(true).render(area, &mut buffer);
+            buffer
+        };
+        let themed = paint(CycleWidget::new("Medium").themed(&theme));
+        let styled = paint(CycleWidget::new("Medium").style(CycleStyle::fallback()));
+        assert_ne!(
+            themed, styled,
+            "the theme and the fallback must paint apart"
+        );
+
+        assert_eq!(
+            paint(
+                CycleWidget::new("Medium")
+                    .style(CycleStyle::fallback())
+                    .themed(&theme)
+            ),
+            themed,
+            "a later themed() replaces an earlier style()"
+        );
+        assert_eq!(
+            paint(
+                CycleWidget::new("Medium")
+                    .themed(&theme)
+                    .style(CycleStyle::fallback())
+            ),
+            styled,
+            "a later style() replaces an earlier themed()"
+        );
     }
 }

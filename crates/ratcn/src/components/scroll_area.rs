@@ -3,12 +3,12 @@
 //! Descendants are declared against their full logical content allocations.
 //! The runtime translates and clips ordinary paint and pointer input without
 //! changing those allocations, while keeping offscreen descendants in focus
-//! traversal. Popup, hint, modal, and deferred paint escape the ordinary clip.
+//! traversal. Popup, hint, and modal layers escape the ordinary clip.
 
 use ratatui::{
     layout::{Position, Rect},
     style::{Color, Style},
-    widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget},
 };
 
 use crate::Theme;
@@ -43,8 +43,8 @@ impl ScrollAreaStyle {
 /// Where the wheel, a key, a gutter drag, or a reveal left the view.
 ///
 /// Event handling writes it and the next declaration reads it, which is what
-/// lets an unbound area scroll at all and what carries a reveal into the frame
-/// that follows a focus change.
+/// lets an unbound area scroll at all and what carries a reveal into the
+/// declaration that follows it.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum ScrollHold {
     /// Nothing is holding the view: the bound offset decides where it sits.
@@ -218,8 +218,7 @@ impl<S, M> ScrollArea<S, M> {
     /// where a bound offset is read; and it is permanent, so an app that
     /// returns to the offset a hold was taken at does not revive it.
     fn settle(&self, ctx: &mut DeclareCtx<'_, S, M>, area: Rect, bound: Option<u16>) -> u16 {
-        let mut unheld = ScrollHold::Released;
-        let hold = ctx.transient_mut::<ScrollHold>().unwrap_or(&mut unheld);
+        let hold = ctx.transient::<ScrollHold>();
         if matches!(*hold, ScrollHold::Held { base, .. } if base != bound) {
             *hold = ScrollHold::Released;
         }
@@ -451,7 +450,7 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
             let mut state = ScrollbarState::new(usize::from(position_count))
                 .position(usize::from(offset))
                 .viewport_content_length(usize::from(viewport_height));
-            ctx.stateful_widget(scrollbar, gutter, &mut state);
+            ctx.with_buffer(gutter, |area, buf| scrollbar.render(area, buf, &mut state));
         });
     }
 
@@ -485,13 +484,14 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
         }
     }
 
-    fn reveal_in_viewport(&mut self, target: Rect, state: &S, ctx: &mut EventCtx<'_>) {
+    fn reveal_in_viewport(&mut self, target: Rect, state: &S, ctx: &mut EventCtx<'_>) -> bool {
         let area = ctx.area();
         let current = self.current(state, ctx);
-        self.hold(self.reveal_offset(target, area, current), state, ctx);
+        self.hold(self.reveal_offset(target, area, current), state, ctx)
+            .is_some()
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         let options = ScopeOptions::default().focusable(true);
         if self.hover_focus {
             options.hover_focus()
@@ -608,7 +608,7 @@ mod tests {
             }
         }
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &State) -> ScopeOptions {
             ScopeOptions::default().focusable(self.focusable)
         }
     }
@@ -689,7 +689,9 @@ mod tests {
     #[test]
     fn partially_visible_fixed_height_control_keeps_its_real_allocation() {
         let mut driver = driver(8, 4);
+        // No focus: a focused button would be revealed, moving the offset.
         let state = State {
+            focus: FocusState::none(),
             offset: 2,
             ..State::default()
         };
@@ -877,6 +879,77 @@ mod tests {
         state.focus = FocusState::intent(["scroll", "last"]);
         render(&mut driver, &state);
         assert_eq!(&driver.row(2)[..4], "last");
+    }
+
+    /// The render closure runs a second time only to rebuild the tree at the
+    /// offset a reveal moved to — a reveal that leaves the offset where it was
+    /// has nothing for a second run to change, and costs one run.
+    #[test]
+    fn the_frame_is_declared_again_only_when_the_reveal_scrolls() {
+        let mut driver = driver(8, 3);
+        let mut state = State {
+            focus: FocusState::none(),
+            ..State::default()
+        };
+        let runs = Cell::new(0);
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            runs.set(0);
+            driver.render(state, |ctx| {
+                runs.set(runs.get() + 1);
+                ctx.component(
+                    "scroll",
+                    ScrollArea::new(9).content(|ctx| {
+                        // Taller than the viewport and already at its top:
+                        // clipped, yet as revealed as it can be.
+                        ctx.component("tall", Probe::focusable("tall"), Rect::new(0, 0, 7, 5));
+                        ctx.component("last", Probe::focusable("last"), Rect::new(0, 6, 7, 1));
+                    }),
+                    Rect::new(0, 0, 8, 3),
+                );
+            });
+            runs.get()
+        };
+        render(&mut driver, &state);
+
+        state.focus = FocusState::intent(["scroll", "tall"]);
+        assert_eq!(render(&mut driver, &state), 1, "top-aligned: nothing moved");
+        assert_eq!(&driver.row(0)[..4], "tall");
+
+        state.focus = FocusState::intent(["scroll", "last"]);
+        assert_eq!(render(&mut driver, &state), 2, "the reveal scrolled");
+        assert_eq!(&driver.row(2)[..4], "last");
+    }
+
+    /// A row appended and focused by one update is on screen in the frame
+    /// that first declares it: an on-demand host draws that one frame and
+    /// then waits for input, so there is no later frame to finish the job.
+    #[test]
+    fn a_row_declared_and_focused_in_one_update_is_revealed_by_that_frame() {
+        let mut driver = driver(8, 3);
+        let mut state = State {
+            focus: FocusState::intent(["scroll", "first"]),
+            ..State::default()
+        };
+        let render = |driver: &mut Driver<State, Msg>, state: &State, appended: bool| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    "scroll",
+                    ScrollArea::new(9).content(move |ctx| {
+                        ctx.component("first", Probe::focusable("first"), Rect::new(0, 0, 7, 1));
+                        if appended {
+                            ctx.component("new", Probe::focusable("new"), Rect::new(0, 6, 7, 1));
+                        }
+                    }),
+                    Rect::new(0, 0, 8, 3),
+                );
+            });
+        };
+        render(&mut driver, &state, false);
+        assert_eq!(&driver.row(0)[..5], "first");
+
+        state.focus = FocusState::intent(["scroll", "new"]);
+        render(&mut driver, &state, true);
+        assert_eq!(&driver.row(2)[..3], "new", "revealed without another frame");
     }
 
     #[test]
@@ -1773,7 +1846,8 @@ mod tests {
             ctx.paint_widget(Paragraph::new("OWNER"), anchor);
             if ctx.pointer_within() {
                 let popup = Rect::new(anchor.x, anchor.y + 2, 5, 1);
-                ctx.popup("popup", popup, PopupOptions::default(), move |ctx| {
+                ctx.popup("popup", popup, PopupOptions::default(), |ctx| {
+                    let popup = ctx.area();
                     ctx.paint_widget(Paragraph::new("POPUP"), popup);
                     ctx.component("item", Probe::focusable("popup-item"), popup);
                 });
@@ -1794,14 +1868,16 @@ mod tests {
             let escaped = Rect::new(anchor.x, anchor.y + 2, 5, 1);
             match self.layer {
                 LayerExample::Hint => {
-                    ctx.hint("layer", escaped, ScopeOptions::default(), move |ctx| {
-                        ctx.paint_widget(Paragraph::new("HINT"), escaped);
+                    ctx.hint("layer", escaped, ScopeOptions::default(), |ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(Paragraph::new("HINT"), area);
                     });
                 }
                 LayerExample::Popup => {
-                    ctx.popup("layer", escaped, PopupOptions::default(), move |ctx| {
-                        ctx.paint_widget(Paragraph::new("POPUP"), escaped);
-                        ctx.component("item", Probe::focusable("item"), escaped);
+                    ctx.popup("layer", escaped, PopupOptions::default(), |ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(Paragraph::new("POPUP"), area);
+                        ctx.component("item", Probe::focusable("item"), area);
                     });
                 }
                 LayerExample::Modal => {
@@ -1849,7 +1925,7 @@ mod tests {
             }
         }
 
-        fn scope_options(&self) -> ScopeOptions {
+        fn scope_options(&self, _state: &State) -> ScopeOptions {
             ScopeOptions::default().focusable(true)
         }
     }
@@ -2095,13 +2171,15 @@ mod tests {
             let escaped = self.escaped;
             match self.layer {
                 LayerExample::Hint => {
-                    ctx.hint("layer", escaped, ScopeOptions::default(), move |ctx| {
-                        ctx.paint_widget(Paragraph::new("LAYER"), escaped);
+                    ctx.hint("layer", escaped, ScopeOptions::default(), |ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(Paragraph::new("LAYER"), area);
                     });
                 }
                 LayerExample::Popup => {
-                    ctx.popup("layer", escaped, PopupOptions::default(), move |ctx| {
-                        ctx.paint_widget(Paragraph::new("LAYER"), escaped);
+                    ctx.popup("layer", escaped, PopupOptions::default(), |ctx| {
+                        let area = ctx.area();
+                        ctx.paint_widget(Paragraph::new("LAYER"), area);
                     });
                 }
                 LayerExample::Modal => {}
@@ -2168,6 +2246,7 @@ mod tests {
         let render = |driver: &mut Driver<State, Msg>, state: &State, hovered: &Rc<Cell<bool>>| {
             let hovered = Rc::clone(hovered);
             driver.render(state, move |ctx| {
+                let hovered = Rc::clone(&hovered);
                 ctx.component(
                     "scroll",
                     scroll_area(8, move |ctx| {

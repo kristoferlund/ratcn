@@ -3,6 +3,91 @@
 
 use super::*;
 
+#[test]
+fn failed_declaration_discards_staged_transient_settlement() {
+    struct Probe(bool);
+    impl Component<(), u32> for Probe {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
+            if self.0 {
+                *ctx.transient::<u32>() = 99;
+                assert_eq!(
+                    *ctx.transient::<u32>(),
+                    99,
+                    "declaration reads its own staged work"
+                );
+            }
+        }
+        fn scope_options(&self, _state: &()) -> ScopeOptions {
+            ScopeOptions::default().focusable(true)
+        }
+        fn handle_event(&mut self, _: &Event, (): &(), ctx: &mut EventCtx<'_>) -> EventResult<u32> {
+            let value = ctx.transient::<u32>();
+            *value += 1;
+            EventResult::Emit(*value)
+        }
+    }
+    let mut driver = Driver::<(), u32>::new(4, 1);
+    let area = driver.area();
+    driver.render(&(), |ctx| ctx.component("probe", Probe(false), area));
+    let key = Event::Key(KeyEvent::new(KeyCode::Enter));
+    assert_eq!(driver.event(key.clone(), &()), EventResult::Emit(1));
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        driver.render(&(), |ctx| {
+            ctx.component("probe", Probe(true), area);
+            panic!("reject this declaration");
+        });
+    }));
+    assert!(failed.is_err());
+    assert_eq!(driver.event(key.clone(), &()), EventResult::Emit(2));
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            driver.render(&(), |ctx| {
+                ctx.component("probe", Probe(true), area);
+                ctx.paint(|_| panic!("reject during paint"));
+            });
+        }))
+        .is_err()
+    );
+    assert_eq!(driver.event(key.clone(), &()), EventResult::Emit(3));
+    driver.render(&(), |ctx| ctx.component("probe", Probe(true), area));
+    assert_eq!(
+        driver.event(key, &()),
+        EventResult::Emit(100),
+        "a successful pass publishes settlement"
+    );
+}
+
+/// Settling the same transient twice in one declaration builds on the first
+/// staged write rather than restarting from the stored value.
+#[test]
+fn repeated_settlement_in_one_declaration_accumulates() {
+    struct Probe;
+    impl Component<(), u32> for Probe {
+        fn declare(&mut self, ctx: &mut DeclareCtx<'_, (), u32>) {
+            for _ in 0..2 {
+                *ctx.transient::<u32>() += 1;
+            }
+        }
+        fn scope_options(&self, _state: &()) -> ScopeOptions {
+            ScopeOptions::default().focusable(true)
+        }
+        fn handle_event(&mut self, _: &Event, (): &(), ctx: &mut EventCtx<'_>) -> EventResult<u32> {
+            EventResult::Emit(*ctx.transient::<u32>())
+        }
+    }
+    let mut driver = Driver::<(), u32>::new(4, 1);
+    let area = driver.area();
+    driver.render(&(), |ctx| ctx.component("probe", Probe, area));
+    let key = Event::Key(KeyEvent::new(KeyCode::Enter));
+    assert_eq!(
+        driver.event(key.clone(), &()),
+        EventResult::Emit(2),
+        "a declaration that finds nothing stored settles from the default"
+    );
+    driver.render(&(), |ctx| ctx.component("probe", Probe, area));
+    assert_eq!(driver.event(key, &()), EventResult::Emit(4));
+}
+
 struct ContextProbe {
     area: Rect,
 }
@@ -13,7 +98,7 @@ impl Component<u8, ()> for ContextProbe {
         assert_eq!(*ctx.state(), 7);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &u8) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -26,7 +111,7 @@ impl Component<(), ()> for Composite {
         ctx.component(ChildId::Static("leaf"), Leaf, area);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &()) -> ScopeOptions {
         ScopeOptions::default().tab_wrap(TabWrap::Wrap)
     }
 }
@@ -44,19 +129,9 @@ struct PanickingScopeOptions;
 impl Component<(), ()> for PanickingScopeOptions {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &()) -> ScopeOptions {
         panic!("scope options failed");
     }
-}
-
-struct PanickingPrepare;
-
-impl Component<(), ()> for PanickingPrepare {
-    fn prepare(&mut self, _state: &()) {
-        panic!("prepare failed");
-    }
-
-    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 }
 
 struct PanickingInteractionArea;
@@ -64,7 +139,7 @@ struct PanickingInteractionArea;
 impl Component<(), ()> for PanickingInteractionArea {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
-    fn interaction_area(&self, _area: Rect) -> Rect {
+    fn interaction_area(&self, _area: Rect, _state: &()) -> Rect {
         panic!("interaction area failed");
     }
 }
@@ -74,7 +149,7 @@ struct EscapingInteractionArea;
 impl Component<(), ()> for EscapingInteractionArea {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &()) -> Rect {
         Rect::new(area.x, area.y, area.width.saturating_add(1), area.height)
     }
 }
@@ -111,7 +186,7 @@ impl Component<FocusTestState, FocusTestMsg> for PathProbe {
         record_declared_path(ctx, &self.0);
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(true)
     }
 }
@@ -146,11 +221,11 @@ impl Component<FocusTestState, FocusTestMsg> for AreaAwareComposite {
         ctx.component(ChildId::Static("child"), FocusLeaf::enabled(), ctx.area());
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default()
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &FocusTestState) -> Rect {
         assert_eq!(area, self.expected_area);
         if area.width >= self.minimum_width {
             area
@@ -222,9 +297,15 @@ fn composite_declaration_builds_paths_and_scope_options() {
             vec![ChildId::Static("composite"), ChildId::Static("leaf")],
         ]
     );
-    assert_eq!(driver.ratcn.surface.roots, vec![0]);
-    assert_eq!(driver.ratcn.surface.nodes[0].children, vec![1]);
-    assert_eq!(driver.ratcn.surface.nodes[1].parent, Some(0));
+    // The composite is the one root and parents the leaf it declared.
+    let parents: Vec<_> = driver
+        .ratcn
+        .surface
+        .nodes
+        .iter()
+        .map(|node| node.parent)
+        .collect();
+    assert_eq!(parents, vec![None, Some(0)]);
     assert_eq!(
         driver.ratcn.surface.nodes[0].options.tab_wrap,
         TabWrap::Wrap
@@ -430,12 +511,6 @@ fn a_failed_declaration_pass_leaves_the_previous_surface_in_place() {
             }));
             assert!(caught.is_err());
         }),
-        ("Component::prepare, caught", |ctx, area| {
-            let caught = catch_unwind(AssertUnwindSafe(|| {
-                ctx.component(ChildId::Static("panicking-prepare"), PanickingPrepare, area);
-            }));
-            assert!(caught.is_err());
-        }),
         ("Component::scope_options, caught", |ctx, area| {
             let caught = catch_unwind(AssertUnwindSafe(|| {
                 ctx.component(
@@ -497,10 +572,12 @@ fn the_closure_declares_once_and_queued_paint_runs_once_on_the_frame() {
         declared.fetch_add(1, Ordering::SeqCst);
         let seen = Rc::clone(&seen);
         ctx.paint(move |ctx| {
-            let before =
-                ctx.with_buffer(|buf| buf.cell((0, 0)).expect("probe cell").symbol().to_owned());
+            let probe = Rect::new(0, 0, 1, 1);
+            let before = ctx.with_buffer(probe, |_, buf| {
+                buf.cell((0, 0)).expect("probe cell").symbol().to_owned()
+            });
             seen.borrow_mut().push(before);
-            ctx.with_buffer(|buf| {
+            ctx.with_buffer(probe, |_, buf| {
                 buf.cell_mut((0, 0)).expect("probe cell").set_symbol("X");
             });
         });
@@ -516,17 +593,17 @@ fn the_closure_declares_once_and_queued_paint_runs_once_on_the_frame() {
 }
 
 #[test]
-fn deferred_paint_finishes_before_surface_replacement() {
+fn queued_paint_finishes_before_surface_replacement() {
     let mut driver = Driver::<(), ()>::new(10, 3);
     let painted = Arc::new(AtomicBool::new(false));
-    let deferred_painted = Arc::clone(&painted);
+    let queued_painted = Arc::clone(&painted);
 
     let area = driver.area();
     driver.render(&(), |ctx| {
         ctx.component(ChildId::Static("next"), Leaf, area);
-        let deferred_painted = Arc::clone(&deferred_painted);
-        ctx.defer_paint(move |_| {
-            deferred_painted.store(true, Ordering::SeqCst);
+        let queued_painted = Arc::clone(&queued_painted);
+        ctx.paint(move |_| {
+            queued_painted.store(true, Ordering::SeqCst);
         });
     });
 
@@ -538,7 +615,7 @@ fn deferred_paint_finishes_before_surface_replacement() {
 }
 
 #[test]
-fn deferred_paint_panic_does_not_replace_the_previous_surface() {
+fn a_paint_panic_does_not_replace_the_previous_surface() {
     let mut driver = Driver::<(), ()>::new(10, 3);
     render_leaf(&mut driver, &ChildId::Static("stable"));
 
@@ -546,7 +623,7 @@ fn deferred_paint_panic_does_not_replace_the_previous_surface() {
         let area = driver.area();
         driver.render(&(), |ctx| {
             ctx.component(ChildId::Static("next"), Leaf, area);
-            ctx.defer_paint(|_| panic!("deferred paint failed"));
+            ctx.paint(|_| panic!("paint failed"));
         });
     }));
 
@@ -557,27 +634,21 @@ fn deferred_paint_panic_does_not_replace_the_previous_surface() {
     );
 }
 
-/// Declared closed, prepared open: every pre-render answer reports what
-/// `prepare` computed, never the value the builder was constructed with.
-struct PreparedClaims {
-    open: bool,
-}
+/// Open or closed only in app state: every pre-render answer reads the state
+/// the component is declared with, which is the only place `open` lives.
+struct StateClaims;
 
-impl Component<bool, ()> for PreparedClaims {
-    fn prepare(&mut self, state: &bool) {
-        self.open = *state;
-    }
-
+impl Component<bool, ()> for StateClaims {
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, bool, ()>) {}
 
-    fn scope_options(&self) -> ScopeOptions {
-        ScopeOptions::default().focusable(self.open)
+    fn scope_options(&self, open: &bool) -> ScopeOptions {
+        ScopeOptions::default().focusable(*open)
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
-        // Non-empty when closed, so an unprepared area suppresses only the
+    fn interaction_area(&self, area: Rect, open: &bool) -> Rect {
+        // Non-empty when closed, so a wrong answer here fails only the
         // hit-test assertion below and not the focus claim as well.
-        if self.open {
+        if *open {
             area
         } else {
             Rect::new(area.x, area.y, 1, 1)
@@ -595,15 +666,11 @@ impl Component<bool, ()> for PreparedClaims {
 }
 
 #[test]
-fn prepare_runs_before_every_pre_render_answer_is_read() {
+fn every_pre_render_answer_reads_the_declared_state() {
     let mut driver = Driver::<bool, ()>::new(8, 2);
     let area = Rect::new(0, 0, 8, 2);
     driver.render(&true, |ctx| {
-        ctx.component(
-            ChildId::Static("claims"),
-            PreparedClaims { open: false },
-            area,
-        );
+        ctx.component(ChildId::Static("claims"), StateClaims, area);
     });
 
     assert!(
@@ -611,12 +678,12 @@ fn prepare_runs_before_every_pre_render_answer_is_read() {
             .ratcn
             .focus_path(&[ChildId::Static("claims")])
             .is_some(),
-        "scope_options was read after prepare"
+        "scope_options read the declared state"
     );
     assert_eq!(
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 1), &true),
         EventResult::Emit(()),
-        "interaction_area was read after prepare, so the whole area hit-tests"
+        "interaction_area read the declared state, so the whole area hit-tests"
     );
 }
 

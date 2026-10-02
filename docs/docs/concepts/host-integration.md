@@ -100,7 +100,7 @@ with time gets its frame. Toast expiry is the common case:
 ```rust
 loop {
     let now = app_time();
-    let _ = app.state.toasts.prune_expired(now);
+    app.state.toasts.prune_expired(now);
     let theme = session.theme();
     session.terminal_mut().draw(|frame| app.draw(frame, &theme, now))?;
 
@@ -158,7 +158,7 @@ mouse capture.
 ## Browser and Ratzilla
 
 Enable the `ratzilla` feature for ratzilla key and mouse conversions and the
-typed browser paste helper:
+browser paste listener:
 
 ```sh
 cargo add ratcn --features ratzilla
@@ -192,8 +192,17 @@ animation frame when an event routes to something — any `EventResult` but
 least `Consumed` once a surface exists, so hover stays live under that rule. The
 demos run on such a host, in `demos/shared`.
 
-For paste, add a DOM `paste` listener and forward `text/plain` clipboard
-data as `Event::Paste`. The demos wrap the wiring in
-`demo_shared::BrowserPasteListener`. Guard `prevent_default()` behind
-`Ratcn::has_rendered()`, so the host takes the event over once the first frame
-is on screen.
+Ratzilla has no paste callback. `ratcn::runtime::BrowserPasteListener` puts a
+`paste` listener on the document and hands `text/plain` clipboard data to your
+closure as `Event::Paste`; the paste stays with the page unless the closure
+returns `true`. Keep the guard alive for as long as the app runs:
+
+```rust
+let paste = BrowserPasteListener::install({
+    let app = Rc::clone(&app);
+    move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
+})?;
+```
+
+The runtime ignores events before the first render, so an early paste is left
+to the page.

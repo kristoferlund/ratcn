@@ -216,11 +216,11 @@ its displayed label and its dynamic id (`number.to_string().into()` builds the
 `ChildId::Dynamic`). The app passes a reference to that stored id in each
 declaration, so identity follows the card when it moves between columns.
 
-The floating dragged card is passive paint scheduled with
-`DeclareCtx::defer_paint`. Deferred paint runs after ordinary declarations in
-the current layer and has no identity, geometry, focus, hover, or hit target;
-the card's declared slot remains the interaction source. The dragged card clears
-its area before painting so border and separator glyphs underneath cannot show
+The floating dragged card is a `DeclareCtx::hint` layer declared by the card
+being dragged. A hint paints above every card declared after it and takes no
+input — no focus, no hover, no hit target — so the card's declared slot remains
+the interaction source. Layers are transparent, so the dragged card clears its
+area before painting and the border and separator glyphs underneath cannot show
 through. See
 [Layers and modals](./layers-and-modals) for paint ordering.
 

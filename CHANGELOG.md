@@ -7,6 +7,42 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- Layers are transparent: a modal, popup, or hint covers only the cells its
+  content paints. Paint `Clear` first to hide what is beneath. Every layer now
+  declares in screen coordinates, so paint at the layer's `ctx.area()`.
+- `DeclareCtx::defer_paint` is removed: declare a `hint` for decoration above
+  later siblings, or paint onto the buffer after `render`.
+- `Ratcn::render`/`render_into` take `FnMut`: a frame whose focus reveal scrolls
+  a viewport is declared twice. Build what the closure consumes inside it.
+- `Component`: `prepare` is removed, `scope_options` and `interaction_area`
+  receive the state, and `reveal_in_viewport` returns whether it scrolled.
+- `DeclareCtx::transient::<T>()` returns `&mut T`, like `EventCtx::transient`;
+  `transient_mut` is removed.
+- `PaintCtx::with_buffer(area, |area, buf| …)` takes the area it writes;
+  `stateful_widget` is removed.
+- `Cycle::width()` includes its padding and grows by 2.
+- `Ratcn::has_rendered` and `BrowserEventError` are removed.
+
+### Added
+
+- `runtime::BrowserPasteListener` (`ratzilla` feature) forwards browser pastes
+  as `Event::Paste`.
+
+### Fixed
+
+- Focus onto a clipped target declared that same frame (startup focus, an
+  appended row) scrolls it into view immediately, not on the next render.
+- A List without a `scroll` binding, and Select's panel, no longer drag the view
+  when the cursor moves within it.
+- A click right after a wheel scroll hits the row still on screen.
+- Clicking the empty space of a scope that holds focus no longer moves focus.
+- A popup without `on_dismiss` no longer blocks the popup beneath it from
+  dismissing.
+- `terminal::Session` no longer writes to the terminal on a panic after it has
+  closed.
+
 ## [0.0.4] - 2026-09-26
 
 ### Added

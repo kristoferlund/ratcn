@@ -52,8 +52,8 @@ ctx.component(
 ```
 
 For layouts that reserve space instead, `Cycle::width()` (and
-`MeasuredComponent`) answer with the widest option — the columns no value ever
-outgrows.
+`MeasuredComponent`) answer with the widest option plus its padding — the
+columns no value ever outgrows.
 
 ## Where a Checkbox ends
 

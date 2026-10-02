@@ -448,6 +448,10 @@ type MultiSelectionFn<S, T> = Box<dyn Fn(&S, &T) -> bool>;
 type OnChangeFn<T, M> = Box<dyn Fn(T) -> M>;
 type OnFocusChangeFn<T, M> = Box<dyn Fn(T, usize) -> M>;
 type ScrollFn<S> = Box<dyn Fn(&S) -> usize>;
+type FocusBinding<S, T, M> = (ReadFn<S, T>, OnFocusChangeFn<T, M>);
+type SelectionBinding<S, T, M> = (ReadFn<S, T>, OnChangeFn<T, M>);
+type MultiSelectionBinding<S, T, M> = (MultiSelectionFn<S, T>, OnChangeFn<T, M>);
+type ScrollBinding<S, M> = (ScrollFn<S>, Box<dyn Fn(usize) -> M>);
 type PaintItemFn<S, T> = Box<dyn for<'a> Fn(&S, ListItemState<'a, T>) -> Text<'static>>;
 type StyleFn = Box<dyn Fn(&Theme) -> ListStyle>;
 
@@ -502,14 +506,10 @@ type StyleFn = Box<dyn Fn(&Theme) -> ListStyle>;
 /// ```
 pub struct List<T, S, M> {
     items: Vec<ListItem<T>>,
-    focused_item: Option<ReadFn<S, T>>,
-    on_focus_change: Option<OnFocusChangeFn<T, M>>,
-    selected: Option<ReadFn<S, T>>,
-    on_select: Option<OnChangeFn<T, M>>,
-    selected_many: Option<MultiSelectionFn<S, T>>,
-    on_toggle: Option<OnChangeFn<T, M>>,
-    scroll: Option<ScrollFn<S>>,
-    on_scroll_change: Option<Box<dyn Fn(usize) -> M>>,
+    focused_item: Option<FocusBinding<S, T, M>>,
+    selected: Option<SelectionBinding<S, T, M>>,
+    selected_many: Option<MultiSelectionBinding<S, T, M>>,
+    scroll: Option<ScrollBinding<S, M>>,
     disabled: bool,
     paint_item: Option<PaintItemFn<S, T>>,
     style: Option<StyleFn>,
@@ -547,13 +547,9 @@ impl<T, S, M> List<T, S, M> {
         Self {
             items: items.into_iter().map(Into::into).collect(),
             focused_item: None,
-            on_focus_change: None,
             selected: None,
-            on_select: None,
             selected_many: None,
-            on_toggle: None,
             scroll: None,
-            on_scroll_change: None,
             disabled: false,
             paint_item: None,
             style: None,
@@ -582,8 +578,7 @@ impl<T, S, M> List<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_change: impl Fn(T, usize) -> M + 'static,
     ) -> Self {
-        self.focused_item = Some(Box::new(read));
-        self.on_focus_change = Some(Box::new(on_change));
+        self.focused_item = Some((Box::new(read), Box::new(on_change)));
         self
     }
 
@@ -612,8 +607,7 @@ impl<T, S, M> List<T, S, M> {
         read: impl Fn(&S) -> Option<T> + 'static,
         on_select: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.selected = Some(Box::new(read));
-        self.on_select = Some(Box::new(on_select));
+        self.selected = Some((Box::new(read), Box::new(on_select)));
         self
     }
 
@@ -643,8 +637,7 @@ impl<T, S, M> List<T, S, M> {
         read: impl Fn(&S, &T) -> bool + 'static,
         on_toggle: impl Fn(T) -> M + 'static,
     ) -> Self {
-        self.selected_many = Some(Box::new(read));
-        self.on_toggle = Some(Box::new(on_toggle));
+        self.selected_many = Some((Box::new(read), Box::new(on_toggle)));
         self
     }
 
@@ -678,8 +671,7 @@ impl<T, S, M> List<T, S, M> {
         read: impl Fn(&S) -> usize + 'static,
         on_change: impl Fn(usize) -> M + 'static,
     ) -> Self {
-        self.scroll = Some(Box::new(read));
-        self.on_scroll_change = Some(Box::new(on_change));
+        self.scroll = Some((Box::new(read), Box::new(on_change)));
         self
     }
 
@@ -778,16 +770,18 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
     }
 
     fn focused_index(&self, state: &S) -> Option<usize> {
-        list_core::index_of(&self.items, &(self.focused_item.as_ref()?)(state)?)
+        let (read, _) = self.focused_item.as_ref()?;
+        list_core::index_of(&self.items, &read(state)?)
     }
 
     fn selected_index(&self, state: &S) -> Option<usize> {
-        list_core::index_of(&self.items, &(self.selected.as_ref()?)(state)?)
+        let (read, _) = self.selected.as_ref()?;
+        list_core::index_of(&self.items, &read(state)?)
     }
 
     fn move_focus(&self, index: usize, state: &S, area: Rect) -> EventResult<M> {
-        match &self.on_focus_change {
-            Some(on_change) => EventResult::Emit(on_change(
+        match &self.focused_item {
+            Some((_, on_change)) => EventResult::Emit(on_change(
                 self.items[index].value().clone(),
                 self.offset_for_focus(state, area, index),
             )),
@@ -799,16 +793,16 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
         let current = self
             .scroll
             .as_ref()
-            .map_or(self.viewport.painted_offset(), |read| read(state));
+            .map_or(self.viewport.painted_offset(), |(read, _)| read(state));
         self.viewport
             .cursor_visible_offset(area, self.items.len(), current, Some(index))
     }
 
     fn select(&self, index: usize) -> EventResult<M> {
-        if let Some(on_select) = &self.on_select {
+        if let Some((_, on_select)) = &self.selected {
             return EventResult::Emit(on_select(self.items[index].value().clone()));
         }
-        if let Some(on_toggle) = &self.on_toggle {
+        if let Some((_, on_toggle)) = &self.selected_many {
             return EventResult::Emit(on_toggle(self.items[index].value().clone()));
         }
         EventResult::Ignored
@@ -821,7 +815,6 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
         area: Rect,
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<M> {
-        let painted = self.viewport.painted_offset();
         // The wheel moves the view, never the cursor, and holds it there on
         // the list's identity — which outlives this instance, and is what
         // lets an unbound list scroll at all.
@@ -832,10 +825,10 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
         else {
             return EventResult::Ignored;
         };
-        let Some(on_change) = &self.on_scroll_change else {
+        let Some((read, on_change)) = &self.scroll else {
             return EventResult::Consumed;
         };
-        let current = self.scroll.as_ref().map_or(painted, |read| read(state));
+        let current = read(state);
         if current == next {
             EventResult::Consumed
         } else {
@@ -861,7 +854,7 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
 }
 
 impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
-    fn prepare(&mut self, _state: &S) {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         // Quadratic in the item count and re-derived on every frame's fresh
         // instance, so a release build takes the items on trust.
         if cfg!(debug_assertions) {
@@ -871,19 +864,16 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
             !(self.selected.is_some() && self.selected_many.is_some()),
             "List::selection(...) and List::multi_selection(...) cannot be used together; choose one selection mode"
         );
-    }
-
-    fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         let area = ctx.area();
         let state = ctx.state();
         let focused_item = self.focused_index(state);
-        let requested = self.scroll.as_ref().map(|scroll| scroll(state));
+        let requested = self.scroll.as_ref().map(|(read, _)| read(state));
         // The wheel holds the view against the list as it stood. While nothing
         // has moved under it, the held offset is painted as it is — the wheel
         // may leave the cursor off-screen. Once the cursor moves, or the items
         // do, it is scrolled back into view. A bound scroll offset always wins
         // over the hold: the app owns it.
-        WheelHold::settle_transient(
+        WheelHold::settle_in(
             ctx,
             &self.items,
             focused_item,
@@ -947,7 +937,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
             // Asked per painted row rather than looked up in a list of every
             // selected index, which would make painting quadratic.
             |index, value| match &self.selected_many {
-                Some(selected_many) => selected_many(state, value),
+                Some((selected_many, _)) => selected_many(state, value),
                 None => selected_row == Some(index),
             },
             |row| {
@@ -1011,7 +1001,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(
             self.focused_item.is_some()
                 && !self.disabled
@@ -1092,7 +1082,7 @@ mod tests {
         driver.render(state, |ctx| {
             ctx.component(
                 ChildId::Static("list"),
-                List::new(items)
+                List::new(items.clone())
                     .item_focus(|state: &State| state.focused, Msg::Focused)
                     .selection(|state: &State| state.selected, Msg::Selected)
                     .scroll(|state: &State| state.scroll, Msg::Scrolled)
@@ -1106,6 +1096,62 @@ mod tests {
         ListItem::new(value, label)
     }
 
+    #[test]
+    fn wheel_accumulates_without_retargeting_clicks_before_redraw() {
+        let mut driver = Driver::<(), usize>::new(12, 2);
+        let area = driver.area();
+        let render = |driver: &mut Driver<(), usize>| {
+            driver.render(&(), |ctx| {
+                ctx.component(
+                    "list",
+                    List::new((0..10).map(|i| ListItem::new(i, format!("row {i}"))))
+                        .selection(|(): &()| None, |i| i),
+                    area,
+                );
+            });
+        };
+        render(&mut driver);
+        for _ in 0..2 {
+            driver.event(mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 0), &());
+        }
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0), &()),
+            EventResult::Emit(0),
+            "clicks address what is still painted"
+        );
+        render(&mut driver);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0), &()),
+            EventResult::Emit(6),
+            "both wheel notches are published together on redraw"
+        );
+    }
+
+    #[test]
+    fn wheeling_the_cursor_offscreen_preserves_the_focus_symbol_gutter() {
+        let mut driver = Driver::<(), ()>::new(12, 2);
+        let area = driver.area();
+        let render = |driver: &mut Driver<(), ()>| {
+            driver.render(&(), |ctx| {
+                ctx.component(
+                    "list",
+                    List::new((0..10).map(|i| ListItem::new(i, format!("item{i}"))))
+                        .item_focus(|()| Some(0), |_, _| ())
+                        .focus_symbol("> "),
+                    area,
+                );
+            });
+        };
+        render(&mut driver);
+        driver.event(mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 0), &());
+        render(&mut driver);
+        assert!(
+            driver.row(0).starts_with("  item3"),
+            "scrolling must not shift text into the reserved cursor gutter: {}",
+            driver.row(0)
+        );
+    }
+
     /// The rows one item of a two-row-per-item list occupies, so a click's
     /// screen row and its item index differ.
     const TALL_ROW_HEIGHT: u16 = 2;
@@ -1117,7 +1163,7 @@ mod tests {
         driver.render(state, |ctx| {
             ctx.component(
                 ChildId::Static("list"),
-                List::new(items)
+                List::new(items.clone())
                     .item_focus(|state: &State| state.focused, Msg::Focused)
                     .selection(|state: &State| state.selected, Msg::Selected)
                     .row_height(TALL_ROW_HEIGHT)
@@ -1774,6 +1820,35 @@ mod tests {
         );
     }
 
+    /// Left unbound, the list keeps its own offset between frames, so a cursor
+    /// that moves within the visible window leaves the view where it is —
+    /// exactly as a bound list does. Recomputing from the top every frame
+    /// would drag the view along with each step back up.
+    #[test]
+    fn an_unbound_list_keeps_its_view_while_the_cursor_stays_visible() {
+        let mut driver = Driver::<Option<usize>, (usize, usize)>::new(12, 5);
+        let area = driver.area();
+        let draw = |driver: &mut Driver<Option<usize>, (usize, usize)>, cursor: Option<usize>| {
+            driver.render(&cursor, |ctx| {
+                ctx.component(
+                    "list",
+                    List::new((0..20).map(|i| ListItem::new(i, format!("row {i}"))))
+                        .item_focus(|cursor: &Option<usize>| *cursor, |i, offset| (i, offset)),
+                    area,
+                );
+            });
+        };
+        draw(&mut driver, Some(9));
+        assert!(driver.row(0).contains("row 5"), "{}", driver.row(0));
+
+        draw(&mut driver, Some(8));
+        assert!(
+            driver.row(0).contains("row 5"),
+            "the cursor is still visible, so the view stays put: {}",
+            driver.row(0)
+        );
+    }
+
     /// Returning the cursor to where the wheel left it must not revive the
     /// held view: the cursor the user just moved has to stay on screen.
     #[test]
@@ -2271,9 +2346,10 @@ mod tests {
 
         let area = driver.area();
         driver.render(&state, |ctx| {
+            let recorded = std::rc::Rc::clone(&recorded);
             ctx.component(
                 ChildId::Static("list"),
-                List::new(items)
+                List::new(items.clone())
                     .scroll(|state: &BigState| state.scroll, BigMsg::Scrolled)
                     .selection(|_: &BigState| None, BigMsg::Chose)
                     .paint_item(move |_: &BigState, row: ListItemState<'_, usize>| {
@@ -2293,6 +2369,336 @@ mod tests {
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 2), &state),
             EventResult::Emit(BigMsg::Chose(42)),
             "the third painted row is the forty-third item"
+        );
+    }
+
+    /// What a list looks like, pinned: a change to how rows are painted must
+    /// leave every one of these frames exactly as recorded.
+    fn painted_list_frames() -> [String; 3] {
+        use crate::runtime::FocusState;
+        use crate::test_support::styled_snapshot;
+        use ratatui::style::Stylize;
+
+        let four = || {
+            [
+                item(Task::A, "Alpha"),
+                item(Task::B, "Bravo"),
+                item(Task::C, "Charlie").disabled(true),
+                item(Task::D, "Delta"),
+            ]
+        };
+        let six = || {
+            [
+                item(Task::A, "Alpha"),
+                item(Task::B, "Bravo"),
+                item(Task::C, "Charlie"),
+                item(Task::D, "Delta").disabled(true),
+                item(Task::E, "Echo"),
+                item(Task::F, "Foxtrot"),
+            ]
+        };
+        let state = State {
+            component_focus: FocusState::intent(["single"]),
+            ..State::default()
+        };
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|state: &State| &state.component_focus, Msg::ComponentFocus),
+            48,
+            5,
+        );
+        let render = |driver: &mut Driver<State, Msg>| {
+            driver.render(&state, |ctx| {
+                // Focused, single selection, a disabled row, a focus symbol,
+                // and a backdrop row past the last item.
+                ctx.component(
+                    "single",
+                    List::new(four())
+                        .item_focus(|_: &State| Some(Task::B), Msg::Focused)
+                        .selection(|_: &State| Some(Task::A), Msg::Selected)
+                        .focus_symbol("> "),
+                    Rect::new(0, 0, 12, 5),
+                );
+                // Resting multi-selection with custom markers: the cursor is
+                // not shown, so neither is the symbol's gutter.
+                ctx.component(
+                    "multi",
+                    List::new(four())
+                        .item_focus(|_: &State| Some(Task::A), Msg::Focused)
+                        .multi_selection(
+                            |_: &State, task: &Task| matches!(task, Task::A | Task::C),
+                            Msg::Toggled,
+                        )
+                        .selected_marker("[x]")
+                        .unselected_marker("[ ]")
+                        .focus_symbol(">"),
+                    Rect::new(12, 0, 12, 5),
+                );
+                ctx.component(
+                    "disabled",
+                    List::new(four())
+                        .item_focus(|_: &State| Some(Task::B), Msg::Focused)
+                        .selection(|_: &State| Some(Task::A), Msg::Selected)
+                        .focus_symbol(">")
+                        .disabled(true),
+                    Rect::new(24, 0, 12, 5),
+                );
+                // Hovered, two-row items scrolled to the cursor, an explicit
+                // span color, and a clipped trailing item.
+                ctx.component(
+                    "tall",
+                    List::new(six())
+                        .item_focus(|_: &State| Some(Task::E), Msg::Focused)
+                        .selection(|_: &State| Some(Task::D), Msg::Selected)
+                        .row_height(2)
+                        .paint_item(|_, row| {
+                            Text::from(vec![
+                                Line::from(row.label.to_string()),
+                                Line::from(format!(" #{}", row.index).magenta()),
+                            ])
+                        })
+                        .focus_symbol(">"),
+                    Rect::new(36, 0, 12, 5),
+                );
+            });
+        };
+        render(&mut driver);
+        driver.event(mouse(MouseKind::Moved, 40, 4), &state);
+        render(&mut driver);
+        let components = styled_snapshot(driver.buffer());
+
+        let theme = Theme::default_dark();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 24, 4));
+        standalone_widgets(&theme, &mut buffer);
+        [components, cursorless_frame(), styled_snapshot(&buffer)]
+    }
+
+    /// Hovered with no cursor anywhere: the cursor is shown, but there is
+    /// nothing to point at, so no gutter.
+    fn cursorless_frame() -> String {
+        let state = State::default();
+        let mut driver = Driver::<State, Msg>::new(12, 3);
+        let render = |driver: &mut Driver<State, Msg>| {
+            driver.render(&state, |ctx| {
+                ctx.component(
+                    "cursorless",
+                    List::new([
+                        item(Task::A, "Alpha"),
+                        item(Task::B, "Bravo"),
+                        item(Task::C, "Charlie").disabled(true),
+                    ])
+                    .item_focus(|_: &State| None, Msg::Focused)
+                    .focus_symbol(">"),
+                    Rect::new(0, 0, 12, 3),
+                );
+            });
+        };
+        render(&mut driver);
+        driver.event(mouse(MouseKind::Moved, 3, 1), &state);
+        render(&mut driver);
+        crate::test_support::styled_snapshot(driver.buffer())
+    }
+
+    /// The paint-only widget on its own: a scrolled, focused window, and the
+    /// same window disabled.
+    fn standalone_widgets(theme: &Theme, buffer: &mut Buffer) {
+        let rows = [
+            Text::from("two"),
+            Text::from("three"),
+            Text::from("four"),
+            Text::from("five"),
+        ];
+        ListWidget::new(&rows)
+            .first_item(2)
+            .focused_item(Some(3))
+            .selected_items(&[2, 4])
+            .disabled_items(&[false, false, false, false, true])
+            .focused(true)
+            .focus_symbol("> ")
+            .themed(theme)
+            .render(Rect::new(0, 0, 12, 4), buffer);
+        ListWidget::new(&rows)
+            .first_item(2)
+            .focused_item(Some(3))
+            .selected_items(&[2])
+            .focused(true)
+            .focus_symbol("> ")
+            .disabled(true)
+            .themed(theme)
+            .render(Rect::new(12, 0, 12, 4), buffer);
+    }
+
+    const RECORDED_LIST_FRAMES: [&str; 3] = [
+        r"   ● Alpha   [x] Alpha   ● Alpha     Delta      |
+>  ○ Bravo   [ ] Bravo   ○ Bravo      #3        |
+   ○ Charlie [x] Charlie ○ Charlie  >Echo       |
+   ○ Delta   [ ] Delta   ○ Delta      #4        |
+                                     Foxtrot    |
+aabbaaaaaaaaccccddddddddeeeeeeeeeeeeeeeeeeeeeeee
+ffggffffffffhhhhhhhhhhhheeeeeeeeeeeeeiiieeeeeeee
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeffffffffffff
+jjjjjjjjjjjjhhhhhhhhhhhheeeeeeeeeeeefkkkffffffff
+jjjjjjjjjjjjhhhhhhhhhhhhllllllllllllmmmmmmmmmmmm
+a: #FAFAFA on #282828 NONE
+b: #E5E5E5 on #282828 NONE
+c: #E5E5E5 on #1F1F1F NONE
+d: #FAFAFA on #1F1F1F NONE
+e: #565656 on #151515 NONE
+f: #FAFAFA on #484848 NONE
+g: #A1A1A1 on #484848 NONE
+h: #A1A1A1 on #1F1F1F NONE
+i: Magenta on #151515 NONE
+j: #A1A1A1 on #282828 NONE
+k: Magenta on #484848 NONE
+l: #A1A1A1 on #151515 NONE
+m: #A1A1A1 on #313131 NONE
+",
+        r"Alpha       |
+Bravo       |
+Charlie     |
+aaaaaaaaaaaa
+aaaaaaaaaaaa
+bbbbbbbbbbbb
+a: #A1A1A1 on #313131 NONE
+b: #565656 on #151515 NONE
+",
+        r"  two       two         |
+> three     three       |
+  four      four        |
+  five      five        |
+aaaaaaaaaaaabbbbbbbbbbbb
+ccccccccccccbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbb
+ddddddddddddbbbbbbbbbbbb
+a: #FAFAFA on #282828 NONE
+b: #565656 on #151515 NONE
+c: #FAFAFA on #484848 NONE
+d: #A1A1A1 on #282828 NONE
+",
+    ];
+
+    #[test]
+    fn list_frames_paint_exactly_as_recorded() {
+        for (painted, recorded) in painted_list_frames().iter().zip(RECORDED_LIST_FRAMES) {
+            assert_eq!(painted, recorded);
+        }
+    }
+
+    fn painted(widget: ListWidget<'_>, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        widget.render(area, &mut buffer);
+        crate::test_support::styled_snapshot(&buffer)
+    }
+
+    // The paint-only widget's frames, pinned: a plain-ratatui caller must
+    // keep seeing exactly these cells.
+
+    #[test]
+    fn standalone_widget_paints_cursor_symbol_selection_and_disabled_mask() {
+        let rows = ["one", "two", "three", "four", "five"].map(Text::from);
+        let widget = ListWidget::new(&rows)
+            .focused_item(Some(1))
+            .selected_items(&[1, 3])
+            // Shorter than the rows: the rest are enabled.
+            .disabled_items(&[false, false, true])
+            .focused(true)
+            .focus_symbol("> ")
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 14, 6),
+            r"  one         |
+> two         |
+  three       |
+  four        |
+  five        |
+              |
+aaaaaaaaaaaaaa
+bbbbbbbbbbbbbb
+cccccccccccccc
+dddddddddddddd
+aaaaaaaaaaaaaa
+aaaaaaaaaaaaaa
+a: #A1A1A1 on #282828 NONE
+b: #FAFAFA on #484848 NONE
+c: #565656 on #151515 NONE
+d: #FAFAFA on #282828 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_cursor_scrolled_out_of_the_window_keeps_the_gutter() {
+        let rows = ["three", "four", "five"].map(Text::from);
+        let widget = ListWidget::new(&rows)
+            .first_item(2)
+            .focused_item(Some(0))
+            .selected_items(&[3])
+            .focused(true)
+            .focus_symbol("> ")
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 14, 4),
+            r"  three       |
+  four        |
+  five        |
+              |
+aaaaaaaaaaaaaa
+bbbbbbbbbbbbbb
+aaaaaaaaaaaaaa
+aaaaaaaaaaaaaa
+a: #A1A1A1 on #282828 NONE
+b: #FAFAFA on #282828 NONE
+"
+        );
+    }
+
+    #[test]
+    fn standalone_explicit_text_styles_survive_every_row_state() {
+        let rows = [
+            Text::from(Span::styled(
+                "bold",
+                Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            )),
+            Text::from(Line::from(vec![
+                Span::raw("half "),
+                Span::styled("filled", Style::new().bg(Color::Green)),
+            ])),
+            Text::from(Span::styled(
+                "italic",
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::ITALIC),
+            )),
+            Text::from("plain"),
+        ];
+        let widget = ListWidget::new(&rows)
+            .focused_item(Some(1))
+            .selected_items(&[0, 1])
+            .disabled_items(&[false, false, true])
+            .focused(true)
+            .focus_symbol("> ")
+            .themed(&Theme::default_dark());
+
+        assert_eq!(
+            painted(widget, 14, 5),
+            r"  bold        |
+> half filled |
+  italic      |
+  plain       |
+              |
+aabbbbaaaaaaaa
+cccccccddddddc
+eeffffffeeeeee
+gggggggggggggg
+gggggggggggggg
+a: #FAFAFA on #282828 NONE
+b: Magenta on #282828 BOLD
+c: #FAFAFA on #484848 NONE
+d: #FAFAFA on Green NONE
+e: #565656 on #151515 NONE
+f: Cyan on #151515 ITALIC
+g: #A1A1A1 on #282828 NONE
+"
         );
     }
 }

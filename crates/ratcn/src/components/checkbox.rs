@@ -184,8 +184,7 @@ pub struct CheckboxWidget<'a> {
     focused: bool,
     hovered: bool,
     disabled: bool,
-    theme: Option<Theme>,
-    style: Option<CheckboxStyle>,
+    style: CheckboxStyle,
 }
 
 impl<'a> CheckboxWidget<'a> {
@@ -200,22 +199,21 @@ impl<'a> CheckboxWidget<'a> {
             focused: false,
             hovered: false,
             disabled: false,
-            theme: None,
-            style: None,
+            style: CheckboxStyle::fallback(),
         }
     }
 
     /// Take colors from `theme`.
     #[must_use]
-    pub const fn themed(mut self, theme: &Theme) -> Self {
-        self.theme = Some(*theme);
+    pub fn themed(mut self, theme: &Theme) -> Self {
+        self.style = CheckboxStyle::from_theme(theme);
         self
     }
 
-    /// Exact colors, taking precedence over [`themed`](Self::themed).
+    /// Use these exact colors, ignoring any theme.
     #[must_use]
     pub const fn style(mut self, style: CheckboxStyle) -> Self {
-        self.style = Some(style);
+        self.style = style;
         self
     }
 
@@ -288,14 +286,6 @@ impl<'a> CheckboxWidget<'a> {
         text_width::display_width_u16(self.checked_marker)
             .max(text_width::display_width_u16(self.unchecked_marker))
     }
-
-    fn resolved_style(&self) -> CheckboxStyle {
-        match (self.style, self.theme) {
-            (Some(style), _) => style,
-            (None, Some(theme)) => CheckboxStyle::from_theme(&theme),
-            (None, None) => CheckboxStyle::fallback(),
-        }
-    }
 }
 
 impl Widget for CheckboxWidget<'_> {
@@ -306,9 +296,9 @@ impl Widget for CheckboxWidget<'_> {
         if area.width == 0 {
             return;
         }
-        let style =
-            self.resolved_style()
-                .resolve(self.checked, self.focused, self.hovered, self.disabled);
+        let style = self
+            .style
+            .resolve(self.checked, self.focused, self.hovered, self.disabled);
         let mut marker_style = Style::default().fg(style.marker);
         let mut label_style = Style::default().fg(style.foreground);
         if let Some(background) = style.background {
@@ -364,8 +354,6 @@ pub struct Checkbox<S, M> {
     checked: Option<(ReadCheckedFn<S>, OnToggleFn<M>)>,
     disabled: bool,
     style: Option<StyleFn>,
-    /// The bound checked value, resolved once per declaration.
-    resolved_checked: bool,
 }
 
 impl<S, M> fmt::Debug for Checkbox<S, M> {
@@ -390,7 +378,6 @@ impl<S, M> Checkbox<S, M> {
             checked: None,
             disabled: false,
             style: None,
-            resolved_checked: false,
         }
     }
 
@@ -485,10 +472,6 @@ impl<S, M> Checkbox<S, M> {
 }
 
 impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
-    fn prepare(&mut self, state: &S) {
-        self.resolved_checked = self.checked.as_ref().is_some_and(|(read, _)| read(state));
-    }
-
     fn declare(&mut self, _ctx: &mut DeclareCtx<'_, S, M>) {
         // Everything a checkbox is lives on its own node: the paint below and
         // the events answered here. There is nothing to declare inside it.
@@ -496,7 +479,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_, S>) {
         let style = resolve_style(self.style.as_deref(), ctx.theme, CheckboxStyle::from_theme);
-        let widget = CheckboxWidget::new(&self.label, self.resolved_checked)
+        let checked = self
+            .checked
+            .as_ref()
+            .is_some_and(|(read, _)| read(ctx.state()));
+        let widget = CheckboxWidget::new(&self.label, checked)
             .checked_marker(&self.checked_marker)
             .unchecked_marker(&self.unchecked_marker)
             .focused(ctx.focused())
@@ -525,11 +512,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(self.can_act())
     }
 
-    fn interaction_area(&self, area: Rect) -> Rect {
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         // A checkbox is one row tall; a taller declaration must not leave a
         // strip of itself clickable.
         crate::geometry::fixed_height(area, 1)
@@ -921,5 +908,44 @@ mod tests {
         else {
             panic!("Tab must walk on to the second checkbox");
         };
+    }
+
+    /// Colors come from whichever of `themed` and `style` was called last, as
+    /// on every other widget: a later theme is not silently outranked by an
+    /// earlier style, and a later style is not by an earlier theme.
+    #[test]
+    fn the_last_of_themed_and_style_wins() {
+        let theme = Theme::default_dark();
+        let area = Rect::new(0, 0, 10, 1);
+        let paint = |widget: CheckboxWidget<'_>| {
+            let mut buffer = Buffer::empty(area);
+            widget.focused(true).render(area, &mut buffer);
+            buffer
+        };
+        let themed = paint(CheckboxWidget::new("Wrap", true).themed(&theme));
+        let styled = paint(CheckboxWidget::new("Wrap", true).style(CheckboxStyle::fallback()));
+        assert_ne!(
+            themed, styled,
+            "the theme and the fallback must paint apart"
+        );
+
+        assert_eq!(
+            paint(
+                CheckboxWidget::new("Wrap", true)
+                    .style(CheckboxStyle::fallback())
+                    .themed(&theme)
+            ),
+            themed,
+            "a later themed() replaces an earlier style()"
+        );
+        assert_eq!(
+            paint(
+                CheckboxWidget::new("Wrap", true)
+                    .themed(&theme)
+                    .style(CheckboxStyle::fallback())
+            ),
+            styled,
+            "a later style() replaces an earlier themed()"
+        );
     }
 }

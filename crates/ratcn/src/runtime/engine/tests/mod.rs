@@ -190,7 +190,7 @@ impl Component<FocusTestState, FocusTestMsg> for FocusLeaf {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(self.enabled)
     }
 }
@@ -348,7 +348,7 @@ impl Component<FocusTestState, FocusTestMsg> for LoggingComponent {
         }
     }
 
-    fn scope_options(&self) -> ScopeOptions {
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
         ScopeOptions::default().focusable(self.focusable)
     }
 }

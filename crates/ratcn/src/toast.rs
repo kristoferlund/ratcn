@@ -294,7 +294,6 @@ impl<'a> ToasterState<'a> {
     ///
     /// Returns whether anything was removed, so the caller can skip a redraw
     /// when nothing changed. Persistent toasts are never removed.
-    #[must_use]
     pub fn prune_expired(&mut self, now: Duration) -> bool {
         let previous_len = self.toasts.len();
         self.toasts.retain(|toast| !toast.is_expired(now));

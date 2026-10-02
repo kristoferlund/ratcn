@@ -412,7 +412,6 @@ impl App {
         bands: &chrome::Bands,
         theme: &Theme,
     ) {
-        let page = getting_started::layout(bands.body, self.state.getting_started_scroll);
         self.embed = None;
 
         chrome::header_rule(buffer, bands, theme);
@@ -420,6 +419,7 @@ impl App {
         let state = &self.state;
         self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             chrome::declare(ctx, state, bands.header);
+            let page = getting_started::layout(bands.body, state.getting_started_scroll);
             getting_started::declare(ctx, bands.body, page);
         });
     }
