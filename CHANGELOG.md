@@ -29,8 +29,6 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `runtime::BrowserPasteListener` (`ratzilla` feature) forwards browser pastes
   as `Event::Paste`.
-- `list_core::{ListRow, RowStyle, paint_rows}` expose the row painter for
-  copied-out components.
 
 ### Fixed
 

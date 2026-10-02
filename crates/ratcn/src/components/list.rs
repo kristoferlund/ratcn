@@ -4,7 +4,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    text::Text,
+    text::{Span, Text},
     widgets::Widget,
 };
 
@@ -14,13 +14,14 @@ use crate::color::{
 };
 use crate::linear_nav::{self, Axis};
 use crate::list_core::{
-    self, KeyIntent, ListItem, ListItemState, ListRow, RowIntent, RowStyle, RowViewport, WheelHold,
+    self, KeyIntent, ListItem, ListItemState, RowIntent, RowViewport, WheelHold,
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MouseKind, PaintCtx,
     ScopeOptions, ScrollDirection,
 };
 use crate::selection_indicator;
+use crate::text_width::display_width;
 use crate::theme::resolve_style;
 
 /// Every color a list can paint.
@@ -163,20 +164,29 @@ impl ListStyle {
         }
     }
 
-    /// The row colors, over whichever `backdrop` the list has: selection has
-    /// no fill of its own.
-    const fn rows(&self, backdrop: Color) -> RowStyle {
-        RowStyle {
-            foreground: self.foreground,
-            background: backdrop,
-            selected_foreground: self.selected_foreground,
-            focused_foreground: self.focused_foreground,
-            focused_background: self.focused_row_background,
-            selected_focused_foreground: self.selected_focused_foreground,
-            selected_focused_background: self.selected_focused_background,
-            disabled_foreground: self.disabled_foreground,
-            disabled_background: self.disabled_background,
+    fn resolve_row(
+        &self,
+        focused: bool,
+        selected: bool,
+        disabled: bool,
+        background: Color,
+    ) -> Style {
+        if disabled {
+            return Style::default()
+                .fg(self.disabled_foreground)
+                .bg(self.disabled_background);
         }
+        let (foreground, background) = match (focused, selected) {
+            (true, true) => (
+                self.selected_focused_foreground,
+                self.selected_focused_background,
+            ),
+            (true, false) => (self.focused_foreground, self.focused_row_background),
+            // Selection has no fill: keep whichever backdrop the list has.
+            (false, true) => (self.selected_foreground, background),
+            (false, false) => (self.foreground, background),
+        };
+        Style::default().fg(foreground).bg(background)
     }
 }
 
@@ -376,31 +386,60 @@ impl Widget for ListWidget<'_> {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let backdrop = self
-            .style
-            .resolve_surface(self.focused, self.hovered, self.disabled);
         // The whole widget area first, so rows past the last item keep the
         // list backdrop.
         buf.set_style(
             area,
-            Style::default().fg(self.style.foreground).bg(backdrop),
+            Style::default()
+                .fg(self.style.foreground)
+                .bg(self
+                    .style
+                    .resolve_surface(self.focused, self.hovered, self.disabled)),
         );
         // The focus symbol occupies a column in front of every row, reserved
         // only while there is a cursor to point at — the same frames the
         // cursor row is highlighted.
         let cursor_shown = self.focused && !self.disabled && self.focused_item.is_some();
-        let focus_symbol = if cursor_shown { self.focus_symbol } else { "" };
-        let rows = self.items.iter().enumerate().map(|(row, text)| {
-            let index = self.first_item.saturating_add(row);
-            ListRow {
-                text,
-                height: u16::try_from(text.lines.len().max(1)).unwrap_or(u16::MAX),
-                focused: self.focused && self.focused_item == Some(index),
-                selected: self.selected_items.contains(&index),
-                disabled: self.disabled || self.disabled_items.get(index).copied().unwrap_or(false),
+        let symbol_width = if cursor_shown {
+            u16::try_from(display_width(self.focus_symbol)).unwrap_or(u16::MAX)
+        } else {
+            0
+        };
+        let text_x = area.x.saturating_add(symbol_width).min(area.right());
+        let text_width = area.width.saturating_sub(symbol_width);
+
+        let mut y = area.y;
+        for (row, item) in self.items.iter().enumerate() {
+            if y >= area.bottom() {
+                break;
             }
-        });
-        list_core::paint_rows(rows, area, buf, &self.style.rows(backdrop), focus_symbol);
+            let index = self.first_item.saturating_add(row);
+            let height = u16::try_from(item.lines.len().max(1))
+                .unwrap_or(u16::MAX)
+                .min(area.bottom() - y);
+            let row_area = Rect::new(area.x, y, area.width, height);
+            // The row's colors fill its full width; the item's own spans then
+            // patch over them, so explicit colors in the text are preserved
+            // and everything else inherits the row style.
+            buf.set_style(row_area, self.row_style(index));
+            if cursor_shown && self.focused_item == Some(index) {
+                Span::raw(self.focus_symbol).render(row_area, buf);
+            }
+            item.render(Rect::new(text_x, y, text_width, height), buf);
+            y = y.saturating_add(height);
+        }
+    }
+}
+
+impl ListWidget<'_> {
+    fn row_style(&self, index: usize) -> Style {
+        self.style.resolve_row(
+            self.focused && self.focused_item == Some(index),
+            self.selected_items.contains(&index),
+            self.disabled || self.disabled_items.get(index).copied().unwrap_or(false),
+            self.style
+                .resolve_surface(self.focused, self.hovered, self.disabled),
+        )
     }
 }
 
@@ -996,10 +1035,7 @@ fn default_item_line<T>(
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use ratatui::{
-        style::Modifier,
-        text::{Line, Span},
-    };
+    use ratatui::{style::Modifier, text::Line};
 
     use super::*;
     use crate::runtime::{ChildId, KeyCode, MouseButton, Ratcn};
@@ -2336,10 +2372,8 @@ mod tests {
         );
     }
 
-    /// The recorded frames below were captured before `ListWidget` painted
-    /// through the row painter it shares with `Select`. That change was a
-    /// refactor of how rows reach the painter, not of what a list looks like,
-    /// so every one of these frames must stay exactly as recorded.
+    /// What a list looks like, pinned: a change to how rows are painted must
+    /// leave every one of these frames exactly as recorded.
     fn painted_list_frames() -> [String; 3] {
         use crate::runtime::FocusState;
         use crate::test_support::styled_snapshot;
@@ -2556,9 +2590,8 @@ d: #A1A1A1 on #282828 NONE
         crate::test_support::styled_snapshot(&buffer)
     }
 
-    // The frames below were recorded from the paint-only widget before it
-    // shared a row painter with `Select`; a plain-ratatui caller must keep
-    // seeing exactly these cells.
+    // The paint-only widget's frames, pinned: a plain-ratatui caller must
+    // keep seeing exactly these cells.
 
     #[test]
     fn standalone_widget_paints_cursor_symbol_selection_and_disabled_mask() {

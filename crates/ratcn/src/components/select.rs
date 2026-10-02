@@ -29,7 +29,7 @@ use crate::color::{
 };
 use crate::linear_nav::{self, Axis};
 use crate::list_core::{
-    self, KeyIntent, ListItem, ListItemState, ListRow, RowIntent, RowStyle, RowViewport, WheelHold,
+    self, KeyIntent, ListItem, ListItemState, RowIntent, RowViewport, WheelHold,
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
@@ -178,19 +178,25 @@ impl SelectStyle {
         }
     }
 
-    /// The option row colors, over the panel's fill.
-    const fn rows(self) -> RowStyle {
-        RowStyle {
-            foreground: self.option_foreground,
-            background: self.panel_background,
-            selected_foreground: self.selected_foreground,
-            focused_foreground: self.focused_option_foreground,
-            focused_background: self.focused_option_background,
-            selected_focused_foreground: self.selected_focused_foreground,
-            selected_focused_background: self.selected_focused_background,
-            disabled_foreground: self.disabled_foreground,
-            disabled_background: self.disabled_background,
-        }
+    const fn resolve_row(self, focused: bool, selected: bool, disabled: bool) -> Style {
+        let (foreground, background) = if disabled {
+            (self.disabled_foreground, self.disabled_background)
+        } else if selected && focused {
+            (
+                self.selected_focused_foreground,
+                self.selected_focused_background,
+            )
+        } else if focused {
+            (
+                self.focused_option_foreground,
+                self.focused_option_background,
+            )
+        } else if selected {
+            (self.selected_foreground, self.panel_background)
+        } else {
+            (self.option_foreground, self.panel_background)
+        };
+        Style::new().fg(foreground).bg(background)
     }
 }
 
@@ -483,44 +489,46 @@ impl Widget for SelectPanelWidget<'_> {
         let inner = block.inner(area);
         block.render(area, buf);
         let row_height = widget.row_height.max(1);
-        let visible =
-            (widget.first_item..widget.options.len()).take(usize::from(inner.height / row_height));
-        // The default marker-and-label lines, built only when the caller did
-        // not hand over its own rows.
-        let marker_lines: Vec<Text<'static>> = match widget.item_rows {
-            Some(_) => Vec::new(),
-            None => visible
-                .clone()
-                .map(|index| {
-                    Text::from(selection_indicator::marker_line(
-                        widget.options[index],
-                        widget.selected_item == Some(index),
-                        widget.disabled_items.get(index).copied().unwrap_or(false),
-                        selection_indicator::MarkerColors {
-                            disabled: widget.style.disabled_foreground,
-                            selected: widget.style.selected_marker,
-                            unselected: widget.style.unselected_marker,
-                        },
-                        selection_indicator::MarkerGlyphs {
-                            selected: widget.selected_marker,
-                            unselected: widget.unselected_marker,
-                        },
-                    ))
-                })
-                .collect(),
-        };
-        let texts = widget.item_rows.unwrap_or(&marker_lines);
-        // A caller's rows may run out before the options do; those options
-        // still paint their state colors.
-        let blank = Text::default();
-        let rows = visible.enumerate().map(|(row, index)| ListRow {
-            text: texts.get(row).unwrap_or(&blank),
-            height: row_height,
-            focused: widget.focused_item == Some(index),
-            selected: widget.selected_item == Some(index),
-            disabled: widget.disabled_items.get(index).copied().unwrap_or(false),
-        });
-        list_core::paint_rows(rows, inner, buf, &widget.style.rows(), "");
+        for (row, index) in (widget.first_item..widget.options.len())
+            .take(usize::from(inner.height / row_height))
+            .enumerate()
+        {
+            let disabled = widget.disabled_items.get(index).copied().unwrap_or(false);
+            let selected = widget.selected_item == Some(index);
+            let row_area = Rect::new(
+                inner.x,
+                inner.y + u16::try_from(row).expect("visible rows fit in u16") * row_height,
+                inner.width,
+                row_height,
+            );
+            buf.set_style(
+                row_area,
+                widget
+                    .style
+                    .resolve_row(widget.focused_item == Some(index), selected, disabled),
+            );
+            if let Some(rows) = widget.item_rows {
+                if let Some(text) = rows.get(row) {
+                    text.render(row_area, buf);
+                }
+                continue;
+            }
+            selection_indicator::marker_line(
+                widget.options[index],
+                selected,
+                disabled,
+                selection_indicator::MarkerColors {
+                    disabled: widget.style.disabled_foreground,
+                    selected: widget.style.selected_marker,
+                    unselected: widget.style.unselected_marker,
+                },
+                selection_indicator::MarkerGlyphs {
+                    selected: widget.selected_marker,
+                    unselected: widget.unselected_marker,
+                },
+            )
+            .render(row_area, buf);
+        }
     }
 }
 
@@ -1295,11 +1303,11 @@ mod tests {
         style.disabled_background = Color::Green;
 
         assert_eq!(
-            style.rows().resolve(true, true, false),
+            style.resolve_row(true, true, false),
             Style::new().fg(Color::Yellow).bg(Color::Blue)
         );
         assert_eq!(
-            style.rows().resolve(true, true, true),
+            style.resolve_row(true, true, true),
             Style::new().fg(Color::Magenta).bg(Color::Green),
             "disabled wins over focus and selection"
         );
@@ -2230,10 +2238,8 @@ mod tests {
         );
     }
 
-    /// The recorded frames below were captured before the panel painted
-    /// through the row painter it shares with `List`. That change was a
-    /// refactor of how rows reach the painter, not of what a select looks
-    /// like, so every one of these frames must stay exactly as recorded.
+    /// What a select looks like, pinned: a change to how options are painted
+    /// must leave every one of these frames exactly as recorded.
     fn painted_select_frames() -> [String; 3] {
         use crate::test_support::styled_snapshot;
         use ratatui::style::Stylize;
@@ -2434,9 +2440,8 @@ k: Reset on Reset NONE
 
     const FRUITS: [&str; 5] = ["Mango", "Papaya", "Lychee", "Durian", "Guava"];
 
-    // The frames below were recorded from the paint-only widget before it
-    // shared a row painter with `List`; a plain-ratatui caller must keep
-    // seeing exactly these cells.
+    // The paint-only widget's frames, pinned: a plain-ratatui caller must
+    // keep seeing exactly these cells.
 
     #[test]
     fn standalone_open_panel_paints_default_markers_and_row_states() {
