@@ -357,8 +357,8 @@ type StyleFn = Rc<dyn Fn(&Theme) -> TextAreaStyle>;
 /// <kbd>Page Up</kbd>/<kbd>Page Down</kbd>, <kbd>Ctrl</kbd>+<kbd>←</kbd>/<kbd>→</kbd>
 /// by word, <kbd>Shift</kbd> with a movement to select, <kbd>Ctrl+W</kbd>,
 /// <kbd>Ctrl+K</kbd>, and the rest of the readline set. <kbd>Enter</kbd>
-/// inserts a line break, so <kbd>Ctrl+Enter</kbd> is the one that emits
-/// [`on_submit`](Self::on_submit). <kbd>Tab</kbd>, <kbd>Esc</kbd>, and the
+/// inserts a line break, so <kbd>Ctrl+Enter</kbd> (or <kbd>Ctrl+J</kbd>) is
+/// the one that emits [`on_submit`](Self::on_submit). <kbd>Tab</kbd>, <kbd>Esc</kbd>, and the
 /// function keys are left to bubble, as is any chord that changes nothing
 /// here, so focus traversal, an enclosing dialog, and the app's shortcuts
 /// keep working around a focused field. A paste keeps its line breaks and
@@ -448,8 +448,9 @@ impl<S, M> TextArea<S, M> {
         self
     }
 
-    /// The message <kbd>Ctrl+Enter</kbd> emits. Plain <kbd>Enter</kbd> stays
-    /// a line break. Without it Ctrl+Enter bubbles.
+    /// The message <kbd>Ctrl+Enter</kbd> emits, and <kbd>Ctrl+J</kbd>, which
+    /// is how a terminal that sends a line feed for Ctrl+Enter reports it.
+    /// Plain <kbd>Enter</kbd> stays a line break. Without it both bubble.
     #[must_use]
     pub fn on_submit(mut self, on_submit: impl Fn() -> M + 'static) -> Self {
         self.on_submit = Some(Rc::new(on_submit));
@@ -628,6 +629,9 @@ impl<S, M> TextArea<S, M> {
                 if rows == 0 {
                     return None;
                 }
+                // The editor's scroll extends an active selection, which the
+                // next key typed would then replace.
+                editor.cancel_selection();
                 editor.scroll((rows, 0));
             }
             _ => return None,
@@ -734,7 +738,7 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
             return EventResult::Ignored;
         }
         let edited = match event {
-            Event::Key(key) if key.code == KeyCode::Enter && key.modifiers.ctrl => {
+            Event::Key(key) if is_submit_chord(*key) => {
                 return match &self.on_submit {
                     Some(on_submit) if !key.modifiers.alt && !key.modifiers.shift => {
                         EventResult::Emit(on_submit())
@@ -761,6 +765,13 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
     fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(self.value.is_some() && !self.disabled)
     }
+}
+
+/// Ctrl+Enter, or Ctrl+J: a terminal that sends a line feed for Ctrl+Enter
+/// reports it as Ctrl+J. Neither ever reaches the editor, which binds Ctrl+J to
+/// deleting back to the start of the line.
+fn is_submit_chord(key: KeyEvent) -> bool {
+    key.modifiers.ctrl && matches!(key.code, KeyCode::Enter | KeyCode::Char('j' | 'J'))
 }
 
 /// The keys a field leaves alone. Tab and `BackTab` belong to focus traversal,
@@ -981,6 +992,57 @@ mod tests {
                 EventResult::Ignored
             ),
             "with nothing to submit, the chord belongs to whatever encloses the field"
+        );
+    }
+
+    /// Terminals that send a line feed for Ctrl+Enter deliver it as Ctrl+J,
+    /// which the editor binds to deleting back to the start of the line. It
+    /// is the submit chord here, and must never reach the editor: pressing
+    /// submit would wipe the line instead.
+    #[test]
+    fn ctrl_j_submits_like_ctrl_enter_and_never_deletes() {
+        let mut driver = driver();
+        let state = state("one two");
+        render(&mut driver, &state);
+
+        assert!(matches!(
+            driver.event(key_with(KeyCode::Char('j'), CTRL), &state),
+            EventResult::Emit(Msg::Submit)
+        ));
+
+        render_with(&mut driver, &state, || {
+            TextArea::new().value(|state: &State| &state.notes, Msg::Notes)
+        });
+        assert!(
+            matches!(
+                driver.event(key_with(KeyCode::Char('j'), CTRL), &state),
+                EventResult::Ignored
+            ),
+            "with nothing to submit, the chord bubbles and deletes nothing"
+        );
+    }
+
+    /// The editor's own scroll extends a selection that is active, so a
+    /// notch of the wheel would quietly grow it — and the next key typed
+    /// would replace text the user never selected. The wheel drops the
+    /// selection instead.
+    #[test]
+    fn the_wheel_never_grows_a_selection() {
+        let mut driver = driver();
+        let mut state = state_at_top(TEN_LINES);
+        render(&mut driver, &state);
+
+        send(&mut driver, &mut state, key_with(KeyCode::Down, SHIFT));
+        send(&mut driver, &mut state, key_with(KeyCode::Down, SHIFT));
+        render(&mut driver, &state);
+        send(&mut driver, &mut state, mouse(WHEEL_DOWN, 1, 1));
+        assert!(!state.notes.editor().is_selecting());
+        render(&mut driver, &state);
+        send(&mut driver, &mut state, key(KeyCode::Char('X')));
+        assert_eq!(
+            state.notes.value().replace('X', ""),
+            TEN_LINES,
+            "typing after the wheel inserts and deletes nothing"
         );
     }
 

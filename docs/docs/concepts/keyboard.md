@@ -84,7 +84,7 @@ PageDown. Each page lists its editing keys.
 |---|---|
 | `Enter` &nbsp;`Space` | Press a [Button](../components/button), toggle a [Checkbox](../components/checkbox), advance a Cycle, or commit the cursor in List, Select, or Tabs |
 | `Enter` | Submit an Input |
-| `Ctrl+Enter` | Submit a TextArea, where Enter is a line break |
+| `Ctrl+Enter` &nbsp;`Ctrl+J` | Submit a TextArea, where Enter is a line break |
 | `Esc` | Request dismissal of a [Dialog](../components/dialog), an open Select, or a [Tooltip](../components/tooltip) with an open-change binding |
 
 `Dialog`'s dismiss key is rebindable with

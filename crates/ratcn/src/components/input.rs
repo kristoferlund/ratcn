@@ -711,7 +711,8 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
 /// The keys a field leaves alone. Tab and `BackTab` belong to focus traversal,
 /// Esc and the function keys to enclosing components and the app, and one
 /// line has no vertical movement to make. Ctrl+M and a raw line break would
-/// insert a newline; Ctrl+U and Ctrl+R are undo and redo, which a state
+/// insert a newline, and Ctrl+J — a line feed, as a terminal reports it —
+/// would delete back to the start of the line; Ctrl+U and Ctrl+R are undo and redo, which a state
 /// replaced on every keystroke does not keep.
 fn bubbles(key: KeyEvent) -> bool {
     match key.code {
@@ -725,7 +726,7 @@ fn bubbles(key: KeyEvent) -> bool {
         | KeyCode::PageDown
         | KeyCode::Char('\n' | '\r') => true,
         KeyCode::Char(char) if key.modifiers.ctrl && !key.modifiers.alt => {
-            matches!(char.to_ascii_lowercase(), 'm' | 'u' | 'r')
+            matches!(char.to_ascii_lowercase(), 'm' | 'j' | 'u' | 'r')
         }
         _ => false,
     }
@@ -962,6 +963,10 @@ mod tests {
         for event in [
             key_with(KeyCode::Enter, SHIFT),
             key_with(KeyCode::Char('m'), CTRL),
+            // A raw line feed arrives as Ctrl+J, which the editor binds to
+            // deleting back to the start of the line: typed Enter would wipe
+            // the value.
+            key_with(KeyCode::Char('j'), CTRL),
             key(KeyCode::Char('\n')),
             key(KeyCode::Char('\r')),
         ] {

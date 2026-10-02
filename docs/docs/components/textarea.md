@@ -77,11 +77,14 @@ assign a new state. There is no `PartialEq`; compare `.value()`.
 ## Submitting
 
 <kbd>Enter</kbd> inserts a line break, so <kbd>Ctrl+Enter</kbd> is the chord
-that emits `.on_submit(...)`. Without `on_submit` it bubbles.
+that emits `.on_submit(...)`, and so is <kbd>Ctrl+J</kbd>. Without `on_submit`
+both bubble.
 
 ::: warning Ctrl+Enter needs a terminal that reports it
-Most terminals send <kbd>Ctrl+Enter</kbd> as a plain Enter unless the kitty
-keyboard protocol is enabled, and then it arrives as a line break. Give a form
+ratcn's terminal session does not enable the kitty keyboard protocol, so most
+terminals send <kbd>Ctrl+Enter</kbd> as a plain Enter, which inserts a line
+break. Terminals that send a line feed instead deliver it as
+<kbd>Ctrl+J</kbd>, which the field treats as the same submit chord. Give a form
 a second way to submit — the demo has a Save button.
 :::
 
@@ -156,10 +159,10 @@ so its readline-style keys apply:
 | `Shift` + a movement | Select |
 | `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
 | `Ctrl+W` `Alt+Backspace` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
-| `Ctrl+K` &nbsp;/&nbsp; `Ctrl+J` | Delete to the end / start of the line |
+| `Ctrl+K` | Delete to the end of the line |
 | `Ctrl+C` `Ctrl+X` `Ctrl+Y` | Copy, cut, and paste within the field |
 | `Enter` | Insert a line break |
-| `Ctrl+Enter` | Submit |
+| `Ctrl+Enter` `Ctrl+J` | Submit |
 
 `Ctrl+C`, `Ctrl+X`, and `Ctrl+Y` use the editor's own buffer, not the system
 clipboard — and a host that quits on `Ctrl+C`, as the demos do, takes that key

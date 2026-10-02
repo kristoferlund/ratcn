@@ -157,7 +157,7 @@ so its readline-style keys apply:
 | `Shift` + a movement | Select |
 | `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
 | `Ctrl+W` `Alt+Backspace` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
-| `Ctrl+K` &nbsp;/&nbsp; `Ctrl+J` | Delete to the end / start |
+| `Ctrl+K` | Delete to the end |
 | `Ctrl+C` `Ctrl+X` `Ctrl+Y` | Copy, cut, and paste within the field |
 | `Enter` | Submit |
 
