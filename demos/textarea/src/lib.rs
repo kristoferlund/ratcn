@@ -5,9 +5,9 @@
 //! from that state each frame, so it can never disagree with what is shown.
 //!
 //! The field wraps a line longer than it is wide and scrolls to keep the
-//! cursor in view. Enter is a line break here, so saving is Ctrl+Enter — a
-//! chord many terminals report as a plain Enter, which is why the form also
-//! has a button. Tab moves between the two.
+//! cursor in view. Enter is a line break here, so saving is Ctrl+Enter. A
+//! terminal reports that chord only under a keyboard protocol this host does
+//! not turn on, so the form also has a button; Tab moves between the two.
 //!
 //! The mouse works as in any editor: a click places the cursor, a drag
 //! selects, and the wheel scrolls the text. A paste keeps its line breaks.
@@ -24,7 +24,7 @@ use ratcn::{
 };
 
 const DEMO_WIDTH: u16 = 48;
-const DEMO_HEIGHT: u16 = 12;
+const DEMO_HEIGHT: u16 = 13;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
 
 #[derive(Default)]
@@ -97,9 +97,10 @@ impl demo_shared::Demo for App {
                 });
             });
 
-            // The field takes every row it is given; the footer gets one.
-            let [notes_area, _, footer] = Layout::vertical([
+            // The field takes every row the footer and help line leave it.
+            let [notes_area, _, footer, help_area] = Layout::vertical([
                 Constraint::Fill(1),
+                Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
             ])
@@ -116,26 +117,32 @@ impl demo_shared::Demo for App {
             );
 
             let save = Button::new("Save").on_press(|| Msg::Save);
-            let [count_area, save_area] =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(save.width())])
-                    .areas(footer);
+            let [count_area, saved_area, save_area] = Layout::horizontal([
+                Constraint::Fill(1),
+                Constraint::Length(5),
+                Constraint::Length(save.width()),
+            ])
+            .spacing(1)
+            .areas(footer);
 
             let lines = state.notes.lines();
             let characters: usize = lines.iter().map(|line| line.chars().count()).sum();
-            let saved = if state.saved.as_deref() == Some(state.notes.value().as_str()) {
-                "  Saved"
-            } else {
-                ""
-            };
             ctx.paint_widget(
-                Line::from(format!(
-                    "Lines: {}  Characters: {characters}{saved}",
-                    lines.len()
-                ))
-                .style(theme.muted_foreground),
+                Line::from(format!("Lines: {} · Chars: {characters}", lines.len()))
+                    .style(theme.muted_foreground),
                 count_area,
             );
+            // "Saved" is a claim about the text on screen, so it is checked
+            // against it each frame.
+            if state.saved.as_deref() == Some(state.notes.value().as_str()) {
+                ctx.paint_widget(Line::from("Saved").style(theme.foreground), saved_area);
+            }
             ctx.component("save", save, save_area);
+
+            ctx.paint_widget(
+                Line::from("Tab to Save, Ctrl+Enter if supported").style(theme.muted_foreground),
+                help_area,
+            );
         });
     }
 }
@@ -159,11 +166,15 @@ mod tests {
 
     /// Draw a frame and hand back its rows.
     fn screen(app: &mut App) -> Vec<String> {
-        let mut buffer = Buffer::empty(SCREEN);
-        app.draw(&mut buffer, SCREEN, &Theme::default_dark());
+        screen_of(app, SCREEN)
+    }
+
+    fn screen_of(app: &mut App, area: Rect) -> Vec<String> {
+        let mut buffer = Buffer::empty(area);
+        app.draw(&mut buffer, area, &Theme::default_dark());
         buffer
             .content
-            .chunks(SCREEN.width.into())
+            .chunks(area.width.into())
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect()
     }
@@ -202,7 +213,7 @@ mod tests {
     #[test]
     fn enter_breaks_the_line_and_the_count_follows() {
         let mut app = app();
-        assert!(shows(&screen(&mut app), "Lines: 1  Characters: 0"));
+        assert!(shows(&screen(&mut app), "Lines: 1 · Chars: 0"));
 
         type_text(&mut app, "Met Ada");
         press(&mut app, KeyCode::Enter);
@@ -211,7 +222,7 @@ mod tests {
         let screen = screen(&mut app);
         assert!(shows(&screen, "│Met Ada "), "{screen:#?}");
         assert!(shows(&screen, "│She counts "), "{screen:#?}");
-        assert!(shows(&screen, "Lines: 2  Characters: 17"), "{screen:#?}");
+        assert!(shows(&screen, "Lines: 2 · Chars: 17"), "{screen:#?}");
     }
 
     /// A line longer than the field breaks over rows on screen and stays one
@@ -228,37 +239,62 @@ mod tests {
         let screen = screen(&mut app);
         assert!(shows(&screen, "│The quick brown fox"), "{screen:#?}");
         assert!(shows(&screen, "│dog, twice over."), "{screen:#?}");
-        assert!(shows(&screen, "Lines: 1  Characters: 56"), "{screen:#?}");
+        assert!(shows(&screen, "Lines: 1 · Chars: 56"), "{screen:#?}");
     }
 
-    /// Saving must not also split the line, and "Saved" is a claim about the
-    /// text on screen: one more keystroke makes it false.
+    /// This host never receives Ctrl+Enter, but a terminal that reports it
+    /// (and the browser) does: there it saves without also splitting the
+    /// line. "Saved" is a claim about the text on screen, so one more
+    /// keystroke makes it false.
     #[test]
-    fn ctrl_enter_saves_and_the_next_edit_is_unsaved() {
+    fn a_reported_ctrl_enter_saves_and_the_next_edit_is_unsaved() {
         let mut app = app();
         type_text(&mut app, "note");
 
         send(&mut app, ctrl_enter());
+        assert_eq!(app.state.notes.lines(), ["note"]);
         assert_eq!(app.state.saved.as_deref(), Some("note"));
-        assert!(shows(&screen(&mut app), "Lines: 1  Characters: 4  Saved"));
+        assert!(shows(&screen(&mut app), "Saved"));
 
         type_text(&mut app, "s");
         assert!(!shows(&screen(&mut app), "Saved"));
     }
 
-    /// The button is the way to save on a terminal that reports Ctrl+Enter as
-    /// Enter, so it has to be reachable from the field — and once focus has
-    /// left an empty field, the placeholder says what belongs in it.
+    /// The button is the way to save where Ctrl+Enter never arrives, so it
+    /// has to be reachable from the field, and the screen has to say so.
     #[test]
-    fn tab_reaches_the_save_button_and_uncovers_the_placeholder() {
+    fn the_help_line_says_how_to_reach_the_save_button() {
         let mut app = app();
-        assert!(!shows(&screen(&mut app), "What happened today?"));
+        type_text(&mut app, "note");
+        assert!(shows(&screen(&mut app), "Tab to Save"));
 
         press(&mut app, KeyCode::Tab);
-        assert!(shows(&screen(&mut app), "│What happened today?"));
-
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.state.saved.as_deref(), Some(""));
+
+        assert_eq!(app.state.saved.as_deref(), Some("note"));
+        assert_eq!(app.state.notes.lines(), ["note"], "Enter pressed Save");
+    }
+
+    /// On a small screen the field gives up rows and the footer keeps its
+    /// own: the count, "Saved", the button and the help line all still read.
+    #[test]
+    fn a_small_screen_keeps_the_footer_whole() {
+        let mut app = app();
+        type_text(&mut app, "The quick brown fox jumps over the lazy dog");
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+
+        let screen = screen_of(&mut app, Rect::new(0, 0, 40, 12));
+
+        for text in [
+            "┌Notes",
+            "Lines: 1 · Chars: 43",
+            "Saved",
+            "Save ",
+            "Tab to Save, Ctrl+Enter if supported",
+        ] {
+            assert!(shows(&screen, text), "{text} is missing: {screen:#?}");
+        }
     }
 
     /// The host delivers pastes because the demo asks for them, and a text
