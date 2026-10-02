@@ -85,8 +85,8 @@ action, for instance.
 ## Placeholder and title
 
 `.placeholder(...)` is the muted text shown while the field is empty, focused
-or not; a focused field shows its cursor in front of it. `.title(...)` is the
-label on the border.
+or not, where the text would start; a focused field shows its cursor on its
+first character. `.title(...)` is the label on the border.
 
 ## Masking
 

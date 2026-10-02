@@ -3,10 +3,10 @@
 //! it.
 //!
 //! ```text
-//! ┌Notes─────────┐
-//! │Met Ada today.│
-//! │She counts.   │
-//! └──────────────┘
+//! ┌Notes───────────┐
+//! │ Met Ada today. │
+//! │ She counts.    │
+//! └────────────────┘
 //! ```
 //!
 //! The text is app-owned, like every other value here: the field reads a
@@ -20,9 +20,9 @@ use std::{fmt, rc::Rc};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Position, Rect},
+    layout::{Alignment, Margin, Position, Rect},
     style::{Color, Style},
-    text::{Line, Text},
+    text::Line,
     widgets::{Block, Widget},
 };
 
@@ -180,15 +180,22 @@ struct ResolvedStyle {
     title: Style,
 }
 
-/// The cells of `area` the text is drawn in: all of it, inside the border
-/// when there is one. Paint draws the editor here and the mouse is read
-/// against it, so the two cannot drift apart.
-fn text_rect(area: Rect, titled: bool) -> Rect {
+/// The cells of `area` the field's background fills: all of it, inside the
+/// border when there is one.
+fn well(area: Rect, titled: bool) -> Rect {
     if titled {
         Block::bordered().inner(area)
     } else {
         area
     }
+}
+
+/// The cells of `area` the text is drawn in: the well, inset a column on
+/// each side, as a Select's trigger insets its value. Paint draws the editor
+/// and the placeholder here and the mouse is read against it, so the three
+/// cannot drift apart.
+fn text_rect(area: Rect, titled: bool) -> Rect {
+    well(area, titled).inner(Margin::new(1, 0))
 }
 
 /// How many rows one notch of the wheel scrolls.
@@ -251,16 +258,17 @@ impl<'a> TextAreaWidget<'a> {
         self
     }
 
-    /// The muted text shown while the field is empty, focused or not. A
-    /// focused field shows its cursor in front of it.
+    /// The muted text shown while the field is empty, focused or not, where
+    /// the text would start, a line to a row. A focused field shows its
+    /// cursor on its first character.
     #[must_use]
     pub const fn placeholder(mut self, placeholder: &'a str) -> Self {
         self.placeholder = placeholder;
         self
     }
 
-    /// Draw a border around the field with `title` on it. The text then
-    /// loses a row and a column on each side.
+    /// Draw a border around the field with `title` on it, which takes a row
+    /// and a column on each side from the text.
     #[must_use]
     pub const fn title(mut self, title: &'a str) -> Self {
         self.title = Some(title);
@@ -345,8 +353,8 @@ impl<'a> TextAreaWidget<'a> {
                 .title(Line::styled(title, style.title))
                 .render(area, buf);
         }
+        buf.set_style(well(area, self.title.is_some()), style.text);
         let field = text_rect(area, self.title.is_some());
-        buf.set_style(field, style.text);
 
         // The field paints its own look over whatever editor the state was
         // built from: a block, line numbers, or another alignment would move
@@ -370,9 +378,24 @@ impl<'a> TextAreaWidget<'a> {
         editor.set_cursor_style(style.cursor);
         editor.set_cursor_line_style(Style::default());
         editor.set_selection_style(style.selection);
-        editor.set_styled_placeholder(Text::raw(self.placeholder.to_owned()));
-        editor.set_placeholder_style(style.placeholder);
+        // The field paints the placeholder itself: the editor's would start a
+        // cell late, behind a cursor of its own.
+        editor.set_placeholder_text("");
         (&*editor).render(field, buf);
+        if editor.is_empty() && !self.placeholder.is_empty() {
+            for (line, y) in self.placeholder.lines().zip(field.y..field.bottom()) {
+                buf.set_stringn(
+                    field.x,
+                    y,
+                    line,
+                    usize::from(field.width),
+                    style.placeholder,
+                );
+            }
+            if self.focused && !self.disabled && !field.is_empty() {
+                buf.set_style(Rect::new(field.x, field.y, 1, 1), style.cursor);
+            }
+        }
         self.editor
     }
 }
@@ -503,16 +526,17 @@ impl<S, M> TextArea<S, M> {
         self
     }
 
-    /// The muted text shown while the field is empty, focused or not. A
-    /// focused field shows its cursor in front of it.
+    /// The muted text shown while the field is empty, focused or not, where
+    /// the text would start, a line to a row. A focused field shows its
+    /// cursor on its first character.
     #[must_use]
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
     }
 
-    /// Draw a border around the field with `title` on it. The text then
-    /// loses a row and a column on each side.
+    /// Draw a border around the field with `title` on it, which takes a row
+    /// and a column on each side from the text.
     #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -837,9 +861,10 @@ mod tests {
         shift: true,
     };
 
-    /// The field every test declares unless it says otherwise: six columns
-    /// by three rows, so ten lines have to scroll and a long one to wrap.
-    const FIELD: Rect = Rect::new(0, 0, 6, 3);
+    /// The field every test declares unless it says otherwise: eight columns,
+    /// six of them text inside the inset, by three rows, so ten lines have to
+    /// scroll and a long one to wrap.
+    const FIELD: Rect = Rect::new(0, 0, 8, 3);
 
     /// Ten lines, `0` to `9`.
     const TEN_LINES: &str = "0\n1\n2\n3\n4\n5\n6\n7\n8\n9";
@@ -922,10 +947,17 @@ mod tests {
     const WHEEL_UP: MouseKind = MouseKind::Scroll(ScrollDirection::Up);
     const WHEEL_DOWN: MouseKind = MouseKind::Scroll(ScrollDirection::Down);
 
-    /// What the field's own cells show, row by row.
+    /// What the field's text cells show, inside the inset, row by row.
     fn field(driver: &Driver<State, Msg>) -> Vec<String> {
         (0..FIELD.height)
-            .map(|row| driver.row(row).chars().take(FIELD.width.into()).collect())
+            .map(|row| {
+                driver
+                    .row(row)
+                    .chars()
+                    .skip(1)
+                    .take(usize::from(FIELD.width - 2))
+                    .collect()
+            })
             .collect()
     }
 
@@ -1322,7 +1354,7 @@ mod tests {
         };
         render(&mut driver, &state);
 
-        let EventResult::Emit(Msg::Focus(focus)) = driver.event(mouse(LEFT_DOWN, 1, 0), &state)
+        let EventResult::Emit(Msg::Focus(focus)) = driver.event(mouse(LEFT_DOWN, 2, 0), &state)
         else {
             panic!("a press must move focus to the field");
         };
@@ -1330,7 +1362,7 @@ mod tests {
         state.focus = focus;
         render(&mut driver, &state);
 
-        send(&mut driver, &mut state, mouse(LEFT_UP, 1, 0));
+        send(&mut driver, &mut state, mouse(LEFT_UP, 2, 0));
         assert_eq!(state.notes.cursor(), (0, 1));
     }
 
@@ -1347,18 +1379,18 @@ mod tests {
             });
         };
         render(&mut driver, &state);
-        assert_eq!(driver.row(1), "    c       ");
+        assert_eq!(driver.row(1), "     c      ");
 
         for ((column, row), cursor) in [
-            ((1, 0), (0, 1)),
-            ((9, 0), (0, 2)),
-            ((1, 1), (1, 0)),
-            ((4, 1), (1, 1)),
-            ((5, 1), (1, 2)),
-            ((0, 2), (2, 0)),
+            ((2, 0), (0, 1)),
+            ((10, 0), (0, 2)),
+            ((2, 1), (1, 0)),
+            ((5, 1), (1, 1)),
+            ((6, 1), (1, 2)),
             ((1, 2), (2, 0)),
-            ((2, 2), (2, 1)),
-            ((2, 4), (2, 1)),
+            ((2, 2), (2, 0)),
+            ((3, 2), (2, 1)),
+            ((3, 4), (2, 1)),
         ] {
             click(&mut driver, &mut state, column, row);
             assert_eq!(state.notes.cursor(), cursor, "a click on {column}, {row}");
@@ -1374,13 +1406,13 @@ mod tests {
         let mut state = state_at_top("aaa bbb ccc");
         render(&mut driver, &state);
         assert_eq!(field(&driver), ["aaa   ", "bbb   ", "ccc   "]);
-        click(&mut driver, &mut state, 1, 2);
+        click(&mut driver, &mut state, 2, 2);
         assert_eq!(state.notes.cursor(), (0, 9), "the second c of the one line");
 
         state.notes = TextAreaState::new(TEN_LINES);
         render(&mut driver, &state);
         assert_eq!(field(&driver), ["7     ", "8     ", "9     "]);
-        click(&mut driver, &mut state, 0, 0);
+        click(&mut driver, &mut state, 1, 0);
         assert_eq!(state.notes.cursor(), (7, 0));
         render(&mut driver, &state);
         assert_eq!(
@@ -1406,9 +1438,9 @@ mod tests {
             });
         };
         render(&mut driver, &state);
-        assert_eq!(driver.row(2), "│cd        │");
+        assert_eq!(driver.row(2), "│ cd       │");
 
-        click(&mut driver, &mut state, 2, 2);
+        click(&mut driver, &mut state, 3, 2);
         assert_eq!(state.notes.cursor(), (1, 1));
 
         render(&mut driver, &state);
@@ -1425,14 +1457,14 @@ mod tests {
         let mut state = state_at_top("abc\ndef\nghi");
         render(&mut driver, &state);
 
-        route(&mut driver, &mut state, mouse(LEFT_DOWN, 1, 0));
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 2, 0));
         assert_eq!(state.notes.editor().selection_range(), None);
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 2, 1));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 3, 1));
         assert_eq!(
             state.notes.editor().selection_range(),
             Some(((0, 1), (1, 2)))
         );
-        route(&mut driver, &mut state, mouse(LEFT_UP, 2, 1));
+        route(&mut driver, &mut state, mouse(LEFT_UP, 3, 1));
         assert_eq!(
             state.notes.editor().selection_range(),
             Some(((0, 1), (1, 2))),
@@ -1455,14 +1487,14 @@ mod tests {
 
         send(&mut driver, &mut state, key_with(KeyCode::Up, SHIFT));
         assert!(state.notes.editor().is_selecting());
-        click(&mut driver, &mut state, 2, 0);
+        click(&mut driver, &mut state, 3, 0);
         assert!(!state.notes.editor().is_selecting(), "a click deselects");
         assert_eq!(state.notes.cursor(), (0, 2));
 
-        route(&mut driver, &mut state, mouse(LEFT_DOWN, 2, 0));
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 1, 1));
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 2, 0));
-        route(&mut driver, &mut state, mouse(LEFT_UP, 2, 0));
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 3, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 2, 1));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 3, 0));
+        route(&mut driver, &mut state, mouse(LEFT_UP, 3, 0));
         assert!(!state.notes.editor().is_selecting());
         assert_eq!(state.notes.cursor(), (0, 2));
     }
@@ -1473,7 +1505,7 @@ mod tests {
     /// view with it.
     #[test]
     fn a_drag_past_the_edge_keeps_extending_and_scrolls() {
-        let area = Rect::new(0, 1, 6, 3);
+        let area = Rect::new(0, 1, 8, 3);
         let mut driver = driver();
         let mut state = state_at_top(TEN_LINES);
         let render = |driver: &mut Driver<State, Msg>, state: &State| {
@@ -1481,11 +1513,11 @@ mod tests {
                 ctx.component(ChildId::Static("notes"), textarea(), area);
             });
         };
-        let top = |driver: &Driver<State, Msg>| driver.row(1)[..1].to_owned();
+        let top = |driver: &Driver<State, Msg>| driver.row(1)[1..2].to_owned();
         render(&mut driver, &state);
 
-        route(&mut driver, &mut state, mouse(LEFT_DOWN, 0, 2));
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 0, 4));
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 1, 2));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 1, 4));
         assert_eq!(state.notes.cursor(), (3, 0), "one row past the edge");
         render(&mut driver, &state);
         assert_eq!(top(&driver), "1");
@@ -1504,8 +1536,8 @@ mod tests {
         assert_eq!(state.notes.cursor(), (4, 1), "the release moves nothing");
 
         // And out the other side, back through the line pressed.
-        route(&mut driver, &mut state, mouse(LEFT_DOWN, 0, 2));
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 0, 0));
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 1, 2));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 1, 0));
         assert_eq!(
             state.notes.editor().selection_range(),
             Some(((1, 0), (3, 0)))
@@ -1591,7 +1623,7 @@ mod tests {
                             ctx.component(
                                 ChildId::Static("notes"),
                                 textarea(),
-                                Rect::new(area.x, area.y, 6, 3),
+                                Rect::new(area.x, area.y, 8, 3),
                             );
                         }),
                     Rect::new(0, 0, 12, 5),
@@ -1630,7 +1662,7 @@ mod tests {
                 .themed(&theme)
                 .focused(focused)
                 .render(FIELD, &mut buffer);
-            buffer.cell((2, 1)).expect("the cell after the text").bg
+            buffer.cell((3, 1)).expect("the cell after the text").bg
         };
 
         assert_eq!(paint(true), style.cursor_background);
@@ -1639,14 +1671,13 @@ mod tests {
 
     /// The placeholder says what belongs in an empty field, and stays while
     /// it is empty: a field that dropped it on focus would lose its label
-    /// the moment the user arrived to fill it in. Focused, the cursor sits
-    /// on the first cell, before the placeholder; text replaces both. A
+    /// the moment the user arrived to fill it in. Text replaces it. A
     /// placeholder of several lines keeps them.
     #[test]
     fn the_placeholder_shows_while_the_field_is_empty() {
         let theme = Theme::default_dark();
         let style = TextAreaStyle::from_theme(&theme);
-        let area = Rect::new(0, 0, 6, 2);
+        let area = Rect::new(0, 0, 8, 2);
         let paint = |state: &TextAreaState, focused| {
             let mut buffer = Buffer::empty(area);
             TextAreaWidget::new(state)
@@ -1665,15 +1696,70 @@ mod tests {
         };
 
         let unfocused = paint(&TextAreaState::default(), false);
-        assert_eq!(symbols(&unfocused), " Noteshere  ");
+        assert_eq!(symbols(&unfocused), " Notes   here   ");
         assert_eq!(unfocused[(1, 0)].fg, style.placeholder_foreground);
         let focused = paint(&TextAreaState::default(), true);
-        assert_eq!(symbols(&focused), " Noteshere  ");
-        assert_eq!(focused[(0, 0)].bg, style.cursor_background);
+        assert_eq!(symbols(&focused), " Notes   here   ");
+        assert_eq!(focused[(1, 1)].fg, style.placeholder_foreground);
         assert_eq!(
             symbols(&paint(&TextAreaState::new("Ada"), true)),
-            "Ada         "
+            " Ada            "
         );
+    }
+
+    /// The placeholder stands where the text will, each of its lines where
+    /// a line of text would start. Started a cell later, the first key typed
+    /// would visibly shift the field's contents left.
+    #[test]
+    fn the_placeholder_starts_in_the_column_the_text_does() {
+        let area = Rect::new(0, 0, 12, 4);
+        let position_of = |state: &TextAreaState, titled, focused, symbol| {
+            let widget = TextAreaWidget::new(state)
+                .placeholder("Notes\nhere")
+                .focused(focused);
+            let widget = if titled { widget.title("T") } else { widget };
+            let mut buffer = Buffer::empty(area);
+            widget.render(area, &mut buffer);
+            let index = buffer
+                .content
+                .iter()
+                .position(|cell| cell.symbol() == symbol)
+                .expect("painted");
+            buffer.pos_of(index)
+        };
+
+        for titled in [false, true] {
+            for focused in [false, true] {
+                let placeholder = position_of(&TextAreaState::default(), titled, focused, "N");
+                let text = position_of(&TextAreaState::new("Ada"), titled, focused, "A");
+                assert_eq!(placeholder, text, "titled {titled}, focused {focused}");
+                let second = position_of(&TextAreaState::default(), titled, focused, "h");
+                assert_eq!(second, (text.0, text.1 + 1), "the second line");
+            }
+        }
+    }
+
+    /// A focused empty field still shows where typing goes: the cursor
+    /// rests on the placeholder's first character, the way a block cursor
+    /// rests on the character under it, and the rest stays muted.
+    #[test]
+    fn a_focused_empty_field_shows_the_cursor_on_the_placeholder() {
+        let theme = Theme::default_dark();
+        let style = TextAreaStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 8, 2);
+        let mut buffer = Buffer::empty(area);
+        TextAreaWidget::new(&TextAreaState::default())
+            .themed(&theme)
+            .placeholder("Notes")
+            .focused(true)
+            .render(area, &mut buffer);
+
+        let first = &buffer[(1, 0)];
+        assert_eq!(
+            (first.symbol(), first.fg, first.bg),
+            ("N", style.cursor_foreground, style.cursor_background)
+        );
+        assert_eq!(buffer[(2, 0)].fg, style.placeholder_foreground);
     }
 
     /// A paint-only field driven by hand keeps its view only if the loop
@@ -1692,7 +1778,7 @@ mod tests {
         let mut editor = TextAreaWidget::new(&TextAreaState::new(TEN_LINES))
             .focused(true)
             .paint(area, &mut buffer);
-        assert_eq!(first_row(&buffer), "7     ");
+        assert_eq!(first_row(&buffer), " 7      ");
 
         editor.input(editor_input(&KeyEvent::new(KeyCode::Up)).expect("an editor key"));
         let state = TextAreaState::from_editor(editor);
@@ -1700,7 +1786,7 @@ mod tests {
         TextAreaWidget::new(&state)
             .focused(true)
             .render(area, &mut buffer);
-        assert_eq!(first_row(&buffer), "7     ", "the view must not jump");
+        assert_eq!(first_row(&buffer), " 7      ", "the view must not jump");
     }
 
     /// A state can be built from any editor, configured any way. The field
@@ -1723,7 +1809,7 @@ mod tests {
         render(&mut driver, &state);
         assert_eq!(field(&driver), ["ab    ", "cd    ", "      "]);
 
-        click(&mut driver, &mut state, 1, 1);
+        click(&mut driver, &mut state, 2, 1);
         assert_eq!(state.notes.cursor(), (1, 1));
     }
 
@@ -1750,8 +1836,8 @@ mod tests {
         declare(&mut driver, &state);
 
         assert_eq!(driver.row(0), "┌Notes─────┐");
-        assert_eq!(driver.row(1), "│A         │");
-        assert_eq!(driver.row(2), "│B         │");
+        assert_eq!(driver.row(1), "│ A        │");
+        assert_eq!(driver.row(2), "│ B        │");
         assert_eq!(driver.row(3), "└──────────┘");
     }
 
@@ -1805,14 +1891,14 @@ mod tests {
 
         assert_eq!(
             styled_snapshot(&buffer),
-            "Ada   |\n\
-             Ada   |\n\
-             Ada   |\n\
-             Ada   |\n\
-             Ada   |\n\
+            " Ada  |\n\
+             \x20Ada  |\n\
+             \x20Ada  |\n\
+             \x20Ada  |\n\
+             \x20Ada  |\n\
              aaaaaa\n\
-             bbbcbb\n\
-             dddcdd\n\
+             bbbbcb\n\
+             ddddcd\n\
              eeeeee\n\
              ffffff\n\
              a: #FAFAFA on #1F1F1F NONE\n\

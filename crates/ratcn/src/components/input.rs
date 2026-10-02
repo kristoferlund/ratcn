@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! ┌Name──────────┐
-//! │Ada Lovelace  │
+//! │ Ada Lovelace │
 //! └──────────────┘
 //! ```
 //!
@@ -18,7 +18,7 @@ use std::{fmt, rc::Rc};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Position, Rect},
+    layout::{Alignment, Margin, Position, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Widget},
@@ -185,16 +185,23 @@ const fn field_rows(area: Rect, titled: bool) -> Rect {
     fixed_height(area, if titled { 3 } else { 1 })
 }
 
-/// The cells of `area` the text is drawn in: the field's rows, inside the
-/// border when there is one. Paint draws the editor here and the mouse is
-/// read against it, so the two cannot drift apart.
-fn text_rect(area: Rect, titled: bool) -> Rect {
+/// The cells of `area` the field's background fills: its rows, inside the
+/// border when there is one.
+fn well(area: Rect, titled: bool) -> Rect {
     let field = field_rows(area, titled);
     if titled {
         Block::bordered().inner(field)
     } else {
         field
     }
+}
+
+/// The cells of `area` the text is drawn in: the well, inset a column on
+/// each side, as a Select's trigger insets its value. Paint draws the editor
+/// and the placeholder here and the mouse is read against it, so the three
+/// cannot drift apart.
+fn text_rect(area: Rect, titled: bool) -> Rect {
+    well(area, titled).inner(Margin::new(1, 0))
 }
 
 /// A single-line text field that only draws — an ordinary ratatui [`Widget`]
@@ -253,8 +260,9 @@ impl<'a> InputWidget<'a> {
         self
     }
 
-    /// The muted text shown while the field is empty, focused or not. A
-    /// focused field shows its cursor in front of it.
+    /// The muted text shown while the field is empty, focused or not, where
+    /// the text would start. A focused field shows its cursor on its first
+    /// character.
     #[must_use]
     pub const fn placeholder(mut self, placeholder: &'a str) -> Self {
         self.placeholder = placeholder;
@@ -344,8 +352,8 @@ impl<'a> InputWidget<'a> {
                 .title(Line::styled(title, style.title))
                 .render(field_rows(area, true), buf);
         }
+        buf.set_style(well(area, self.title.is_some()), style.text);
         let field = text_rect(area, self.title.is_some());
-        buf.set_style(field, style.text);
 
         // The field paints its own look over whatever editor the state was
         // built from: a block, line numbers, or another alignment would move
@@ -372,9 +380,22 @@ impl<'a> InputWidget<'a> {
         editor.set_cursor_style(style.cursor);
         editor.set_cursor_line_style(Style::default());
         editor.set_selection_style(style.selection);
-        editor.set_placeholder_text(self.placeholder);
-        editor.set_placeholder_style(style.placeholder);
+        // The field paints the placeholder itself: the editor's would start a
+        // cell late, behind a cursor of its own.
+        editor.set_placeholder_text("");
         (&*editor).render(field, buf);
+        if editor.is_empty() && !self.placeholder.is_empty() {
+            buf.set_stringn(
+                field.x,
+                field.y,
+                self.placeholder,
+                usize::from(field.width),
+                style.placeholder,
+            );
+            if self.focused && !self.disabled && !field.is_empty() {
+                buf.set_style(Rect::new(field.x, field.y, 1, 1), style.cursor);
+            }
+        }
         self.editor
     }
 }
@@ -498,8 +519,9 @@ impl<S, M> Input<S, M> {
         self
     }
 
-    /// The muted text shown while the field is empty, focused or not. A
-    /// focused field shows its cursor in front of it.
+    /// The muted text shown while the field is empty, focused or not, where
+    /// the text would start. A focused field shows its cursor on its first
+    /// character.
     #[must_use]
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
@@ -802,9 +824,10 @@ mod tests {
         shift: true,
     };
 
-    /// The field every test declares unless it says otherwise: six columns
-    /// wide, so a ten-character value has to scroll.
-    const FIELD: Rect = Rect::new(0, 0, 6, 1);
+    /// The field every test declares unless it says otherwise: eight columns
+    /// wide, six of them text inside the inset, so a ten-character value has
+    /// to scroll.
+    const FIELD: Rect = Rect::new(0, 0, 8, 1);
 
     fn driver() -> Driver<State, Msg> {
         Driver::with(
@@ -879,9 +902,14 @@ mod tests {
     const LEFT_DRAG: MouseKind = MouseKind::Drag(MouseButton::Left);
     const LEFT_UP: MouseKind = MouseKind::Up(MouseButton::Left);
 
-    /// What the field's own columns show.
+    /// What the field's text columns show, inside the inset.
     fn field(driver: &Driver<State, Msg>) -> String {
-        driver.row(0).chars().take(FIELD.width.into()).collect()
+        driver
+            .row(0)
+            .chars()
+            .skip(1)
+            .take(usize::from(FIELD.width - 2))
+            .collect()
     }
 
     /// The whole contract in one pass: each key takes the state the app
@@ -938,7 +966,7 @@ mod tests {
         render(&mut driver, &state);
         assert_eq!(field(&driver), "fghij ", "the view must not shift");
         assert_eq!(
-            driver.cell(4, 0).bg,
+            driver.cell(5, 0).bg,
             InputStyle::from_theme(&Theme::default_dark()).cursor_background,
             "the cursor moved onto the last character"
         );
@@ -1136,7 +1164,7 @@ mod tests {
             );
         }
         assert_eq!(
-            driver.cell(4, 0).bg,
+            driver.cell(5, 0).bg,
             InputStyle::from_theme(&Theme::default_dark()).background,
             "a disabled field shows no cursor"
         );
@@ -1165,7 +1193,7 @@ mod tests {
         };
         render(&mut driver, &state);
 
-        let EventResult::Emit(Msg::Focus(focus)) = driver.event(mouse(LEFT_DOWN, 1, 0), &state)
+        let EventResult::Emit(Msg::Focus(focus)) = driver.event(mouse(LEFT_DOWN, 2, 0), &state)
         else {
             panic!("a press must move focus to the field");
         };
@@ -1173,7 +1201,7 @@ mod tests {
         state.focus = focus;
         render(&mut driver, &state);
 
-        send(&mut driver, &mut state, mouse(LEFT_UP, 1, 0));
+        send(&mut driver, &mut state, mouse(LEFT_UP, 2, 0));
         assert_eq!(state.name.cursor(), 1);
     }
 
@@ -1190,16 +1218,16 @@ mod tests {
         };
         render(&mut driver, &state);
 
-        // Columns: a 0, 日 1–2, 本 3–4, b 5.
+        // Columns, inside the inset: a 1, 日 2–3, 本 4–5, b 6.
         for (column, cursor) in [
-            (0, 0),
-            (1, 1),
+            (1, 0),
             (2, 1),
-            (3, 2),
+            (3, 1),
             (4, 2),
-            (5, 3),
-            (6, 4),
-            (11, 4),
+            (5, 2),
+            (6, 3),
+            (7, 4),
+            (10, 4),
         ] {
             click(&mut driver, &mut state, column, 0);
             assert_eq!(state.name.cursor(), cursor, "a click on column {column}");
@@ -1216,7 +1244,7 @@ mod tests {
         render(&mut driver, &state);
         assert_eq!(field(&driver), "fghij ");
 
-        click(&mut driver, &mut state, 1, 0);
+        click(&mut driver, &mut state, 2, 0);
         assert_eq!(state.name.cursor(), 6, "the g");
         render(&mut driver, &state);
         assert_eq!(field(&driver), "fghij ", "a click must not scroll the view");
@@ -1238,9 +1266,9 @@ mod tests {
             });
         };
         render(&mut driver, &state);
-        assert_eq!(driver.row(1), "│hello     │");
+        assert_eq!(driver.row(1), "│ hello    │");
 
-        click(&mut driver, &mut state, 3, 1);
+        click(&mut driver, &mut state, 4, 1);
         assert_eq!(state.name.cursor(), 2);
 
         render(&mut driver, &state);
@@ -1257,14 +1285,14 @@ mod tests {
         let mut state = state("hello");
         render(&mut driver, &state);
 
-        route(&mut driver, &mut state, mouse(LEFT_DOWN, 1, 0));
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 2, 0));
         assert_eq!(selection(&state), None);
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 4, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 5, 0));
         assert_eq!((selection(&state), state.name.cursor()), (Some((1, 4)), 4));
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 0, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 1, 0));
         assert_eq!((selection(&state), state.name.cursor()), (Some((0, 1)), 0));
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 3, 0));
-        route(&mut driver, &mut state, mouse(LEFT_UP, 3, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 4, 0));
+        route(&mut driver, &mut state, mouse(LEFT_UP, 4, 0));
         assert_eq!(selection(&state), Some((1, 3)), "the release keeps it");
 
         render(&mut driver, &state);
@@ -1283,14 +1311,14 @@ mod tests {
 
         send(&mut driver, &mut state, key_with(KeyCode::Home, SHIFT));
         assert!(state.name.editor().is_selecting());
-        click(&mut driver, &mut state, 2, 0);
+        click(&mut driver, &mut state, 3, 0);
         assert!(!state.name.editor().is_selecting(), "a click deselects");
         assert_eq!(state.name.cursor(), 2);
 
-        route(&mut driver, &mut state, mouse(LEFT_DOWN, 2, 0));
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 4, 0));
-        send(&mut driver, &mut state, mouse(LEFT_DRAG, 2, 0));
-        route(&mut driver, &mut state, mouse(LEFT_UP, 2, 0));
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 3, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 5, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 3, 0));
+        route(&mut driver, &mut state, mouse(LEFT_UP, 3, 0));
         assert!(!state.name.editor().is_selecting());
         assert_eq!(state.name.cursor(), 2);
     }
@@ -1301,7 +1329,7 @@ mod tests {
     /// the view with it.
     #[test]
     fn a_drag_past_the_edge_keeps_extending_and_scrolls() {
-        let area = Rect::new(3, 1, 6, 1);
+        let area = Rect::new(3, 1, 8, 1);
         let mut driver = driver();
         let mut state = state("abcdefghij");
         let render = |driver: &mut Driver<State, Msg>, state: &State| {
@@ -1309,11 +1337,11 @@ mod tests {
                 ctx.component(ChildId::Static("name"), input(), area);
             });
         };
-        let shown = |driver: &Driver<State, Msg>| driver.row(1)[3..9].to_owned();
+        let shown = |driver: &Driver<State, Msg>| driver.row(1)[4..10].to_owned();
         render(&mut driver, &state);
         assert_eq!(shown(&driver), "fghij ");
 
-        route(&mut driver, &mut state, mouse(LEFT_DOWN, 6, 1));
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 7, 1));
         send(&mut driver, &mut state, mouse(LEFT_DRAG, 1, 0));
         assert_eq!(selection(&state), Some((4, 8)), "one past the edge");
         render(&mut driver, &state);
@@ -1328,7 +1356,7 @@ mod tests {
         assert_eq!(selection(&state), Some((3, 8)), "the release moves nothing");
 
         // And out the other side, back through the character pressed.
-        route(&mut driver, &mut state, mouse(LEFT_DOWN, 3, 1));
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 4, 1));
         send(&mut driver, &mut state, mouse(LEFT_DRAG, 11, 2));
         assert_eq!(selection(&state), Some((3, 9)));
     }
@@ -1343,7 +1371,7 @@ mod tests {
         render_with(&mut driver, &state, || input().mask_char('*'));
         assert_eq!(field(&driver), "***** ");
 
-        for (column, cursor) in [(1, 1), (2, 2), (4, 4)] {
+        for (column, cursor) in [(2, 1), (3, 2), (5, 4)] {
             click(&mut driver, &mut state, column, 0);
             assert_eq!(state.name.cursor(), cursor, "a click on column {column}");
             render_with(&mut driver, &state, || input().mask_char('*'));
@@ -1386,7 +1414,7 @@ mod tests {
                             ctx.component(
                                 ChildId::Static("name"),
                                 input().title("Name"),
-                                Rect::new(area.x + 1, area.y + 4, 8, 3),
+                                Rect::new(area.x, area.y + 4, 10, 3),
                             );
                         }),
                     Rect::new(1, 0, 11, 3),
@@ -1395,7 +1423,11 @@ mod tests {
         };
         render(&mut driver, &state);
         // Content row 5 is screen row 1, and the text starts at column 3.
-        assert!(driver.row(1).starts_with("  │hello │"), "{}", driver.row(1));
+        assert!(
+            driver.row(1).starts_with(" │ hello  │"),
+            "{}",
+            driver.row(1)
+        );
 
         click(&mut driver, &mut state, 5, 1);
         assert_eq!(state.name.cursor(), 2);
@@ -1467,7 +1499,7 @@ mod tests {
                 .themed(&theme)
                 .focused(focused)
                 .render(FIELD, &mut buffer);
-            buffer.cell((2, 0)).expect("the cell after the text").bg
+            buffer.cell((3, 0)).expect("the cell after the text").bg
         };
 
         assert_eq!(paint(true), style.cursor_background);
@@ -1476,8 +1508,7 @@ mod tests {
 
     /// The placeholder says what belongs in an empty field, and stays while
     /// it is empty: a field that dropped it on focus would lose its label
-    /// the moment the user arrived to fill it in. Focused, the cursor sits
-    /// on the first cell, before the placeholder; text replaces both.
+    /// the moment the user arrived to fill it in. Text replaces it.
     #[test]
     fn the_placeholder_shows_while_the_field_is_empty() {
         let theme = Theme::default_dark();
@@ -1505,9 +1536,60 @@ mod tests {
         assert_eq!(unfocused[(1, 0)].fg, style.placeholder_foreground);
         let focused = paint(&InputState::default(), true);
         assert_eq!(symbols(&focused), " Name   ");
-        assert_eq!(focused[(0, 0)].bg, style.cursor_background);
-        assert_eq!(focused[(1, 0)].fg, style.placeholder_foreground);
-        assert_eq!(symbols(&paint(&InputState::new("Ada"), true)), "Ada     ");
+        assert_eq!(focused[(2, 0)].fg, style.placeholder_foreground);
+        assert_eq!(symbols(&paint(&InputState::new("Ada"), true)), " Ada    ");
+    }
+
+    /// The placeholder stands where the text will. Started a cell later, the
+    /// first key typed would visibly shift the field's contents left.
+    #[test]
+    fn the_placeholder_starts_in_the_column_the_text_does() {
+        let area = Rect::new(0, 0, 12, 3);
+        let column_of = |state: &InputState, titled, focused, symbol| {
+            let widget = InputWidget::new(state).placeholder("Name").focused(focused);
+            let widget = if titled { widget.title("T") } else { widget };
+            let mut buffer = Buffer::empty(area);
+            widget.render(area, &mut buffer);
+            let index = buffer
+                .content
+                .iter()
+                .position(|cell| cell.symbol() == symbol)
+                .expect("painted");
+            buffer.pos_of(index)
+        };
+
+        for titled in [false, true] {
+            for focused in [false, true] {
+                assert_eq!(
+                    column_of(&InputState::default(), titled, focused, "N"),
+                    column_of(&InputState::new("Ada"), titled, focused, "A"),
+                    "titled {titled}, focused {focused}"
+                );
+            }
+        }
+    }
+
+    /// A focused empty field still shows where typing goes: the cursor
+    /// rests on the placeholder's first character, the way a block cursor
+    /// rests on the character under it, and the rest stays muted.
+    #[test]
+    fn a_focused_empty_field_shows_the_cursor_on_the_placeholder() {
+        let theme = Theme::default_dark();
+        let style = InputStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 8, 1);
+        let mut buffer = Buffer::empty(area);
+        InputWidget::new(&InputState::default())
+            .themed(&theme)
+            .placeholder("Name")
+            .focused(true)
+            .render(area, &mut buffer);
+
+        let first = &buffer[(1, 0)];
+        assert_eq!(
+            (first.symbol(), first.fg, first.bg),
+            ("N", style.cursor_foreground, style.cursor_background)
+        );
+        assert_eq!(buffer[(2, 0)].fg, style.placeholder_foreground);
     }
 
     /// A paint-only field driven by hand keeps its view only if the loop
@@ -1527,7 +1609,7 @@ mod tests {
         let mut editor = InputWidget::new(&InputState::new("abcdefghij"))
             .focused(true)
             .paint(area, &mut buffer);
-        assert_eq!(shown(&buffer), "fghij ");
+        assert_eq!(shown(&buffer), " fghij  ");
 
         editor.input(editor_input(&KeyEvent::new(KeyCode::Left)).expect("an editor key"));
         let state = InputState::from_editor(editor);
@@ -1535,7 +1617,7 @@ mod tests {
         InputWidget::new(&state)
             .focused(true)
             .render(area, &mut buffer);
-        assert_eq!(shown(&buffer), "fghij ", "the view must not shift");
+        assert_eq!(shown(&buffer), " fghij  ", "the view must not shift");
     }
 
     /// A state can be built from any editor, configured any way. The field
@@ -1559,7 +1641,7 @@ mod tests {
         render(&mut driver, &state);
         assert_eq!(field(&driver), "hello ");
 
-        click(&mut driver, &mut state, 3, 0);
+        click(&mut driver, &mut state, 4, 0);
         assert_eq!(state.name.cursor(), 3);
     }
 
@@ -1583,7 +1665,7 @@ mod tests {
         declare(&mut driver, &state);
 
         assert_eq!(driver.row(0), "┌Name──────┐");
-        assert_eq!(driver.row(1), "│A         │");
+        assert_eq!(driver.row(1), "│ A        │");
         assert_eq!(driver.row(2), "└──────────┘");
     }
 
@@ -1637,14 +1719,14 @@ mod tests {
 
         assert_eq!(
             styled_snapshot(&buffer),
-            "Ada   |\n\
-             Ada   |\n\
-             Ada   |\n\
-             Ada   |\n\
-             Ada   |\n\
+            " Ada  |\n\
+             \x20Ada  |\n\
+             \x20Ada  |\n\
+             \x20Ada  |\n\
+             \x20Ada  |\n\
              aaaaaa\n\
-             bbbcbb\n\
-             dddcdd\n\
+             bbbbcb\n\
+             ddddcd\n\
              eeeeee\n\
              ffffff\n\
              a: #FAFAFA on #1F1F1F NONE\n\

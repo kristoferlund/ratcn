@@ -331,8 +331,8 @@ mod tests {
         assert_eq!(app.state.name.value(), "Ada");
         assert_eq!(app.state.email.value(), "ada@example.com");
         let screen = screen(&mut app);
-        assert!(shows(&screen, "│Ada "), "{screen:#?}");
-        assert!(shows(&screen, "│ada@example.com "), "{screen:#?}");
+        assert!(shows(&screen, "│ Ada "), "{screen:#?}");
+        assert!(shows(&screen, "│ ada@example.com "), "{screen:#?}");
     }
 
     /// A field half filled in is work in progress, not a mistake: nothing is
@@ -416,7 +416,7 @@ mod tests {
         type_text(&mut app, "hunter2");
 
         let screen = screen(&mut app);
-        assert!(shows(&screen, "│••••••• "), "{screen:#?}");
+        assert!(shows(&screen, "│ ••••••• "), "{screen:#?}");
         assert!(!shows(&screen, "hunter2"));
         assert_eq!(app.state.password.value(), "hunter2");
     }

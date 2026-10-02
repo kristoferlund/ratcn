@@ -220,8 +220,8 @@ mod tests {
         type_text(&mut app, "She counts");
 
         let screen = screen(&mut app);
-        assert!(shows(&screen, "│Met Ada "), "{screen:#?}");
-        assert!(shows(&screen, "│She counts "), "{screen:#?}");
+        assert!(shows(&screen, "│ Met Ada "), "{screen:#?}");
+        assert!(shows(&screen, "│ She counts "), "{screen:#?}");
         assert!(shows(&screen, "Lines: 2 · Chars: 17"), "{screen:#?}");
     }
 
@@ -237,8 +237,8 @@ mod tests {
         );
 
         let screen = screen(&mut app);
-        assert!(shows(&screen, "│The quick brown fox"), "{screen:#?}");
-        assert!(shows(&screen, "│dog, twice over."), "{screen:#?}");
+        assert!(shows(&screen, "│ The quick brown fox"), "{screen:#?}");
+        assert!(shows(&screen, "│ dog, twice over."), "{screen:#?}");
         assert!(shows(&screen, "Lines: 1 · Chars: 56"), "{screen:#?}");
     }
 

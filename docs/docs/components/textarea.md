@@ -91,9 +91,9 @@ a second way to submit — the demo has a Save button.
 ## Placeholder and title
 
 `.placeholder(...)` is the muted text shown while the field is empty, focused
-or not; a focused field shows its cursor in front of it. `.title(...)` draws a
-border with the title on it, and the text then loses a row and a column on each
-side.
+or not, where the text would start; a focused field shows its cursor on its
+first character. `.title(...)` draws a border with the title on it, which takes
+a row and a column on each side from the text.
 
 ## Wrapping
 
