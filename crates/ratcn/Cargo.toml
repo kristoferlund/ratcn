@@ -15,6 +15,7 @@ version.workspace = true
 [dependencies]
 ratatui.workspace = true
 ratatui-termina = { workspace = true, optional = true }
+ratatui-textarea.workspace = true
 ratzilla = { workspace = true, optional = true }
 termina = { version = "0.3.3", optional = true }
 unicode-segmentation = "1.13.3"

@@ -1657,6 +1657,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatui-textarea"
+version = "0.9.2"
+source = "git+https://github.com/kristoferlund/ratatui-textarea?rev=36482a6e8a42c96160f5980e42f5eef9e33ed0c9#36482a6e8a42c96160f5980e42f5eef9e33ed0c9"
+dependencies = [
+ "ratatui-core",
+ "ratatui-widgets",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "ratatui-widgets"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1683,6 +1694,7 @@ dependencies = [
  "criterion",
  "ratatui",
  "ratatui-termina",
+ "ratatui-textarea",
  "ratzilla",
  "termina",
  "unicode-segmentation",
