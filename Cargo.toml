@@ -42,9 +42,11 @@ web-sys = { version = "0.3.99", features = ["AbortController", "AbortSignal", "H
 
 # Input and TextArea need changes that upstream has not released yet: the
 # masked width fix, the `screen_to_data` hit test, and `scroll_offset`
-# (upstream #30, merged but unreleased). Until a release carries them,
-# the crates.io name resolves to the `ratcn` branch of our fork. Remove this
-# block, and bump the version above, once upstream ships them. ratcn cannot be
-# published while this patch is in place.
+# (upstream #30, merged but unreleased), and the fork's fixes for a wide
+# character cut by the horizontal scroll and for whitespace at a word-wrap
+# break, with a `screen_to_data` clamp fix to come. Until a release carries
+# them, the crates.io name resolves to the `ratcn` branch of our fork. Remove
+# this block, and bump the version above, once upstream ships them. ratcn
+# cannot be published while this patch is in place.
 [patch.crates-io]
 ratatui-textarea = { git = "https://github.com/kristoferlund/ratatui-textarea", rev = "0141e79c596da915361f91e8779be245849d1859" }

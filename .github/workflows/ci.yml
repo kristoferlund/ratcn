@@ -90,12 +90,15 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
       # A packaged crate builds against crates.io alone, where the fixes the
-      # workspace patches in are not released yet, so ratcn cannot be packaged
-      # while Cargo.toml has a patch. The step runs again once it is removed.
+      # workspace patches in are not released yet, so while Cargo.toml has a
+      # patch the package is assembled but not built: the include list and the
+      # manifest are still checked. Full verification returns once the patch
+      # is removed.
       - name: Package
         run: |
           if grep -q '^\[patch\.crates-io\]' Cargo.toml; then
-            echo "::warning::ratcn is not packaged: Cargo.toml patches a dependency with fixes crates.io does not have yet. Remove the patch once upstream releases them."
+            echo "::warning::ratcn is packaged without verification: Cargo.toml patches a dependency with fixes crates.io does not have yet. Remove the patch once upstream releases them."
+            cargo package -p ratcn --locked --no-verify
           else
             cargo package -p ratcn --locked
           fi
