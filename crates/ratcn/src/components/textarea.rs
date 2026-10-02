@@ -207,7 +207,7 @@ impl<'a> TextAreaWidget<'a> {
             editor: state.editor().clone(),
             placeholder: "",
             title: None,
-            wrap_mode: WrapMode::None,
+            wrap_mode: WrapMode::WordOrGlyph,
             focused: false,
             hovered: false,
             disabled: false,
@@ -246,9 +246,10 @@ impl<'a> TextAreaWidget<'a> {
         self
     }
 
-    /// How a line longer than the field is shown. [`WrapMode::None`], the
-    /// default, scrolls it sideways; the other modes break it over several
-    /// rows. Only the paint changes: the state's lines stay as typed.
+    /// How a line longer than the field is shown. [`WrapMode::WordOrGlyph`],
+    /// the default, breaks it over several rows, at a word boundary where
+    /// there is one; [`WrapMode::None`] scrolls it sideways instead. Only the
+    /// paint changes: the state's lines stay as typed.
     #[must_use]
     pub const fn wrap_mode(mut self, wrap_mode: WrapMode) -> Self {
         self.wrap_mode = wrap_mode;
@@ -338,7 +339,8 @@ type StyleFn = Rc<dyn Fn(&Theme) -> TextAreaStyle>;
 /// [`value`](Self::value); every edit and every cursor movement emits a new
 /// state for the app to store. Without that binding the field paints empty,
 /// is not focusable, and answers no events. The field fills the area it is
-/// declared in and scrolls to keep the cursor in view.
+/// declared in, wraps a line longer than it is wide, and scrolls to keep the
+/// cursor in view.
 ///
 /// The editor's keys all work — arrows, <kbd>Home</kbd>/<kbd>End</kbd>,
 /// <kbd>Page Up</kbd>/<kbd>Page Down</kbd>, <kbd>Ctrl</kbd>+<kbd>←</kbd>/<kbd>→</kbd>
@@ -348,18 +350,17 @@ type StyleFn = Rc<dyn Fn(&Theme) -> TextAreaStyle>;
 /// [`on_submit`](Self::on_submit). <kbd>Tab</kbd>, <kbd>Esc</kbd>, and the
 /// function keys are left to bubble, as is any chord that changes nothing
 /// here, so focus traversal, an enclosing dialog, and the app's shortcuts
-/// keep working around a focused field. A paste goes in as it is, line breaks
-/// included.
+/// keep working around a focused field. A paste keeps its line breaks and
+/// tabs and loses every other control character.
 ///
 /// ```
-/// # use ratcn::{TextArea, TextAreaState, text_edit::WrapMode};
+/// # use ratcn::{TextArea, TextAreaState};
 /// # struct AppState { notes: TextAreaState }
 /// # enum Msg { Notes(TextAreaState), Save }
 /// let notes = TextArea::new()
 ///     .value(|state: &AppState| &state.notes, Msg::Notes)
 ///     .title("Notes")
 ///     .placeholder("What happened today?")
-///     .wrap_mode(WrapMode::WordOrGlyph)
 ///     .on_submit(|| Msg::Save);
 /// # let _: TextArea<AppState, Msg> = notes;
 /// ```
@@ -408,7 +409,7 @@ impl<S, M> TextArea<S, M> {
             on_submit: None,
             placeholder: String::new(),
             title: None,
-            wrap_mode: WrapMode::None,
+            wrap_mode: WrapMode::WordOrGlyph,
             disabled: false,
             invalid: false,
             style: None,
@@ -455,10 +456,11 @@ impl<S, M> TextArea<S, M> {
         self
     }
 
-    /// How a line longer than the field is shown. [`WrapMode::None`], the
-    /// default, scrolls it sideways; the other modes break it over several
-    /// rows, and <kbd>↑</kbd>/<kbd>↓</kbd> then move by the rows on screen.
-    /// The state's lines stay as typed.
+    /// How a line longer than the field is shown. [`WrapMode::WordOrGlyph`],
+    /// the default, breaks it over several rows, at a word boundary where
+    /// there is one, and <kbd>↑</kbd>/<kbd>↓</kbd> then move by the rows on
+    /// screen. [`WrapMode::None`] scrolls it sideways instead. The state's
+    /// lines stay as typed.
     #[must_use]
     pub const fn wrap_mode(mut self, wrap_mode: WrapMode) -> Self {
         self.wrap_mode = wrap_mode;
@@ -537,17 +539,18 @@ impl<S, M> TextArea<S, M> {
         }
     }
 
-    /// Insert a paste as it is, at the cursor.
+    /// Insert a paste at the cursor, as the text [`pasted_text`] makes of it.
     fn handle_paste(
         &self,
         text: &str,
         state: &TextAreaState,
     ) -> Option<EventResult<TextAreaState>> {
+        let text = pasted_text(text);
         if text.is_empty() {
             return None;
         }
         let mut editor = self.editor(state);
-        editor.insert_str(line_feeds(text));
+        editor.insert_str(text);
         Some(EventResult::Emit(TextAreaState::edited(editor)))
     }
 }
@@ -631,11 +634,16 @@ fn bubbles(key: KeyEvent) -> bool {
     }
 }
 
-/// A paste with one kind of line break. Terminals send a pasted break as
-/// `\r\n`, `\n`, or a bare `\r`; left in a line, a carriage return would be
-/// text the user cannot see.
-fn line_feeds(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n")
+/// A paste as text a field can hold: one kind of line break, and no control
+/// character but that and the tab. Terminals send a pasted break as `\r\n`,
+/// `\n`, or a bare `\r`; left in a line, a carriage return — or an escape, or
+/// a bell — would be text the user cannot see.
+fn pasted_text(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|char| matches!(char, '\n' | '\t') || !char.is_control())
+        .collect()
 }
 
 #[cfg(test)]
@@ -705,10 +713,6 @@ mod tests {
         TextArea::new()
             .value(|state: &State| &state.notes, Msg::Notes)
             .on_submit(|| Msg::Submit)
-    }
-
-    fn wrapping() -> TextArea<State, Msg> {
-        textarea().wrap_mode(WrapMode::Word)
     }
 
     fn render_with(
@@ -864,10 +868,11 @@ mod tests {
         }
     }
 
-    /// A paste keeps its lines, whichever line break the terminal sent, and
-    /// no carriage return is left behind as invisible text.
+    /// A paste keeps its lines and tabs, whichever line break the terminal
+    /// sent, and nothing invisible comes with it: no carriage return, and no
+    /// escape for the terminal to act on when the text is shown again.
     #[test]
-    fn a_paste_keeps_its_line_breaks() {
+    fn a_paste_keeps_its_line_breaks_and_drops_control_characters() {
         let mut driver = driver();
         let mut state = state("a");
         render(&mut driver, &state);
@@ -875,13 +880,13 @@ mod tests {
         send(
             &mut driver,
             &mut state,
-            Event::Paste("b\r\nc\nd\re\tf".to_owned()),
+            Event::Paste("b\r\nc\nd\re\tf\u{1b}\u{7}".to_owned()),
         );
         assert_eq!(state.notes.lines(), ["ab", "c", "d", "e\tf"]);
         assert_eq!(state.notes.cursor(), (3, 3));
         assert!(
             matches!(
-                driver.event(Event::Paste(String::new()), &state),
+                driver.event(Event::Paste("\u{1b}".to_owned()), &state),
                 EventResult::Ignored
             ),
             "a paste with nothing to insert is not an edit"
@@ -964,15 +969,17 @@ mod tests {
         assert_eq!(field(&driver), ["3     ", "4     ", "5     "]);
     }
 
-    /// With soft wrap, Down moves by the rows on screen, not by the lines
-    /// in the text. Where a line wraps depends on the width it was painted
-    /// at, which again only the painted editor knows: for the state's own
-    /// editor this is one line with nothing below it.
+    /// A form's text area wraps: a long line breaks over rows, at a word
+    /// boundary where it has one, rather than scrolling out of sight. Down
+    /// then moves by the rows on screen, not by the lines in the text. Where
+    /// a line wraps depends on the width it was painted at, which again only
+    /// the painted editor knows: for the state's own editor this is one line
+    /// with nothing below it.
     #[test]
-    fn down_moves_by_visual_row_in_a_wrapped_line() {
+    fn a_long_line_wraps_and_down_moves_by_visual_row() {
         let mut driver = driver();
         let mut state = state_at_top("aaa bbb ccc");
-        render_with(&mut driver, &state, wrapping);
+        render(&mut driver, &state);
         assert_eq!(field(&driver), ["aaa   ", "bbb   ", "ccc   "]);
 
         send(&mut driver, &mut state, key(KeyCode::Down));
@@ -982,6 +989,20 @@ mod tests {
             "onto the second row of the same line"
         );
         assert_eq!(state.notes.lines().len(), 1, "wrapping changes no text");
+    }
+
+    /// A word wider than the field has no boundary to break at, and must
+    /// still stay in sight; and the caller who wants one row per line can
+    /// have it, scrolled sideways to the cursor.
+    #[test]
+    fn a_long_word_breaks_by_glyph_unless_wrapping_is_switched_off() {
+        let mut driver = driver();
+        let state = state("abcdefghij");
+        render(&mut driver, &state);
+        assert_eq!(field(&driver), ["abcdef", "ghij  ", "      "]);
+
+        render_with(&mut driver, &state, || textarea().wrap_mode(WrapMode::None));
+        assert_eq!(field(&driver), ["fghij ", "      ", "      "]);
     }
 
     /// Two keys can arrive between frames. The second finds a state newer
