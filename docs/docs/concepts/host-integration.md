@@ -246,17 +246,19 @@ not the keys. Every other `Cmd` or `Super` chord is dropped, on every platform:
 it never reaches the app, so the Mac's `Cmd` editing chords do nothing in a
 field.
 
-Focus decides whose an event is. With focus on the app's canvas it is the
-app's, and a copy or cut the app answers with nothing copies nothing. With
-focus on the page's body, or nowhere, it is the app's too, unless text is
-selected on the page for a copy or cut; so a page that releases keyboard
-capture by blurring to the body still sends the clipboard chords to the app.
-With focus on any other element, an input or a button, the page keeps it.
-Install one per page, and keep the guard alive for as long as the app runs. The runtime ignores events before the
-first render, so an early paste is left to the page.
+Install one per app, given the app's element: an event is the app's while
+focus is on that element or inside it, and the page's otherwise, so the page's
+own inputs, buttons, and shortcuts keep their keys, and two apps on one page
+each get only their own. Pass the canvas a canvas backend (`WebGl2Backend`,
+`CanvasBackend`) draws on, or the container you gave it as `grid_id`; for
+`DomBackend`, its grid container. A copy or cut the app answers with nothing
+copies nothing, unless text inside its element is selected. Keep the guard
+alive for as long as the app runs. The runtime ignores events before the first
+render, so an early paste is left to the page.
 
 ```rust
 let clipboard = BrowserClipboard::install(
+    &canvas,
     {
         let app = Rc::clone(&app);
         move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
