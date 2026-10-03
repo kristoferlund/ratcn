@@ -160,9 +160,10 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    /// Bracketed paste natively, and the browser's `paste` event on the web:
-    /// the wiring is the demonstration, since no component reads a paste yet.
-    const PASTE: bool = true;
+    /// Bracketed paste natively, and the browser's clipboard events on the
+    /// web. Nothing on this page reads them, so the wiring is the
+    /// demonstration.
+    const CLIPBOARD: bool = true;
 
     /// Paint with the terminal's own colors, falling back to `THEME`. The
     /// picker lists whatever that resolves to alongside the presets.

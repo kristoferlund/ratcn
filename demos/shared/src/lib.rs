@@ -36,9 +36,9 @@ pub trait Demo {
     /// listeners and takes over the terminal's mouse.
     const INPUT: bool = true;
 
-    /// Whether the host delivers clipboard pastes — bracketed paste natively,
-    /// the browser's `paste` event on the web.
-    const PASTE: bool = false;
+    /// Whether the host delivers the clipboard's events — bracketed paste
+    /// natively; the browser's `paste`, `copy`, and `cut` on the web.
+    const CLIPBOARD: bool = false;
 
     /// The theme this demo paints with, and what it falls back to under
     /// [`ADAPTIVE`](Self::ADAPTIVE).
@@ -84,6 +84,12 @@ pub trait Demo {
     fn wake(&self) -> Option<Duration> {
         None
     }
+
+    /// What the last event put on the clipboard, for the host to write out:
+    /// `Ratcn::take_clipboard`, for a demo built on the runtime.
+    fn take_clipboard(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// Run `demo` until it quits (natively) or forever (in the browser).
@@ -105,7 +111,7 @@ fn options_for<D: Demo>() -> SessionOptions {
     if D::INPUT {
         options = options.mouse();
     }
-    if D::PASTE {
+    if D::CLIPBOARD {
         options = options.paste();
     }
     if D::ADAPTIVE {
@@ -130,6 +136,9 @@ trait Host {
 
     /// Wait for at most `timeout`, or indefinitely when it is [`None`].
     fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<SessionEvent>>;
+
+    /// Put `text` on the system clipboard.
+    fn set_clipboard(&mut self, text: &str) -> io::Result<()>;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -146,6 +155,10 @@ impl Host for Session {
 
     fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<SessionEvent>> {
         Session::next(self, timeout)
+    }
+
+    fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+        Session::set_clipboard(self, text)
     }
 }
 
@@ -189,14 +202,20 @@ fn drive<D: Demo, H: Host>(demo: &mut D, host: &mut H) -> io::Result<()> {
             SessionEvent::Input(event) => event,
         };
 
-        if is_quit(&event) {
-            return Ok(());
-        }
+        let quit = is_quit(&event);
         // A resize is not an app event: the new size reaches the demo as the
         // next frame's area, so all the host owes it is that frame.
         stale |= matches!(event, termina::Event::WindowResized(..));
         if let Ok(event) = Event::try_from(event) {
             stale |= demo.handle_event(event);
+        }
+        // The quit key is the demo's first: a text field copies its selection
+        // on it. Only a Ctrl+C that copied nothing quits — not one the demo
+        // ignored, since an open modal consumes every key it is handed.
+        match demo.take_clipboard() {
+            Some(text) => host.set_clipboard(&text)?,
+            None if quit => return Ok(()),
+            None => {}
         }
     }
 }
@@ -263,7 +282,7 @@ mod web_host {
 
     use gloo_timers::callback::Timeout;
     use ratatui::Terminal;
-    use ratcn::runtime::{BrowserPasteListener, Event};
+    use ratcn::runtime::{BrowserClipboard, Event};
     use ratzilla::{
         WebGl2Backend, WebRenderer,
         web_sys::{
@@ -290,9 +309,9 @@ mod web_host {
         requested: Cell<bool>,
         /// The pending [`Demo::wake`] deadline. Dropping it cancels the timer.
         timer: RefCell<Option<Timeout>>,
-        /// The document paste listener, held for its `Drop`: the host owns it for
-        /// as long as it drives the demo, and letting go of it uninstalls it.
-        _paste: RefCell<Option<BrowserPasteListener>>,
+        /// The clipboard listeners, held for their `Drop`: the host owns them
+        /// for as long as it drives the demo, and letting go uninstalls them.
+        _clipboard: RefCell<Option<BrowserClipboard>>,
         /// The window resize listener, held for the same reason.
         _resize: RefCell<Option<Closure<dyn FnMut()>>>,
     }
@@ -310,7 +329,7 @@ mod web_host {
             frame: RefCell::new(None),
             requested: Cell::new(false),
             timer: RefCell::new(None),
-            _paste: RefCell::new(None),
+            _clipboard: RefCell::new(None),
             _resize: RefCell::new(None),
         });
 
@@ -324,28 +343,39 @@ mod web_host {
             terminal
                 .on_key_event({
                     let host = Rc::clone(&host);
-                    move |key| {
-                        host.on_event(key);
-                    }
+                    move |key| host.on_input(key)
                 })
                 .map_err(|error| io::Error::other(error.to_string()))?;
             // Ratzilla reports browser pointer positions in terminal cells.
             terminal
                 .on_mouse_event({
                     let host = Rc::clone(&host);
-                    move |mouse| {
-                        host.on_event(mouse);
-                    }
+                    move |mouse| host.on_input(mouse)
                 })
                 .map_err(|error| io::Error::other(error.to_string()))?;
         }
 
-        if D::PASTE {
-            let listener = BrowserPasteListener::install({
-                let host = Rc::clone(&host);
-                move |paste| host.on_event(paste)
-            })?;
-            *host._paste.borrow_mut() = Some(listener);
+        if D::CLIPBOARD {
+            // The body, only because the page is the demo: its keyboard
+            // capture script makes the whole page the demo's keyboard
+            // surface. Esc blurs it, which hands the clipboard back to the
+            // page. An app sharing a page passes its own element.
+            let body = web_sys::window()
+                .and_then(|window| window.document())
+                .and_then(|document| document.body())
+                .ok_or_else(|| io::Error::other("no document body"))?;
+            let listener = BrowserClipboard::install(
+                &body,
+                {
+                    let host = Rc::clone(&host);
+                    move |event| host.on_event(event)
+                },
+                {
+                    let host = Rc::clone(&host);
+                    move || host.demo.borrow_mut().take_clipboard()
+                },
+            )?;
+            *host._clipboard.borrow_mut() = Some(listener);
         }
 
         host.watch_resize()?;
@@ -406,8 +436,18 @@ mod web_host {
             }
         }
 
+        /// Route a key or mouse event, and write out whatever it put on the
+        /// clipboard.
+        fn on_input(self: &Rc<Self>, event: impl TryInto<Event>) {
+            self.on_event(event);
+            let written = self.demo.borrow_mut().take_clipboard();
+            if let Some(text) = written {
+                BrowserClipboard::write(&text);
+            }
+        }
+
         /// Route one browser event, and report whether the demo took it — which
-        /// is what a paste listener needs to know to leave the page's own
+        /// is what the clipboard listener needs to know to leave the page's own
         /// handling alone.
         fn on_event(self: &Rc<Self>, event: impl TryInto<Event>) -> bool {
             let Ok(event) = event.try_into() else {
@@ -441,7 +481,7 @@ mod web_host {
     }
 
     impl<D> Drop for Host<D> {
-        /// Take the resize listener off the window with the host. The paste
+        /// Take the resize listener off the window with the host. The clipboard
         /// listener is a guard that removes itself; a bare [`Closure`] cannot.
         fn drop(&mut self) {
             if let Some(callback) = self._resize.borrow().as_ref()
@@ -609,6 +649,9 @@ mod tests {
         deadlines: Vec<Option<Duration>>,
         /// The theme each frame was painted with, in order.
         themes: Vec<Theme>,
+        /// What each routed event put on the clipboard, in order. A spent
+        /// script wrote nothing.
+        clipboard: VecDeque<Option<String>>,
     }
 
     impl Demo for Probe {
@@ -626,6 +669,18 @@ mod tests {
         fn wake(&self) -> Option<Duration> {
             self.deadlines.get(self.frames).copied().flatten()
         }
+
+        fn take_clipboard(&mut self) -> Option<String> {
+            self.clipboard.pop_front().flatten()
+        }
+    }
+
+    impl Probe {
+        /// The events routed before the quit key that ended the run, which
+        /// the demo is handed first.
+        fn app_events(&self) -> &[Event] {
+            self.routed.split_last().map_or(&[], |(_, before)| before)
+        }
     }
 
     /// The host, scripted: one entry answers one wait.
@@ -637,6 +692,8 @@ mod tests {
         steps: VecDeque<Option<SessionEvent>>,
         /// The timeout the loop asked for, per wait, in order.
         waits: Vec<Option<Duration>>,
+        /// What the loop put on the clipboard, in order.
+        clipboard: Vec<String>,
     }
 
     impl Script {
@@ -649,6 +706,7 @@ mod tests {
                 theme: None,
                 steps: steps.into_iter().collect(),
                 waits: Vec::new(),
+                clipboard: Vec::new(),
             }
         }
     }
@@ -674,6 +732,11 @@ mod tests {
                 self.theme = Some(*theme);
             }
             Ok(step)
+        }
+
+        fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+            self.clipboard.push(text.to_owned());
+            Ok(())
         }
     }
 
@@ -720,7 +783,7 @@ mod tests {
             fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
         }
         impl Demo for Everything {
-            const PASTE: bool = true;
+            const CLIPBOARD: bool = true;
             const ADAPTIVE: bool = true;
             fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
         }
@@ -778,7 +841,7 @@ mod tests {
 
         run_scripted(&mut probe, &mut script);
 
-        assert_eq!(probe.routed.len(), 1, "the event reached the demo");
+        assert_eq!(probe.app_events().len(), 1, "the event reached the demo");
         assert_eq!(probe.frames, 2, "the first frame, and one for the event");
     }
 
@@ -792,7 +855,7 @@ mod tests {
 
         run_scripted(&mut probe, &mut script);
 
-        assert_eq!(probe.routed.len(), 1, "the event reached the demo");
+        assert_eq!(probe.app_events().len(), 1, "the event reached the demo");
         assert_eq!(probe.frames, 1, "only the first frame");
     }
 
@@ -803,7 +866,10 @@ mod tests {
 
         run_scripted(&mut probe, &mut script);
 
-        assert!(probe.routed.is_empty(), "a resize is not an app event");
+        assert!(
+            probe.app_events().is_empty(),
+            "a resize is not an app event"
+        );
         assert_eq!(probe.frames, 2, "the new size reaches the demo as an area");
     }
 
@@ -821,7 +887,7 @@ mod tests {
         run_scripted(&mut probe, &mut script);
 
         assert!(
-            probe.routed.is_empty(),
+            probe.app_events().is_empty(),
             "a theme change is not routed at the components"
         );
         assert_eq!(probe.frames, 2, "the frame that wears it was drawn");
@@ -860,7 +926,7 @@ mod tests {
 
         assert_eq!(probe.frames, 2, "the deadline caused a frame of its own");
         assert!(
-            probe.routed.is_empty(),
+            probe.app_events().is_empty(),
             "nothing was invented to carry the wake-up"
         );
         assert_eq!(script.waits.first(), Some(&Some(deadline)));
@@ -905,14 +971,41 @@ mod tests {
     }
 
     #[test]
-    fn the_quit_key_ends_the_loop_without_routing_it() {
-        let mut probe = Probe::default();
+    fn the_quit_key_ends_the_loop_when_it_copied_nothing() {
+        let mut probe = Probe {
+            // Handled, as an open modal answers every key.
+            handled: VecDeque::from([true]),
+            ..Probe::default()
+        };
         let mut script = Script::new(HostBackend::new(20, 5), [Some(quit()), Some(key('y'))]);
 
         run_scripted(&mut probe, &mut script);
 
-        assert!(probe.routed.is_empty(), "the quit key is the host's");
+        assert_eq!(probe.routed.len(), 1, "the demo saw the quit key first");
         assert_eq!(probe.frames, 1, "nothing after the quit key ran");
+    }
+
+    /// A field with a selection copies on Ctrl+C, and the host writes the
+    /// copy to the terminal's clipboard instead of quitting. The demo keeps
+    /// running for whatever comes next.
+    #[test]
+    fn a_quit_key_that_copied_writes_the_clipboard_and_runs_on() {
+        let mut probe = Probe {
+            handled: VecDeque::from([true, true]),
+            clipboard: VecDeque::from([Some("copied".to_owned())]),
+            ..Probe::default()
+        };
+        let mut script = Script::new(HostBackend::new(20, 5), [Some(quit()), Some(key('y'))]);
+
+        run_scripted(&mut probe, &mut script);
+
+        assert_eq!(script.clipboard, vec!["copied".to_owned()]);
+        assert_eq!(
+            probe.app_events().len(),
+            2,
+            "the Ctrl+C and the key after it reached the demo"
+        );
+        assert_eq!(probe.frames, 3, "each drew its frame");
     }
 
     #[test]

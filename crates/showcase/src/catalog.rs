@@ -12,7 +12,7 @@ use ratcn::{Theme, runtime::Event};
 /// theme a demo paints with, and whether it follows the terminal instead — are
 /// associated consts, and a const is not dispatchable. This is the same
 /// contract with those turned into a method.
-/// The three [`demo_shared::Demo`] methods keep that trait's contracts; only
+/// The four [`demo_shared::Demo`] methods keep that trait's contracts; only
 /// `theme` is new.
 pub trait Embedded {
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme);
@@ -20,6 +20,8 @@ pub trait Embedded {
     fn handle_event(&mut self, event: Event) -> bool;
 
     fn wake(&self) -> Option<Duration>;
+
+    fn take_clipboard(&mut self) -> Option<String>;
 
     /// The theme this demo paints with, given what the terminal resolves to.
     fn theme(&self, terminal: &Theme) -> Theme;
@@ -36,6 +38,10 @@ impl<D: demo_shared::Demo> Embedded for D {
 
     fn wake(&self) -> Option<Duration> {
         demo_shared::Demo::wake(self)
+    }
+
+    fn take_clipboard(&mut self) -> Option<String> {
+        demo_shared::Demo::take_clipboard(self)
     }
 
     /// The answer `demo_shared::run` gives a demo on its own: it opens an
@@ -101,6 +107,10 @@ pub static ENTRIES: &[Entry] = &[
         open: || Box::new(effects::App::new()),
     },
     Entry {
+        name: "input",
+        open: || Box::new(input::App::new()),
+    },
+    Entry {
         name: "kanban",
         open: || Box::new(kanban::App::new()),
     },
@@ -151,6 +161,10 @@ pub static ENTRIES: &[Entry] = &[
     Entry {
         name: "tabs-large",
         open: || Box::new(tabs_large::App::new()),
+    },
+    Entry {
+        name: "textarea",
+        open: || Box::new(textarea::App::new()),
     },
     Entry {
         name: "toast",

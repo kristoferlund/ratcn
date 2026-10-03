@@ -1086,6 +1086,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "input"
+version = "0.0.5"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
+]
+
+[[package]]
 name = "instability"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1657,6 +1667,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatui-textarea"
+version = "0.9.2"
+source = "git+https://github.com/kristoferlund/ratatui-textarea?rev=2c805b08edb1b7ca60b37c0876111ffa6069a9d3#2c805b08edb1b7ca60b37c0876111ffa6069a9d3"
+dependencies = [
+ "ratatui-core",
+ "ratatui-widgets",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "ratatui-widgets"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1683,10 +1704,12 @@ dependencies = [
  "criterion",
  "ratatui",
  "ratatui-termina",
+ "ratatui-textarea",
  "ratzilla",
  "termina",
  "unicode-segmentation",
  "unicode-width",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
@@ -2020,6 +2043,7 @@ dependencies = [
  "dialog",
  "drag",
  "effects",
+ "input",
  "kanban",
  "landing",
  "ledger93",
@@ -2037,6 +2061,7 @@ dependencies = [
  "tabs-basic",
  "tabs-disabled",
  "tabs-large",
+ "textarea",
  "toast",
  "tooltip",
  "tui-big-text",
@@ -2246,6 +2271,16 @@ name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
+
+[[package]]
+name = "textarea"
+version = "0.0.5"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
+]
 
 [[package]]
 name = "textwrap"

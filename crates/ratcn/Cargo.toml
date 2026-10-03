@@ -15,17 +15,25 @@ version.workspace = true
 [dependencies]
 ratatui.workspace = true
 ratatui-termina = { workspace = true, optional = true }
+ratatui-textarea.workspace = true
 ratzilla = { workspace = true, optional = true }
 termina = { version = "0.3.3", optional = true }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
+    "Clipboard",
     "ClipboardEvent",
     "DataTransfer",
     "Document",
     "EventTarget",
+    "Element",
+    "KeyboardEvent",
+    "Navigator",
+    "Node",
+    "Selection",
     "Window",
 ] }
 
@@ -43,7 +51,7 @@ features = ["crossterm", "termina"]
 [features]
 default = []
 crossterm = ["ratatui/crossterm"]
-ratzilla = ["dep:ratzilla", "dep:web-sys"]
+ratzilla = ["dep:ratzilla", "dep:wasm-bindgen-futures", "dep:web-sys"]
 termina = ["dep:termina", "dep:ratatui-termina"]
 
 [lints.rust]

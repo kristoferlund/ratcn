@@ -111,10 +111,15 @@ loop {
     };
 
     if let SessionEvent::Input(event) = event {
-        if is_global_quit(&event) {
-            break;
-        }
+        let quit = is_quit(&event);
         app.handle_event(event);
+        // A text field copies its selection on Ctrl+C; only a Ctrl+C that
+        // copied nothing quits.
+        match app.ratcn.take_clipboard() {
+            Some(text) => session.set_clipboard(&text)?,
+            None if quit => break,
+            None => {}
+        }
     }
 }
 ```
@@ -158,7 +163,7 @@ mouse capture.
 ## Browser and Ratzilla
 
 Enable the `ratzilla` feature for ratzilla key and mouse conversions and the
-browser paste listener:
+browser clipboard listener:
 
 ```sh
 cargo add ratcn --features ratzilla
@@ -180,7 +185,9 @@ terminal.on_key_event({
 terminal.draw_web(move |frame| app.borrow_mut().draw(frame));
 ```
 
-Wire mouse callbacks the same way; see
+An app with text fields routes through the `route` function in
+[The clipboard](#the-clipboard) instead, so a copy reaches the clipboard. Wire
+mouse callbacks the same way; see
 [Mouse Input](./mouse#in-the-browser) for the details. Time-based cleanup,
 including toast pruning, belongs in the draw callback or another host callback
 that can cause a frame.
@@ -192,17 +199,105 @@ animation frame when an event routes to something — any `EventResult` but
 least `Consumed` once a surface exists, so hover stays live under that rule. The
 demos run on such a host, in `demos/shared`.
 
-Ratzilla has no paste callback. `ratcn::runtime::BrowserPasteListener` puts a
-`paste` listener on the document and hands `text/plain` clipboard data to your
-closure as `Event::Paste`; the paste stays with the page unless the closure
-returns `true`. Keep the guard alive for as long as the app runs:
+Ratzilla has no clipboard callback; see [The clipboard](#the-clipboard).
+
+## The clipboard
+
+A component writes the system clipboard with `EventCtx::set_clipboard`, as
+[Input](../components/input#copy-and-paste) and
+[TextArea](../components/textarea#copy-and-paste) do on a copy or cut. The
+runtime keeps the latest write, and the host carries it out after each event,
+whatever the event's result.
+
+In a terminal, `Session::set_clipboard` writes it with the OSC 52 escape
+sequence, which works over SSH too. Most terminals honor it; iTerm2 needs its
+clipboard-access setting, tmux needs `set -g set-clipboard on`, and macOS
+Terminal.app and the VTE terminals (GNOME Terminal, xfce4-terminal, Tilix)
+ignore it. An app on `ratcn::crossterm` writes the text with crossterm's
+`clipboard::CopyToClipboard::to_clipboard_from`, behind its `osc52` feature.
+
+A field copies on `Ctrl+C` only with a selection, and lets it bubble without
+one, so route `Ctrl+C` before treating it as quit. Quit only when the event put
+nothing on the clipboard, not only when it came back `Ignored`: an open modal
+consumes every key. Here `app` is your app, holding its `Ratcn` as `ratcn`, and
+`is_quit` says whether an event is `Ctrl+C` (the loop in
+[The event loop](#the-event-loop) is the same):
 
 ```rust
-let paste = BrowserPasteListener::install({
-    let app = Rc::clone(&app);
-    move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
-})?;
+let quit = is_quit(&event);
+app.handle_event(event);
+match app.ratcn.take_clipboard() {
+    Some(text) => session.set_clipboard(&text)?,
+    None if quit => return Ok(()),
+    None => {}
+}
 ```
 
-The runtime ignores events before the first render, so an early paste is left
-to the page.
+In the browser, `ratcn::runtime::BrowserClipboard` listens for the document's
+`paste`, `copy`, and `cut` events and hands them to your first closure as
+`Event::Paste`, `Event::Copy`, and `Event::Cut`; return whether the app took
+the event. On a copy or cut it asks your second closure for the text the app
+wrote, and puts it on the clipboard (a paste's write goes out too).
+
+It also stops chords from reaching ratzilla as keys. `Cmd+C`, `Cmd+X`, and
+`Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` elsewhere, become
+`Event::Copy`, `Event::Cut`, and `Event::Paste`, so an app binds those events,
+not the keys; off a Mac, `Shift+Delete` becomes `Event::Cut` too. Every other `Cmd` or `Super` chord is dropped, on every platform:
+it never reaches the app, so the Mac's `Cmd` editing chords do nothing in a
+field.
+
+Install one per app, given the app's element: an event is the app's while
+focus is on that element or inside it, and the page's otherwise, so the page's
+own inputs, buttons, and shortcuts keep their keys, and two apps on one page
+each get only their own. Pass the canvas a canvas backend (`WebGl2Backend`,
+`CanvasBackend`) draws on, or the container you gave it as `grid_id`; for
+`DomBackend`, the element whose id you gave as `grid_id`. A copy or cut the app answers with nothing
+copies nothing, unless text inside its element is selected. Keep the guard
+alive for as long as the app runs. The runtime ignores events before the first
+render, so an early paste is left to the page.
+
+```rust
+// The element whose id the backend was given as `grid_id`.
+let element = web_sys::window()
+    .and_then(|window| window.document())
+    .and_then(|document| document.get_element_by_id("app"))
+    .ok_or_else(|| io::Error::other("no #app element"))?;
+let clipboard = BrowserClipboard::install(
+    &element,
+    {
+        let app = Rc::clone(&app);
+        move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
+    },
+    {
+        let app = Rc::clone(&app);
+        move || app.borrow_mut().ratcn.take_clipboard()
+    },
+)?;
+```
+
+A write after any other event — `Ctrl+C` on a Mac, a "Copy" button — goes out
+through `BrowserClipboard::write`. The browser allows it while it handles the
+user's key press or click, on https or localhost, and in a cross-origin iframe
+only with `allow="clipboard-write"`; anywhere else the write is skipped.
+
+Route keys and the mouse through one function that writes afterwards, since
+either can write — a click on a "Copy" button is a mouse event:
+
+```rust
+fn route(app: &RefCell<App>, event: impl TryInto<Event>) {
+    app.borrow_mut().handle_event(event);
+    let written = app.borrow_mut().ratcn.take_clipboard();
+    if let Some(text) = written {
+        BrowserClipboard::write(&text);
+    }
+}
+
+terminal.on_key_event({
+    let app = Rc::clone(&app);
+    move |event| route(&app, event)
+}).map_err(|error| io::Error::other(error.to_string()))?;
+terminal.on_mouse_event({
+    let app = Rc::clone(&app);
+    move |event| route(&app, event)
+}).map_err(|error| io::Error::other(error.to_string()))?;
+```

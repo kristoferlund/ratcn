@@ -207,11 +207,13 @@ export default defineConfig({
             { text: 'Checkbox', link: '/docs/components/checkbox' },
             { text: 'Cycle', link: '/docs/components/cycle' },
             { text: 'Dialog', link: '/docs/components/dialog' },
+            { text: 'Input', link: '/docs/components/input' },
             { text: 'List', link: '/docs/components/list' },
             { text: 'Progress', link: '/docs/components/progress' },
             { text: 'ScrollArea', link: '/docs/components/scroll-area' },
             { text: 'Select', link: '/docs/components/select' },
             { text: 'Tabs', link: '/docs/components/tabs' },
+            { text: 'TextArea', link: '/docs/components/textarea' },
             { text: 'Toast', link: '/docs/components/toast' },
             { text: 'Tooltip', link: '/docs/components/tooltip' }
           ]

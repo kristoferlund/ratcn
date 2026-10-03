@@ -68,11 +68,30 @@ ScrollArea does not claim arrows, Vim letters, or Ctrl navigation chords.
 Unlike item navigation, a scrolling key that cannot change the offset bubbles
 to the app. Tab traversal reveals a focused descendant that was offscreen.
 
+### Text fields
+
+[Input](../components/input) and [TextArea](../components/textarea) route keys
+by binding, not by effect: a key their editor binds is theirs even where it
+changes nothing — `←` at the start of the text, `Ctrl+K` at its end — and a
+chord it does not bind bubbles, so app hotkeys reach the app wherever the
+cursor is. Every unmodified character is text there; `j`, `h`, and Space
+are characters. Both leave Tab, Shift+Tab, Esc, and the function keys alone,
+so traversal and dialogs keep working around a focused field. Input also
+leaves the vertical keys and the editor's chords for them. In a terminal,
+`Ctrl+C` and `Ctrl+X` copy and cut a selection, and bubble without one. In the
+browser, `Cmd+C`, `Cmd+X`, and `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and
+`Ctrl+V` elsewhere, arrive as `Event::Copy`, `Event::Cut`, and `Event::Paste`,
+never as keys: bind those events, not the keys. Every other `Cmd` or `Super`
+chord is dropped there, so the Mac's `Cmd` editing chords do nothing in a
+field. Each page lists its editing keys.
+
 ### Commit and dismiss
 
 | Key | Does |
 |---|---|
 | `Enter` &nbsp;`Space` | Press a [Button](../components/button), toggle a [Checkbox](../components/checkbox), advance a Cycle, or commit the cursor in List, Select, or Tabs |
+| `Enter` | Submit an Input |
+| `Ctrl+Enter` &nbsp;`Ctrl+J` | Submit a TextArea, where Enter is a line break |
 | `Esc` | Request dismissal of a [Dialog](../components/dialog), an open Select, or a [Tooltip](../components/tooltip) with an open-change binding |
 
 `Dialog`'s dismiss key is rebindable with
