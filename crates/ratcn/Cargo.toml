@@ -28,8 +28,13 @@ web-sys = { version = "0.3", optional = true, features = [
     "DataTransfer",
     "Document",
     "EventTarget",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
     "KeyboardEvent",
     "Navigator",
+    "Selection",
     "Window",
 ] }
 

@@ -87,10 +87,16 @@ fn main() -> io::Result<()> {
 
         // Wait for input, or wake when the next toast is due to disappear.
         let timeout = app.state.toasts.time_until_next_expiry(now);
-        match session.next(timeout)? {
-            Some(SessionEvent::Input(event)) if is_quit(&event) => return Ok(()),
-            Some(SessionEvent::Input(event)) => app.handle_event(event, started.elapsed()),
-            _ => {}
+        if let Some(SessionEvent::Input(event)) = session.next(timeout)? {
+            let quit = is_quit(&event);
+            app.handle_event(event, started.elapsed());
+            // A text field copies its selection on Ctrl+C; only a Ctrl+C that
+            // copied nothing quits.
+            match app.ratcn.take_clipboard() {
+                Some(text) => session.set_clipboard(&text)?,
+                None if quit => return Ok(()),
+                None => {}
+            }
         }
     }
 }

@@ -290,9 +290,9 @@ impl Session {
     ///
     /// It goes through the terminal, so it works over SSH too. Most terminals
     /// honor it, but iTerm2 only with its clipboard-access setting on, tmux
-    /// only with `set -g set-clipboard on`, and macOS Terminal.app not at all.
-    /// Nothing answers either way, so a terminal that ignores it fails
-    /// silently.
+    /// only with `set -g set-clipboard on`, and macOS Terminal.app and the VTE
+    /// terminals (GNOME Terminal, xfce4-terminal, Tilix) not at all. Nothing
+    /// answers either way, so a terminal that ignores it fails silently.
     ///
     /// # Errors
     ///

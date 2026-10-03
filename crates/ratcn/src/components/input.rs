@@ -668,34 +668,34 @@ impl<S, M> Input<S, M> {
         }
     }
 
-    /// Copy the selection to the clipboard, or cut it there when `cut` is
-    /// set. The editor's yank buffer takes it too, so Ctrl+Y pastes it back;
-    /// a copy keeps the selection. With nothing selected there is nothing to
-    /// copy, and the request bubbles: that is how an app's Ctrl+C reaches it
-    /// through a focused field. A masked field never copies or cuts, as a
-    /// browser's password field does not: the secret would leave it. Its
-    /// selection still takes the chord, which must not quit the app.
+    /// Copy the selection to the clipboard, or cut it there. The editor's
+    /// yank buffer takes it too, so Ctrl+Y pastes it back; a copy keeps the
+    /// selection. With nothing selected there is nothing to copy, and the
+    /// request bubbles: that is how an app's Ctrl+C reaches it through a
+    /// focused field. A masked field never copies or cuts, as a
+    /// browser's password field does not: the secret would leave it.
     fn handle_copy(
         &self,
-        cut: bool,
+        clip: Clip,
         state: &InputState,
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<InputState> {
         let mut editor = self.editor(state).clone();
-        if editor.selection_range().is_none_or(|(from, to)| from == to) {
+        if self.mask_char.is_some() || editor.selection_range().is_none_or(|(from, to)| from == to)
+        {
             return EventResult::Ignored;
         }
-        if self.mask_char.is_some() {
-            return EventResult::Consumed;
-        }
-        if cut {
-            editor.cut();
-        } else {
-            // Upstream's copy ends the selection, and a copy should not: a
-            // second Ctrl+C would no longer find one, and bubble.
-            let mut copied = editor.clone();
-            copied.copy();
-            editor.set_yank_text(copied.yank_text());
+        match clip {
+            Clip::Cut => {
+                editor.cut();
+            }
+            Clip::Copy => {
+                // Upstream's copy ends the selection, and a copy should not: a
+                // second Ctrl+C would no longer find one, and bubble.
+                let mut copied = editor.clone();
+                copied.copy();
+                editor.set_yank_text(copied.yank_text());
+            }
         }
         ctx.set_clipboard(editor.yank_text());
         EventResult::Emit(InputState::from_editor(editor))
@@ -819,14 +819,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
                 };
             }
             Event::Key(key) => match clipboard_chord(*key) {
-                Some(cut) => self.handle_copy(cut, read(state), ctx),
+                Some(clip) => self.handle_copy(clip, read(state), ctx),
                 None => self.handle_key(*key, read(state)),
             },
-            // A masked field's copy is left to the browser, which copies
-            // nothing from a canvas.
-            Event::Copy | Event::Cut if self.mask_char.is_some() => EventResult::Ignored,
-            Event::Copy => self.handle_copy(false, read(state), ctx),
-            Event::Cut => self.handle_copy(true, read(state), ctx),
+            Event::Copy => self.handle_copy(Clip::Copy, read(state), ctx),
+            Event::Cut => self.handle_copy(Clip::Cut, read(state), ctx),
             Event::Paste(text) => self.handle_paste(text, read(state)),
             Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
             #[allow(
@@ -858,15 +855,22 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
     }
 }
 
-/// Ctrl+C or Ctrl+X: copy, or cut when `Some(true)`. They act on a
-/// selection only, so they are the field's to route rather than the editor's.
-fn clipboard_chord(key: KeyEvent) -> Option<bool> {
+/// What a copy or cut request asks for.
+#[derive(Clone, Copy)]
+enum Clip {
+    Copy,
+    Cut,
+}
+
+/// Ctrl+C or Ctrl+X. They act on a selection only, so they are the field's to
+/// route rather than the editor's.
+fn clipboard_chord(key: KeyEvent) -> Option<Clip> {
     if !key.modifiers.ctrl || key.modifiers.alt {
         return None;
     }
     match key.code {
-        KeyCode::Char('c' | 'C') => Some(false),
-        KeyCode::Char('x' | 'X') => Some(true),
+        KeyCode::Char('c' | 'C') => Some(Clip::Copy),
+        KeyCode::Char('x' | 'X') => Some(Clip::Cut),
         _ => None,
     }
 }
@@ -1353,9 +1357,7 @@ mod tests {
 
     /// A masked field holds a secret, and copying it would put the secret on
     /// the clipboard: it never copies or cuts, as a browser's password field
-    /// does not. A paste still goes in. On a selection Ctrl+C and Ctrl+X are
-    /// still the field's, so they cannot quit the app and lose the form; the
-    /// browser's own copy and cut are left to the browser.
+    /// does not. A paste still goes in.
     #[test]
     fn a_masked_field_never_copies_or_cuts() {
         let masked = || {
@@ -1372,13 +1374,9 @@ mod tests {
         for event in [
             key_with(KeyCode::Char('c'), CTRL),
             key_with(KeyCode::Char('x'), CTRL),
+            Event::Copy,
+            Event::Cut,
         ] {
-            assert!(
-                matches!(driver.event(event.clone(), &state), EventResult::Consumed),
-                "{event:?} must be taken"
-            );
-        }
-        for event in [Event::Copy, Event::Cut] {
             assert!(
                 matches!(driver.event(event.clone(), &state), EventResult::Ignored),
                 "{event:?} must bubble"

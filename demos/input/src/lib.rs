@@ -660,7 +660,7 @@ mod tests {
         type_text(&mut app, "hunter2");
         assert!(app.handle_event(shift_home));
         screen(&mut app);
-        assert!(app.handle_event(ctrl_c), "the selection takes the chord");
-        assert_eq!(app.take_clipboard(), None, "and copies nothing");
+        assert!(!app.handle_event(ctrl_c), "the copy is left to the host");
+        assert_eq!(app.take_clipboard(), None);
     }
 }
