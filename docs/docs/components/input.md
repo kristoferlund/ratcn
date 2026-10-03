@@ -97,9 +97,8 @@ first character. `.title(...)` is the label on the border.
 paint changes: the state keeps the text as typed, and `value()` returns it.
 Each character is one mask cell whatever its real width, so the mask does not
 give away the shape of what it hides. A masked field never copies or cuts, as
-a browser's password field does not; on a selection it still takes `Ctrl+C`
-and `Ctrl+X`, so they cannot quit an app that quits on `Ignored`. A paste
-still goes in.
+a browser's password field does not, so a `Ctrl+C` there quits like any other
+that copied nothing. A paste still goes in.
 
 ```rust
 Input::new()

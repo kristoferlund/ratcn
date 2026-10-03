@@ -111,10 +111,15 @@ loop {
     };
 
     if let SessionEvent::Input(event) = event {
-        if is_global_quit(&event) {
-            break;
-        }
+        let quit = is_quit(&event);
         app.handle_event(event);
+        // A text field copies its selection on Ctrl+C; only a Ctrl+C that
+        // copied nothing quits.
+        match app.ratcn.take_clipboard() {
+            Some(text) => session.set_clipboard(&text)?,
+            None if quit => break,
+            None => {}
+        }
     }
 }
 ```
@@ -228,12 +233,20 @@ In the browser, `ratcn::runtime::BrowserClipboard` listens for the document's
 `paste`, `copy`, and `cut` events and hands them to your first closure as
 `Event::Paste`, `Event::Copy`, and `Event::Cut`; return whether the app took
 the event. On a copy or cut it asks your second closure for the text the app
-wrote, and puts it on the clipboard. It also stops the clipboard chords from
-reaching ratzilla as keys, so the browser turns them into those events: every
-`Cmd` chord, and `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` except on a Mac. An app
-binds the events, not those keys. Install one per page, and keep the guard
-alive for as long as the app runs. The runtime ignores events before the first
-render, so an early paste is left to the page.
+wrote, and puts it on the clipboard (a paste's write goes out too).
+
+It also stops chords from reaching ratzilla as keys. `Cmd+C`, `Cmd+X`, and
+`Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` elsewhere, become
+`Event::Copy`, `Event::Cut`, and `Event::Paste`, so an app binds those events,
+not the keys. Every other `Cmd` or `Super` chord is dropped, on every platform:
+it never reaches the app, so the Mac's `Cmd` editing chords do nothing in a
+field.
+
+The page keeps what is its own: an event aimed at a DOM text input, text area,
+or editable content, or made while focus is in one, is left alone, and so is a
+copy or cut of text selected on the page while focus is off the app's canvas. Install one per page, and keep the
+guard alive for as long as the app runs. The runtime ignores events before the
+first render, so an early paste is left to the page.
 
 ```rust
 let clipboard = BrowserClipboard::install(
@@ -253,15 +266,24 @@ through `BrowserClipboard::write`. The browser allows it while it handles the
 user's key press or click, on https or localhost, and in a cross-origin iframe
 only with `allow="clipboard-write"`; anywhere else the write is skipped.
 
+Route keys and the mouse through one function that writes afterwards, since
+either can write — a click on a "Copy" button is a mouse event:
+
 ```rust
+fn route(app: &RefCell<App>, event: impl TryInto<Event>) {
+    app.borrow_mut().handle_event(event);
+    let written = app.borrow_mut().ratcn.take_clipboard();
+    if let Some(text) = written {
+        BrowserClipboard::write(&text);
+    }
+}
+
 terminal.on_key_event({
     let app = Rc::clone(&app);
-    move |event| {
-        app.borrow_mut().handle_event(event);
-        let written = app.borrow_mut().ratcn.take_clipboard();
-        if let Some(text) = written {
-            BrowserClipboard::write(&text);
-        }
-    }
+    move |event| route(&app, event)
+}).map_err(|error| io::Error::other(error.to_string()))?;
+terminal.on_mouse_event({
+    let app = Rc::clone(&app);
+    move |event| route(&app, event)
 }).map_err(|error| io::Error::other(error.to_string()))?;
 ```

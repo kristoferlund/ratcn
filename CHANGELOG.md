@@ -19,8 +19,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Input` and `TextArea`, single-line and multi-line text fields, each with its
   paint widget and style. Their text lives in app state as an `InputState` or a
   `TextAreaState`; `text_edit` holds the state types and the editing mechanics
-  a text component of your own builds on. Copy and cut reach the system
-  clipboard.
+  a text component of your own builds on.
 - Clipboard writes: `EventCtx::set_clipboard`, taken by the host with
   `Ratcn::take_clipboard` and written with `Session::set_clipboard` (OSC 52) or
   `BrowserClipboard::write`. `Event::Copy` and `Event::Cut` carry the

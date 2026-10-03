@@ -79,9 +79,11 @@ are characters. Both leave Tab, Shift+Tab, Esc, and the function keys alone,
 so traversal and dialogs keep working around a focused field. Input also
 leaves the vertical keys and the editor's chords for them. In a terminal,
 `Ctrl+C` and `Ctrl+X` copy and cut a selection, and bubble without one. In the
-browser, `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` on Linux and Windows, and every `Cmd`
-chord on a Mac, arrive as `Event::Copy`, `Event::Cut`, and `Event::Paste`,
-never as keys: bind those events, not the keys. Each page lists its editing keys.
+browser, `Cmd+C`, `Cmd+X`, and `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and
+`Ctrl+V` elsewhere, arrive as `Event::Copy`, `Event::Cut`, and `Event::Paste`,
+never as keys: bind those events, not the keys. Every other `Cmd` or `Super`
+chord is dropped there, so the Mac's `Cmd` editing chords do nothing in a
+field. Each page lists its editing keys.
 
 ### Commit and dismiss
 
