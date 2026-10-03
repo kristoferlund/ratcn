@@ -24,11 +24,13 @@ use ratatui::{
 use ratcn::{
     Input, InputState, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
+    text_width::display_width,
 };
 
 const DEMO_WIDTH: u16 = 44;
 const DEMO_HEIGHT: u16 = 18;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
+const HELP: &str = "Tab between fields, Enter to sign up";
 
 /// Child ids, named once so declarations and focus jumps can't drift.
 mod ids {
@@ -96,6 +98,8 @@ fn plausible_email(email: &str) -> bool {
 pub struct App {
     state: AppState,
     ratcn: Ratcn<AppState, Msg>,
+    /// How many fields, from the top, the last frame had room for.
+    fields_shown: usize,
 }
 
 impl App {
@@ -105,6 +109,7 @@ impl App {
             ratcn: Ratcn::new()
                 .focus(|s: &AppState| &s.focus, Msg::Focus)
                 .tab_wrap(TabWrap::Wrap),
+            fields_shown: 0,
         }
     }
 
@@ -116,25 +121,25 @@ impl App {
             Msg::Email(email) => state.email = email,
             Msg::Password(password) => state.password = password,
             Msg::Submit => {
-                let first_failing = [
+                let failing = [
                     (ids::NAME, state.name_problem()),
                     (ids::EMAIL, state.email_problem()),
                 ]
-                .into_iter()
-                .find_map(|(id, problem)| problem.map(|_| id));
-                match first_failing {
-                    // Send the user to the first field that needs them.
-                    Some(id) => {
-                        state.attempted = true;
-                        state.focus = FocusState::intent([id]);
-                    }
-                    None => {
-                        let sent = (
-                            state.name.value().to_owned(),
-                            state.email.value().to_owned(),
-                        );
-                        state.signed_up = Some(sent);
-                    }
+                .map(|(id, problem)| problem.map(|_| id));
+                if failing.iter().all(Option::is_none) {
+                    let sent = (
+                        state.name.value().to_owned(),
+                        state.email.value().to_owned(),
+                    );
+                    state.signed_up = Some(sent);
+                    return;
+                }
+                state.attempted = true;
+                // Send the user to the first field that needs them, if the
+                // screen has room for it: focus on a field that is not shown
+                // would swallow what is typed next.
+                if let Some(id) = failing.into_iter().take(self.fields_shown).flatten().next() {
+                    state.focus = FocusState::intent([id]);
                 }
             }
         }
@@ -163,6 +168,7 @@ impl demo_shared::Demo for App {
         let name_problem = state.name_problem().filter(|_| state.attempted);
         let email_problem = state.email_problem().filter(|_| state.attempted);
 
+        let mut fields_shown = 0;
         self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             let demo = area.centered(
                 Constraint::Length(DEMO_WIDTH),
@@ -196,62 +202,74 @@ impl demo_shared::Demo for App {
 
             // Each field has a row beneath it: a hint's, or the gap before the
             // footer. On a short screen the padding gives way first, then the
-            // footer, then those rows, all together so the gaps stay even.
+            // footer, then those rows, all together so the gaps stay even, and
+            // then the fields from the bottom: a field is shown whole or not
+            // at all.
             let field = name.height();
-            let form = 3 * field + 3;
             let content = if demo.height >= DEMO_HEIGHT {
                 demo.inner(CONTENT_PADDING)
             } else {
                 demo.inner(Margin::new(CONTENT_PADDING.horizontal, 0))
             };
-            let gap = u16::from(content.height >= form);
-            let [
-                name_area,
-                name_hint,
-                email_area,
-                email_hint,
-                password_area,
-                _,
-                footer,
-            ] = Layout::vertical([
-                Constraint::Length(field),
-                Constraint::Length(gap),
-                Constraint::Length(field),
-                Constraint::Length(gap),
-                Constraint::Length(field),
-                Constraint::Length(gap),
-                Constraint::Fill(1),
-            ])
-            .areas(content);
-
-            ctx.component(ids::NAME, name, name_area);
-            ctx.component(ids::EMAIL, email, email_area);
-            ctx.component(ids::PASSWORD, password, password_area);
-
-            // A hint starts under the field's text: past the border, and past
-            // the cell the field leaves before its text.
-            for (problem, hint_area) in [(name_problem, name_hint), (email_problem, email_hint)] {
-                if let Some(problem) = problem {
-                    ctx.paint_widget(
-                        Line::from(problem).style(theme.destructive),
-                        hint_area.inner(Margin::new(2, 0)),
-                    );
-                }
+            let gap = u16::from(content.height >= 3 * (field + 1));
+            let shown = (content.height / (field + gap)).min(3);
+            fields_shown = usize::from(shown);
+            let slot = |index: u16| Rect {
+                y: content.y + index * (field + gap),
+                height: field,
+                ..content
+            };
+            for (index, (id, input)) in (0..shown).zip([
+                (ids::NAME, name),
+                (ids::EMAIL, email),
+                (ids::PASSWORD, password),
+            ]) {
+                ctx.component(id, input, slot(index));
             }
             // Without room for the gaps there is none for the footer.
             if gap == 0 {
                 return;
             }
 
+            // A hint starts under the field's text: past the border, and past
+            // the cell the field leaves before its text. It may run on under
+            // the right border, which a narrow screen needs.
+            for (index, problem) in [(0, name_problem), (1, email_problem)] {
+                if let Some(problem) = problem {
+                    let hint_area = Rect {
+                        x: content.x + 2,
+                        y: slot(index).bottom(),
+                        width: content.width.saturating_sub(2),
+                        height: 1,
+                    };
+                    ctx.paint_widget(Line::from(problem).style(theme.destructive), hint_area);
+                }
+            }
+
+            let [_, footer] =
+                Layout::vertical([Constraint::Length(3 * (field + gap)), Constraint::Fill(1)])
+                    .areas(content);
             // "Signed up" holds only while the fields still say what was sent.
             let signed_up = state
                 .signed_up
                 .as_ref()
                 .filter(|(name, email)| name == state.name.value() && email == state.email.value());
+            // The summary answers what the user just did, so it has its two
+            // rows first; the help line has the last row only with one to
+            // spare above it, and only if it fits whole.
+            let status_rows = if signed_up.is_some() {
+                footer.height.min(2)
+            } else {
+                0
+            };
+            let help_rows = u16::from(
+                footer.height > status_rows + u16::from(status_rows > 0)
+                    && display_width(HELP) <= usize::from(footer.width),
+            );
             let [status_area, _, help_area] = Layout::vertical([
+                Constraint::Length(status_rows),
                 Constraint::Fill(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
+                Constraint::Length(help_rows),
             ])
             .areas(footer);
             if let Some((name, email)) = signed_up {
@@ -263,11 +281,9 @@ impl demo_shared::Demo for App {
                     status_area,
                 );
             }
-            ctx.paint_widget(
-                Line::from("Tab between fields, Enter to sign up.").style(theme.muted_foreground),
-                help_area,
-            );
+            ctx.paint_widget(Line::from(HELP).style(theme.muted_foreground), help_area);
         });
+        self.fields_shown = fields_shown;
     }
 }
 
@@ -457,40 +473,113 @@ mod tests {
     }
 
     /// On a short screen the padding, the footer, and the hint rows give
-    /// way, in that order; the three fields are what the demo is for, so
-    /// they stay whole. The hint rows go all together: one field with a gap
-    /// beneath it and one without would look like a layout bug, and a field
-    /// drawn invalid with its hint dropped would not say what is wrong.
+    /// way, in that order, and then the fields themselves, from the bottom.
+    /// A field is shown whole or not at all: one squeezed shorter than its
+    /// border draws nothing and leaves a hole Tab skips. The hint rows go all
+    /// together: one field with a gap beneath it and one without would look
+    /// like a layout bug, and a field drawn invalid with its hint dropped
+    /// would not say what is wrong.
     #[test]
-    fn a_short_screen_keeps_every_field_and_spaces_them_evenly() {
+    fn a_short_screen_shows_whole_fields_from_the_top_spaced_evenly() {
         let mut app = app();
         press(&mut app, KeyCode::Enter);
 
-        for height in 9..=20 {
-            let screen = screen_of(&mut app, Rect::new(0, 0, 40, height));
-            let rows = |symbol| {
-                screen
+        for width in [30, 40] {
+            for height in 1..=20 {
+                let screen = screen_of(&mut app, Rect::new(0, 0, width, height));
+                let at = format!("{width}x{height}");
+                let rows = |symbol| {
+                    screen
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, row)| row.contains(symbol))
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>()
+                };
+                let (tops, bottoms) = (rows('┌'), rows('└'));
+                let shown = usize::from(height / 3).min(3);
+                assert_eq!(tops.len(), shown, "{at}: {screen:#?}");
+                for (index, (top, title)) in tops
                     .iter()
+                    .zip(["┌Name", "┌Email", "┌Password"])
                     .enumerate()
-                    .filter(|(_, row)| row.contains(symbol))
-                    .map(|(index, _)| index)
-                    .collect::<Vec<_>>()
-            };
-            let (tops, bottoms) = (rows('┌'), rows('└'));
-            assert_eq!((tops.len(), bottoms.len()), (3, 3), "{screen:#?}");
-            assert_eq!(
-                tops[1] - bottoms[0],
-                tops[2] - bottoms[1],
-                "uneven gaps at {height} rows: {screen:#?}"
-            );
-            let hints = shows(&screen, NAME_HINT) && shows(&screen, EMAIL_HINT);
-            if height >= 12 {
-                assert!(hints, "a hint dropped at {height} rows: {screen:#?}");
+                {
+                    assert!(screen[*top].contains(title), "{at}: {screen:#?}");
+                    assert_eq!(
+                        bottoms[index],
+                        top + 2,
+                        "{at}: a field cut short: {screen:#?}"
+                    );
+                }
+                if shown == 3 {
+                    assert_eq!(
+                        tops[1] - bottoms[0],
+                        tops[2] - bottoms[1],
+                        "uneven gaps at {at}: {screen:#?}"
+                    );
+                }
+                let hints = shows(&screen, NAME_HINT) && shows(&screen, EMAIL_HINT);
+                if height >= 12 {
+                    assert!(hints, "a hint dropped at {at}: {screen:#?}");
+                }
+                if shows(&screen, "Tab between") {
+                    assert!(hints, "help kept over the hints at {at}: {screen:#?}");
+                    assert!(
+                        screen.iter().any(|row| row.trim() == HELP),
+                        "help cut short at {at}: {screen:#?}"
+                    );
+                }
             }
-            if shows(&screen, "Tab between fields") {
+        }
+    }
+
+    /// A turned-down sign-up sends focus to the first field that needs work
+    /// only if that field is on screen: focus on a field the screen is too
+    /// short for would swallow what is typed next.
+    #[test]
+    fn a_sign_up_on_a_short_screen_keeps_focus_on_a_shown_field() {
+        let tiny = Rect::new(0, 0, 30, 5);
+        let mut app = App::new();
+        let key = |app: &mut App, code| {
+            assert!(
+                app.handle_event(Event::Key(KeyEvent::new(code))),
+                "{code:?} changed nothing"
+            );
+            screen_of(app, tiny)
+        };
+        let screen = screen_of(&mut app, tiny);
+        assert!(!shows(&screen, "┌Email"), "{screen:#?}");
+        for char in "Ada".chars() {
+            key(&mut app, KeyCode::Char(char));
+        }
+
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Char('!'));
+
+        assert!(app.state.signed_up.is_none());
+        assert_eq!(app.state.name.value(), "Ada!");
+    }
+
+    /// A sign-up's summary is the answer to what the user just did, so on a
+    /// short screen it keeps its rows and the static help line gives way.
+    #[test]
+    fn a_short_screen_drops_the_help_before_the_summary() {
+        let mut app = app();
+        type_text(&mut app, "Ada");
+        press(&mut app, KeyCode::Tab);
+        type_text(&mut app, "ada@example.com");
+        press(&mut app, KeyCode::Enter);
+
+        for height in 13..=20 {
+            let screen = screen_of(&mut app, Rect::new(0, 0, 40, height));
+            assert!(
+                shows(&screen, "Signed up Ada."),
+                "{height} rows: {screen:#?}"
+            );
+            if height >= 14 {
                 assert!(
-                    hints,
-                    "help kept over the hints at {height} rows: {screen:#?}"
+                    screen.iter().any(|row| row.trim() == "ada@example.com"),
+                    "{height} rows: {screen:#?}"
                 );
             }
         }

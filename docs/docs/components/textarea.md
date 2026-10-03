@@ -8,7 +8,7 @@ A multi-line text field: the text in a well as tall as the area it is given, a
 block cursor while focused, and an optional titled border around it. It wraps a
 line longer than it is wide and scrolls to keep the cursor in view.
 
-<div class="ratcn-preview-window" style="--ratcn-preview-height: 320px">
+<div class="ratcn-preview-window" style="--ratcn-preview-height: 330px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
     <span class="ratcn-dot"></span>
     <span class="ratcn-dot"></span>

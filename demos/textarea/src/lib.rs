@@ -5,9 +5,10 @@
 //! from that state each frame, so it can never disagree with what is shown.
 //!
 //! The field wraps a line longer than it is wide and scrolls to keep the
-//! cursor in view. Enter is a line break here, so saving is Ctrl+Enter. A
-//! terminal reports that chord only under a keyboard protocol this host does
-//! not turn on, so the form also has a button; Tab moves between the two.
+//! cursor in view. Enter is a line break here, so saving is Ctrl+Enter, or
+//! Ctrl+J, which every terminal sends. A terminal reports Ctrl+Enter only
+//! under a keyboard protocol this host does not turn on, so the form also has
+//! a button; Tab moves between the two.
 //!
 //! The mouse works as in any editor: a click places the cursor, a drag
 //! selects, and the wheel scrolls the text. A paste keeps its line breaks.
@@ -21,13 +22,14 @@ use ratatui::{
 use ratcn::{
     Button, TextArea, TextAreaState, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
-    text_width::display_width_u16,
+    text_width::{display_width, display_width_u16},
 };
 
 const DEMO_WIDTH: u16 = 48;
-const DEMO_HEIGHT: u16 = 13;
+const DEMO_HEIGHT: u16 = 14;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
 const SAVED: &str = "Saved";
+const HELP: &str = "Tab to Save, or Ctrl+J";
 
 #[derive(Default)]
 struct AppState {
@@ -99,14 +101,22 @@ impl demo_shared::Demo for App {
                 });
             });
 
-            // The field takes every row the footer and help line leave it.
-            let [notes_area, _, footer, help_area] = Layout::vertical([
+            // The field takes every row the footer and help line leave it. On
+            // a short screen the padding gives way first, so the field keeps
+            // a row of text.
+            let content = if demo.height >= DEMO_HEIGHT {
+                demo.inner(CONTENT_PADDING)
+            } else {
+                demo.inner(Margin::new(CONTENT_PADDING.horizontal, 0))
+            };
+            let [notes_area, _, footer, _, help_area] = Layout::vertical([
                 Constraint::Fill(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
+                Constraint::Length(1),
             ])
-            .areas(demo.inner(CONTENT_PADDING));
+            .areas(content);
 
             ctx.component(
                 "notes",
@@ -127,13 +137,15 @@ impl demo_shared::Demo for App {
             .spacing(1)
             .areas(footer);
 
+            // A count too wide for its room drops its last part whole.
             let lines = state.notes.lines();
             let characters: usize = lines.iter().map(|line| line.chars().count()).sum();
-            ctx.paint_widget(
-                Line::from(format!("Lines: {} · Chars: {characters}", lines.len()))
-                    .style(theme.muted_foreground),
-                count_area,
-            );
+            let line_count = format!("Lines: {}", lines.len());
+            let count = [format!("{line_count} · Chars: {characters}"), line_count]
+                .into_iter()
+                .find(|count| display_width(count) <= usize::from(count_area.width))
+                .unwrap_or_default();
+            ctx.paint_widget(Line::from(count).style(theme.muted_foreground), count_area);
             // "Saved" is a claim about the text on screen, so it is checked
             // against it each frame.
             if state.saved.as_deref() == Some(state.notes.value().as_str()) {
@@ -141,10 +153,7 @@ impl demo_shared::Demo for App {
             }
             ctx.component("save", save, save_area);
 
-            ctx.paint_widget(
-                Line::from("Tab to Save, Ctrl+Enter if supported").style(theme.muted_foreground),
-                help_area,
-            );
+            ctx.paint_widget(Line::from(HELP).style(theme.muted_foreground), help_area);
         });
     }
 }
@@ -268,13 +277,48 @@ mod tests {
     fn the_help_line_says_how_to_reach_the_save_button() {
         let mut app = app();
         type_text(&mut app, "note");
-        assert!(shows(&screen(&mut app), "Tab to Save"));
+        assert!(shows(&screen(&mut app), HELP));
 
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Enter);
 
         assert_eq!(app.state.saved.as_deref(), Some("note"));
         assert_eq!(app.state.notes.lines(), ["note"], "Enter pressed Save");
+    }
+
+    /// Ctrl+J is the chord every terminal sends, so the help line names it,
+    /// and it saves from the field without splitting the line.
+    #[test]
+    fn the_chord_the_help_line_names_saves() {
+        let mut app = app();
+        type_text(&mut app, "note");
+
+        send(
+            &mut app,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                },
+            }),
+        );
+
+        assert_eq!(app.state.saved.as_deref(), Some("note"));
+        assert_eq!(app.state.notes.lines(), ["note"]);
+    }
+
+    /// The help line is set off from the footer by a blank row, as in the
+    /// input demo.
+    #[test]
+    fn the_help_line_is_set_off_from_the_footer() {
+        let mut app = app();
+        let screen = screen(&mut app);
+
+        let help = screen.iter().position(|row| row.contains(HELP));
+        let help = help.expect("the help line is shown");
+        assert_eq!(screen[help - 1].trim(), "", "{screen:#?}");
+        assert!(screen[help - 2].contains("Lines: 1"), "{screen:#?}");
     }
 
     /// On a small screen the field gives up rows and the footer keeps its
@@ -288,15 +332,27 @@ mod tests {
 
         let screen = screen_of(&mut app, Rect::new(0, 0, 40, 12));
 
-        for text in [
-            "┌Notes",
-            "Lines: 1 · Chars: 43",
-            "Saved",
-            "Save ",
-            "Tab to Save, Ctrl+Enter if supported",
-        ] {
+        for text in ["┌Notes", "Lines: 1 · Chars: 43", "Saved", "Save ", HELP] {
             assert!(shows(&screen, text), "{text} is missing: {screen:#?}");
         }
+    }
+
+    /// The smallest screens the demo is shown on still read: the field keeps
+    /// a row of text, and a count too long for its room drops a part whole
+    /// rather than ending on a dangling separator.
+    #[test]
+    fn a_narrow_short_screen_keeps_a_text_row_and_a_clean_count() {
+        let mut app = app();
+        type_text(&mut app, "note");
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+
+        let screen = screen_of(&mut app, Rect::new(0, 0, 30, 8));
+
+        for text in ["│ note", "Lines: 1", "Saved", "Save ", HELP] {
+            assert!(shows(&screen, text), "{text} is missing: {screen:#?}");
+        }
+        assert!(!shows(&screen, "·"), "{screen:#?}");
     }
 
     /// The host delivers pastes because the demo asks for them, and a text
