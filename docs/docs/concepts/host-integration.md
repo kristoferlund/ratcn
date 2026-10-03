@@ -158,7 +158,7 @@ mouse capture.
 ## Browser and Ratzilla
 
 Enable the `ratzilla` feature for ratzilla key and mouse conversions and the
-browser paste listener:
+browser clipboard listener:
 
 ```sh
 cargo add ratcn --features ratzilla
@@ -192,17 +192,66 @@ animation frame when an event routes to something — any `EventResult` but
 least `Consumed` once a surface exists, so hover stays live under that rule. The
 demos run on such a host, in `demos/shared`.
 
-Ratzilla has no paste callback. `ratcn::runtime::BrowserPasteListener` puts a
-`paste` listener on the document and hands `text/plain` clipboard data to your
-closure as `Event::Paste`; the paste stays with the page unless the closure
-returns `true`. Keep the guard alive for as long as the app runs:
+Ratzilla has no clipboard callback; see [The clipboard](#the-clipboard).
+
+## The clipboard
+
+A component writes the system clipboard with `EventCtx::set_clipboard`, as
+[Input](../components/input#copy-and-paste) and
+[TextArea](../components/textarea#copy-and-paste) do on a copy or cut. The
+runtime keeps the latest write, and the host carries it out after each event.
+
+In a terminal, `Session::set_clipboard` writes it with the OSC 52 escape
+sequence, which works over SSH too. Most terminals honor it; iTerm2 needs its
+clipboard-access setting, tmux needs `set -g set-clipboard on`, and macOS
+Terminal.app ignores it. Add one line after routing:
 
 ```rust
-let paste = BrowserPasteListener::install({
-    let app = Rc::clone(&app);
-    move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
-})?;
+app.handle_event(event);
+if let Some(text) = app.ratcn.take_clipboard() {
+    session.set_clipboard(&text)?;
+}
 ```
 
-The runtime ignores events before the first render, so an early paste is left
-to the page.
+A field copies on `Ctrl+C` only with a selection, and lets it bubble back as
+`Ignored` without one. So route `Ctrl+C` before treating it as quit.
+
+In the browser, `ratcn::runtime::BrowserClipboard` listens for the document's
+`paste`, `copy`, and `cut` events and hands them to your first closure as
+`Event::Paste`, `Event::Copy`, and `Event::Cut`; return whether the app took
+the event. On a copy or cut it asks your second closure for the text the app
+wrote, and puts it on the clipboard. It also keeps the platform's clipboard
+chords from reaching ratzilla as keys, so the browser turns them into those
+events: every `Cmd` chord on a Mac, `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` elsewhere.
+Keep the guard alive for as long as the app runs. The runtime ignores events
+before the first render, so an early paste is left to the page.
+
+```rust
+let clipboard = BrowserClipboard::install(
+    {
+        let app = Rc::clone(&app);
+        move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
+    },
+    {
+        let app = Rc::clone(&app);
+        move || app.borrow_mut().ratcn.take_clipboard()
+    },
+)?;
+```
+
+A write after any other event — `Ctrl+C` on a Mac, a "Copy" button — goes out
+through `BrowserClipboard::write`, which the browser allows while it handles
+the user's key press or click, on https or localhost:
+
+```rust
+terminal.on_key_event({
+    let app = Rc::clone(&app);
+    move |event| {
+        let mut app = app.borrow_mut();
+        app.handle_event(event);
+        if let Some(text) = app.ratcn.take_clipboard() {
+            BrowserClipboard::write(&text);
+        }
+    }
+}).map_err(|error| io::Error::other(error.to_string()))?;
+```

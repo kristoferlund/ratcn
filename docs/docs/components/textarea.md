@@ -165,13 +165,14 @@ so its readline-style keys apply:
 | `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
 | `Ctrl+W` `Alt+Backspace` `Alt+H` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
 | `Ctrl+K` | Delete to the end of the line; at its end, join the next line |
-| `Ctrl+C` `Ctrl+X` `Ctrl+Y` | Copy, cut, and paste within the field |
+| `Ctrl+C` `Ctrl+X` | Copy / cut the selection to the clipboard |
+| `Ctrl+Y` | Paste the field's last copy or cut |
 | `Enter` | Insert a line break |
 | `Ctrl+Enter` `Ctrl+J` | Submit |
 
-`Ctrl+C`, `Ctrl+X`, and `Ctrl+Y` use the editor's own buffer, not the system
-clipboard — and a host that quits on `Ctrl+C`, as the demos do, takes that key
-before the field sees it.
+`Ctrl+C` and `Ctrl+X` act only on a selection. With nothing selected they
+bubble, so an app that quits on `Ctrl+C` still does with a field focused. See
+[Copy and paste](#copy-and-paste).
 
 Keys route by binding, not by effect. A key the editor binds is the field's
 even where it changes nothing — <kbd>↑</kbd> on the first line,
@@ -201,14 +202,30 @@ field, so a form scrolls on from there.
 
 Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
-## Paste
+## Copy and paste
+
+Copy and cut write the selection to the system clipboard, and a paste comes in
+from it, on the keys each platform's users expect:
+
+| Where | Copy | Cut | Paste |
+|---|---|---|---|
+| Browser, Mac | `Cmd+C` | `Cmd+X` | `Cmd+V` |
+| Browser, Linux and Windows | `Ctrl+C` | `Ctrl+X` | `Ctrl+V` |
+| Browser, any | Edit menu, context menu | same | same |
+| Terminal, any OS | `Ctrl+C` on a selection | `Ctrl+X` on a selection | the terminal's own: `Cmd+V` (Mac), `Ctrl+Shift+V` (Linux), `Ctrl+V` (Windows Terminal) |
+
+In a terminal, `Cmd+C` and `Ctrl+Shift+C` belong to the terminal, which copies
+its own selection. A copy or cut also fills the field's own buffer, so `Ctrl+Y`
+pastes it back.
 
 A paste is inserted at the cursor with its line breaks and tabs kept, whichever
-line ending the terminal sent; every other control character is dropped. Pastes
-only arrive as such when the host asks for them — bracketed paste in a
-terminal, a paste listener in the browser. See
-[Host integration](../concepts/host-integration). Without it, a terminal
-delivers a paste as keystrokes.
+line ending the terminal sent; every other control character is dropped.
+Without bracketed paste, a terminal delivers a paste as keystrokes.
+
+The host carries the clipboard both ways. Pastes only arrive as such when it
+asks for them: bracketed paste in a terminal, `BrowserClipboard` in the
+browser. Copies go out when it writes what `Ratcn::take_clipboard` returns
+after each event. See [Host integration](../concepts/host-integration#the-clipboard).
 
 ## Paint-only widget
 
@@ -289,8 +306,14 @@ match key.code {
   states.
 - **No maximum length.** Check the value in `update` and keep the previous
   state if the new one is too long.
-- **No double-click word selection**, and no system clipboard beyond the host's
-  paste.
+- **No double-click word selection.**
+- **No copy in macOS Terminal.app.** A terminal app writes the clipboard with
+  the OSC 52 escape sequence, which Terminal.app ignores. iTerm2 honors it only
+  with its clipboard-access setting on, and tmux only with
+  `set -g set-clipboard on`.
+- **No in-app paste in a terminal.** Terminals do not let an app read the
+  clipboard, so `Ctrl+V` cannot paste it; the terminal's own paste does.
+- **No Linux primary selection** (select, then middle-click).
 - **Ctrl+Enter** submits only on a terminal that reports it, and **Ctrl+J**
   not in the browser, as above.
 - **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the

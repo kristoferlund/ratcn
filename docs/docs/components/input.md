@@ -96,7 +96,8 @@ first character. `.title(...)` is the label on the border.
 `.mask_char('•')` paints every character as the mask, for a secret. Only the
 paint changes: the state keeps the text as typed, and `value()` returns it.
 Each character is one mask cell whatever its real width, so the mask does not
-give away the shape of what it hides.
+give away the shape of what it hides. A masked field never copies or cuts, as
+a browser's password field does not; a paste still goes in.
 
 ```rust
 Input::new()
@@ -161,12 +162,13 @@ so its readline-style keys apply:
 | `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
 | `Ctrl+W` `Alt+Backspace` `Alt+H` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
 | `Ctrl+K` | Delete to the end |
-| `Ctrl+C` `Ctrl+X` `Ctrl+Y` | Copy, cut, and paste within the field |
+| `Ctrl+C` `Ctrl+X` | Copy / cut the selection to the clipboard |
+| `Ctrl+Y` | Paste the field's last copy or cut |
 | `Enter` | Submit |
 
-`Ctrl+C`, `Ctrl+X`, and `Ctrl+Y` use the editor's own buffer, not the system
-clipboard — and a host that quits on `Ctrl+C`, as the demos do, takes that key
-before the field sees it.
+`Ctrl+C` and `Ctrl+X` act only on a selection. With nothing selected they
+bubble, so an app that quits on `Ctrl+C` still does with a field focused. See
+[Copy and paste](#copy-and-paste).
 
 Keys route by binding, not by effect. A key the editor binds is the field's
 even where it changes nothing — <kbd>←</kbd> at the start of the text,
@@ -200,14 +202,30 @@ is left to whatever encloses the field.
 
 Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
-## Paste
+## Copy and paste
+
+Copy and cut write the selection to the system clipboard, and a paste comes in
+from it, on the keys each platform's users expect:
+
+| Where | Copy | Cut | Paste |
+|---|---|---|---|
+| Browser, Mac | `Cmd+C` | `Cmd+X` | `Cmd+V` |
+| Browser, Linux and Windows | `Ctrl+C` | `Ctrl+X` | `Ctrl+V` |
+| Browser, any | Edit menu, context menu | same | same |
+| Terminal, any OS | `Ctrl+C` on a selection | `Ctrl+X` on a selection | the terminal's own: `Cmd+V` (Mac), `Ctrl+Shift+V` (Linux), `Ctrl+V` (Windows Terminal) |
+
+In a terminal, `Cmd+C` and `Ctrl+Shift+C` belong to the terminal, which copies
+its own selection. A copy or cut also fills the field's own buffer, so `Ctrl+Y`
+pastes it back.
 
 A paste is inserted at the cursor as one line: each line break and tab becomes
-a space, and other control characters are dropped. Pastes only arrive as such
-when the host asks for them — bracketed paste in a terminal, a paste listener
-in the browser. See [Host integration](../concepts/host-integration). Without
-it, a terminal delivers a paste as keystrokes, and a pasted line break is an
-Enter.
+a space, and other control characters are dropped. Without bracketed paste, a
+terminal delivers a paste as keystrokes, and a pasted line break is an Enter.
+
+The host carries the clipboard both ways. Pastes only arrive as such when it
+asks for them: bracketed paste in a terminal, `BrowserClipboard` in the
+browser. Copies go out when it writes what `Ratcn::take_clipboard` returns
+after each event. See [Host integration](../concepts/host-integration#the-clipboard).
 
 ## Paint-only widget
 
@@ -290,8 +308,14 @@ back from `InputState::from_editor` as one, its lines joined with spaces.
   states.
 - **No maximum length.** Check the value in `update` and keep the previous
   state if the new one is too long.
-- **No double-click word selection**, and no system clipboard beyond the host's
-  paste.
+- **No double-click word selection.**
+- **No copy in macOS Terminal.app.** A terminal app writes the clipboard with
+  the OSC 52 escape sequence, which Terminal.app ignores. iTerm2 honors it only
+  with its clipboard-access setting on, and tmux only with
+  `set -g set-clipboard on`.
+- **No in-app paste in a terminal.** Terminals do not let an app read the
+  clipboard, so `Ctrl+V` cannot paste it; the terminal's own paste does.
+- **No Linux primary selection** (select, then middle-click).
 - **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the
   cursor off from the character clicked. Keyboard editing is unaffected.
 - Text fields currently build against a fork of `ratatui-textarea`, until
