@@ -13,6 +13,7 @@
 //!
 //! The mouse works as in any editor: a click places the cursor, a drag
 //! selects, and the wheel scrolls the text. A paste keeps its line breaks.
+//! Ctrl+C and Ctrl+X copy and cut a selection to the system clipboard.
 
 use ratatui::{
     buffer::Buffer,
@@ -89,6 +90,11 @@ impl demo_shared::Demo for App {
             EventResult::Consumed => true,
             EventResult::Ignored => false,
         }
+    }
+
+    /// What a copy or cut in a field put on the clipboard.
+    fn take_clipboard(&mut self) -> Option<String> {
+        self.ratcn.take_clipboard()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
@@ -371,5 +377,36 @@ mod tests {
         send(&mut app, Event::Paste("one\r\ntwo\nthree".to_owned()));
 
         assert_eq!(app.state.notes.lines(), ["one", "two", "three"]);
+    }
+
+    /// Ctrl+C copies a selection to the clipboard for the host to write out,
+    /// and with nothing selected is left to the host, whose quit key it is.
+    #[test]
+    fn ctrl_c_copies_a_selection_and_otherwise_is_the_hosts() {
+        let ctrl_c = Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+        });
+        let mut app = app();
+        type_text(&mut app, "note");
+        assert!(!app.handle_event(ctrl_c.clone()), "nothing selected");
+        assert_eq!(app.take_clipboard(), None);
+
+        send(
+            &mut app,
+            Event::Key(KeyEvent {
+                code: KeyCode::Home,
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Modifiers::NONE
+                },
+            }),
+        );
+        send(&mut app, ctrl_c);
+
+        assert_eq!(app.take_clipboard().as_deref(), Some("note"));
     }
 }

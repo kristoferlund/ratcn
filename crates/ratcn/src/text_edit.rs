@@ -326,7 +326,9 @@ pub fn editor_input(event: &KeyEvent) -> Option<EditorInput> {
 /// the two together. A component routes keys by it: a binding is consumed
 /// even where it changes nothing — Ctrl+K at the end of the text — so that
 /// whether a chord reaches the app never depends on where the cursor is. Shift
-/// never decides a binding; the editor reads it as "select".
+/// never decides a binding; the editor reads it as "select". The fields route
+/// the copy and cut chords, Ctrl+C and Ctrl+X, themselves: they act only on a
+/// selection, and bubble without one so that an app's Ctrl+C still works.
 ///
 /// Undo and redo (Ctrl+U, Ctrl+R) are left out: a state keeps no history, so
 /// in a state they do nothing. So is a control character typed as text, a tab

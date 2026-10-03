@@ -13,7 +13,8 @@
 //!
 //! Tab moves between the fields and Enter signs up from any of them. A click
 //! places the cursor, a drag selects, and a paste lands in the focused field
-//! as one line.
+//! as one line. Ctrl+C and Ctrl+X copy and cut a selection to the system
+//! clipboard, except from the masked password.
 
 use ratatui::{
     buffer::Buffer,
@@ -161,6 +162,11 @@ impl demo_shared::Demo for App {
         }
     }
 
+    /// What a copy or cut in a field put on the clipboard.
+    fn take_clipboard(&mut self) -> Option<String> {
+        self.ratcn.take_clipboard()
+    }
+
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         buffer.set_style(area, Style::default().bg(theme.background));
 
@@ -290,7 +296,7 @@ impl demo_shared::Demo for App {
 #[cfg(test)]
 mod tests {
     use demo_shared::Demo as _;
-    use ratcn::runtime::{KeyCode, KeyEvent};
+    use ratcn::runtime::{KeyCode, KeyEvent, Modifiers};
 
     use super::*;
 
@@ -621,5 +627,39 @@ mod tests {
         assert!(app.handle_event(Event::Paste("Ada\nLovelace".to_owned())));
 
         assert_eq!(app.state.name.value(), "Ada Lovelace");
+    }
+
+    /// A selection in a field is copied for the host to write out, but never
+    /// one in the masked password: the copy would leak the secret.
+    #[test]
+    fn ctrl_c_copies_a_selection_but_never_the_password() {
+        let shift_home = Event::Key(KeyEvent {
+            code: KeyCode::Home,
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+        });
+        let ctrl_c = Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+        });
+        let mut app = app();
+        type_text(&mut app, "Ada");
+        assert!(app.handle_event(shift_home.clone()));
+        screen(&mut app);
+        assert!(app.handle_event(ctrl_c.clone()));
+        assert_eq!(app.take_clipboard().as_deref(), Some("Ada"));
+
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        type_text(&mut app, "hunter2");
+        assert!(app.handle_event(shift_home));
+        screen(&mut app);
+        assert!(!app.handle_event(ctrl_c), "the copy is left to the host");
+        assert_eq!(app.take_clipboard(), None);
     }
 }

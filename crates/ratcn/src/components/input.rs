@@ -283,7 +283,8 @@ impl<'a> InputWidget<'a> {
     }
 
     /// Paint every character as `mask_char`, for a secret. Only the paint
-    /// changes: the state keeps the text as typed.
+    /// changes: the state keeps the text as typed. A masked field never
+    /// copies or cuts, so the secret cannot leave it that way.
     #[must_use]
     pub const fn mask_char(mut self, mask_char: char) -> Self {
         self.mask_char = Some(mask_char);
@@ -479,6 +480,12 @@ type StyleFn = Rc<dyn Fn(&Theme) -> InputStyle>;
 /// a terminal's line feed, which the editor reads as "delete to the start". A
 /// paste is flattened to one line.
 ///
+/// <kbd>Ctrl+C</kbd> and <kbd>Ctrl+X</kbd> copy and cut the selection to the
+/// system clipboard, as a browser's copy and cut
+/// ([`Event::Copy`], [`Event::Cut`]) do; with nothing selected they bubble, so
+/// the app's own <kbd>Ctrl+C</kbd> keeps working. <kbd>Ctrl+Y</kbd> pastes the
+/// last copy or cut back.
+///
 /// A click places the cursor at the character clicked, and a drag selects
 /// from the character pressed to the one under the pointer, scrolling the
 /// text as the pointer moves on past either end of the field.
@@ -660,6 +667,34 @@ impl<S, M> Input<S, M> {
         }
     }
 
+    /// Copy the selection to the clipboard, or cut it there when `cut` is
+    /// set. The editor copies or cuts it too, so Ctrl+Y yanks it back. With
+    /// nothing selected there is nothing to copy, and the request bubbles:
+    /// that is how an app's Ctrl+C reaches it through a focused field. A
+    /// masked field never copies or cuts, as a browser's password field does
+    /// not: the secret would leave it.
+    fn handle_copy(
+        &self,
+        cut: bool,
+        state: &InputState,
+        ctx: &mut EventCtx<'_>,
+    ) -> EventResult<InputState> {
+        if self.mask_char.is_some() {
+            return EventResult::Ignored;
+        }
+        let mut editor = self.editor(state).clone();
+        if editor.selection_range().is_none_or(|(from, to)| from == to) {
+            return EventResult::Ignored;
+        }
+        if cut {
+            editor.cut();
+        } else {
+            editor.copy();
+        }
+        ctx.set_clipboard(editor.yank_text());
+        EventResult::Emit(InputState::from_editor(editor))
+    }
+
     /// Insert a paste as one line.
     fn handle_paste(&self, text: &str, state: &InputState) -> EventResult<InputState> {
         let text = single_line(text);
@@ -777,7 +812,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
                     _ => EventResult::Ignored,
                 };
             }
-            Event::Key(key) => self.handle_key(*key, read(state)),
+            Event::Key(key) => match clipboard_chord(*key) {
+                Some(cut) => self.handle_copy(cut, read(state), ctx),
+                None => self.handle_key(*key, read(state)),
+            },
+            Event::Copy => self.handle_copy(false, read(state), ctx),
+            Event::Cut => self.handle_copy(true, read(state), ctx),
             Event::Paste(text) => self.handle_paste(text, read(state)),
             Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
             #[allow(
@@ -806,6 +846,19 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
         } else {
             field_rows(area, titled)
         }
+    }
+}
+
+/// Ctrl+C or Ctrl+X: copy, or cut when `Some(true)`. They act on a
+/// selection only, so they are the field's to route rather than the editor's.
+fn clipboard_chord(key: KeyEvent) -> Option<bool> {
+    if !key.modifiers.ctrl || key.modifiers.alt {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c' | 'C') => Some(false),
+        KeyCode::Char('x' | 'X') => Some(true),
+        _ => None,
     }
 }
 
@@ -1216,6 +1269,106 @@ mod tests {
                 "{char:?}"
             );
         }
+    }
+
+    /// Copy and cut put the selection on the system clipboard, and in the
+    /// editor's yank buffer too, so Ctrl+Y still pastes it back. Ctrl+C and
+    /// Ctrl+X do it from the keyboard; `Event::Copy` and `Event::Cut` are
+    /// the platform's own gesture, a browser's copy say.
+    #[test]
+    fn copy_and_cut_put_the_selection_on_the_clipboard() {
+        for (event, cut) in [
+            (key_with(KeyCode::Char('c'), CTRL), false),
+            (Event::Copy, false),
+            (key_with(KeyCode::Char('x'), CTRL), true),
+            (Event::Cut, true),
+        ] {
+            let mut driver = driver();
+            let mut state = state("Ada Lovelace");
+            render(&mut driver, &state);
+            send(&mut driver, &mut state, key(KeyCode::Home));
+            for _ in 0..3 {
+                send(&mut driver, &mut state, key_with(KeyCode::Right, SHIFT));
+            }
+            render(&mut driver, &state);
+
+            send(&mut driver, &mut state, event.clone());
+
+            assert_eq!(
+                driver.ratcn.take_clipboard().as_deref(),
+                Some("Ada"),
+                "{event:?}"
+            );
+            let left = if cut { " Lovelace" } else { "Ada Lovelace" };
+            assert_eq!(state.name.value(), left, "{event:?}");
+            assert_eq!(selection(&state), None, "{event:?} ends the selection");
+            render(&mut driver, &state);
+            send(&mut driver, &mut state, key_with(KeyCode::Char('y'), CTRL));
+            assert!(
+                state.name.value().contains("Ada"),
+                "{event:?} fills the yank buffer"
+            );
+        }
+    }
+
+    /// With nothing selected there is nothing to copy, and Ctrl+C is the
+    /// app's again: its quit key has to work with a field focused. An empty
+    /// selection, a drag that came back to its start, counts as none.
+    #[test]
+    fn copy_and_cut_without_a_selection_bubble() {
+        let mut driver = driver();
+        let mut state = state("Ada");
+        render(&mut driver, &state);
+        send(&mut driver, &mut state, key_with(KeyCode::Left, SHIFT));
+        send(&mut driver, &mut state, key_with(KeyCode::Right, SHIFT));
+        assert!(state.name.editor().is_selecting());
+        render(&mut driver, &state);
+
+        for event in [
+            key_with(KeyCode::Char('c'), CTRL),
+            key_with(KeyCode::Char('x'), CTRL),
+            Event::Copy,
+            Event::Cut,
+        ] {
+            assert!(
+                matches!(driver.event(event.clone(), &state), EventResult::Ignored),
+                "{event:?} must bubble"
+            );
+        }
+        assert_eq!(driver.ratcn.take_clipboard(), None);
+    }
+
+    /// A masked field holds a secret, and copying it would put the secret on
+    /// the clipboard: it never copies or cuts, as a browser's password field
+    /// does not. A paste still goes in.
+    #[test]
+    fn a_masked_field_never_copies_or_cuts() {
+        let masked = || {
+            Input::new()
+                .value(|state: &State| &state.name, Msg::Name)
+                .mask_char('•')
+        };
+        let mut driver = driver();
+        let mut state = state("secret");
+        render_with(&mut driver, &state, masked);
+        send(&mut driver, &mut state, key_with(KeyCode::Home, SHIFT));
+        render_with(&mut driver, &state, masked);
+
+        for event in [
+            key_with(KeyCode::Char('c'), CTRL),
+            key_with(KeyCode::Char('x'), CTRL),
+            Event::Copy,
+            Event::Cut,
+        ] {
+            assert!(
+                matches!(driver.event(event.clone(), &state), EventResult::Ignored),
+                "{event:?} must bubble"
+            );
+        }
+        assert_eq!(driver.ratcn.take_clipboard(), None);
+        assert_eq!(state.name.value(), "secret");
+        send(&mut driver, &mut state, Event::Paste("s".to_owned()));
+        assert_eq!(state.name.value(), "s", "the paste replaced the selection");
     }
 
     /// A paste can carry anything; the field holds one line.

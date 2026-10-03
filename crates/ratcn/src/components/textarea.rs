@@ -473,6 +473,12 @@ type StyleFn = Rc<dyn Fn(&Theme) -> TextAreaStyle>;
 /// app's shortcuts keep working around a focused field. A paste keeps its
 /// line breaks and tabs and loses every other control character.
 ///
+/// <kbd>Ctrl+C</kbd> and <kbd>Ctrl+X</kbd> copy and cut the selection to the
+/// system clipboard, as a browser's copy and cut
+/// ([`Event::Copy`], [`Event::Cut`]) do; with nothing selected they bubble, so
+/// the app's own <kbd>Ctrl+C</kbd> keeps working. <kbd>Ctrl+Y</kbd> pastes the
+/// last copy or cut back.
+///
 /// A click places the cursor at the character clicked, and a drag selects
 /// from the character pressed to the one under the pointer, scrolling the
 /// text as the pointer moves on past an edge of the field. The wheel scrolls
@@ -662,6 +668,29 @@ impl<S, M> TextArea<S, M> {
         }
     }
 
+    /// Copy the selection to the clipboard, or cut it there when `cut` is
+    /// set. The editor copies or cuts it too, so Ctrl+Y yanks it back. With
+    /// nothing selected there is nothing to copy, and the request bubbles:
+    /// that is how an app's Ctrl+C reaches it through a focused field.
+    fn handle_copy(
+        &self,
+        cut: bool,
+        state: &TextAreaState,
+        ctx: &mut EventCtx<'_>,
+    ) -> EventResult<TextAreaState> {
+        let mut editor = self.editor(state).clone();
+        if editor.selection_range().is_none_or(|(from, to)| from == to) {
+            return EventResult::Ignored;
+        }
+        if cut {
+            editor.cut();
+        } else {
+            editor.copy();
+        }
+        ctx.set_clipboard(editor.yank_text());
+        EventResult::Emit(TextAreaState::from_editor(editor))
+    }
+
     /// Insert a paste at the cursor, as the text [`pasted_text`] makes of it.
     fn handle_paste(&self, text: &str, state: &TextAreaState) -> EventResult<TextAreaState> {
         let text = pasted_text(text);
@@ -818,7 +847,12 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
                     _ => EventResult::Ignored,
                 };
             }
-            Event::Key(key) => self.handle_key(*key, read(state)),
+            Event::Key(key) => match clipboard_chord(*key) {
+                Some(cut) => self.handle_copy(cut, read(state), ctx),
+                None => self.handle_key(*key, read(state)),
+            },
+            Event::Copy => self.handle_copy(false, read(state), ctx),
+            Event::Cut => self.handle_copy(true, read(state), ctx),
             Event::Paste(text) => self.handle_paste(text, read(state)),
             Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
             #[allow(
@@ -855,6 +889,19 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
 /// deleting back to the start of the line.
 fn is_submit_chord(key: KeyEvent) -> bool {
     key.modifiers.ctrl && matches!(key.code, KeyCode::Enter | KeyCode::Char('j' | 'J'))
+}
+
+/// Ctrl+C or Ctrl+X: copy, or cut when `Some(true)`. They act on a
+/// selection only, so they are the field's to route rather than the editor's.
+fn clipboard_chord(key: KeyEvent) -> Option<bool> {
+    if !key.modifiers.ctrl || key.modifiers.alt {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c' | 'C') => Some(false),
+        KeyCode::Char('x' | 'X') => Some(true),
+        _ => None,
+    }
 }
 
 /// The keys a field leaves alone, whatever the editor binds them to. Tab and
@@ -1238,6 +1285,74 @@ mod tests {
                 "{event:?}"
             );
         }
+    }
+
+    /// Copy and cut put the selection on the system clipboard, line breaks
+    /// and all, and in the editor's yank buffer too, so Ctrl+Y still pastes
+    /// it back. Ctrl+C and Ctrl+X do it from the keyboard; `Event::Copy` and
+    /// `Event::Cut` are the platform's own gesture, a browser's copy say.
+    #[test]
+    fn copy_and_cut_put_the_selection_on_the_clipboard() {
+        for (event, cut) in [
+            (key_with(KeyCode::Char('c'), CTRL), false),
+            (Event::Copy, false),
+            (key_with(KeyCode::Char('x'), CTRL), true),
+            (Event::Cut, true),
+        ] {
+            let mut driver = driver();
+            let mut state = state_at_top("one\ntwo");
+            render(&mut driver, &state);
+            send(&mut driver, &mut state, key_with(KeyCode::Down, SHIFT));
+            render(&mut driver, &state);
+
+            send(&mut driver, &mut state, event.clone());
+
+            assert_eq!(
+                driver.ratcn.take_clipboard().as_deref(),
+                Some("one\n"),
+                "{event:?}"
+            );
+            let left = if cut { "two" } else { "one\ntwo" };
+            assert_eq!(state.notes.value(), left, "{event:?}");
+            assert_eq!(
+                state.notes.editor().selection_range(),
+                None,
+                "{event:?} ends the selection"
+            );
+            render(&mut driver, &state);
+            send(&mut driver, &mut state, key_with(KeyCode::Char('y'), CTRL));
+            assert!(
+                state.notes.value().contains("one\n"),
+                "{event:?} fills the yank buffer"
+            );
+        }
+    }
+
+    /// With nothing selected there is nothing to copy, and Ctrl+C is the
+    /// app's again: its quit key has to work with a field focused. An empty
+    /// selection, a drag that came back to its start, counts as none.
+    #[test]
+    fn copy_and_cut_without_a_selection_bubble() {
+        let mut driver = driver();
+        let mut state = state("one\ntwo");
+        render(&mut driver, &state);
+        send(&mut driver, &mut state, key_with(KeyCode::Left, SHIFT));
+        send(&mut driver, &mut state, key_with(KeyCode::Right, SHIFT));
+        assert!(state.notes.editor().is_selecting());
+        render(&mut driver, &state);
+
+        for event in [
+            key_with(KeyCode::Char('c'), CTRL),
+            key_with(KeyCode::Char('x'), CTRL),
+            Event::Copy,
+            Event::Cut,
+        ] {
+            assert!(
+                matches!(driver.event(event.clone(), &state), EventResult::Ignored),
+                "{event:?} must bubble"
+            );
+        }
+        assert_eq!(driver.ratcn.take_clipboard(), None);
     }
 
     /// A paste keeps its lines and tabs, whichever line break the terminal

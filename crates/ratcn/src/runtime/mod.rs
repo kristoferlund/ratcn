@@ -197,7 +197,7 @@ pub use component::{
 pub use drag::{CellOffset, DragOptions, DragPhase, clamp_offset, offset_rect};
 pub use engine::Ratcn;
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-pub use event::BrowserPasteListener;
+pub use event::BrowserClipboard;
 pub use event::{
     Event, EventResult, KeyChord, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
     ScrollDirection, Unsupported,

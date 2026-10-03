@@ -1014,16 +1014,20 @@ fn slot_mut<'m, T: 'static>(store: &'m mut TransientMap, path: &[ChildId]) -> Op
 /// The extra facilities a component gets while handling an event.
 ///
 /// Passed to [`Component::handle_event`] alongside the event and the app state.
-/// It carries the component's identity path plus the two things a component
+/// It carries the component's identity path plus the things a component
 /// cannot obtain any other way: scratch storage that survives between events
-/// ([`transient`](Self::transient)) and mouse capture
-/// ([`capture_pointer`](Self::capture_pointer)).
+/// ([`transient`](Self::transient)), mouse capture
+/// ([`capture_pointer`](Self::capture_pointer)), and the system clipboard
+/// ([`set_clipboard`](Self::set_clipboard)).
 #[derive(Default)]
 pub struct EventCtx<'a> {
     path: Vec<ChildId>,
     area: Rect,
     transients: TransientStore<'a>,
     pub(super) pointer: PointerInputs<'a>,
+    /// The text this event asked to put on the clipboard, collected by the
+    /// runtime once the component returns.
+    pub(super) clipboard: Option<String>,
 }
 
 /// Where a context's transients live: the runtime's store during dispatch,
@@ -1069,6 +1073,7 @@ impl fmt::Debug for EventCtx<'_> {
                 &self.pointer.claim.as_ref().map(|(button, _)| *button),
             )
             .field("screen_mouse", &self.pointer.screen_mouse)
+            .field("clipboard", &self.clipboard)
             .finish()
     }
 }
@@ -1087,6 +1092,7 @@ impl<'a> EventCtx<'a> {
             area,
             transients: TransientStore::Runtime(transients),
             pointer,
+            clipboard: None,
         }
     }
 
@@ -1231,6 +1237,16 @@ impl<'a> EventCtx<'a> {
         if claim.is_none() {
             **claim = Some(self.path.clone());
         }
+    }
+
+    /// Put `text` on the system clipboard.
+    ///
+    /// The runtime keeps the latest text written, and the host carries it out
+    /// after the event: it takes it with
+    /// [`Ratcn::take_clipboard`](super::Ratcn::take_clipboard) and writes it
+    /// through the terminal or the browser.
+    pub fn set_clipboard(&mut self, text: impl Into<String>) {
+        self.clipboard = Some(text.into());
     }
 
     /// Whether this event reached **this** component because it captured the pointer.

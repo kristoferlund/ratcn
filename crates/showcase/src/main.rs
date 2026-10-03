@@ -526,6 +526,12 @@ impl demo_shared::Demo for App {
         self.shown().and_then(Embedded::wake)
     }
 
+    /// Whatever the demo on screen put on the clipboard: a copy in an
+    /// embedded text field reaches the terminal, over SSH too.
+    fn take_clipboard(&mut self) -> Option<String> {
+        self.shown_mut().and_then(Embedded::take_clipboard)
+    }
+
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         buffer.set_style(area, Style::default().bg(theme.background));
 

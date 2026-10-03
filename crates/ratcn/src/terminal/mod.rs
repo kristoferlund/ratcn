@@ -80,7 +80,10 @@ use ratatui::Terminal;
 use ratatui_termina::TerminaBackend;
 use termina::{
     EventReader, PlatformTerminal, Terminal as _,
-    escape::csi::{Csi, DecPrivateMode, DecPrivateModeCode, Mode},
+    escape::{
+        csi::{Csi, DecPrivateMode, DecPrivateModeCode, Mode},
+        osc::{Osc, Selection},
+    },
 };
 
 use crate::Theme;
@@ -283,6 +286,21 @@ impl Session {
         )
     }
 
+    /// Put `text` on the system clipboard, with the OSC 52 escape sequence.
+    ///
+    /// It goes through the terminal, so it works over SSH too. Most terminals
+    /// honor it, but iTerm2 only with its clipboard-access setting on, tmux
+    /// only with `set -g set-clipboard on`, and macOS Terminal.app not at all.
+    /// Nothing answers either way, so a terminal that ignores it fails
+    /// silently.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the terminal will not take the write.
+    pub fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
+        write_clipboard(self.terminal.backend_mut(), text)
+    }
+
     /// Switch the modes on. A failure part-way through still restores, because
     /// the session already owns them: resetting a mode that never went on is
     /// what a terminal does with any mode it does not know.
@@ -409,6 +427,12 @@ fn soonest(one: Option<Duration>, other: Option<Duration>) -> Option<Duration> {
     }
 }
 
+/// OSC 52 for the clipboard selection: `ESC ] 52 ; c ; <base64> ST`.
+fn write_clipboard(out: &mut impl io::Write, text: &str) -> io::Result<()> {
+    write!(out, "{}", Osc::SetSelection(Selection::CLIPBOARD, text))?;
+    out.flush()
+}
+
 fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
     for &code in modes {
         let mode = DecPrivateMode::Code(code);
@@ -452,6 +476,7 @@ mod tests {
         Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Ordering, SessionEvent,
         SessionOptions, TerminalColors, Watch, modes, panic_restore, pump, restore_modes,
         watch::{DEBOUNCE, IDLE},
+        write_clipboard,
     };
     use crate::terminal::fake::FakeTerminal;
     use ratatui::style::Color;
@@ -507,6 +532,17 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    /// The bytes a terminal reads as "put this on the clipboard": OSC 52 on
+    /// the `c` selection, the text in base64, ended by ST.
+    #[test]
+    fn the_clipboard_is_written_as_osc_52() {
+        let mut terminal = FakeTerminal::scripted("");
+
+        write_clipboard(&mut terminal, "héllo\nworld").expect("a fake terminal takes writes");
+
+        assert_eq!(terminal.written, b"\x1b]52;c;aMOpbGxvCndvcmxk\x1b\\");
     }
 
     #[test]
