@@ -72,7 +72,8 @@ filled.lines();  // ["Met Ada today.", "She counts."]
 filled.cursor(); // (1, 11): the line, then the character within it
 ```
 
-`TextAreaState::new` splits at `\n`, `\r\n`, and `\r`. To clear or replace the text,
+`TextAreaState::new` splits at `\n`, `\r\n`, and `\r`, keeps tabs, and drops
+every other control character, as a paste does. To clear or replace the text,
 assign a new state. There is no `PartialEq`; compare `.value()`.
 
 ## Submitting

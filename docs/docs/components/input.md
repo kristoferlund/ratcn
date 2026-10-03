@@ -75,7 +75,8 @@ filled.cursor(); // 12, a character index
 ```
 
 An `InputState` is one line: `InputState::new` turns each line break and tab
-in the value into a space. To clear or replace the text — a form reset, loading a record —
+in the value into a space and drops every other control character, as a paste
+does. To clear or replace the text — a form reset, loading a record —
 assign a new state. There is no `PartialEq`; compare `.value()`.
 
 ## Submitting

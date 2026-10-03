@@ -62,13 +62,19 @@ impl Default for InputState {
 impl InputState {
     /// A state holding `value`, with the cursor at its end. Each line break in
     /// `value` — `\r\n`, `\n`, or `\r` — becomes a space, and so does each
-    /// tab, as in a paste.
+    /// tab; every other control character is dropped, as in a paste.
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
         let value = value
             .into()
-            .replace("\r\n", " ")
-            .replace(['\n', '\r', '\t'], " ");
+            .replace("\r\n", "\n")
+            .chars()
+            .filter_map(|char| match char {
+                '\n' | '\r' | '\t' => Some(' '),
+                char if char.is_control() => None,
+                char => Some(char),
+            })
+            .collect();
         let mut editor = Editor::new(vec![value]);
         editor.move_cursor(CursorMove::End);
         Self::from_editor(editor)
@@ -157,10 +163,17 @@ impl Default for TextAreaState {
 
 impl TextAreaState {
     /// A state holding `value`, split into lines at each `\n`, `\r\n`, or
-    /// `\r`, as in a paste, with the cursor at the end of the text.
+    /// `\r`, with tabs kept and every other control character dropped, as in
+    /// a paste. The cursor starts at the end of the text.
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
-        let value = value.into().replace("\r\n", "\n").replace('\r', "\n");
+        let value: String = value
+            .into()
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .chars()
+            .filter(|char| matches!(char, '\n' | '\t') || !char.is_control())
+            .collect();
         let mut editor = Editor::from(value.split('\n'));
         editor.move_cursor(CursorMove::Bottom);
         editor.move_cursor(CursorMove::End);
@@ -526,6 +539,20 @@ mod tests {
         let state = InputState::new("one\r\ntwo\nthree\rfour\tfive");
         assert_eq!(state.value(), "one two three four five");
         assert_eq!(state.cursor(), 23);
+    }
+
+    /// The buffer draws no control character, so one kept in a state would
+    /// be a cell with no cursor, a Right that looks dead, and an escape the
+    /// app gets back from `value()`. Data the app does not control goes in
+    /// as a paste would.
+    #[test]
+    fn states_drop_control_characters_as_a_paste_does() {
+        let input = InputState::new("a\u{1b}[2Jb\u{7}c\u{0}");
+        assert_eq!((input.value(), input.cursor()), ("a[2Jbc", 6));
+
+        let area = TextAreaState::new("a\u{1b}[2J\tb\r\nc\u{7}\u{0}");
+        assert_eq!(area.lines(), ["a[2J\tb", "c"]);
+        assert_eq!(area.cursor(), (1, 1));
     }
 
     /// A state's debug output is for reading: the text, the cursor, and the
