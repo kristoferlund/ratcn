@@ -837,6 +837,17 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
     fn scope_options(&self, _state: &S) -> ScopeOptions {
         ScopeOptions::default().focusable(self.value.is_some() && !self.disabled)
     }
+
+    /// The whole field, or nothing when the border and inset leave no text
+    /// cell: a field that cannot show its text takes no focus, typing, or
+    /// clicks.
+    fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
+        if text_rect(area, self.title.is_some()).is_empty() {
+            Rect::default()
+        } else {
+            area
+        }
+    }
 }
 
 /// Ctrl+Enter, or Ctrl+J: a terminal that sends a line feed for Ctrl+Enter
@@ -1282,6 +1293,92 @@ mod tests {
             TextAreaStyle::from_theme(&Theme::default_dark()).background,
             "a disabled field shows no cursor"
         );
+    }
+
+    /// Two rows are all border: no text can be drawn, so a field there would
+    /// edit text nobody sees. Focus passes it by for the next control until
+    /// the field is given room again.
+    #[test]
+    fn a_field_with_no_text_cells_is_skipped_until_it_has_room() {
+        let mut driver = Driver::with(
+            Ratcn::new()
+                .focus(|state: &State| &state.focus, Msg::Focus)
+                .tab_wrap(crate::runtime::TabWrap::Wrap),
+            20,
+            5,
+        );
+        let mut state = state("");
+        let declare = |driver: &mut Driver<State, Msg>, state: &State, field: Rect| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    ChildId::Static("notes"),
+                    TextArea::new()
+                        .value(|state: &State| &state.notes, Msg::Notes)
+                        .title("Notes"),
+                    field,
+                );
+                ctx.component(
+                    ChildId::Static("save"),
+                    crate::Button::new("Save").on_press(|| Msg::Submit),
+                    Rect::new(0, 3, 20, 1),
+                );
+                ctx.component(
+                    ChildId::Static("cancel"),
+                    crate::Button::new("Cancel").on_press(|| Msg::Submit),
+                    Rect::new(0, 4, 20, 1),
+                );
+            });
+        };
+        let short = Rect::new(0, 0, 20, 2);
+
+        declare(&mut driver, &state, short);
+        assert!(
+            driver
+                .ratcn
+                .focus_path(&[ChildId::Static("notes")])
+                .is_none()
+        );
+        send(&mut driver, &mut state, key(KeyCode::Tab));
+        assert_eq!(
+            state.focus.path(),
+            [ChildId::Static("cancel")],
+            "startup focus went to Save, so Tab moves on to Cancel"
+        );
+        declare(&mut driver, &state, short);
+        send(&mut driver, &mut state, key(KeyCode::Tab));
+        assert_eq!(
+            state.focus.path(),
+            [ChildId::Static("save")],
+            "Tab wraps past the field"
+        );
+        declare(&mut driver, &state, short);
+        for event in [
+            key(KeyCode::Char('x')),
+            Event::Paste("x".to_owned()),
+            mouse(MouseKind::Down(MouseButton::Left), 2, 1),
+        ] {
+            assert!(
+                !matches!(
+                    driver.event(event.clone(), &state),
+                    EventResult::Emit(Msg::Notes(_))
+                ),
+                "{event:?}"
+            );
+        }
+
+        state.focus = FocusState::default();
+        declare(&mut driver, &state, Rect::new(0, 0, 20, 3));
+        let EventResult::Emit(Msg::Notes(typed)) = driver.event(key(KeyCode::Char('x')), &state)
+        else {
+            panic!("the enlarged field takes startup focus and typing");
+        };
+        assert_eq!(typed.value(), "x");
+        let EventResult::Emit(Msg::Notes(pasted)) =
+            driver.event(Event::Paste("y".to_owned()), &state)
+        else {
+            panic!("the enlarged field takes a paste");
+        };
+        assert_eq!(pasted.value(), "y");
     }
 
     #[test]

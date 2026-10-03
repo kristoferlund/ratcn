@@ -797,8 +797,15 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
         ScopeOptions::default().focusable(self.value.is_some() && !self.disabled)
     }
 
+    /// The field's rows, or nothing when the inset leaves no text cell: a
+    /// field that cannot show its text takes no focus, typing, or clicks.
     fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
-        field_rows(area, self.title.is_some())
+        let titled = self.title.is_some();
+        if text_rect(area, titled).is_empty() {
+            Rect::default()
+        } else {
+            field_rows(area, titled)
+        }
     }
 }
 
@@ -1259,6 +1266,89 @@ mod tests {
             InputStyle::from_theme(&Theme::default_dark()).background,
             "a disabled field shows no cursor"
         );
+    }
+
+    /// Two columns are all inset: no text can be drawn, so a field there
+    /// would edit text nobody sees. Focus passes it by for the next control
+    /// until the field is given room again.
+    #[test]
+    fn a_field_with_no_text_cells_is_skipped_until_it_has_room() {
+        let mut driver = Driver::with(
+            Ratcn::new()
+                .focus(|state: &State| &state.focus, Msg::Focus)
+                .tab_wrap(crate::runtime::TabWrap::Wrap),
+            12,
+            3,
+        );
+        let mut state = state("");
+        let declare = |driver: &mut Driver<State, Msg>, state: &State, field: Rect| {
+            driver.render(state, |ctx| {
+                ctx.component(
+                    ChildId::Static("name"),
+                    Input::new().value(|state: &State| &state.name, Msg::Name),
+                    field,
+                );
+                ctx.component(
+                    ChildId::Static("save"),
+                    crate::Button::new("Save").on_press(|| Msg::Submit),
+                    Rect::new(0, 1, 12, 1),
+                );
+                ctx.component(
+                    ChildId::Static("cancel"),
+                    crate::Button::new("Cancel").on_press(|| Msg::Submit),
+                    Rect::new(0, 2, 12, 1),
+                );
+            });
+        };
+
+        declare(&mut driver, &state, Rect::new(0, 0, 2, 1));
+        assert!(
+            driver
+                .ratcn
+                .focus_path(&[ChildId::Static("name")])
+                .is_none()
+        );
+        send(&mut driver, &mut state, key(KeyCode::Tab));
+        assert_eq!(
+            state.focus.path(),
+            [ChildId::Static("cancel")],
+            "startup focus went to Save, so Tab moves on to Cancel"
+        );
+        declare(&mut driver, &state, Rect::new(0, 0, 2, 1));
+        send(&mut driver, &mut state, key(KeyCode::Tab));
+        assert_eq!(
+            state.focus.path(),
+            [ChildId::Static("save")],
+            "Tab wraps past the field"
+        );
+        declare(&mut driver, &state, Rect::new(0, 0, 2, 1));
+        for event in [
+            key(KeyCode::Char('x')),
+            Event::Paste("x".to_owned()),
+            mouse(LEFT_DOWN, 0, 0),
+        ] {
+            assert!(
+                !matches!(
+                    driver.event(event.clone(), &state),
+                    EventResult::Emit(Msg::Name(_))
+                ),
+                "{event:?}"
+            );
+        }
+
+        state.focus = FocusState::default();
+        declare(&mut driver, &state, FIELD);
+        let EventResult::Emit(Msg::Name(typed)) = driver.event(key(KeyCode::Char('x')), &state)
+        else {
+            panic!("the enlarged field takes startup focus and typing");
+        };
+        assert_eq!(typed.value(), "x");
+        let EventResult::Emit(Msg::Name(pasted)) =
+            driver.event(Event::Paste("y".to_owned()), &state)
+        else {
+            panic!("the enlarged field takes a paste");
+        };
+        assert_eq!(pasted.value(), "y");
     }
 
     #[test]
