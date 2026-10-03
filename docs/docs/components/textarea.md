@@ -164,7 +164,7 @@ so its readline-style keys apply:
 | `Shift` + a movement | Select |
 | `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
 | `Ctrl+W` `Alt+Backspace` `Alt+H` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
-| `Ctrl+K` | Delete to the end of the line |
+| `Ctrl+K` | Delete to the end of the line; at its end, join the next line |
 | `Ctrl+C` `Ctrl+X` `Ctrl+Y` | Copy, cut, and paste within the field |
 | `Enter` | Insert a line break |
 | `Ctrl+Enter` `Ctrl+J` | Submit |
@@ -260,8 +260,10 @@ self.painted = Some((self.notes.version(), editor));
 
 // On a key:
 match key.code {
-    // Enter is a line break, so submitting takes a chord, shifted or not;
-    // Ctrl+J is how a terminal that sends a line feed reports Ctrl+Enter.
+    // Enter is a line break, so submitting takes a chord. Ctrl+J is how a
+    // terminal that sends a line feed reports Ctrl+Enter, and some report it
+    // as `J`: either way it must never reach the editor, whose Ctrl+J deletes
+    // to the line start.
     KeyCode::Enter | KeyCode::Char('j' | 'J') if key.modifiers.ctrl => self.save(),
     // Focus traversal and the enclosing view.
     KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc => {}

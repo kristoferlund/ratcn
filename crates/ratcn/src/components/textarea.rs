@@ -349,9 +349,10 @@ impl<'a> TextAreaWidget<'a> {
     ///     painted: &mut Option<(u64, Editor<'static>)>,
     /// ) {
     ///     match key.code {
-    ///         // Enter is a line break, so submitting takes a chord, shifted or
-    ///         // not; Ctrl+J is how a terminal that sends a line feed reports
-    ///         // Ctrl+Enter.
+    ///         // Enter is a line break, so submitting takes a chord. Ctrl+J is
+    ///         // how a terminal that sends a line feed reports Ctrl+Enter, and
+    ///         // some report it as `J`: either way it must never reach the
+    ///         // editor, whose Ctrl+J deletes to the line start.
     ///         KeyCode::Enter | KeyCode::Char('j' | 'J') if key.modifiers.ctrl => { /* submit */ }
     ///         // Focus traversal and the enclosing view.
     ///         KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc => {}
