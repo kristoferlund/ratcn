@@ -185,7 +185,9 @@ terminal.on_key_event({
 terminal.draw_web(move |frame| app.borrow_mut().draw(frame));
 ```
 
-Wire mouse callbacks the same way; see
+An app with text fields routes through the `route` function in
+[The clipboard](#the-clipboard) instead, so a copy reaches the clipboard. Wire
+mouse callbacks the same way; see
 [Mouse Input](./mouse#in-the-browser) for the details. Time-based cleanup,
 including toast pruning, belongs in the draw callback or another host callback
 that can cause a frame.
@@ -218,13 +220,15 @@ A field copies on `Ctrl+C` only with a selection, and lets it bubble without
 one, so route `Ctrl+C` before treating it as quit. Quit only when the event put
 nothing on the clipboard, not only when it came back `Ignored`: an open modal
 consumes every key. Here `app` is your app, holding its `Ratcn` as `ratcn`, and
-`is_quit` says whether the event was `Ctrl+C`:
+`is_quit` says whether an event is `Ctrl+C` (the loop in
+[The event loop](#the-event-loop) is the same):
 
 ```rust
+let quit = is_quit(&event);
 app.handle_event(event);
 match app.ratcn.take_clipboard() {
     Some(text) => session.set_clipboard(&text)?,
-    None if is_quit => return Ok(()),
+    None if quit => return Ok(()),
     None => {}
 }
 ```
@@ -242,10 +246,13 @@ not the keys. Every other `Cmd` or `Super` chord is dropped, on every platform:
 it never reaches the app, so the Mac's `Cmd` editing chords do nothing in a
 field.
 
-The page keeps what is its own: an event aimed at a DOM text input, text area,
-or editable content, or made while focus is in one, is left alone, and so is a
-copy or cut of text selected on the page while focus is off the app's canvas. Install one per page, and keep the
-guard alive for as long as the app runs. The runtime ignores events before the
+Focus decides whose an event is. With focus on the app's canvas it is the
+app's, and a copy or cut the app answers with nothing copies nothing. With
+focus on the page's body, or nowhere, it is the app's too, unless text is
+selected on the page for a copy or cut; so a page that releases keyboard
+capture by blurring to the body still sends the clipboard chords to the app.
+With focus on any other element, an input or a button, the page keeps it.
+Install one per page, and keep the guard alive for as long as the app runs. The runtime ignores events before the
 first render, so an early paste is left to the page.
 
 ```rust

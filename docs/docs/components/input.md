@@ -169,8 +169,9 @@ so its readline-style keys apply:
 
 In a terminal, `Ctrl+C` and `Ctrl+X` act only on a selection; with nothing
 selected they bubble, so an app that quits on `Ctrl+C` still does with a field
-focused. In the browser they never arrive as keys: see
-[Copy and paste](#copy-and-paste).
+focused. In the browser, `Cmd+C`/`Cmd+X` on a Mac and `Ctrl+C`/`Ctrl+X`
+elsewhere arrive as `Event::Copy` and `Event::Cut`, not as keys; on a Mac,
+`Ctrl+C` and `Ctrl+X` are still keys. See [Copy and paste](#copy-and-paste).
 
 Keys route by binding, not by effect. A key the editor binds is the field's
 even where it changes nothing — <kbd>←</kbd> at the start of the text,
