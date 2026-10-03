@@ -86,8 +86,11 @@ both bubble.
 ratcn's terminal session does not enable the kitty keyboard protocol, so most
 terminals send <kbd>Ctrl+Enter</kbd> as a plain Enter, which inserts a line
 break. Terminals that send a line feed instead deliver it as
-<kbd>Ctrl+J</kbd>, which the field treats as the same submit chord. Give a form
-a second way to submit — the demo has a Save button.
+<kbd>Ctrl+J</kbd>, which the field treats as the same submit chord. In the
+browser it is the other way round: <kbd>Ctrl+Enter</kbd> arrives, and the
+browser keeps <kbd>Ctrl+J</kbd> for itself. Give a form a second way to submit
+— the demo has a Save button, and its help line names the chord that works on
+each host.
 :::
 
 ## Placeholder and title
@@ -286,7 +289,8 @@ match key.code {
   state if the new one is too long.
 - **No double-click word selection**, and no system clipboard beyond the host's
   paste.
-- **Ctrl+Enter** submits only on a terminal that reports it, as above.
+- **Ctrl+Enter** submits only on a terminal that reports it, and **Ctrl+J**
+  not in the browser, as above.
 - Text fields currently build against a fork of `ratatui-textarea`, until
   upstream releases the changes they depend on.
 

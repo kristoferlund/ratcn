@@ -7,8 +7,9 @@
 //! The field wraps a line longer than it is wide and scrolls to keep the
 //! cursor in view. Enter is a line break here, so saving is Ctrl+Enter, or
 //! Ctrl+J, which every terminal sends. A terminal reports Ctrl+Enter only
-//! under a keyboard protocol this host does not turn on, so the form also has
-//! a button; Tab moves between the two.
+//! under a keyboard protocol this host does not turn on, and a browser keeps
+//! Ctrl+J for itself, so the help line names the chord that works on each,
+//! and the form also has a button; Tab moves between the two.
 //!
 //! The mouse works as in any editor: a click places the cursor, a drag
 //! selects, and the wheel scrolls the text. A paste keeps its line breaks.
@@ -29,7 +30,12 @@ const DEMO_WIDTH: u16 = 48;
 const DEMO_HEIGHT: u16 = 14;
 const CONTENT_PADDING: Margin = Margin::new(2, 1);
 const SAVED: &str = "Saved";
-const HELP: &str = "Tab to Save, or Ctrl+J";
+// The browser opens its downloads on Ctrl+J but passes Ctrl+Enter on.
+const HELP: &str = if cfg!(target_arch = "wasm32") {
+    "Tab to Save, or Ctrl+Enter"
+} else {
+    "Tab to Save, or Ctrl+J"
+};
 
 #[derive(Default)]
 struct AppState {
@@ -286,8 +292,8 @@ mod tests {
         assert_eq!(app.state.notes.lines(), ["note"], "Enter pressed Save");
     }
 
-    /// Ctrl+J is the chord every terminal sends, so the help line names it,
-    /// and it saves from the field without splitting the line.
+    /// Ctrl+J is the chord every terminal sends, so the help line names it
+    /// there, and it saves from the field without splitting the line.
     #[test]
     fn the_chord_the_help_line_names_saves() {
         let mut app = app();
