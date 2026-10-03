@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "input"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "ratatui",
  "ratcn",
@@ -2273,7 +2273,7 @@ checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
 name = "textarea"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "ratatui",
  "ratcn",
