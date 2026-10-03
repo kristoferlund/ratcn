@@ -439,8 +439,8 @@ fn blit(destination: &mut Buffer, source: &Buffer, target: Rect, source_y: u16) 
 }
 
 impl demo_shared::Demo for App {
-    /// So a paste reaches an embedded demo that wants one.
-    const PASTE: bool = true;
+    /// So the clipboard's events reach an embedded demo that wants them.
+    const CLIPBOARD: bool = true;
 
     /// Paint with the terminal's own colors, falling back to `THEME`. Each
     /// embedded demo then resolves its own theme from that.

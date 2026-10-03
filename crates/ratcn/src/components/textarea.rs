@@ -475,9 +475,10 @@ type StyleFn = Rc<dyn Fn(&Theme) -> TextAreaStyle>;
 ///
 /// <kbd>Ctrl+C</kbd> and <kbd>Ctrl+X</kbd> copy and cut the selection to the
 /// system clipboard, as a browser's copy and cut
-/// ([`Event::Copy`], [`Event::Cut`]) do; with nothing selected they bubble, so
-/// the app's own <kbd>Ctrl+C</kbd> keeps working. <kbd>Ctrl+Y</kbd> pastes the
-/// last copy or cut back.
+/// ([`Event::Copy`], [`Event::Cut`]) do; a copy keeps the selection. With
+/// nothing selected they bubble, so in a terminal the app's own
+/// <kbd>Ctrl+C</kbd> keeps working. <kbd>Ctrl+Y</kbd> pastes the last copy or
+/// cut back.
 ///
 /// A click places the cursor at the character clicked, and a drag selects
 /// from the character pressed to the one under the pointer, scrolling the
@@ -669,9 +670,10 @@ impl<S, M> TextArea<S, M> {
     }
 
     /// Copy the selection to the clipboard, or cut it there when `cut` is
-    /// set. The editor copies or cuts it too, so Ctrl+Y yanks it back. With
-    /// nothing selected there is nothing to copy, and the request bubbles:
-    /// that is how an app's Ctrl+C reaches it through a focused field.
+    /// set. The editor's yank buffer takes it too, so Ctrl+Y pastes it back;
+    /// a copy keeps the selection. With nothing selected there is nothing to
+    /// copy, and the request bubbles: that is how an app's Ctrl+C reaches it
+    /// through a focused field.
     fn handle_copy(
         &self,
         cut: bool,
@@ -685,7 +687,11 @@ impl<S, M> TextArea<S, M> {
         if cut {
             editor.cut();
         } else {
-            editor.copy();
+            // Upstream's copy ends the selection, and a copy should not: a
+            // second Ctrl+C would no longer find one, and bubble.
+            let mut copied = editor.clone();
+            copied.copy();
+            editor.set_yank_text(copied.yank_text());
         }
         ctx.set_clipboard(editor.yank_text());
         EventResult::Emit(TextAreaState::from_editor(editor))
@@ -1289,7 +1295,8 @@ mod tests {
 
     /// Copy and cut put the selection on the system clipboard, line breaks
     /// and all, and in the editor's yank buffer too, so Ctrl+Y still pastes
-    /// it back. Ctrl+C and Ctrl+X do it from the keyboard; `Event::Copy` and
+    /// it back, and a copy leaves the selection as it was. Ctrl+C and Ctrl+X
+    /// do it from the keyboard; `Event::Copy` and
     /// `Event::Cut` are the platform's own gesture, a browser's copy say.
     #[test]
     fn copy_and_cut_put_the_selection_on_the_clipboard() {
@@ -1314,11 +1321,10 @@ mod tests {
             );
             let left = if cut { "two" } else { "one\ntwo" };
             assert_eq!(state.notes.value(), left, "{event:?}");
-            assert_eq!(
-                state.notes.editor().selection_range(),
-                None,
-                "{event:?} ends the selection"
-            );
+            // A copy keeps the selection, so a second Ctrl+C copies again
+            // rather than bubbling to the app's quit; a cut takes it away.
+            let kept = if cut { None } else { Some(((0, 0), (1, 0))) };
+            assert_eq!(state.notes.editor().selection_range(), kept, "{event:?}");
             render(&mut driver, &state);
             send(&mut driver, &mut state, key_with(KeyCode::Char('y'), CTRL));
             assert!(

@@ -442,7 +442,7 @@ mod browser_clipboard {
 
     use web_sys::{
         ClipboardEvent, Document, KeyboardEvent, Window,
-        wasm_bindgen::{JsCast, prelude::Closure},
+        wasm_bindgen::{JsCast, JsValue, prelude::Closure},
     };
 
     use super::Event;
@@ -452,20 +452,26 @@ mod browser_clipboard {
     /// the page itself:
     ///
     /// - The document's `paste`, `copy`, and `cut` events arrive as
-    ///   [`Event::Paste`], [`Event::Copy`], and [`Event::Cut`].
-    /// - The platform's clipboard chords are kept from ratzilla, so they
-    ///   reach the app as those events and not as keys: every <kbd>Cmd</kbd>
-    ///   chord on a Mac (which ratzilla would report as the bare letter, so
-    ///   Cmd+C would type `c`), and <kbd>Ctrl+C</kbd>, <kbd>Ctrl+X</kbd>, and
-    ///   <kbd>Ctrl+V</kbd> elsewhere. A Mac is told by `navigator.platform`.
+    ///   [`Event::Paste`], [`Event::Copy`], and [`Event::Cut`]. Its
+    ///   `beforepaste`, `beforecopy`, and `beforecut` are cancelled, which is
+    ///   how Safari enables those commands on a canvas with no text selected.
+    /// - The clipboard chords are stopped before they reach ratzilla as keys,
+    ///   so the browser turns them into those events instead: every
+    ///   <kbd>Cmd</kbd> (or <kbd>Super</kbd>) chord, which ratzilla would
+    ///   report as the bare letter, and on all but a Mac <kbd>Ctrl+C</kbd>,
+    ///   <kbd>Ctrl+X</kbd>, and <kbd>Ctrl+V</kbd>. A Mac is told by
+    ///   `navigator.platform`. <kbd>Cmd+A</kbd> is also kept from selecting
+    ///   the page's text.
     ///
-    /// Text an app writes outside those events — Ctrl+C on a Mac, a "Copy"
-    /// button — goes out through [`write`](Self::write).
+    /// Install one per page. Text an app writes outside those events —
+    /// Ctrl+C on a Mac, a "Copy" button — goes out through
+    /// [`write`](Self::write).
     #[must_use = "dropping the guard removes its browser listeners"]
     pub struct BrowserClipboard {
         window: Window,
         document: Document,
         on_clipboard: Closure<dyn FnMut(ClipboardEvent)>,
+        on_before: Closure<dyn FnMut(web_sys::Event)>,
         on_keydown: Closure<dyn FnMut(KeyboardEvent)>,
     }
 
@@ -475,8 +481,11 @@ mod browser_clipboard {
         }
     }
 
-    /// The document events this listens to.
+    /// The document events this routes.
     const EVENTS: [&str; 3] = ["paste", "copy", "cut"];
+
+    /// The document events this cancels, so Safari offers the ones above.
+    const BEFORE: [&str; 3] = ["beforepaste", "beforecopy", "beforecut"];
 
     impl BrowserClipboard {
         /// Install the listeners.
@@ -486,10 +495,9 @@ mod browser_clipboard {
         /// [`EventResult::Ignored`](super::EventResult::Ignored) to `true`.
         /// `take_clipboard` hands back what the app wrote meanwhile, as
         /// [`Ratcn::take_clipboard`](super::super::Ratcn::take_clipboard)
-        /// does. The page's own handling is left alone unless the app took a
-        /// paste, or took a copy or cut and wrote the text it put on the
-        /// clipboard. An event before the first render is ignored by the
-        /// runtime, so the page keeps it.
+        /// does. A paste the app took, and a copy or cut that wrote text, are
+        /// the app's; anything else is left to the page. An event before the
+        /// first render is ignored by the runtime, so the page keeps it.
         ///
         /// # Errors
         ///
@@ -507,47 +515,54 @@ mod browser_clipboard {
                 let Some(data) = event.clipboard_data() else {
                     return;
                 };
-                match event.type_().as_str() {
-                    "paste" => {
-                        let Ok(text) = data.get_data("text/plain") else {
-                            return;
-                        };
-                        if on_event(Event::Paste(text)) {
-                            event.prevent_default();
-                        }
+                if event.type_() == "paste" {
+                    let Ok(text) = data.get_data("text/plain") else {
+                        return;
+                    };
+                    if on_event(Event::Paste(text)) {
+                        event.prevent_default();
                     }
-                    kind => {
-                        let routed = if kind == "cut" {
-                            Event::Cut
-                        } else {
-                            Event::Copy
-                        };
-                        let handled = on_event(routed);
-                        if let Some(text) = take_clipboard()
-                            && handled
-                            && data.set_data("text/plain", &text).is_ok()
-                        {
-                            event.prevent_default();
-                        }
-                    }
+                    return;
+                }
+                let _ = on_event(if event.type_() == "cut" {
+                    Event::Cut
+                } else {
+                    Event::Copy
+                });
+                if let Some(text) = take_clipboard()
+                    && data.set_data("text/plain", &text).is_ok()
+                {
+                    event.prevent_default();
                 }
             });
-            for kind in EVENTS {
-                document
-                    .add_event_listener_with_callback(kind, on_clipboard.as_ref().unchecked_ref())
-                    .map_err(|error| io::Error::other(format!("{kind} listener: {error:?}")))?;
-            }
+            let on_before = Closure::new(|event: web_sys::Event| event.prevent_default());
             let mac = window
                 .navigator()
                 .platform()
                 .is_ok_and(|platform| platform.starts_with("Mac"));
             let on_keydown = Closure::new(move |event: KeyboardEvent| {
-                if is_clipboard_chord(&event, mac) {
+                let letter = chord_letter(&event);
+                let clipboard = matches!(letter, Some('c' | 'x' | 'v'));
+                if event.meta_key() {
                     // Not `prevent_default`: the browser still has to fire
                     // its copy, cut, or paste event.
                     event.stop_propagation();
+                    if letter == Some('a') {
+                        event.prevent_default();
+                    }
+                } else if !mac && clipboard && event.ctrl_key() && !event.alt_key() {
+                    event.stop_propagation();
                 }
             });
+            let listen = |kinds: [&str; 3], callback: &JsValue| {
+                kinds.into_iter().try_for_each(|kind| {
+                    document
+                        .add_event_listener_with_callback(kind, callback.unchecked_ref())
+                        .map_err(|error| io::Error::other(format!("{kind} listener: {error:?}")))
+                })
+            };
+            listen(EVENTS, on_clipboard.as_ref())?;
+            listen(BEFORE, on_before.as_ref())?;
             // The capture phase on the window runs before ratzilla's
             // listener on the canvas, which then never sees the key.
             window
@@ -561,6 +576,7 @@ mod browser_clipboard {
                 window,
                 document,
                 on_clipboard,
+                on_before,
                 on_keydown,
             })
         }
@@ -568,33 +584,50 @@ mod browser_clipboard {
         /// Put `text` on the clipboard from outside a copy or cut event, with
         /// `navigator.clipboard.writeText`. The browser allows it while
         /// handling a user's key press or click, on a secure page (https, or
-        /// localhost); otherwise the write fails silently.
+        /// localhost), and in a cross-origin iframe only with
+        /// `allow="clipboard-write"`; otherwise the write fails silently.
         pub fn write(text: &str) {
-            if let Some(window) = web_sys::window() {
-                let _ = window.navigator().clipboard().write_text(text);
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let clipboard = window.navigator().clipboard();
+            // Missing on an insecure page, where calling it would throw.
+            if JsValue::from(&clipboard).is_undefined() {
+                return;
             }
+            let _ = clipboard.write_text(text);
         }
     }
 
-    /// Whether `event` is a chord the browser turns into a clipboard event:
-    /// on a Mac any Cmd chord, elsewhere Ctrl+C, Ctrl+X, or Ctrl+V alone.
-    fn is_clipboard_chord(event: &KeyboardEvent, mac: bool) -> bool {
-        if mac {
-            return event.meta_key();
+    /// The letter a chord was typed with, lowercased: the key's own when it is
+    /// an ASCII letter, and the physical key's on a layout that types another
+    /// script, where Ctrl+С is still copy. Not the physical key alone: on
+    /// Dvorak the key in C's place types `j`.
+    fn chord_letter(event: &KeyboardEvent) -> Option<char> {
+        let key = event.key();
+        let mut chars = key.chars();
+        match (chars.next(), chars.next()) {
+            (Some(char), None) if char.is_ascii_alphabetic() => Some(char.to_ascii_lowercase()),
+            _ if !key.is_ascii() => event
+                .code()
+                .strip_prefix("Key")
+                .and_then(|letter| letter.chars().next())
+                .map(|char| char.to_ascii_lowercase()),
+            _ => None,
         }
-        event.ctrl_key()
-            && !event.alt_key()
-            && !event.meta_key()
-            && matches!(event.key().as_str(), "c" | "C" | "x" | "X" | "v" | "V")
     }
 
     impl Drop for BrowserClipboard {
         fn drop(&mut self) {
-            for kind in EVENTS {
-                let _ = self.document.remove_event_listener_with_callback(
-                    kind,
-                    self.on_clipboard.as_ref().unchecked_ref(),
-                );
+            for (kinds, callback) in [
+                (EVENTS, self.on_clipboard.as_ref()),
+                (BEFORE, self.on_before.as_ref()),
+            ] {
+                for kind in kinds {
+                    let _ = self
+                        .document
+                        .remove_event_listener_with_callback(kind, callback.unchecked_ref());
+                }
             }
             let _ = self.window.remove_event_listener_with_callback_and_bool(
                 "keydown",

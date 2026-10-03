@@ -1242,7 +1242,7 @@ impl<'a> EventCtx<'a> {
     /// Put `text` on the system clipboard.
     ///
     /// The runtime keeps the latest text written, and the host carries it out
-    /// after the event: it takes it with
+    /// after the event, whatever the event's result: it takes it with
     /// [`Ratcn::take_clipboard`](super::Ratcn::take_clipboard) and writes it
     /// through the terminal or the browser.
     pub fn set_clipboard(&mut self, text: impl Into<String>) {

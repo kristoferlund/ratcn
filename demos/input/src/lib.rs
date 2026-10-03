@@ -148,8 +148,9 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    /// A paste reaches the focused field as one event.
-    const PASTE: bool = true;
+    /// A paste reaches the focused field as one event, and so do a browser's
+    /// copy and cut.
+    const CLIPBOARD: bool = true;
 
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
@@ -621,7 +622,7 @@ mod tests {
     /// holds one line whatever the clipboard held.
     #[test]
     fn a_paste_lands_in_the_focused_field_as_one_line() {
-        const { assert!(<App as demo_shared::Demo>::PASTE) };
+        const { assert!(<App as demo_shared::Demo>::CLIPBOARD) };
         let mut app = app();
 
         assert!(app.handle_event(Event::Paste("Ada\nLovelace".to_owned())));
@@ -659,7 +660,7 @@ mod tests {
         type_text(&mut app, "hunter2");
         assert!(app.handle_event(shift_home));
         screen(&mut app);
-        assert!(!app.handle_event(ctrl_c), "the copy is left to the host");
-        assert_eq!(app.take_clipboard(), None);
+        assert!(app.handle_event(ctrl_c), "the selection takes the chord");
+        assert_eq!(app.take_clipboard(), None, "and copies nothing");
     }
 }

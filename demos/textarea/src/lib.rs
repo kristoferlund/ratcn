@@ -78,8 +78,9 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    /// A paste reaches the field as one event, line breaks and all.
-    const PASTE: bool = true;
+    /// A paste reaches the field as one event, line breaks and all, and so do
+    /// a browser's copy and cut.
+    const CLIPBOARD: bool = true;
 
     fn handle_event(&mut self, event: Event) -> bool {
         match self.ratcn.handle_event(event, &self.state) {
@@ -371,7 +372,7 @@ mod tests {
     /// area keeps the lines a paste arrives with.
     #[test]
     fn a_paste_keeps_its_line_breaks() {
-        const { assert!(<App as demo_shared::Demo>::PASTE) };
+        const { assert!(<App as demo_shared::Demo>::CLIPBOARD) };
         let mut app = app();
 
         send(&mut app, Event::Paste("one\r\ntwo\nthree".to_owned()));

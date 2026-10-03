@@ -38,7 +38,7 @@ pub trait Demo {
 
     /// Whether the host delivers the clipboard's events — bracketed paste
     /// natively; the browser's `paste`, `copy`, and `cut` on the web.
-    const PASTE: bool = false;
+    const CLIPBOARD: bool = false;
 
     /// The theme this demo paints with, and what it falls back to under
     /// [`ADAPTIVE`](Self::ADAPTIVE).
@@ -111,7 +111,7 @@ fn options_for<D: Demo>() -> SessionOptions {
     if D::INPUT {
         options = options.mouse();
     }
-    if D::PASTE {
+    if D::CLIPBOARD {
         options = options.paste();
     }
     if D::ADAPTIVE {
@@ -355,7 +355,7 @@ mod web_host {
                 .map_err(|error| io::Error::other(error.to_string()))?;
         }
 
-        if D::PASTE {
+        if D::CLIPBOARD {
             let listener = BrowserClipboard::install(
                 {
                     let host = Rc::clone(&host);
@@ -431,7 +431,8 @@ mod web_host {
         /// clipboard.
         fn on_input(self: &Rc<Self>, event: impl TryInto<Event>) {
             self.on_event(event);
-            if let Some(text) = self.demo.borrow_mut().take_clipboard() {
+            let written = self.demo.borrow_mut().take_clipboard();
+            if let Some(text) = written {
                 BrowserClipboard::write(&text);
             }
         }
@@ -773,7 +774,7 @@ mod tests {
             fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
         }
         impl Demo for Everything {
-            const PASTE: bool = true;
+            const CLIPBOARD: bool = true;
             const ADAPTIVE: bool = true;
             fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
         }
@@ -976,21 +977,26 @@ mod tests {
     }
 
     /// A field with a selection copies on Ctrl+C, and the host writes the
-    /// copy to the terminal's clipboard instead of quitting.
+    /// copy to the terminal's clipboard instead of quitting. The demo keeps
+    /// running for whatever comes next.
     #[test]
     fn a_quit_key_that_copied_writes_the_clipboard_and_runs_on() {
         let mut probe = Probe {
-            handled: VecDeque::from([true]),
+            handled: VecDeque::from([true, true]),
             clipboard: VecDeque::from([Some("copied".to_owned())]),
             ..Probe::default()
         };
-        let mut script = Script::new(HostBackend::new(20, 5), [Some(quit())]);
+        let mut script = Script::new(HostBackend::new(20, 5), [Some(quit()), Some(key('y'))]);
 
         run_scripted(&mut probe, &mut script);
 
         assert_eq!(script.clipboard, vec!["copied".to_owned()]);
-        assert_eq!(probe.routed.len(), 2, "the second Ctrl+C copied nothing");
-        assert_eq!(probe.frames, 2, "the copy drew its frame before the quit");
+        assert_eq!(
+            probe.app_events().len(),
+            2,
+            "the Ctrl+C and the key after it reached the demo"
+        );
+        assert_eq!(probe.frames, 3, "each drew its frame");
     }
 
     #[test]
