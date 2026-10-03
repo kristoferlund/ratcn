@@ -293,6 +293,8 @@ match key.code {
   paste.
 - **Ctrl+Enter** submits only on a terminal that reports it, and **Ctrl+J**
   not in the browser, as above.
+- **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the
+  cursor off from the character clicked. Keyboard editing is unaffected.
 - Text fields currently build against a fork of `ratatui-textarea`, until
   upstream releases the changes they depend on.
 

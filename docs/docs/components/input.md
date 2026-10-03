@@ -292,6 +292,8 @@ back from `InputState::from_editor` as one, its lines joined with spaces.
   state if the new one is too long.
 - **No double-click word selection**, and no system clipboard beyond the host's
   paste.
+- **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the
+  cursor off from the character clicked. Keyboard editing is unaffected.
 - Text fields currently build against a fork of `ratatui-textarea`, until
   upstream releases the changes they depend on.
 
