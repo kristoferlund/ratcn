@@ -74,7 +74,7 @@ to the app. Tab traversal reveals a focused descendant that was offscreen.
 by binding, not by effect: a key their editor binds is theirs even where it
 changes nothing — `←` at the start of the text, `Ctrl+K` at its end — and a
 chord it does not bind bubbles, so app hotkeys reach the app wherever the
-cursor is. Every unmodified key is text or movement there; `j`, `h`, and Space
+cursor is. Every unmodified character is text there; `j`, `h`, and Space
 are characters. Both leave Tab, Shift+Tab, Esc, and the function keys alone,
 so traversal and dialogs keep working around a focused field. Input also
 leaves the vertical keys and the editor's chords for them. Each page lists its

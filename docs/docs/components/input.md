@@ -245,15 +245,15 @@ use ratcn::{
     text_edit::{Editor, editor_input, is_editor_binding},
 };
 
-// Beside the state, the editor the last paint handed back:
-painted: Option<Editor<'static>>,
+// Beside the state, the editor the last paint handed back, with the version
+// of the state it was painted from:
+painted: Option<(u64, Editor<'static>)>,
 
 // In draw():
-self.painted = Some(
-    InputWidget::new(&self.name)
-        .focused(true)
-        .paint(area, frame.buffer_mut()),
-);
+let editor = InputWidget::new(&self.name)
+    .focused(true)
+    .paint(area, frame.buffer_mut());
+self.painted = Some((self.name.version(), editor));
 
 // On a key:
 match key.code {
@@ -261,14 +261,17 @@ match key.code {
     // Focus traversal, the enclosing view, and keys with nowhere to go on
     // one line.
     KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc | KeyCode::Up | KeyCode::Down => {}
-    // Line breaks: Ctrl+J is a terminal's line feed.
-    KeyCode::Char('j' | 'm') if key.modifiers.ctrl => {}
+    // Line breaks, shifted or not: Ctrl+J is a terminal's line feed.
+    KeyCode::Char('j' | 'J' | 'm' | 'M') if key.modifiers.ctrl => {}
     KeyCode::Char('\n' | '\r') => {}
     _ => {
         if let Some(input) = editor_input(&key).filter(is_editor_binding) {
-            // The painted editor, until the state moves on without a paint
-            // between. If you replace the state yourself, clear `painted`.
-            let mut editor = self.painted.take().unwrap_or_else(|| self.name.editor().clone());
+            // The painted editor, while the state is still the one it was
+            // painted from.
+            let mut editor = match self.painted.take() {
+                Some((version, editor)) if version == self.name.version() => editor,
+                _ => self.name.editor().clone(),
+            };
             editor.input(input);
             self.name = InputState::from_editor(editor);
         }

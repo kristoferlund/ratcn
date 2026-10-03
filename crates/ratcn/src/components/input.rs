@@ -341,35 +341,63 @@ impl<'a> InputWidget<'a> {
     ///     text_edit::{Editor, editor_input, is_editor_binding},
     /// };
     ///
+    /// // Beside the state, the editor the last paint handed back, with the
+    /// // version of the state it was painted from.
     /// let mut state = InputState::new("Ada Lovelace");
+    /// let mut painted: Option<(u64, Editor<'static>)> = None;
+    ///
+    /// // Each frame:
     /// let area = Rect::new(0, 0, 8, 1);
     /// let mut buf = Buffer::empty(area);
-    ///
-    /// // Each frame, keep the editor the paint hands back.
-    /// let mut painted: Option<Editor<'static>> =
-    ///     Some(InputWidget::new(&state).focused(true).paint(area, &mut buf));
+    /// let editor = InputWidget::new(&state).focused(true).paint(area, &mut buf);
+    /// painted = Some((state.version(), editor));
     ///
     /// // When a key arrives:
-    /// let key = KeyEvent::new(KeyCode::Left);
-    /// match key.code {
-    ///     KeyCode::Enter => { /* submit */ }
-    ///     // Focus traversal, the enclosing view, and keys with nowhere to go
-    ///     // on one line.
-    ///     KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc | KeyCode::Up | KeyCode::Down => {}
-    ///     // Line breaks: Ctrl+J is a terminal's line feed.
-    ///     KeyCode::Char('j' | 'm') if key.modifiers.ctrl => {}
-    ///     KeyCode::Char('\n' | '\r') => {}
-    ///     _ => {
-    ///         if let Some(input) = editor_input(&key).filter(is_editor_binding) {
-    ///             // The painted editor, until the state moves on without a
-    ///             // paint between.
-    ///             let mut editor = painted.take().unwrap_or_else(|| state.editor().clone());
-    ///             editor.input(input);
-    ///             state = InputState::from_editor(editor);
+    /// fn on_key(
+    ///     key: KeyEvent,
+    ///     state: &mut InputState,
+    ///     painted: &mut Option<(u64, Editor<'static>)>,
+    /// ) {
+    ///     match key.code {
+    ///         KeyCode::Enter => { /* submit */ }
+    ///         // Focus traversal, the enclosing view, and keys with nowhere to
+    ///         // go on one line.
+    ///         KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc | KeyCode::Up | KeyCode::Down => {}
+    ///         // Line breaks, shifted or not: Ctrl+J is a terminal's line feed.
+    ///         KeyCode::Char('j' | 'J' | 'm' | 'M') if key.modifiers.ctrl => {}
+    ///         KeyCode::Char('\n' | '\r') => {}
+    ///         _ => {
+    ///             if let Some(input) = editor_input(&key).filter(is_editor_binding) {
+    ///                 // The painted editor, while the state is still the one
+    ///                 // it was painted from.
+    ///                 let mut editor = match painted.take() {
+    ///                     Some((version, editor)) if version == state.version() => editor,
+    ///                     _ => state.editor().clone(),
+    ///                 };
+    ///                 editor.input(input);
+    ///                 *state = InputState::from_editor(editor);
+    ///             }
     ///         }
     ///     }
     /// }
+    ///
+    /// on_key(KeyEvent::new(KeyCode::Left), &mut state, &mut painted);
     /// assert_eq!(state.cursor(), 11);
+    /// # // A shifted chord is the same chord: neither line break edits.
+    /// # use ratcn::runtime::Modifiers;
+    /// # let shifted = |char| KeyEvent {
+    /// #     code: KeyCode::Char(char),
+    /// #     modifiers: Modifiers { ctrl: true, alt: false, shift: true },
+    /// # };
+    /// # on_key(shifted('J'), &mut state, &mut painted);
+    /// # on_key(shifted('M'), &mut state, &mut painted);
+    /// # assert_eq!(state.value(), "Ada Lovelace");
+    /// # // A state the app replaces after a paint is the one edited.
+    /// # let editor = InputWidget::new(&state).focused(true).paint(area, &mut buf);
+    /// # painted = Some((state.version(), editor));
+    /// # state = InputState::default();
+    /// # on_key(KeyEvent::new(KeyCode::Char('x')), &mut state, &mut painted);
+    /// # assert_eq!(state.value(), "x");
     /// ```
     pub fn paint(mut self, area: Rect, buf: &mut Buffer) -> Editor<'static> {
         let style = self
@@ -599,10 +627,10 @@ impl<S, M> Input<S, M> {
     /// painted from is still the app's, since only it knows how far the view
     /// is scrolled. A state that changed since the paint is edited itself —
     /// it descends from a painted editor through the event that produced it.
-    fn editor(&self, state: &InputState) -> Editor<'static> {
+    fn editor<'s>(&'s self, state: &'s InputState) -> &'s Editor<'static> {
         match &self.painted {
-            Some((version, editor)) if *version == state.version() => editor.clone(),
-            _ => state.editor().clone(),
+            Some((version, editor)) if *version == state.version() => editor,
+            _ => state.editor(),
         }
     }
 
@@ -620,7 +648,7 @@ impl<S, M> Input<S, M> {
         let Some(input) = editor_input(&key).filter(is_editor_binding) else {
             return EventResult::Ignored;
         };
-        let mut editor = self.editor(state);
+        let mut editor = self.editor(state).clone();
         // The yank buffer changes only with the text, or on a copy, which
         // ends the selection: neither goes unseen here.
         let before = (editor.cursor(), editor.selection_range());
@@ -638,7 +666,7 @@ impl<S, M> Input<S, M> {
         if text.is_empty() {
             return EventResult::Ignored;
         }
-        let mut editor = self.editor(state);
+        let mut editor = self.editor(state).clone();
         editor.insert_str(text);
         EventResult::Emit(InputState::from_editor(editor))
     }
@@ -659,26 +687,31 @@ impl<S, M> Input<S, M> {
         let titled = self.title.is_some();
         let text = text_rect(ctx.area(), titled);
         let pointer = Position::new(mouse.column, mouse.row);
-        let mut editor = self.editor(state);
-        let before = (editor.cursor(), editor.selection_range());
-        match mouse.kind {
+        let painted = self.editor(state);
+        let editor = match mouse.kind {
             MouseKind::Down(MouseButton::Left) if well(ctx.area(), titled).contains(pointer) => {
                 ctx.capture_pointer(MouseButton::Left);
-                *ctx.transient() = DragAnchor(cursor_at(&editor, text, pointer));
+                *ctx.transient() = DragAnchor(cursor_at(painted, text, pointer));
                 return EventResult::Ignored;
             }
             MouseKind::Click(MouseButton::Left) if ctx.pointer_captured() => {
+                let mut editor = painted.clone();
                 editor.cancel_selection();
                 editor.move_cursor(cursor_at(&editor, text, pointer));
+                editor
             }
             MouseKind::Drag(MouseButton::Left) if ctx.pointer_captured() => {
                 let DragAnchor(anchor) = *ctx.transient();
+                let mut editor = painted.clone();
                 let pointer = cursor_at(&editor, text, pointer);
                 select_dragged(&mut editor, anchor, pointer);
+                editor
             }
             _ => return EventResult::Ignored,
-        }
-        if before == (editor.cursor(), editor.selection_range()) {
+        };
+        if (painted.cursor(), painted.selection_range())
+            == (editor.cursor(), editor.selection_range())
+        {
             EventResult::Consumed
         } else {
             EventResult::Emit(InputState::from_editor(editor))

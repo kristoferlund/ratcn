@@ -40,13 +40,13 @@ wasm-bindgen = "0.2.122"
 wasm-bindgen-futures = "0.4.72"
 web-sys = { version = "0.3.99", features = ["AbortController", "AbortSignal", "Headers", "Request", "RequestInit", "Response", "Window"] }
 
-# Input and TextArea need changes that upstream has not released yet: the
-# masked width fix, the `screen_to_data` hit test, and `scroll_offset`
-# (upstream #30, merged but unreleased), and the fork's fixes for a wide
-# character cut by the horizontal scroll and for whitespace at a word-wrap
-# break, with a `screen_to_data` clamp fix to come. Until a release carries
-# them, the crates.io name resolves to the `ratcn` branch of our fork. Remove
-# this block, and bump the version above, once upstream ships them. ratcn
-# cannot be published while this patch is in place.
+# Input and TextArea need what upstream has not released: `scroll_offset` and
+# the `screen_to_data` hit test (upstream #30, merged but unreleased), and the
+# fork's fixes for the masked width, a wide character cut by the horizontal
+# scroll, whitespace at a word-wrap break, and a `screen_to_data` that stays on
+# the clicked row and off grapheme interiors. Until a release carries them, the
+# crates.io name resolves to the `ratcn` branch of our fork. Remove this block,
+# and bump the version above, once upstream ships them. ratcn cannot be
+# published while this patch is in place.
 [patch.crates-io]
 ratatui-textarea = { git = "https://github.com/kristoferlund/ratatui-textarea", rev = "61e6eb6c6e3feee6b8d5a57a3250393752b56634" }

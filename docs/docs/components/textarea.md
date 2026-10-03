@@ -244,28 +244,31 @@ use ratcn::{
     text_edit::{Editor, editor_input, is_editor_binding},
 };
 
-// Beside the state, the editor the last paint handed back:
-painted: Option<Editor<'static>>,
+// Beside the state, the editor the last paint handed back, with the version
+// of the state it was painted from:
+painted: Option<(u64, Editor<'static>)>,
 
 // In draw():
-self.painted = Some(
-    TextAreaWidget::new(&self.notes)
-        .focused(true)
-        .paint(area, frame.buffer_mut()),
-);
+let editor = TextAreaWidget::new(&self.notes)
+    .focused(true)
+    .paint(area, frame.buffer_mut());
+self.painted = Some((self.notes.version(), editor));
 
 // On a key:
 match key.code {
-    // Enter is a line break, so submitting takes a chord; Ctrl+J is how a
-    // terminal that sends a line feed reports Ctrl+Enter.
-    KeyCode::Enter | KeyCode::Char('j') if key.modifiers.ctrl => self.save(),
+    // Enter is a line break, so submitting takes a chord, shifted or not;
+    // Ctrl+J is how a terminal that sends a line feed reports Ctrl+Enter.
+    KeyCode::Enter | KeyCode::Char('j' | 'J') if key.modifiers.ctrl => self.save(),
     // Focus traversal and the enclosing view.
     KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc => {}
     _ => {
         if let Some(input) = editor_input(&key).filter(is_editor_binding) {
-            // The painted editor, until the state moves on without a paint
-            // between. If you replace the state yourself, clear `painted`.
-            let mut editor = self.painted.take().unwrap_or_else(|| self.notes.editor().clone());
+            // The painted editor, while the state is still the one it was
+            // painted from.
+            let mut editor = match self.painted.take() {
+                Some((version, editor)) if version == self.notes.version() => editor,
+                _ => self.notes.editor().clone(),
+            };
             editor.input(input);
             self.notes = TextAreaState::from_editor(editor);
         }
