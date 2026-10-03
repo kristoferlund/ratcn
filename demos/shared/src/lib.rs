@@ -356,9 +356,10 @@ mod web_host {
         }
 
         if D::CLIPBOARD {
-            // The keyboard capture script makes the whole page the demo's
-            // keyboard surface, so the body is the demo's element. Esc
-            // blurs it, which hands the clipboard back to the page.
+            // The body, only because the page is the demo: its keyboard
+            // capture script makes the whole page the demo's keyboard
+            // surface. Esc blurs it, which hands the clipboard back to the
+            // page. An app sharing a page passes its own element.
             let body = web_sys::window()
                 .and_then(|window| window.document())
                 .and_then(|document| document.body())

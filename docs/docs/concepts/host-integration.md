@@ -242,7 +242,7 @@ wrote, and puts it on the clipboard (a paste's write goes out too).
 It also stops chords from reaching ratzilla as keys. `Cmd+C`, `Cmd+X`, and
 `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` elsewhere, become
 `Event::Copy`, `Event::Cut`, and `Event::Paste`, so an app binds those events,
-not the keys. Every other `Cmd` or `Super` chord is dropped, on every platform:
+not the keys; off a Mac, `Shift+Delete` becomes `Event::Cut` too. Every other `Cmd` or `Super` chord is dropped, on every platform:
 it never reaches the app, so the Mac's `Cmd` editing chords do nothing in a
 field.
 
@@ -251,14 +251,19 @@ focus is on that element or inside it, and the page's otherwise, so the page's
 own inputs, buttons, and shortcuts keep their keys, and two apps on one page
 each get only their own. Pass the canvas a canvas backend (`WebGl2Backend`,
 `CanvasBackend`) draws on, or the container you gave it as `grid_id`; for
-`DomBackend`, its grid container. A copy or cut the app answers with nothing
+`DomBackend`, the element whose id you gave as `grid_id`. A copy or cut the app answers with nothing
 copies nothing, unless text inside its element is selected. Keep the guard
 alive for as long as the app runs. The runtime ignores events before the first
 render, so an early paste is left to the page.
 
 ```rust
+// The element whose id the backend was given as `grid_id`.
+let element = web_sys::window()
+    .and_then(|window| window.document())
+    .and_then(|document| document.get_element_by_id("app"))
+    .ok_or_else(|| io::Error::other("no #app element"))?;
 let clipboard = BrowserClipboard::install(
-    &canvas,
+    &element,
     {
         let app = Rc::clone(&app);
         move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)

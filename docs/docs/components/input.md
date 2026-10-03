@@ -323,6 +323,8 @@ back from `InputState::from_editor` as one, its lines joined with spaces.
 - **No Linux primary selection** (select, then middle-click).
 - **Cmd editing chords do nothing in the browser on a Mac** — `Cmd+←`, `Cmd+→`,
   `Cmd+Backspace` and the like. Use `Home`, `End`, and the `Ctrl` chords.
+- **A page selection survives a click into the field in the browser.** It
+  stays highlighted, but a copy in the field never copies it.
 - **Safari is unverified.**
 - **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the
   cursor off from the character clicked. Keyboard editing is unaffected.

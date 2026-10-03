@@ -460,7 +460,7 @@ mod browser_clipboard {
     ///   so the browser turns them into those events instead: every
     ///   <kbd>Cmd</kbd> (or <kbd>Super</kbd>) chord, which ratzilla would
     ///   report as the bare letter, and on all but a Mac <kbd>Ctrl+C</kbd>,
-    ///   <kbd>Ctrl+X</kbd>, and <kbd>Ctrl+V</kbd>. A Mac is told by
+    ///   <kbd>Ctrl+X</kbd>, <kbd>Ctrl+V</kbd>, and <kbd>Shift+Delete</kbd>. A Mac is told by
     ///   `navigator.platform`. <kbd>Cmd+A</kbd> is also kept from selecting
     ///   the page's text.
     ///
@@ -495,8 +495,8 @@ mod browser_clipboard {
 
     impl BrowserClipboard {
         /// Install the listeners for the app drawn in `app`: the canvas a
-        /// canvas backend draws on, or the element holding it, or the grid
-        /// element a DOM backend fills.
+        /// canvas backend draws on, or the element holding it; for a DOM
+        /// backend, the element whose id was given as its `grid_id`.
         ///
         /// `on_event` routes one clipboard event and reports whether the app
         /// took it — as a host does by mapping anything but
@@ -584,7 +584,10 @@ mod browser_clipboard {
                     if letter == Some('a') {
                         event.prevent_default();
                     }
-                } else if !mac && clipboard && event.ctrl_key() && !event.alt_key() {
+                } else if !mac
+                    && (clipboard && event.ctrl_key() && !event.alt_key()
+                        || is_shift_delete(&event))
+                {
                     event.stop_propagation();
                 }
             });
@@ -652,6 +655,12 @@ mod browser_clipboard {
             .filter(|selection| !selection.is_collapsed())
             .and_then(|selection| selection.anchor_node())
             .is_some_and(|node| app.contains(Some(&node)))
+    }
+
+    /// Shift+Delete, which a browser off a Mac reads as cut; ratzilla would
+    /// delete the selection without copying it.
+    fn is_shift_delete(event: &KeyboardEvent) -> bool {
+        event.key() == "Delete" && event.shift_key() && !event.ctrl_key() && !event.alt_key()
     }
 
     /// The letter a chord was typed with, lowercased: the key's own when it is

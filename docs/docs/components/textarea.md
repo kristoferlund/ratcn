@@ -320,6 +320,8 @@ match key.code {
 - **No Linux primary selection** (select, then middle-click).
 - **Cmd editing chords do nothing in the browser on a Mac** — `Cmd+←`, `Cmd+→`,
   `Cmd+Backspace` and the like. Use `Home`, `End`, and the `Ctrl` chords.
+- **A page selection survives a click into the field in the browser.** It
+  stays highlighted, but a copy in the field never copies it.
 - **Safari is unverified.**
 - **Ctrl+Enter** submits only on a terminal that reports it, and **Ctrl+J**
   not in the browser, as above.
