@@ -442,7 +442,7 @@ mod browser_clipboard {
 
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
-        ClipboardEvent, Document, Element, HtmlCanvasElement, KeyboardEvent, Window,
+        ClipboardEvent, Document, Element, KeyboardEvent, Window,
         wasm_bindgen::{JsCast, JsValue, prelude::Closure},
     };
 
@@ -464,14 +464,13 @@ mod browser_clipboard {
     ///   `navigator.platform`. <kbd>Cmd+A</kbd> is also kept from selecting
     ///   the page's text.
     ///
-    /// Focus decides whose an event is. With focus on a canvas, it is the
-    /// app's, and a copy or cut the app answers with nothing copies nothing.
-    /// With focus on the page's body, or nowhere, it is the app's too, except
-    /// a copy or cut of text selected on the page. With focus on any other
-    /// element — an input, a button — the page keeps it.
+    /// Focus decides whose an event is: it is the app's while focus is on the
+    /// app's element or inside it (`:focus-within`), and the page's otherwise.
+    /// A copy or cut the app answers with nothing copies nothing, unless text
+    /// inside the app's element is selected, which the browser then copies.
     ///
-    /// Install one per page. Text an app writes outside those events —
-    /// Ctrl+C on a Mac, a "Copy" button — goes out through
+    /// Install one per app, given its element. Text an app writes outside
+    /// those events — Ctrl+C on a Mac, a "Copy" button — goes out through
     /// [`write`](Self::write).
     #[must_use = "dropping the guard removes its browser listeners"]
     pub struct BrowserClipboard {
@@ -495,7 +494,9 @@ mod browser_clipboard {
     const BEFORE: [&str; 3] = ["beforepaste", "beforecopy", "beforecut"];
 
     impl BrowserClipboard {
-        /// Install the listeners.
+        /// Install the listeners for the app drawn in `app`: the canvas a
+        /// canvas backend draws on, or the element holding it, or the grid
+        /// element a DOM backend fills.
         ///
         /// `on_event` routes one clipboard event and reports whether the app
         /// took it — as a host does by mapping anything but
@@ -511,6 +512,7 @@ mod browser_clipboard {
         /// Returns an I/O error if there is no window or document, or if either
         /// refuses a listener.
         pub fn install(
+            app: &Element,
             mut on_event: impl FnMut(Event) -> bool + 'static,
             mut take_clipboard: impl FnMut() -> Option<String> + 'static,
         ) -> io::Result<Self> {
@@ -518,45 +520,51 @@ mod browser_clipboard {
             let document = window
                 .document()
                 .ok_or_else(|| io::Error::other("no document"))?;
-            let on_clipboard = Closure::new(move |event: ClipboardEvent| {
-                let Some(data) = event.clipboard_data() else {
-                    return;
-                };
-                let focus = focus();
-                if focus == Focus::Page {
-                    return;
-                }
-                if event.type_() == "paste" {
-                    let Ok(text) = data.get_data("text/plain") else {
+            let keyboard_app = app.clone();
+            let on_clipboard = Closure::new({
+                let app = app.clone();
+                move |event: ClipboardEvent| {
+                    let Some(data) = event.clipboard_data() else {
                         return;
                     };
-                    if on_event(Event::Paste(text)) {
+                    if !focused(&app) {
+                        return;
+                    }
+                    if event.type_() == "paste" {
+                        let Ok(text) = data.get_data("text/plain") else {
+                            return;
+                        };
+                        if on_event(Event::Paste(text)) {
+                            event.prevent_default();
+                        }
+                        // A paste's write goes out as any other event's does.
+                        if let Some(text) = take_clipboard() {
+                            Self::write(&text);
+                        }
+                        return;
+                    }
+                    let _ = on_event(if event.type_() == "cut" {
+                        Event::Cut
+                    } else {
+                        Event::Copy
+                    });
+                    if let Some(text) = take_clipboard() {
+                        let _ = data.set_data("text/plain", &text);
+                    } else if selected_within(&app) {
+                        // Text of the app's own DOM, which the browser copies.
+                        return;
+                    }
+                    // The app's copy, even of nothing: the browser's own would
+                    // copy whatever the page still has selected.
+                    event.prevent_default();
+                }
+            });
+            let on_before = Closure::new({
+                let app = app.clone();
+                move |event: web_sys::Event| {
+                    if focused(&app) {
                         event.prevent_default();
                     }
-                    // A paste's write goes out as any other event's does.
-                    if let Some(text) = take_clipboard() {
-                        Self::write(&text);
-                    }
-                    return;
-                }
-                if focus == Focus::Body && page_selection() {
-                    return;
-                }
-                let _ = on_event(if event.type_() == "cut" {
-                    Event::Cut
-                } else {
-                    Event::Copy
-                });
-                if let Some(text) = take_clipboard() {
-                    let _ = data.set_data("text/plain", &text);
-                }
-                // The app's copy, even of nothing: the browser's own would
-                // copy whatever the page still has selected.
-                event.prevent_default();
-            });
-            let on_before = Closure::new(|event: web_sys::Event| {
-                if focus() != Focus::Page {
-                    event.prevent_default();
                 }
             });
             let mac = window
@@ -564,7 +572,7 @@ mod browser_clipboard {
                 .platform()
                 .is_ok_and(|platform| platform.starts_with("Mac"));
             let on_keydown = Closure::new(move |event: KeyboardEvent| {
-                if focus() == Focus::Page {
+                if !focused(&keyboard_app) {
                     return;
                 }
                 let letter = chord_letter(&event);
@@ -630,40 +638,20 @@ mod browser_clipboard {
         }
     }
 
-    /// Where focus is, which decides whose a clipboard event or chord is.
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Focus {
-        /// A canvas: the app's.
-        Canvas,
-        /// Nowhere in particular — the page's body, or nothing. The app's,
-        /// unless the page has text selected for a copy or cut.
-        Body,
-        /// Any other element: the page's own.
-        Page,
+    /// Whether focus is on `app` or inside it, which makes an event the
+    /// app's.
+    fn focused(app: &Element) -> bool {
+        app.matches(":focus-within").unwrap_or(false)
     }
 
-    fn focus() -> Focus {
-        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
-            return Focus::Body;
-        };
-        match document.active_element() {
-            Some(focused) if focused.is_instance_of::<HtmlCanvasElement>() => Focus::Canvas,
-            Some(focused)
-                if document
-                    .body()
-                    .is_none_or(|body| Element::from(body) != focused) =>
-            {
-                Focus::Page
-            }
-            _ => Focus::Body,
-        }
-    }
-
-    /// Whether text is selected on the page.
-    fn page_selection() -> bool {
+    /// Whether text inside `app` is selected: the app's own DOM, for a
+    /// backend that draws into it.
+    fn selected_within(app: &Element) -> bool {
         web_sys::window()
             .and_then(|window| window.get_selection().ok().flatten())
-            .is_some_and(|selection| !selection.is_collapsed())
+            .filter(|selection| !selection.is_collapsed())
+            .and_then(|selection| selection.anchor_node())
+            .is_some_and(|node| app.contains(Some(&node)))
     }
 
     /// The letter a chord was typed with, lowercased: the key's own when it is

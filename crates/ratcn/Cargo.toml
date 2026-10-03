@@ -30,10 +30,9 @@ web-sys = { version = "0.3", optional = true, features = [
     "Document",
     "EventTarget",
     "Element",
-    "HtmlCanvasElement",
-    "HtmlElement",
     "KeyboardEvent",
     "Navigator",
+    "Node",
     "Selection",
     "Window",
 ] }
