@@ -97,7 +97,9 @@ first character. `.title(...)` is the label on the border.
 paint changes: the state keeps the text as typed, and `value()` returns it.
 Each character is one mask cell whatever its real width, so the mask does not
 give away the shape of what it hides. A masked field never copies or cuts, as
-a browser's password field does not; a paste still goes in.
+a browser's password field does not; on a selection it still takes `Ctrl+C`
+and `Ctrl+X`, so they cannot quit an app that quits on `Ignored`. A paste
+still goes in.
 
 ```rust
 Input::new()
@@ -166,8 +168,9 @@ so its readline-style keys apply:
 | `Ctrl+Y` | Paste the field's last copy or cut |
 | `Enter` | Submit |
 
-`Ctrl+C` and `Ctrl+X` act only on a selection. With nothing selected they
-bubble, so an app that quits on `Ctrl+C` still does with a field focused. See
+In a terminal, `Ctrl+C` and `Ctrl+X` act only on a selection; with nothing
+selected they bubble, so an app that quits on `Ctrl+C` still does with a field
+focused. In the browser they never arrive as keys: see
 [Copy and paste](#copy-and-paste).
 
 Keys route by binding, not by effect. A key the editor binds is the field's
@@ -211,11 +214,13 @@ from it, on the keys each platform's users expect:
 |---|---|---|---|
 | Browser, Mac | `Cmd+C` | `Cmd+X` | `Cmd+V` |
 | Browser, Linux and Windows | `Ctrl+C` | `Ctrl+X` | `Ctrl+V` |
-| Browser, any | Edit menu, context menu | same | same |
 | Terminal, any OS | `Ctrl+C` on a selection | `Ctrl+X` on a selection | the terminal's own: `Cmd+V` (Mac), `Ctrl+Shift+V` (Linux), `Ctrl+V` (Windows Terminal) |
 
 In a terminal, `Cmd+C` and `Ctrl+Shift+C` belong to the terminal, which copies
-its own selection. A copy or cut also fills the field's own buffer, so `Ctrl+Y`
+its own selection. In the browser the platform's chords arrive as
+`Event::Copy`, `Event::Cut`, and `Event::Paste`, never as keys, so an app binds
+those events rather than the keys. A copy keeps the selection; a cut removes
+it. A copy or cut also fills the field's own buffer, so `Ctrl+Y`
 pastes it back.
 
 A paste is inserted at the cursor as one line: each line break and tab becomes
@@ -309,13 +314,16 @@ back from `InputState::from_editor` as one, its lines joined with spaces.
 - **No maximum length.** Check the value in `update` and keep the previous
   state if the new one is too long.
 - **No double-click word selection.**
-- **No copy in macOS Terminal.app.** A terminal app writes the clipboard with
-  the OSC 52 escape sequence, which Terminal.app ignores. iTerm2 honors it only
-  with its clipboard-access setting on, and tmux only with
-  `set -g set-clipboard on`.
+- **No copy in macOS Terminal.app or the VTE terminals** (GNOME Terminal,
+  xfce4-terminal, Tilix). A terminal app writes the clipboard with the OSC 52
+  escape sequence, which they ignore. iTerm2 honors it only with its
+  clipboard-access setting on, and tmux only with `set -g set-clipboard on`.
 - **No in-app paste in a terminal.** Terminals do not let an app read the
   clipboard, so `Ctrl+V` cannot paste it; the terminal's own paste does.
 - **No Linux primary selection** (select, then middle-click).
+- **Cmd editing chords do nothing in the browser on a Mac** — `Cmd+←`, `Cmd+→`,
+  `Cmd+Backspace` and the like. Use `Home`, `End`, and the `Ctrl` chords.
+- **Safari is unverified.**
 - **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the
   cursor off from the character clicked. Keyboard editing is unaffected.
 - Text fields currently build against a fork of `ratatui-textarea`, until

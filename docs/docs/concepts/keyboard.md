@@ -77,9 +77,11 @@ chord it does not bind bubbles, so app hotkeys reach the app wherever the
 cursor is. Every unmodified character is text there; `j`, `h`, and Space
 are characters. Both leave Tab, Shift+Tab, Esc, and the function keys alone,
 so traversal and dialogs keep working around a focused field. Input also
-leaves the vertical keys and the editor's chords for them. `Ctrl+C` and
-`Ctrl+X` copy and cut a selection, and bubble without one, so an app's
-`Ctrl+C` still works. Each page lists its editing keys.
+leaves the vertical keys and the editor's chords for them. In a terminal,
+`Ctrl+C` and `Ctrl+X` copy and cut a selection, and bubble without one. In the
+browser, `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` on Linux and Windows, and every `Cmd`
+chord on a Mac, arrive as `Event::Copy`, `Event::Cut`, and `Event::Paste`,
+never as keys: bind those events, not the keys. Each page lists its editing keys.
 
 ### Commit and dismiss
 

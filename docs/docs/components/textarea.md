@@ -170,8 +170,9 @@ so its readline-style keys apply:
 | `Enter` | Insert a line break |
 | `Ctrl+Enter` `Ctrl+J` | Submit |
 
-`Ctrl+C` and `Ctrl+X` act only on a selection. With nothing selected they
-bubble, so an app that quits on `Ctrl+C` still does with a field focused. See
+In a terminal, `Ctrl+C` and `Ctrl+X` act only on a selection; with nothing
+selected they bubble, so an app that quits on `Ctrl+C` still does with a field
+focused. In the browser they never arrive as keys: see
 [Copy and paste](#copy-and-paste).
 
 Keys route by binding, not by effect. A key the editor binds is the field's
@@ -211,11 +212,13 @@ from it, on the keys each platform's users expect:
 |---|---|---|---|
 | Browser, Mac | `Cmd+C` | `Cmd+X` | `Cmd+V` |
 | Browser, Linux and Windows | `Ctrl+C` | `Ctrl+X` | `Ctrl+V` |
-| Browser, any | Edit menu, context menu | same | same |
 | Terminal, any OS | `Ctrl+C` on a selection | `Ctrl+X` on a selection | the terminal's own: `Cmd+V` (Mac), `Ctrl+Shift+V` (Linux), `Ctrl+V` (Windows Terminal) |
 
 In a terminal, `Cmd+C` and `Ctrl+Shift+C` belong to the terminal, which copies
-its own selection. A copy or cut also fills the field's own buffer, so `Ctrl+Y`
+its own selection. In the browser the platform's chords arrive as
+`Event::Copy`, `Event::Cut`, and `Event::Paste`, never as keys, so an app binds
+those events rather than the keys. A copy keeps the selection; a cut removes
+it. A copy or cut also fills the field's own buffer, so `Ctrl+Y`
 pastes it back.
 
 A paste is inserted at the cursor with its line breaks and tabs kept, whichever
@@ -307,13 +310,16 @@ match key.code {
 - **No maximum length.** Check the value in `update` and keep the previous
   state if the new one is too long.
 - **No double-click word selection.**
-- **No copy in macOS Terminal.app.** A terminal app writes the clipboard with
-  the OSC 52 escape sequence, which Terminal.app ignores. iTerm2 honors it only
-  with its clipboard-access setting on, and tmux only with
-  `set -g set-clipboard on`.
+- **No copy in macOS Terminal.app or the VTE terminals** (GNOME Terminal,
+  xfce4-terminal, Tilix). A terminal app writes the clipboard with the OSC 52
+  escape sequence, which they ignore. iTerm2 honors it only with its
+  clipboard-access setting on, and tmux only with `set -g set-clipboard on`.
 - **No in-app paste in a terminal.** Terminals do not let an app read the
   clipboard, so `Ctrl+V` cannot paste it; the terminal's own paste does.
 - **No Linux primary selection** (select, then middle-click).
+- **Cmd editing chords do nothing in the browser on a Mac** — `Cmd+←`, `Cmd+→`,
+  `Cmd+Backspace` and the like. Use `Home`, `End`, and the `Ctrl` chords.
+- **Safari is unverified.**
 - **Ctrl+Enter** submits only on a terminal that reports it, and **Ctrl+J**
   not in the browser, as above.
 - **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the

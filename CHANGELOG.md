@@ -11,7 +11,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `runtime::BrowserPasteListener` is `BrowserClipboard`, and `install` takes a
   second closure returning `Ratcn::take_clipboard`. It also carries copy and
-  cut, and keeps Cmd chords (Mac) and Ctrl+C/X/V from ratzilla as keys.
+  cut, and stops Cmd chords and (off a Mac) Ctrl+C/X/V reaching ratzilla as
+  keys.
 
 ### Added
 
