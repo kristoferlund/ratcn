@@ -1669,7 +1669,7 @@ dependencies = [
 [[package]]
 name = "ratatui-textarea"
 version = "0.9.2"
-source = "git+https://github.com/kristoferlund/ratatui-textarea?rev=f1d0780b1c3d0e932258f3f14240191e2dfe708a#f1d0780b1c3d0e932258f3f14240191e2dfe708a"
+source = "git+https://github.com/kristoferlund/ratatui-textarea?rev=2c805b08edb1b7ca60b37c0876111ffa6069a9d3#2c805b08edb1b7ca60b37c0876111ffa6069a9d3"
 dependencies = [
  "ratatui-core",
  "ratatui-widgets",
