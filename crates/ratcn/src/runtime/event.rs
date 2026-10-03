@@ -440,9 +440,9 @@ impl std::error::Error for Unsupported {}
 mod browser_clipboard {
     use std::io;
 
+    use wasm_bindgen_futures::JsFuture;
     use web_sys::{
-        ClipboardEvent, Document, EventTarget, HtmlCanvasElement, HtmlElement, HtmlInputElement,
-        HtmlTextAreaElement, KeyboardEvent, Window,
+        ClipboardEvent, Document, Element, HtmlCanvasElement, KeyboardEvent, Window,
         wasm_bindgen::{JsCast, JsValue, prelude::Closure},
     };
 
@@ -464,10 +464,11 @@ mod browser_clipboard {
     ///   `navigator.platform`. <kbd>Cmd+A</kbd> is also kept from selecting
     ///   the page's text.
     ///
-    /// The page keeps what is its own: an event aimed at, or made while
-    /// focus is in, a text input, a text area, or editable content is left
-    /// alone, and so is a copy or cut of text selected on the page while
-    /// focus is off the app's canvas.
+    /// Focus decides whose an event is. With focus on a canvas, it is the
+    /// app's, and a copy or cut the app answers with nothing copies nothing.
+    /// With focus on the page's body, or nowhere, it is the app's too, except
+    /// a copy or cut of text selected on the page. With focus on any other
+    /// element — an input, a button — the page keeps it.
     ///
     /// Install one per page. Text an app writes outside those events —
     /// Ctrl+C on a Mac, a "Copy" button — goes out through
@@ -521,7 +522,8 @@ mod browser_clipboard {
                 let Some(data) = event.clipboard_data() else {
                     return;
                 };
-                if page_owns(&event) {
+                let focus = focus();
+                if focus == Focus::Page {
                     return;
                 }
                 if event.type_() == "paste" {
@@ -537,7 +539,7 @@ mod browser_clipboard {
                     }
                     return;
                 }
-                if page_selection() {
+                if focus == Focus::Body && page_selection() {
                     return;
                 }
                 let _ = on_event(if event.type_() == "cut" {
@@ -545,14 +547,15 @@ mod browser_clipboard {
                 } else {
                     Event::Copy
                 });
-                if let Some(text) = take_clipboard()
-                    && data.set_data("text/plain", &text).is_ok()
-                {
-                    event.prevent_default();
+                if let Some(text) = take_clipboard() {
+                    let _ = data.set_data("text/plain", &text);
                 }
+                // The app's copy, even of nothing: the browser's own would
+                // copy whatever the page still has selected.
+                event.prevent_default();
             });
             let on_before = Closure::new(|event: web_sys::Event| {
-                if !page_owns(&event) {
+                if focus() != Focus::Page {
                     event.prevent_default();
                 }
             });
@@ -561,7 +564,7 @@ mod browser_clipboard {
                 .platform()
                 .is_ok_and(|platform| platform.starts_with("Mac"));
             let on_keydown = Closure::new(move |event: KeyboardEvent| {
-                if page_owns(&event) {
+                if focus() == Focus::Page {
                     return;
                 }
                 let letter = chord_letter(&event);
@@ -618,48 +621,49 @@ mod browser_clipboard {
             if JsValue::from(&clipboard).is_undefined() {
                 return;
             }
-            let _ = clipboard.write_text(text);
+            // A refused write rejects the promise: wait it out, so the
+            // rejection is handled and the failure stays silent.
+            let written = JsFuture::from(clipboard.write_text(text));
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = written.await;
+            });
         }
     }
 
-    /// Whether `event` belongs to the page rather than the app: it is aimed
-    /// at an editable element, or focus is in one.
-    fn page_owns(event: &web_sys::Event) -> bool {
-        let focused = web_sys::window()
-            .and_then(|window| window.document())
-            .and_then(|document| document.active_element())
-            .map(EventTarget::from);
-        editable(event.target()) || editable(focused)
+    /// Where focus is, which decides whose a clipboard event or chord is.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Focus {
+        /// A canvas: the app's.
+        Canvas,
+        /// Nowhere in particular — the page's body, or nothing. The app's,
+        /// unless the page has text selected for a copy or cut.
+        Body,
+        /// Any other element: the page's own.
+        Page,
     }
 
-    /// Whether `target` is a text input, a text area, or editable content.
-    fn editable(target: Option<EventTarget>) -> bool {
-        target.is_some_and(|target| {
-            target.is_instance_of::<HtmlInputElement>()
-                || target.is_instance_of::<HtmlTextAreaElement>()
-                || target
-                    .dyn_ref::<HtmlElement>()
-                    .is_some_and(HtmlElement::is_content_editable)
-        })
-    }
-
-    /// Whether a copy or cut is of text selected on the page. A click on the
-    /// app's canvas leaves the page's selection in place, so once focus is on
-    /// a canvas the copy is the app's.
-    fn page_selection() -> bool {
-        let Some(window) = web_sys::window() else {
-            return false;
+    fn focus() -> Focus {
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+            return Focus::Body;
         };
-        let on_canvas = window
-            .document()
-            .and_then(|document| document.active_element())
-            .is_some_and(|focused| focused.is_instance_of::<HtmlCanvasElement>());
-        !on_canvas
-            && window
-                .get_selection()
-                .ok()
-                .flatten()
-                .is_some_and(|selection| !selection.is_collapsed())
+        match document.active_element() {
+            Some(focused) if focused.is_instance_of::<HtmlCanvasElement>() => Focus::Canvas,
+            Some(focused)
+                if document
+                    .body()
+                    .is_none_or(|body| Element::from(body) != focused) =>
+            {
+                Focus::Page
+            }
+            _ => Focus::Body,
+        }
+    }
+
+    /// Whether text is selected on the page.
+    fn page_selection() -> bool {
+        web_sys::window()
+            .and_then(|window| window.get_selection().ok().flatten())
+            .is_some_and(|selection| !selection.is_collapsed())
     }
 
     /// The letter a chord was typed with, lowercased: the key's own when it is

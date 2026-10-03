@@ -674,7 +674,7 @@ impl<S, M> Input<S, M> {
     /// request bubbles: that is how an app's Ctrl+C reaches it through a
     /// focused field. A masked field never copies or cuts, as a
     /// browser's password field does not: the secret would leave it.
-    fn handle_copy(
+    fn handle_clip(
         &self,
         clip: Clip,
         state: &InputState,
@@ -819,11 +819,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
                 };
             }
             Event::Key(key) => match clipboard_chord(*key) {
-                Some(clip) => self.handle_copy(clip, read(state), ctx),
+                Some(clip) => self.handle_clip(clip, read(state), ctx),
                 None => self.handle_key(*key, read(state)),
             },
-            Event::Copy => self.handle_copy(Clip::Copy, read(state), ctx),
-            Event::Cut => self.handle_copy(Clip::Cut, read(state), ctx),
+            Event::Copy => self.handle_clip(Clip::Copy, read(state), ctx),
+            Event::Cut => self.handle_clip(Clip::Cut, read(state), ctx),
             Event::Paste(text) => self.handle_paste(text, read(state)),
             Event::Mouse(mouse) => self.handle_mouse(mouse, read(state), ctx),
             #[allow(
