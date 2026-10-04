@@ -10,7 +10,6 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
     style::Style,
-    text::Line,
 };
 use ratcn::{
     Input, InputState, Theme,
@@ -88,18 +87,11 @@ impl demo_shared::Demo for App {
         let [column] = Layout::horizontal([Constraint::Length(40)])
             .flex(Flex::Center)
             .areas(area);
-        let [
-            website_area,
-            search_area,
-            price_area,
-            weight_area,
-            hint_area,
-        ] = Layout::vertical([
+        let [website_area, search_area, price_area, weight_area] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(1),
             Constraint::Length(3),
             Constraint::Length(3),
-            Constraint::Length(1),
         ])
         .spacing(1)
         .flex(Flex::Center)
@@ -142,10 +134,6 @@ impl demo_shared::Demo for App {
                         .suffix("kg")
                         .placeholder("0"),
                     weight_area,
-                );
-                ctx.paint_widget(
-                    Line::from("Tab between fields").style(theme.muted_foreground),
-                    hint_area,
                 );
             });
     }

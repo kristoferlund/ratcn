@@ -205,9 +205,7 @@ impl demo_shared::Demo for App {
                 Some(Submitted::Incomplete) => {
                     Line::from("Fill in every field to sign up").style(theme.destructive)
                 }
-                None => {
-                    Line::from("Tab between fields, Enter to sign up").style(theme.muted_foreground)
-                }
+                None => return,
             };
             ctx.paint_widget(status, status_area);
         });
