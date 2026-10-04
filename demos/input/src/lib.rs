@@ -26,8 +26,14 @@ struct State {
     name: InputState,
     email: InputState,
     password: InputState,
-    /// Who the last sign-up was for.
-    signed_up: Option<String>,
+    /// What the last press of Enter came to.
+    submitted: Option<Submitted>,
+}
+
+/// The answer to a sign-up. Nothing is sent anywhere: this is a demo.
+enum Submitted {
+    SignedUp(String),
+    Incomplete,
 }
 
 impl State {
@@ -83,10 +89,13 @@ impl App {
             Msg::Name(name) => self.state.name = name,
             Msg::Email(email) => self.state.email = email,
             Msg::Password(password) => self.state.password = password,
-            Msg::SignUp if self.state.complete() => {
-                self.state.signed_up = Some(self.state.name.value().to_owned());
+            Msg::SignUp => {
+                self.state.submitted = Some(if self.state.complete() {
+                    Submitted::SignedUp(self.state.name.value().to_owned())
+                } else {
+                    Submitted::Incomplete
+                });
             }
-            Msg::SignUp => {}
         }
     }
 }
@@ -149,7 +158,7 @@ impl demo_shared::Demo for App {
                 Input::new()
                     .value(|s: &State| &s.name, Msg::Name)
                     .title("Name")
-                    .placeholder("Ada Lovelace")
+                    .placeholder("Pablo Picasso")
                     .on_submit(|| Msg::SignUp),
                 name_area,
             );
@@ -158,7 +167,7 @@ impl demo_shared::Demo for App {
                 Input::new()
                     .value(|s: &State| &s.email, Msg::Email)
                     .title("Email")
-                    .placeholder("ada@example.com")
+                    .placeholder("picasso@louvre.fr")
                     .invalid(email_error.is_some())
                     .on_submit(|| Msg::SignUp),
                 email_area,
@@ -187,8 +196,13 @@ impl demo_shared::Demo for App {
                 }
             }
 
-            let status = match &state.signed_up {
-                Some(name) => Line::from(format!("Signed up {name}")).style(theme.foreground),
+            let status = match &state.submitted {
+                Some(Submitted::SignedUp(name)) => {
+                    Line::from(format!("Signed up {name}")).style(theme.foreground)
+                }
+                Some(Submitted::Incomplete) => {
+                    Line::from("Fill in every field to sign up").style(theme.destructive)
+                }
                 None => {
                     Line::from("Tab between fields, Enter to sign up").style(theme.muted_foreground)
                 }
@@ -228,7 +242,7 @@ mod tests {
         let mut app = App::new();
         draw(&mut app);
 
-        type_text(&mut app, "Ada");
+        type_text(&mut app, "Pablo");
         press(&mut app, KeyCode::Tab);
         type_text(&mut app, "ada@example.com");
         press(&mut app, KeyCode::Tab);
@@ -236,7 +250,7 @@ mod tests {
         press(&mut app, KeyCode::Enter);
 
         assert_eq!(app.state.email.value(), "ada@example.com");
-        assert!(draw(&mut app).contains("Signed up Ada"));
+        assert!(draw(&mut app).contains("Signed up Pablo"));
     }
 
     #[test]
@@ -254,10 +268,7 @@ mod tests {
         assert!(screen.contains("At least 6 characters"));
 
         press(&mut app, KeyCode::Enter);
-        assert_eq!(
-            app.state.signed_up, None,
-            "an invalid form does not sign up"
-        );
+        assert!(draw(&mut app).contains("Fill in every field to sign up"));
 
         type_text(&mut app, "def");
         assert!(!draw(&mut app).contains("At least"));
