@@ -56,7 +56,7 @@ impl State {
 
 pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     let area = ctx.area();
-    let inner = declare_tile_panel(ctx, area, " alt+5 ");
+    let inner = declare_tile_panel(ctx, area, " alt+6 ");
     let disabled = ctx.state().controls_disabled;
     let summary = ctx.state().agent_settings_state.summary();
     let tooltip = Tooltip::new(summary)

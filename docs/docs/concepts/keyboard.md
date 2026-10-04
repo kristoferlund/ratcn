@@ -22,9 +22,9 @@ per-scope — see [Focus, hover, and identity](./focus-hover-identity). Apps add
 their own jumps with [`focus_key`](./focus-hover-identity#focus).
 
 For example, in the showcase's Agent settings, Tab chooses a setting and
-Left/Right or `h`/`l` changes its value. In Themes, Notifications, and the Quake III
-asset checklist, Up/Down or `k`/`j` moves among the rows of one List. Buttons and
-individual checkboxes use Tab/Shift+Tab, not arrows or Vim letters, to move focus.
+Left/Right or `h`/`l` changes its value. In Themes and Notifications, Up/Down or
+`k`/`j` moves among the rows of one List. Buttons and individual checkboxes use
+Tab/Shift+Tab, not arrows or Vim letters, to move focus.
 
 ### Navigation — moving a cursor inside a component
 
