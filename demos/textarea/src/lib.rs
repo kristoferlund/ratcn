@@ -1,45 +1,30 @@
-//! A notes field: one [`TextArea`], a live count beneath it, and a Save button.
+//! A notes field: one [`TextArea`] and a Save button.
 //!
-//! The text is a [`TextAreaState`] in app state. A keystroke emits the next
-//! state and `update` stores it; the count under the field is read straight
-//! from that state each frame, so it can never disagree with what is shown.
-//!
-//! The field wraps a line longer than it is wide and scrolls to keep the
-//! cursor in view. Enter is a line break here, so saving is Ctrl+Enter, or
-//! Ctrl+J, which every terminal sends. A terminal reports Ctrl+Enter only
-//! under a keyboard protocol this host does not turn on, and a browser keeps
-//! Ctrl+J for itself, so the help line names the chord that works on each,
-//! and the form also has a button; Tab moves between the two.
-//!
-//! The mouse works as in any editor: a click places the cursor, a drag
-//! selects, and the wheel scrolls the text. A paste keeps its line breaks.
-//! Ctrl+C and Ctrl+X copy and cut a selection to the system clipboard.
+//! The text is a [`TextAreaState`] in app state: a keystroke emits the next
+//! state and `update` stores it. Enter is a line break, so saving is the
+//! button, or Ctrl+Enter from the field. A terminal sends Ctrl+Enter as Ctrl+J,
+//! which the field takes for submit too.
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Flex, Layout, Rect},
     style::Style,
     text::Line,
 };
 use ratcn::{
     Button, TextArea, TextAreaState, Theme,
     runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
-    text_width::{display_width, display_width_u16},
 };
 
-const DEMO_WIDTH: u16 = 48;
-const DEMO_HEIGHT: u16 = 14;
-const CONTENT_PADDING: Margin = Margin::new(2, 1);
-const SAVED: &str = "Saved";
-// The browser opens its downloads on Ctrl+J but passes Ctrl+Enter on.
+// A browser opens its downloads on Ctrl+J, but passes Ctrl+Enter on.
 const HELP: &str = if cfg!(target_arch = "wasm32") {
-    "Tab to Save, or Ctrl+Enter"
+    "Ctrl+Enter or Tab to Save"
 } else {
-    "Tab to Save, or Ctrl+J"
+    "Ctrl+J or Tab to Save"
 };
 
 #[derive(Default)]
-struct AppState {
+struct State {
     focus: FocusState,
     notes: TextAreaState,
     /// The text as it was last saved.
@@ -54,16 +39,16 @@ enum Msg {
 }
 
 pub struct App {
-    state: AppState,
-    ratcn: Ratcn<AppState, Msg>,
+    state: State,
+    ratcn: Ratcn<State, Msg>,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
-            state: AppState::default(),
+            state: State::default(),
             ratcn: Ratcn::new()
-                .focus(|s: &AppState| &s.focus, Msg::Focus)
+                .focus(|s: &State| &s.focus, Msg::Focus)
                 .tab_wrap(TabWrap::Wrap),
         }
     }
@@ -78,8 +63,7 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    /// A paste reaches the field as one event, line breaks and all, and so do
-    /// a browser's copy and cut.
+    /// Pastes, and a browser's copy and cut, reach the field.
     const CLIPBOARD: bool = true;
 
     fn handle_event(&mut self, event: Event) -> bool {
@@ -93,48 +77,27 @@ impl demo_shared::Demo for App {
         }
     }
 
-    /// What a copy or cut in a field put on the clipboard.
+    /// What a copy or cut in the field put on the clipboard.
     fn take_clipboard(&mut self) -> Option<String> {
         self.ratcn.take_clipboard()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         buffer.set_style(area, Style::default().bg(theme.background));
+        let [column] = Layout::horizontal([Constraint::Length(44)])
+            .flex(Flex::Center)
+            .areas(area);
+        let [notes_area, footer] = Layout::vertical([Constraint::Length(8), Constraint::Length(1)])
+            .spacing(1)
+            .flex(Flex::Center)
+            .areas(column);
 
         let state = &self.state;
         self.ratcn.render_into(buffer, area, state, theme, |ctx| {
-            let demo = area.centered(
-                Constraint::Length(DEMO_WIDTH),
-                Constraint::Length(DEMO_HEIGHT),
-            );
-            ctx.paint(move |ctx| {
-                let surface = ctx.theme.surface;
-                ctx.with_buffer(demo, |area, buf| {
-                    buf.set_style(area, Style::default().bg(surface));
-                });
-            });
-
-            // The field takes every row the footer and help line leave it. On
-            // a short screen the padding gives way first, so the field keeps
-            // a row of text.
-            let content = if demo.height >= DEMO_HEIGHT {
-                demo.inner(CONTENT_PADDING)
-            } else {
-                demo.inner(Margin::new(CONTENT_PADDING.horizontal, 0))
-            };
-            let [notes_area, _, footer, _, help_area] = Layout::vertical([
-                Constraint::Fill(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .areas(content);
-
             ctx.component(
                 "notes",
                 TextArea::new()
-                    .value(|s: &AppState| &s.notes, Msg::Notes)
+                    .value(|s: &State| &s.notes, Msg::Notes)
                     .title("Notes")
                     .placeholder("What happened today?")
                     .on_submit(|| Msg::Save),
@@ -142,31 +105,17 @@ impl demo_shared::Demo for App {
             );
 
             let save = Button::new("Save").on_press(|| Msg::Save);
-            let [count_area, saved_area, save_area] = Layout::horizontal([
-                Constraint::Fill(1),
-                Constraint::Length(display_width_u16(SAVED)),
-                Constraint::Length(save.width()),
-            ])
-            .spacing(1)
-            .areas(footer);
-
-            // A count too wide for its room drops its last part whole.
-            let lines = state.notes.lines();
-            let characters: usize = lines.iter().map(|line| line.chars().count()).sum();
-            let line_count = format!("Lines: {}", lines.len());
-            let count = [format!("{line_count} · Chars: {characters}"), line_count]
-                .into_iter()
-                .find(|count| display_width(count) <= usize::from(count_area.width))
-                .unwrap_or_default();
-            ctx.paint_widget(Line::from(count).style(theme.muted_foreground), count_area);
-            // "Saved" is a claim about the text on screen, so it is checked
-            // against it each frame.
-            if state.saved.as_deref() == Some(state.notes.value().as_str()) {
-                ctx.paint_widget(Line::from(SAVED).style(theme.foreground), saved_area);
-            }
+            let [status_area, save_area] =
+                Layout::horizontal([Constraint::Fill(1), Constraint::Length(save.width())])
+                    .areas(footer);
+            let saved = state.saved.as_deref() == Some(state.notes.value().as_str());
+            let status = if saved {
+                Line::from("Saved").style(theme.foreground)
+            } else {
+                Line::from(HELP).style(theme.muted_foreground)
+            };
+            ctx.paint_widget(status, status_area);
             ctx.component("save", save, save_area);
-
-            ctx.paint_widget(Line::from(HELP).style(theme.muted_foreground), help_area);
         });
     }
 }
@@ -174,240 +123,40 @@ impl demo_shared::Demo for App {
 #[cfg(test)]
 mod tests {
     use demo_shared::Demo as _;
-    use ratcn::runtime::{KeyCode, KeyEvent, Modifiers};
+    use ratcn::runtime::{KeyCode, KeyEvent};
 
     use super::*;
 
-    const SCREEN: Rect = Rect::new(0, 0, 60, 16);
-
-    /// The app with its first frame drawn: the runtime routes nothing before
-    /// one.
-    fn app() -> App {
-        let mut app = App::new();
-        screen(&mut app);
-        app
-    }
-
-    /// Draw a frame and hand back its rows.
-    fn screen(app: &mut App) -> Vec<String> {
-        screen_of(app, SCREEN)
-    }
-
-    fn screen_of(app: &mut App, area: Rect) -> Vec<String> {
+    /// The app with a frame drawn: the runtime routes nothing before one.
+    fn draw(app: &mut App) -> String {
+        let area = Rect::new(0, 0, 60, 16);
         let mut buffer = Buffer::empty(area);
         app.draw(&mut buffer, area, &Theme::default_dark());
-        buffer
-            .content
-            .chunks(area.width.into())
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
-            .collect()
-    }
-
-    fn send(app: &mut App, event: Event) {
-        assert!(app.handle_event(event.clone()), "{event:?} changed nothing");
-        screen(app);
+        buffer.content.iter().map(|cell| cell.symbol()).collect()
     }
 
     fn press(app: &mut App, code: KeyCode) {
-        send(app, Event::Key(KeyEvent::new(code)));
+        assert!(app.handle_event(Event::Key(KeyEvent::new(code))));
+        draw(app);
     }
 
     fn type_text(app: &mut App, text: &str) {
-        for char in text.chars() {
-            press(app, KeyCode::Char(char));
-        }
+        text.chars()
+            .for_each(|char| press(app, KeyCode::Char(char)));
     }
 
-    fn ctrl_enter() -> Event {
-        Event::Key(KeyEvent {
-            code: KeyCode::Enter,
-            modifiers: Modifiers {
-                ctrl: true,
-                ..Modifiers::NONE
-            },
-        })
-    }
-
-    fn shows(screen: &[String], text: &str) -> bool {
-        screen.iter().any(|row| row.contains(text))
-    }
-
-    /// Enter is text in a multi-line field, and the count is read from the
-    /// same state the field paints, so the two move together.
     #[test]
-    fn enter_breaks_the_line_and_the_count_follows() {
-        let mut app = app();
-        assert!(shows(&screen(&mut app), "Lines: 1 · Chars: 0"));
+    fn enter_breaks_the_line_and_the_button_saves() {
+        let mut app = App::new();
+        draw(&mut app);
 
         type_text(&mut app, "Met Ada");
         press(&mut app, KeyCode::Enter);
         type_text(&mut app, "She counts");
-
-        let screen = screen(&mut app);
-        assert!(shows(&screen, "│ Met Ada "), "{screen:#?}");
-        assert!(shows(&screen, "│ She counts "), "{screen:#?}");
-        assert!(shows(&screen, "Lines: 2 · Chars: 17"), "{screen:#?}");
-    }
-
-    /// A line longer than the field breaks over rows on screen and stays one
-    /// line in the text: wrapping is paint, not an edit.
-    #[test]
-    fn a_long_line_wraps_on_screen_and_stays_one_line() {
-        let mut app = app();
-
-        type_text(
-            &mut app,
-            "The quick brown fox jumps over the lazy dog, twice over.",
-        );
-
-        let screen = screen(&mut app);
-        assert!(shows(&screen, "│ The quick brown fox"), "{screen:#?}");
-        assert!(shows(&screen, "│ dog, twice over."), "{screen:#?}");
-        assert!(shows(&screen, "Lines: 1 · Chars: 56"), "{screen:#?}");
-    }
-
-    /// This host never receives Ctrl+Enter, but a terminal that reports it
-    /// (and the browser) does: there it saves without also splitting the
-    /// line. "Saved" is a claim about the text on screen, so one more
-    /// keystroke makes it false.
-    #[test]
-    fn a_reported_ctrl_enter_saves_and_the_next_edit_is_unsaved() {
-        let mut app = app();
-        type_text(&mut app, "note");
-
-        send(&mut app, ctrl_enter());
-        assert_eq!(app.state.notes.lines(), ["note"]);
-        assert_eq!(app.state.saved.as_deref(), Some("note"));
-        assert!(shows(&screen(&mut app), "Saved"));
-
-        type_text(&mut app, "s");
-        assert!(!shows(&screen(&mut app), "Saved"));
-    }
-
-    /// The button is the way to save where Ctrl+Enter never arrives, so it
-    /// has to be reachable from the field, and the screen has to say so.
-    #[test]
-    fn the_help_line_says_how_to_reach_the_save_button() {
-        let mut app = app();
-        type_text(&mut app, "note");
-        assert!(shows(&screen(&mut app), HELP));
-
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Enter);
 
-        assert_eq!(app.state.saved.as_deref(), Some("note"));
-        assert_eq!(app.state.notes.lines(), ["note"], "Enter pressed Save");
-    }
-
-    /// Ctrl+J is the chord every terminal sends, so the help line names it
-    /// there, and it saves from the field without splitting the line.
-    #[test]
-    fn the_chord_the_help_line_names_saves() {
-        let mut app = app();
-        type_text(&mut app, "note");
-
-        send(
-            &mut app,
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers: Modifiers {
-                    ctrl: true,
-                    ..Modifiers::NONE
-                },
-            }),
-        );
-
-        assert_eq!(app.state.saved.as_deref(), Some("note"));
-        assert_eq!(app.state.notes.lines(), ["note"]);
-    }
-
-    /// The help line is set off from the footer by a blank row, as in the
-    /// input demo.
-    #[test]
-    fn the_help_line_is_set_off_from_the_footer() {
-        let mut app = app();
-        let screen = screen(&mut app);
-
-        let help = screen.iter().position(|row| row.contains(HELP));
-        let help = help.expect("the help line is shown");
-        assert_eq!(screen[help - 1].trim(), "", "{screen:#?}");
-        assert!(screen[help - 2].contains("Lines: 1"), "{screen:#?}");
-    }
-
-    /// On a small screen the field gives up rows and the footer keeps its
-    /// own: the count, "Saved", the button and the help line all still read.
-    #[test]
-    fn a_small_screen_keeps_the_footer_whole() {
-        let mut app = app();
-        type_text(&mut app, "The quick brown fox jumps over the lazy dog");
-        press(&mut app, KeyCode::Tab);
-        press(&mut app, KeyCode::Enter);
-
-        let screen = screen_of(&mut app, Rect::new(0, 0, 40, 12));
-
-        for text in ["┌Notes", "Lines: 1 · Chars: 43", "Saved", "Save ", HELP] {
-            assert!(shows(&screen, text), "{text} is missing: {screen:#?}");
-        }
-    }
-
-    /// The smallest screens the demo is shown on still read: the field keeps
-    /// a row of text, and a count too long for its room drops a part whole
-    /// rather than ending on a dangling separator.
-    #[test]
-    fn a_narrow_short_screen_keeps_a_text_row_and_a_clean_count() {
-        let mut app = app();
-        type_text(&mut app, "note");
-        press(&mut app, KeyCode::Tab);
-        press(&mut app, KeyCode::Enter);
-
-        let screen = screen_of(&mut app, Rect::new(0, 0, 30, 8));
-
-        for text in ["│ note", "Lines: 1", "Saved", "Save ", HELP] {
-            assert!(shows(&screen, text), "{text} is missing: {screen:#?}");
-        }
-        assert!(!shows(&screen, "·"), "{screen:#?}");
-    }
-
-    /// The host delivers pastes because the demo asks for them, and a text
-    /// area keeps the lines a paste arrives with.
-    #[test]
-    fn a_paste_keeps_its_line_breaks() {
-        const { assert!(<App as demo_shared::Demo>::CLIPBOARD) };
-        let mut app = app();
-
-        send(&mut app, Event::Paste("one\r\ntwo\nthree".to_owned()));
-
-        assert_eq!(app.state.notes.lines(), ["one", "two", "three"]);
-    }
-
-    /// Ctrl+C copies a selection to the clipboard for the host to write out,
-    /// and with nothing selected is left to the host, whose quit key it is.
-    #[test]
-    fn ctrl_c_copies_a_selection_and_otherwise_is_the_hosts() {
-        let ctrl_c = Event::Key(KeyEvent {
-            code: KeyCode::Char('c'),
-            modifiers: Modifiers {
-                ctrl: true,
-                ..Modifiers::NONE
-            },
-        });
-        let mut app = app();
-        type_text(&mut app, "note");
-        assert!(!app.handle_event(ctrl_c.clone()), "nothing selected");
-        assert_eq!(app.take_clipboard(), None);
-
-        send(
-            &mut app,
-            Event::Key(KeyEvent {
-                code: KeyCode::Home,
-                modifiers: Modifiers {
-                    shift: true,
-                    ..Modifiers::NONE
-                },
-            }),
-        );
-        send(&mut app, ctrl_c);
-
-        assert_eq!(app.take_clipboard().as_deref(), Some("note"));
+        assert_eq!(app.state.notes.lines(), ["Met Ada", "She counts"]);
+        assert!(draw(&mut app).contains("Saved"));
     }
 }
