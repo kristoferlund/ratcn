@@ -1,9 +1,8 @@
-//! A notes field: one [`TextArea`] and a Save button.
+//! A notes field: one [`TextArea`] with a line of stats beneath it.
 //!
 //! The text is a [`TextAreaState`] in app state: a keystroke emits the next
-//! state and `update` stores it. Enter is a line break, so saving is the
-//! button, or Ctrl+Enter from the field. A terminal sends Ctrl+Enter as Ctrl+J,
-//! which the field takes for submit too.
+//! state and `update` stores it. The stats are read from that same state each
+//! frame.
 
 use ratatui::{
     buffer::Buffer,
@@ -12,30 +11,20 @@ use ratatui::{
     text::Line,
 };
 use ratcn::{
-    Button, TextArea, TextAreaState, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
-};
-
-// A browser opens its downloads on Ctrl+J, but passes Ctrl+Enter on.
-const HELP: &str = if cfg!(target_arch = "wasm32") {
-    "Ctrl+Enter or Tab to Save"
-} else {
-    "Ctrl+J or Tab to Save"
+    TextArea, TextAreaState, Theme,
+    runtime::{Event, EventResult, FocusState, Ratcn},
 };
 
 #[derive(Default)]
 struct State {
     focus: FocusState,
     notes: TextAreaState,
-    /// The text as it was last saved.
-    saved: Option<String>,
 }
 
 #[derive(Clone)]
 enum Msg {
     Focus(FocusState),
     Notes(TextAreaState),
-    Save,
 }
 
 pub struct App {
@@ -47,9 +36,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             state: State::default(),
-            ratcn: Ratcn::new()
-                .focus(|s: &State| &s.focus, Msg::Focus)
-                .tab_wrap(TabWrap::Wrap),
+            ratcn: Ratcn::new().focus(|s: &State| &s.focus, Msg::Focus),
         }
     }
 
@@ -57,7 +44,6 @@ impl App {
         match msg {
             Msg::Focus(focus) => self.state.focus = focus,
             Msg::Notes(notes) => self.state.notes = notes,
-            Msg::Save => self.state.saved = Some(self.state.notes.value()),
         }
     }
 }
@@ -87,36 +73,31 @@ impl demo_shared::Demo for App {
         let [column] = Layout::horizontal([Constraint::Length(44)])
             .flex(Flex::Center)
             .areas(area);
-        let [notes_area, footer] = Layout::vertical([Constraint::Length(8), Constraint::Length(1)])
-            .spacing(1)
-            .flex(Flex::Center)
-            .areas(column);
+        let [notes_area, stats_area] =
+            Layout::vertical([Constraint::Length(8), Constraint::Length(1)])
+                .spacing(1)
+                .flex(Flex::Center)
+                .areas(column);
 
-        let state = &self.state;
-        self.ratcn.render_into(buffer, area, state, theme, |ctx| {
-            ctx.component(
-                "notes",
-                TextArea::new()
-                    .value(|s: &State| &s.notes, Msg::Notes)
-                    .title("Notes")
-                    .placeholder("What happened today?")
-                    .on_submit(|| Msg::Save),
-                notes_area,
-            );
+        let lines = self.state.notes.lines();
+        let chars: usize = lines.iter().map(|line| line.chars().count()).sum();
+        let stats = format!("{chars} chars · {} rows", lines.len());
 
-            let save = Button::new("Save").on_press(|| Msg::Save);
-            let [status_area, save_area] =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(save.width())])
-                    .areas(footer);
-            let saved = state.saved.as_deref() == Some(state.notes.value().as_str());
-            let status = if saved {
-                Line::from("Saved").style(theme.foreground)
-            } else {
-                Line::from(HELP).style(theme.muted_foreground)
-            };
-            ctx.paint_widget(status, status_area);
-            ctx.component("save", save, save_area);
-        });
+        self.ratcn
+            .render_into(buffer, area, &self.state, theme, |ctx| {
+                ctx.component(
+                    "notes",
+                    TextArea::new()
+                        .value(|s: &State| &s.notes, Msg::Notes)
+                        .title("Notes")
+                        .placeholder("What happened today?"),
+                    notes_area,
+                );
+                ctx.paint_widget(
+                    Line::from(stats.clone()).style(theme.muted_foreground),
+                    stats_area,
+                );
+            });
     }
 }
 
@@ -140,23 +121,20 @@ mod tests {
         draw(app);
     }
 
-    fn type_text(app: &mut App, text: &str) {
-        text.chars()
-            .for_each(|char| press(app, KeyCode::Char(char)));
-    }
-
     #[test]
-    fn enter_breaks_the_line_and_the_button_saves() {
+    fn enter_breaks_the_line_and_the_stats_follow() {
         let mut app = App::new();
-        draw(&mut app);
+        assert!(draw(&mut app).contains("0 chars · 1 rows"));
 
-        type_text(&mut app, "Met Ada");
+        "Met Ada"
+            .chars()
+            .for_each(|c| press(&mut app, KeyCode::Char(c)));
         press(&mut app, KeyCode::Enter);
-        type_text(&mut app, "She counts");
-        press(&mut app, KeyCode::Tab);
-        press(&mut app, KeyCode::Enter);
+        "She counts"
+            .chars()
+            .for_each(|c| press(&mut app, KeyCode::Char(c)));
 
         assert_eq!(app.state.notes.lines(), ["Met Ada", "She counts"]);
-        assert!(draw(&mut app).contains("Saved"));
+        assert!(draw(&mut app).contains("17 chars · 2 rows"));
     }
 }
