@@ -81,7 +81,8 @@ leaves the vertical keys and the editor's chords for them. In a terminal,
 `Ctrl+C` and `Ctrl+X` copy and cut a selection, and bubble without one. In the
 browser, `Cmd+C`, `Cmd+X`, and `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and
 `Ctrl+V` elsewhere, arrive as `Event::Copy`, `Event::Cut`, and `Event::Paste`,
-never as keys: bind those events, not the keys. Every other `Cmd` or `Super`
+never as keys, and so does `Shift+Delete` off a Mac: bind those events, not
+the keys. Every other `Cmd` or `Super`
 chord is dropped there, so the Mac's `Cmd` editing chords do nothing in a
 field. Each page lists its editing keys.
 

@@ -170,8 +170,8 @@ so its readline-style keys apply:
 In a terminal, `Ctrl+C` and `Ctrl+X` act only on a selection; with nothing
 selected they bubble, so an app that quits on `Ctrl+C` still does with a field
 focused. In the browser, `Cmd+C`/`Cmd+X` on a Mac and `Ctrl+C`/`Ctrl+X`
-elsewhere arrive as `Event::Copy` and `Event::Cut`, not as keys; on a Mac,
-`Ctrl+C` and `Ctrl+X` are still keys. See [Copy and paste](#copy-and-paste).
+elsewhere arrive as `Event::Copy` and `Event::Cut`, not as keys, and so does
+`Shift+Delete` off a Mac; on a Mac, `Ctrl+C` and `Ctrl+X` are still keys. See [Copy and paste](#copy-and-paste).
 
 Keys route by binding, not by effect. A key the editor binds is the field's
 even where it changes nothing — <kbd>←</kbd> at the start of the text,
@@ -213,7 +213,7 @@ from it, on the keys each platform's users expect:
 | Where | Copy | Cut | Paste |
 |---|---|---|---|
 | Browser, Mac | `Cmd+C` | `Cmd+X` | `Cmd+V` |
-| Browser, Linux and Windows | `Ctrl+C` | `Ctrl+X` | `Ctrl+V` |
+| Browser, Linux and Windows | `Ctrl+C` | `Ctrl+X`, `Shift+Delete` | `Ctrl+V` |
 | Terminal, any OS | `Ctrl+C` on a selection | `Ctrl+X` on a selection | the terminal's own: `Cmd+V` (Mac), `Ctrl+Shift+V` (Linux), `Ctrl+V` (Windows Terminal) |
 
 In a terminal, `Cmd+C` and `Ctrl+Shift+C` belong to the terminal, which copies

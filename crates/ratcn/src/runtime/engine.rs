@@ -2249,8 +2249,9 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// The host carries the write out after each
     /// [`handle_event`](Self::handle_event): natively with the `termina`
-    /// feature's `Session::set_clipboard`, in the browser with the `ratzilla`
-    /// feature's `BrowserClipboard`.
+    /// feature's `Session::set_clipboard` or crossterm's `CopyToClipboard`
+    /// (its `osc52` feature), in the browser with the `ratzilla` feature's
+    /// `BrowserClipboard`.
     #[must_use = "the text is gone from the runtime once taken"]
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard.take()

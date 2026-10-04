@@ -171,10 +171,29 @@ cargo add ratatui --no-default-features --features layout-cache,std
 cargo add ratzilla
 ```
 
+The browser-only API (`BrowserClipboard`) exists only on `wasm32`; read its
+rustdoc with
+`cargo doc -p ratcn --features ratzilla --target wasm32-unknown-unknown`.
+
 Ratzilla drives callbacks, so shared mutable app state normally uses
-`Rc<RefCell<App>>`:
+`Rc<RefCell<App>>`. Its key and mouse callbacks hand you ratzilla events, so
+the app's `handle_event` takes anything that converts to an `Event`, applies an
+`Emit`, and returns the result:
 
 ```rust
+impl App {
+    fn handle_event(&mut self, event: impl TryInto<Event>) -> EventResult<Msg> {
+        let Ok(event) = event.try_into() else {
+            return EventResult::Ignored;
+        };
+        let result = self.ratcn.handle_event(event, &self.state);
+        if let EventResult::Emit(msg) = &result {
+            self.update(msg.clone());
+        }
+        result
+    }
+}
+
 let app = Rc::new(RefCell::new(App::new()));
 
 terminal.on_key_event({
@@ -191,6 +210,12 @@ mouse callbacks the same way; see
 [Mouse Input](./mouse#in-the-browser) for the details. Time-based cleanup,
 including toast pruning, belongs in the draw callback or another host callback
 that can cause a frame.
+
+Ratzilla's canvas takes focus but leaves Tab to the browser, which moves focus
+off the canvas: keys, and the clipboard chords with them, then go to the page.
+An app that uses Tab for its own focus traversal stops Tab's default while the
+canvas has focus, as the demos' `demos/shared/ratatui-keyboard-capture.js`
+does.
 
 `draw_web` renders on every animation frame. A host that draws only the frames
 it needs can keep the terminal and call `Terminal::draw` itself: request one
@@ -214,7 +239,13 @@ sequence, which works over SSH too. Most terminals honor it; iTerm2 needs its
 clipboard-access setting, tmux needs `set -g set-clipboard on`, and macOS
 Terminal.app and the VTE terminals (GNOME Terminal, xfce4-terminal, Tilix)
 ignore it. An app on `ratcn::crossterm` writes the text with crossterm's
-`clipboard::CopyToClipboard::to_clipboard_from`, behind its `osc52` feature.
+`CopyToClipboard`, behind its `osc52` feature (add the crossterm that ratatui
+uses: `cargo add crossterm@0.29 --features osc52`), in place of
+`session.set_clipboard` below:
+
+```rust
+Some(text) => execute!(io::stdout(), CopyToClipboard::to_clipboard_from(text))?,
+```
 
 A field copies on `Ctrl+C` only with a selection, and lets it bubble without
 one, so route `Ctrl+C` before treating it as quit. Quit only when the event put
@@ -242,21 +273,28 @@ wrote, and puts it on the clipboard (a paste's write goes out too).
 It also stops chords from reaching ratzilla as keys. `Cmd+C`, `Cmd+X`, and
 `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` elsewhere, become
 `Event::Copy`, `Event::Cut`, and `Event::Paste`, so an app binds those events,
-not the keys; off a Mac, `Shift+Delete` becomes `Event::Cut` too. Every other `Cmd` or `Super` chord is dropped, on every platform:
-it never reaches the app, so the Mac's `Cmd` editing chords do nothing in a
-field.
+not the keys; off a Mac, `Shift+Delete` becomes `Event::Cut` too. Every other
+`Cmd` or `Super` chord is dropped, on every platform: it never reaches the app,
+so the Mac's `Cmd` editing chords do nothing in a field, and `Cmd+A` does not
+select the page.
 
 Install one per app, given the app's element: an event is the app's while
 focus is on that element or inside it, and the page's otherwise, so the page's
 own inputs, buttons, and shortcuts keep their keys, and two apps on one page
 each get only their own. Pass the canvas a canvas backend (`WebGl2Backend`,
 `CanvasBackend`) draws on, or the container you gave it as `grid_id`; for
-`DomBackend`, the element whose id you gave as `grid_id`. A copy or cut the app answers with nothing
-copies nothing, unless text inside its element is selected. Keep the guard
-alive for as long as the app runs. The runtime ignores events before the first
-render, so an early paste is left to the page.
+`DomBackend`, the element whose id you gave as `grid_id`. A copy or cut the
+app answers with nothing copies nothing, unless text inside its element is
+selected. The runtime ignores events before the first render, so an early
+paste is left to the page.
+
+Dropping the guard uninstalls the listener, so keep it for as long as the app
+runs. A wasm `main` returns once `draw_web` is running, which would drop a
+local binding at once, so leak it there, as below.
 
 ```rust
+use ratzilla::web_sys;
+
 // The element whose id the backend was given as `grid_id`.
 let element = web_sys::window()
     .and_then(|window| window.document())
@@ -273,6 +311,8 @@ let clipboard = BrowserClipboard::install(
         move || app.borrow_mut().ratcn.take_clipboard()
     },
 )?;
+// `main` returns once the app is running; the listener has to outlive it.
+std::mem::forget(clipboard);
 ```
 
 A write after any other event — `Ctrl+C` on a Mac, a "Copy" button — goes out
