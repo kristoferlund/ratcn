@@ -185,7 +185,7 @@ impl demo_shared::Demo for App {
                 password_area,
             );
 
-            // An error starts under the field's text, past its border and inset.
+            // An error starts under the field's text, past its border.
             for (error, area) in [
                 (email_error, email_error_area),
                 (password_error, password_error_area),
@@ -193,7 +193,7 @@ impl demo_shared::Demo for App {
                 if let Some(error) = error {
                     ctx.paint_widget(
                         Line::from(error).style(theme.destructive),
-                        area.inner(Margin::new(2, 0)),
+                        area.inner(Margin::new(1, 0)),
                     );
                 }
             }

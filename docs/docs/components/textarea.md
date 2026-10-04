@@ -49,8 +49,8 @@ Msg::Notes(notes) => state.notes = notes,
 ```
 
 It is the multi-line sibling of [Input](./input), bound the same way. Unlike an
-Input, it fills the whole area it is declared in. The text sits one cell in from
-each side of the well, and a click on that cell still lands on the field.
+Input, it fills the whole area it is declared in. The text runs from edge to
+edge, inside the border when there is one.
 
 ## State
 

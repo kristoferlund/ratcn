@@ -51,8 +51,8 @@ Msg::Name(name) => state.name = name,
 An untitled Input is one row; `.title(...)` draws a border with the title on
 it, and the field is then three. `.height()` answers which, for a layout
 constraint. Either way it sits at the top of the area it is declared in and
-ignores rows below that. The text sits one cell in from each side of the well,
-and a click on that cell still lands on the field.
+ignores rows below that. The text runs from edge to edge of the field, inside
+the border when there is one.
 
 ## State
 
