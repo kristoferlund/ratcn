@@ -677,7 +677,7 @@ impl<S, M> Input<S, M> {
     /// Muted text before the editable text, inside the field: `https://`
     /// before a URL, an icon before a search. The text starts a cell after
     /// it. Never masked; a span's own style paints over the muted one. A
-    /// press on it lands on the field.
+    /// click on it puts the cursor at the start of the text.
     #[must_use]
     pub fn prefix(mut self, prefix: impl Into<Line<'static>>) -> Self {
         self.prefix = Some(prefix.into());
@@ -686,7 +686,8 @@ impl<S, M> Input<S, M> {
 
     /// Muted text after the editable text, inside the field: a unit, a
     /// domain. The text ends a cell before it. Never masked; a span's own
-    /// style paints over the muted one. A press on it lands on the field.
+    /// style paints over the muted one. A click on it puts the cursor at the
+    /// end of the text.
     #[must_use]
     pub fn suffix(mut self, suffix: impl Into<Line<'static>>) -> Self {
         self.suffix = Some(suffix.into());
@@ -838,12 +839,12 @@ impl<S, M> Input<S, M> {
         state: &InputState,
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<InputState> {
-        let titled = self.title.is_some();
+        let well = well(ctx.area(), self.title.is_some());
         let text = self.text_rect(ctx.area());
         let pointer = Position::new(mouse.column, mouse.row);
         let painted = self.editor(state);
         let editor = match mouse.kind {
-            MouseKind::Down(MouseButton::Left) if well(ctx.area(), titled).contains(pointer) => {
+            MouseKind::Down(MouseButton::Left) if well.contains(pointer) => {
                 ctx.capture_pointer(MouseButton::Left);
                 *ctx.transient() = DragAnchor(cursor_at(painted, text, pointer));
                 return EventResult::Ignored;
@@ -851,7 +852,18 @@ impl<S, M> Input<S, M> {
             MouseKind::Click(MouseButton::Left) if ctx.pointer_captured() => {
                 let mut editor = painted.clone();
                 editor.cancel_selection();
-                editor.move_cursor(cursor_at(&editor, text, pointer));
+                // Beside the text in the well is an adornment, and a click
+                // there means that end of the text, however it is scrolled.
+                let target = if !well.contains(pointer) {
+                    cursor_at(&editor, text, pointer)
+                } else if pointer.x < text.x {
+                    CursorMove::Head
+                } else if pointer.x >= text.right() {
+                    CursorMove::End
+                } else {
+                    cursor_at(&editor, text, pointer)
+                };
+                editor.move_cursor(target);
                 editor
             }
             MouseKind::Drag(MouseButton::Left) if ctx.pointer_captured() => {
@@ -2362,7 +2374,7 @@ mod tests {
     }
 
     /// The adornments are part of the field: a press on one focuses it and
-    /// places the cursor at the nearest end of the text.
+    /// places the cursor at that end of the text.
     #[test]
     fn a_click_on_an_adornment_places_the_cursor_at_that_end() {
         let mut driver = driver();
@@ -2393,6 +2405,36 @@ mod tests {
         render(&mut driver, &state);
         click(&mut driver, &mut state, 3, 0);
         assert_eq!(state.name.cursor(), 1, "the text starts after the prefix");
+    }
+
+    /// A click on an adornment means that end of the text even when it is
+    /// scrolled out of sight, where a drag across the same cell only steps
+    /// one character past the edge, so it can keep scrolling.
+    #[test]
+    fn a_click_on_an_adornment_reaches_that_end_of_scrolled_text() {
+        let mut driver = driver();
+        let mut state = state("abcdefghijklmnop");
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(ChildId::Static("name"), adorned(), Rect::new(0, 0, 12, 1));
+            });
+        };
+        render(&mut driver, &state);
+        assert_eq!(driver.row(0), "$ klmnop  kg", "scrolled to the end");
+
+        click(&mut driver, &mut state, 0, 0);
+        assert_eq!(state.name.cursor(), 0, "the prefix: the very start");
+        render(&mut driver, &state);
+        assert_eq!(driver.row(0), "$ abcdefg kg");
+
+        click(&mut driver, &mut state, 11, 0);
+        assert_eq!(state.name.cursor(), 16, "the suffix: the very end");
+        render(&mut driver, &state);
+        assert_eq!(driver.row(0), "$ klmnop  kg");
+
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 4, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 0, 0));
+        assert_eq!(state.name.cursor(), 9, "a drag steps one past the edge");
     }
 
     /// Long text scrolls inside the cells between the adornments, and never
