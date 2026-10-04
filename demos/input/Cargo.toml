@@ -7,6 +7,7 @@ version.workspace = true
 
 [dependencies]
 demo-shared.workspace = true
+email_address.workspace = true
 ratatui.workspace = true
 ratcn.workspace = true
 

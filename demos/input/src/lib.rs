@@ -3,10 +3,15 @@
 //! Each field's text is an [`InputState`] in app state: a keystroke emits the
 //! next state and `update` stores it. Tab moves between the fields, and Enter
 //! signs up from any of them.
+//!
+//! The email and password are checked as soon as they have content, and a
+//! failing field is drawn `invalid` with a message beneath it. The email is
+//! checked against RFC 5322 by the `email_address` crate.
 
+use email_address::EmailAddress;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::Style,
     text::Line,
 };
@@ -23,6 +28,29 @@ struct State {
     password: InputState,
     /// Who the last sign-up was for.
     signed_up: Option<String>,
+}
+
+impl State {
+    /// What is wrong with the email, once it has content.
+    fn email_error(&self) -> Option<&'static str> {
+        let email = self.email.value();
+        (!email.is_empty() && !EmailAddress::is_valid(email)).then_some("Not a valid email address")
+    }
+
+    /// What is wrong with the password, once it has content.
+    fn password_error(&self) -> Option<&'static str> {
+        let length = self.password.value().chars().count();
+        (length > 0 && length < 6).then_some("At least 6 characters")
+    }
+
+    /// Whether every field is filled in and passes its check.
+    fn complete(&self) -> bool {
+        [&self.name, &self.email, &self.password]
+            .iter()
+            .all(|field| !field.value().is_empty())
+            && self.email_error().is_none()
+            && self.password_error().is_none()
+    }
 }
 
 #[derive(Clone)]
@@ -55,7 +83,10 @@ impl App {
             Msg::Name(name) => self.state.name = name,
             Msg::Email(email) => self.state.email = email,
             Msg::Password(password) => self.state.password = password,
-            Msg::SignUp => self.state.signed_up = Some(self.state.name.value().to_owned()),
+            Msg::SignUp if self.state.complete() => {
+                self.state.signed_up = Some(self.state.name.value().to_owned());
+            }
+            Msg::SignUp => {}
         }
     }
 }
@@ -85,19 +116,32 @@ impl demo_shared::Demo for App {
         let [column] = Layout::horizontal([Constraint::Length(40)])
             .flex(Flex::Center)
             .areas(area);
-        let [name_area, email_area, password_area, status_area] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Length(3),
+        // Each field has a row beneath it for its error message.
+        let [
+            name_area,
+            _,
+            email_area,
+            email_error_area,
+            password_area,
+            password_error_area,
+            _,
+            status_area,
+        ] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
         ])
-        .spacing(1)
         .flex(Flex::Center)
         .areas(column);
 
         let state = &self.state;
-        let email = state.email.value();
-        let email_invalid = !email.is_empty() && !email.contains('@');
+        let email_error = state.email_error();
+        let password_error = state.password_error();
 
         self.ratcn.render_into(buffer, area, state, theme, |ctx| {
             ctx.component(
@@ -115,7 +159,7 @@ impl demo_shared::Demo for App {
                     .value(|s: &State| &s.email, Msg::Email)
                     .title("Email")
                     .placeholder("ada@example.com")
-                    .invalid(email_invalid)
+                    .invalid(email_error.is_some())
                     .on_submit(|| Msg::SignUp),
                 email_area,
             );
@@ -125,9 +169,23 @@ impl demo_shared::Demo for App {
                     .value(|s: &State| &s.password, Msg::Password)
                     .title("Password")
                     .mask_char('•')
+                    .invalid(password_error.is_some())
                     .on_submit(|| Msg::SignUp),
                 password_area,
             );
+
+            // An error starts under the field's text, past its border and inset.
+            for (error, area) in [
+                (email_error, email_error_area),
+                (password_error, password_error_area),
+            ] {
+                if let Some(error) = error {
+                    ctx.paint_widget(
+                        Line::from(error).style(theme.destructive),
+                        area.inner(Margin::new(2, 0)),
+                    );
+                }
+            }
 
             let status = match &state.signed_up {
                 Some(name) => Line::from(format!("Signed up {name}")).style(theme.foreground),
@@ -173,10 +231,36 @@ mod tests {
         type_text(&mut app, "Ada");
         press(&mut app, KeyCode::Tab);
         type_text(&mut app, "ada@example.com");
+        press(&mut app, KeyCode::Tab);
+        type_text(&mut app, "hunter2");
         press(&mut app, KeyCode::Enter);
 
         assert_eq!(app.state.email.value(), "ada@example.com");
         assert!(draw(&mut app).contains("Signed up Ada"));
+    }
+
+    #[test]
+    fn errors_show_only_once_a_field_has_content() {
+        let mut app = App::new();
+        let empty = draw(&mut app);
+        assert!(!empty.contains("Not a valid") && !empty.contains("At least"));
+
+        press(&mut app, KeyCode::Tab);
+        type_text(&mut app, "ada@");
+        press(&mut app, KeyCode::Tab);
+        type_text(&mut app, "abc");
+        let screen = draw(&mut app);
+        assert!(screen.contains("Not a valid email address"));
+        assert!(screen.contains("At least 6 characters"));
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.state.signed_up, None,
+            "an invalid form does not sign up"
+        );
+
+        type_text(&mut app, "def");
+        assert!(!draw(&mut app).contains("At least"));
     }
 
     #[test]
