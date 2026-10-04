@@ -22,6 +22,7 @@ dialog = { path = "../../demos/dialog" }
 drag = { path = "../../demos/drag" }
 effects = { path = "../../demos/effects" }
 input = { path = "../../demos/input" }
+input-adornments = { path = "../../demos/input-adornments" }
 kanban = { path = "../../demos/kanban" }
 landing = { path = "../../demos/landing" }
 ledger93 = { path = "../../demos/ledger93" }

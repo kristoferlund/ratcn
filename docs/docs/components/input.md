@@ -99,6 +99,18 @@ a unit after a number. Each takes a string or a styled `Line`, whose own
 styles paint over the muted one. The text keeps a cell of space from each,
 and a click on one lands at that end of the text. They are never masked.
 
+<div class="ratcn-preview-window" style="--ratcn-preview-height: 400px">
+  <div class="ratcn-preview-chrome" aria-hidden="true">
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-preview-url">cargo run -p input-adornments</span>
+  </div>
+  <div class="ratcn-preview-body">
+    <iframe class="ratcn-component-preview-frame" src="../../../demos/input-adornments-demo/index.html" title="ratcn input adornments demo"></iframe>
+  </div>
+</div>
+
 ```rust
 Input::new()
     .value(|state: &AppState| &state.site, Msg::Site)

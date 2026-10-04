@@ -1106,6 +1106,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "input-adornments"
+version = "0.0.5"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
+]
+
+[[package]]
 name = "instability"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2054,6 +2064,7 @@ dependencies = [
  "drag",
  "effects",
  "input",
+ "input-adornments",
  "kanban",
  "landing",
  "ledger93",

@@ -111,6 +111,10 @@ pub static ENTRIES: &[Entry] = &[
         open: || Box::new(input::App::new()),
     },
     Entry {
+        name: "input-adornments",
+        open: || Box::new(input_adornments::App::new()),
+    },
+    Entry {
         name: "kanban",
         open: || Box::new(kanban::App::new()),
     },
