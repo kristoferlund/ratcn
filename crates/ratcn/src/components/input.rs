@@ -36,7 +36,6 @@ use crate::{
         CursorMove, Editor, InputState, WrapMode, cursor_at, editor_input, is_editor_binding,
         select_dragged,
     },
-    text_width::display_width,
     theme::resolve_style,
 };
 
@@ -240,26 +239,38 @@ fn parts(area: Rect, titled: bool, prefix: Option<&Line>, suffix: Option<&Line>)
     }
 }
 
-/// The cells an adornment takes on screen.
+/// The cells an adornment takes on screen. A tab in one is not supported:
+/// it measures as no cells.
 fn adornment_width(line: &Line) -> u16 {
-    let width: usize = line
-        .spans
-        .iter()
-        .map(|span| display_width(&span.content))
-        .sum();
-    u16::try_from(width).unwrap_or(u16::MAX)
+    u16::try_from(line.width()).unwrap_or(u16::MAX)
 }
 
-/// Paint an adornment in its cells: the field's adornment style, each
-/// span's own over it, and muted over everything on a disabled field.
+/// Paint an adornment in its cells: the field's adornment style with each
+/// span's own over it, or, on a disabled field, the muted style alone.
 fn paint_adornment(buf: &mut Buffer, area: Rect, line: &Line, style: Style, disabled: bool) {
     if area.is_empty() {
         return;
     }
     buf.set_style(area, style);
-    buf.set_line(area.x, area.y, line, area.width);
     if disabled {
-        buf.set_style(area, Style::default().fg(style.fg.unwrap_or_default()));
+        let text: String = line.spans.iter().map(|span| &*span.content).collect();
+        buf.set_stringn(area.x, area.y, text, usize::from(area.width), style);
+    } else {
+        buf.set_line(area.x, area.y, line, area.width);
+    }
+}
+
+/// Where a press at `pointer` puts the cursor. Beside the text in the well
+/// is an adornment, and a press there means that end of the text, however
+/// it is scrolled. Anywhere else it is the character under the pointer, or
+/// one past the edge outside the well, so a drag keeps scrolling.
+fn press_target(editor: &Editor<'_>, well: Rect, text: Rect, pointer: Position) -> CursorMove {
+    if well.contains(pointer) && pointer.x < text.x {
+        CursorMove::Head
+    } else if well.contains(pointer) && pointer.x >= text.right() {
+        CursorMove::End
+    } else {
+        cursor_at(editor, text, pointer)
     }
 }
 
@@ -846,24 +857,13 @@ impl<S, M> Input<S, M> {
         let editor = match mouse.kind {
             MouseKind::Down(MouseButton::Left) if well.contains(pointer) => {
                 ctx.capture_pointer(MouseButton::Left);
-                *ctx.transient() = DragAnchor(cursor_at(painted, text, pointer));
+                *ctx.transient() = DragAnchor(press_target(painted, well, text, pointer));
                 return EventResult::Ignored;
             }
             MouseKind::Click(MouseButton::Left) if ctx.pointer_captured() => {
                 let mut editor = painted.clone();
                 editor.cancel_selection();
-                // Beside the text in the well is an adornment, and a click
-                // there means that end of the text, however it is scrolled.
-                let target = if !well.contains(pointer) {
-                    cursor_at(&editor, text, pointer)
-                } else if pointer.x < text.x {
-                    CursorMove::Head
-                } else if pointer.x >= text.right() {
-                    CursorMove::End
-                } else {
-                    cursor_at(&editor, text, pointer)
-                };
-                editor.move_cursor(target);
+                editor.move_cursor(press_target(&editor, well, text, pointer));
                 editor
             }
             MouseKind::Drag(MouseButton::Left) if ctx.pointer_captured() => {
@@ -1568,8 +1568,8 @@ mod tests {
     }
 
     /// A titled field two columns wide is all border: no text can be drawn,
-    /// so a field there would edit text nobody sees. Focus passes it by for the next control
-    /// until the field is given room again.
+    /// so a field there would edit text nobody sees. Focus passes it by for
+    /// the next control until the field is given room again.
     #[test]
     fn a_field_with_no_text_cells_is_skipped_until_it_has_room() {
         let mut driver = Driver::with(
@@ -2344,19 +2344,32 @@ mod tests {
         let style = InputStyle::from_theme(&theme);
         let area = Rect::new(0, 0, 10, 1);
         let state = InputState::new("ab");
-        let prefix = || Line::styled("$", Style::default().fg(Color::Green));
+        let prefix = || {
+            Line::styled(
+                "$",
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(Color::Blue)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )
+        };
         let paint = |disabled| {
-            paint_adorned(
+            let cell = paint_adorned(
                 area,
                 InputWidget::new(&state)
                     .themed(&theme)
                     .prefix(prefix())
                     .disabled(disabled),
             )[(0, 0)]
-                .fg
+                .clone();
+            (cell.fg, cell.bg, cell.modifier.is_empty())
         };
-        assert_eq!(paint(false), Color::Green);
-        assert_eq!(paint(true), style.disabled_foreground);
+        assert_eq!(paint(false), (Color::Green, Color::Blue, false));
+        assert_eq!(
+            paint(true),
+            (style.disabled_foreground, style.background, true),
+            "nothing of the span's own look survives"
+        );
     }
 
     /// A mask hides the secret, not the field's furniture: a unit after a
@@ -2435,6 +2448,32 @@ mod tests {
         route(&mut driver, &mut state, mouse(LEFT_DOWN, 4, 0));
         send(&mut driver, &mut state, mouse(LEFT_DRAG, 0, 0));
         assert_eq!(state.name.cursor(), 9, "a drag steps one past the edge");
+    }
+
+    /// A press is a press wherever it ends up: one on an adornment anchors
+    /// a drag at that end of the text, as a click there would place it.
+    #[test]
+    fn a_drag_from_an_adornment_selects_from_that_end() {
+        let mut driver = driver();
+        let mut state = state("abcdefghijklmnop");
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(ChildId::Static("name"), adorned(), Rect::new(0, 0, 12, 1));
+            });
+        };
+        render(&mut driver, &state);
+
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 0, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 3, 0));
+        assert_eq!(selection(&state), Some((0, 11)), "from the very start");
+
+        render(&mut driver, &state);
+        route(&mut driver, &mut state, mouse(LEFT_UP, 3, 0));
+        send(&mut driver, &mut state, key(KeyCode::End));
+        render(&mut driver, &state);
+        route(&mut driver, &mut state, mouse(LEFT_DOWN, 11, 0));
+        send(&mut driver, &mut state, mouse(LEFT_DRAG, 4, 0));
+        assert_eq!(selection(&state), Some((12, 16)), "from the very end");
     }
 
     /// Long text scrolls inside the cells between the adornments, and never

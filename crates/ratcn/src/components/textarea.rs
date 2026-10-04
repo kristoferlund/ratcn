@@ -880,8 +880,8 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
         ScopeOptions::default().focusable(self.value.is_some() && !self.disabled)
     }
 
-    /// The whole field, or nothing when the border leaves no text cell: a field that cannot show its text takes no focus, typing, or
-    /// clicks.
+    /// The whole field, or nothing when the border leaves no text cell: a
+    /// field that cannot show its text takes no focus, typing, or clicks.
     fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
         if text_rect(area, self.title.is_some()).is_empty() {
             Rect::default()
