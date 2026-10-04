@@ -91,6 +91,23 @@ action, for instance.
 or not, where the text would start; a focused field shows its cursor on its
 first character. `.title(...)` is the label on the border.
 
+## Prefix and suffix
+
+`.prefix(...)` and `.suffix(...)` paint muted text inside the field, before
+and after the editable text: `https://` before a URL, an icon before a search,
+a unit after a number. Each takes a string or a styled `Line`, whose own
+styles paint over the muted one. The text keeps a cell of space from each,
+and a click on one lands at that end of the text. They are never masked.
+
+```rust
+Input::new()
+    .value(|state: &AppState| &state.site, Msg::Site)
+    .prefix("https://")
+    .suffix(".com")
+```
+
+They are text only. A button belongs beside the field, not inside it.
+
 ## Masking
 
 `.mask_char('•')` paints every character as the mask, for a secret. Only the
@@ -253,7 +270,8 @@ frame.render_widget(
 );
 ```
 
-`.mask_char(...)`, `.invalid(...)`, and `.disabled(...)` match the component's.
+`.prefix(...)`, `.suffix(...)`, `.mask_char(...)`, `.invalid(...)`, and
+`.disabled(...)` match the component's.
 Replace `.themed(...)` with `.style(...)` to supply exact colors.
 
 Driving the editing is then yours, and `ratcn::text_edit` holds the key

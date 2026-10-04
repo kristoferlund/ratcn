@@ -36,6 +36,7 @@ use crate::{
         CursorMove, Editor, InputState, WrapMode, cursor_at, editor_input, is_editor_binding,
         select_dragged,
     },
+    text_width::display_width,
     theme::resolve_style,
 };
 
@@ -60,6 +61,9 @@ pub struct InputStyle {
     pub hovered_background: Color,
     /// Placeholder color.
     pub placeholder_foreground: Color,
+    /// The [`prefix`](Input::prefix) and [`suffix`](Input::suffix) color,
+    /// under whatever style their spans carry.
+    pub adornment_foreground: Color,
     /// Text and title color while disabled.
     pub disabled_foreground: Color,
     /// Text, border, and title color while invalid.
@@ -87,6 +91,7 @@ impl InputStyle {
             focused_background: Color::Reset,
             hovered_background: Color::Reset,
             placeholder_foreground: Color::DarkGray,
+            adornment_foreground: Color::DarkGray,
             disabled_foreground: Color::DarkGray,
             invalid_foreground: Color::Red,
             cursor_foreground: Color::Black,
@@ -109,6 +114,7 @@ impl InputStyle {
             focused_background: dim(theme.field, away, FIELD_FOCUS_SHIFT),
             hovered_background: dim(theme.field, away, FIELD_HOVER_SHIFT),
             placeholder_foreground: theme.muted_foreground,
+            adornment_foreground: theme.muted_foreground,
             disabled_foreground: theme.muted_foreground,
             invalid_foreground: theme.destructive,
             cursor_foreground: theme.background,
@@ -149,6 +155,13 @@ impl InputStyle {
             placeholder: Style::default()
                 .fg(self.placeholder_foreground)
                 .bg(background),
+            adornment: Style::default()
+                .fg(if disabled {
+                    self.disabled_foreground
+                } else {
+                    self.adornment_foreground
+                })
+                .bg(background),
             cursor: if focused && !disabled {
                 Style::default()
                     .fg(self.cursor_foreground)
@@ -173,6 +186,7 @@ impl InputStyle {
 struct ResolvedStyle {
     text: Style,
     placeholder: Style,
+    adornment: Style,
     cursor: Style,
     selection: Style,
     border: Style,
@@ -201,12 +215,53 @@ fn well(area: Rect, titled: bool) -> Rect {
     }
 }
 
-/// The cells of `area` the text is drawn in: the well, inset a column on
-/// each side, as a Select's trigger insets its value. Paint draws the editor
-/// and the placeholder here and the mouse is read against it, so the three
-/// cannot drift apart.
-fn text_rect(area: Rect, titled: bool) -> Rect {
-    well(area, titled).inner(Margin::new(1, 0))
+/// Where a field's row puts the prefix, the text, and the suffix.
+struct Parts {
+    prefix: Rect,
+    text: Rect,
+    suffix: Rect,
+}
+
+/// Lay out the row inside the well, inset a column on each side, as a
+/// Select's trigger insets its value: the prefix at its start, the suffix at
+/// its end, each a cell apart from the text between them. Paint draws the
+/// editor and the placeholder in `text` and the mouse is read against it, so
+/// the three cannot drift apart.
+fn parts(area: Rect, titled: bool, prefix: Option<&Line>, suffix: Option<&Line>) -> Parts {
+    let row = well(area, titled).inner(Margin::new(1, 0));
+    let prefix = prefix.map_or(0, adornment_width).min(row.width);
+    let suffix = suffix.map_or(0, adornment_width).min(row.width - prefix);
+    let spaced = |width: u16| if width == 0 { 0 } else { width + 1 };
+    let text_x = row.x + spaced(prefix).min(row.width);
+    let text_right = row.right().saturating_sub(spaced(suffix)).max(text_x);
+    Parts {
+        prefix: Rect::new(row.x, row.y, prefix, row.height),
+        text: Rect::new(text_x, row.y, text_right - text_x, row.height),
+        suffix: Rect::new(row.right() - suffix, row.y, suffix, row.height),
+    }
+}
+
+/// The cells an adornment takes on screen.
+fn adornment_width(line: &Line) -> u16 {
+    let width: usize = line
+        .spans
+        .iter()
+        .map(|span| display_width(&span.content))
+        .sum();
+    u16::try_from(width).unwrap_or(u16::MAX)
+}
+
+/// Paint an adornment in its cells: the field's adornment style, each
+/// span's own over it, and muted over everything on a disabled field.
+fn paint_adornment(buf: &mut Buffer, area: Rect, line: &Line, style: Style, disabled: bool) {
+    if area.is_empty() {
+        return;
+    }
+    buf.set_style(area, style);
+    buf.set_line(area.x, area.y, line, area.width);
+    if disabled {
+        buf.set_style(area, Style::default().fg(style.fg.unwrap_or_default()));
+    }
 }
 
 /// A single-line text field that only draws — an ordinary ratatui [`Widget`]
@@ -225,6 +280,8 @@ fn text_rect(area: Rect, titled: bool) -> Rect {
 pub struct InputWidget<'a> {
     editor: Editor<'static>,
     placeholder: &'a str,
+    prefix: Option<Line<'a>>,
+    suffix: Option<Line<'a>>,
     title: Option<&'a str>,
     mask_char: Option<char>,
     focused: bool,
@@ -241,6 +298,8 @@ impl<'a> InputWidget<'a> {
         Self {
             editor: state.editor().clone(),
             placeholder: "",
+            prefix: None,
+            suffix: None,
             title: None,
             mask_char: None,
             focused: false,
@@ -271,6 +330,23 @@ impl<'a> InputWidget<'a> {
     #[must_use]
     pub const fn placeholder(mut self, placeholder: &'a str) -> Self {
         self.placeholder = placeholder;
+        self
+    }
+
+    /// Muted text before the editable text, inside the field: `https://`
+    /// before a URL, an icon before a search. Never masked; a span's own
+    /// style paints over the muted one.
+    #[must_use]
+    pub fn prefix(mut self, prefix: impl Into<Line<'a>>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    /// Muted text after the editable text, inside the field: a unit, a
+    /// domain. Never masked; a span's own style paints over the muted one.
+    #[must_use]
+    pub fn suffix(mut self, suffix: impl Into<Line<'a>>) -> Self {
+        self.suffix = Some(suffix.into());
         self
     }
 
@@ -410,8 +486,15 @@ impl<'a> InputWidget<'a> {
                 .title(Line::styled(title, style.title))
                 .render(field_rows(area, true), buf);
         }
-        buf.set_style(well(area, self.title.is_some()), style.text);
-        let field = text_rect(area, self.title.is_some());
+        let titled = self.title.is_some();
+        buf.set_style(well(area, titled), style.text);
+        let parts = parts(area, titled, self.prefix.as_ref(), self.suffix.as_ref());
+        for (adornment, cells) in [(&self.prefix, parts.prefix), (&self.suffix, parts.suffix)] {
+            if let Some(line) = adornment {
+                paint_adornment(buf, cells, line, style.adornment, self.disabled);
+            }
+        }
+        let field = parts.text;
 
         // The state cleared the editor's own look when it adopted it; what
         // is left is what this field decides. The setters that re-measure the
@@ -506,6 +589,8 @@ pub struct Input<S, M> {
     value: Option<(ReadValueFn<S>, OnChangeFn<M>)>,
     on_submit: Option<OnSubmitFn<M>>,
     placeholder: String,
+    prefix: Option<Line<'static>>,
+    suffix: Option<Line<'static>>,
     title: Option<String>,
     mask_char: Option<char>,
     disabled: bool,
@@ -522,6 +607,8 @@ impl<S, M> fmt::Debug for Input<S, M> {
             .field("value", &self.value.is_some())
             .field("on_submit", &self.on_submit.is_some())
             .field("placeholder", &self.placeholder)
+            .field("prefix", &self.prefix)
+            .field("suffix", &self.suffix)
             .field("title", &self.title)
             .field("mask_char", &self.mask_char)
             .field("disabled", &self.disabled)
@@ -545,6 +632,8 @@ impl<S, M> Input<S, M> {
             value: None,
             on_submit: None,
             placeholder: String::new(),
+            prefix: None,
+            suffix: None,
             title: None,
             mask_char: None,
             disabled: false,
@@ -583,6 +672,25 @@ impl<S, M> Input<S, M> {
     #[must_use]
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
+        self
+    }
+
+    /// Muted text before the editable text, inside the field: `https://`
+    /// before a URL, an icon before a search. The text starts a cell after
+    /// it. Never masked; a span's own style paints over the muted one. A
+    /// press on it lands on the field.
+    #[must_use]
+    pub fn prefix(mut self, prefix: impl Into<Line<'static>>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    /// Muted text after the editable text, inside the field: a unit, a
+    /// domain. The text ends a cell before it. Never masked; a span's own
+    /// style paints over the muted one. A press on it lands on the field.
+    #[must_use]
+    pub fn suffix(mut self, suffix: impl Into<Line<'static>>) -> Self {
+        self.suffix = Some(suffix.into());
         self
     }
 
@@ -629,6 +737,12 @@ impl<S, M> Input<S, M> {
     pub fn style(mut self, style: impl Fn(&Theme) -> InputStyle + 'static) -> Self {
         self.style = Some(Rc::new(style));
         self
+    }
+
+    /// The cells of `area` the text is drawn in, between the adornments.
+    fn text_rect(&self, area: Rect) -> Rect {
+        let titled = self.title.is_some();
+        parts(area, titled, self.prefix.as_ref(), self.suffix.as_ref()).text
     }
 
     /// The editor an event edits: the painted one while the state it was
@@ -726,7 +840,7 @@ impl<S, M> Input<S, M> {
         ctx: &mut EventCtx<'_>,
     ) -> EventResult<InputState> {
         let titled = self.title.is_some();
-        let text = text_rect(ctx.area(), titled);
+        let text = self.text_rect(ctx.area());
         let pointer = Position::new(mouse.column, mouse.row);
         let painted = self.editor(state);
         let editor = match mouse.kind {
@@ -800,6 +914,12 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
         if let Some(mask_char) = self.mask_char {
             widget = widget.mask_char(mask_char);
         }
+        if let Some(prefix) = &self.prefix {
+            widget = widget.prefix(prefix.clone());
+        }
+        if let Some(suffix) = &self.suffix {
+            widget = widget.suffix(suffix.clone());
+        }
         let editor = ctx.with_buffer(ctx.area(), |area, buf| widget.paint(area, buf));
         self.painted = Some((state.version(), editor));
     }
@@ -843,14 +963,14 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
         ScopeOptions::default().focusable(self.value.is_some() && !self.disabled)
     }
 
-    /// The field's rows, or nothing when the inset leaves no text cell: a
-    /// field that cannot show its text takes no focus, typing, or clicks.
+    /// The field's rows, or nothing when the inset and the adornments leave
+    /// no text cell: a field that cannot show its text takes no focus,
+    /// typing, or clicks.
     fn interaction_area(&self, area: Rect, _state: &S) -> Rect {
-        let titled = self.title.is_some();
-        if text_rect(area, titled).is_empty() {
+        if self.text_rect(area).is_empty() {
             Rect::default()
         } else {
-            field_rows(area, titled)
+            field_rows(area, self.title.is_some())
         }
     }
 }
@@ -2142,5 +2262,183 @@ mod tests {
              e: #A1A1A1 on #1F1F1F NONE\n\
              f: #FF6467 on #1F1F1F NONE\n"
         );
+    }
+
+    /// Paint one adorned widget into a fresh buffer of `area` and return the
+    /// buffer.
+    fn paint_adorned(area: Rect, widget: InputWidget<'_>) -> Buffer {
+        let mut buffer = Buffer::empty(area);
+        widget.render(area, &mut buffer);
+        buffer
+    }
+
+    fn symbols(buffer: &Buffer) -> String {
+        buffer
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    /// An adornment sits inside the field, a cell apart from the text, and
+    /// the placeholder starts where the text will: after the prefix, not on
+    /// top of it.
+    #[test]
+    fn adornments_sit_a_cell_apart_from_the_text_and_the_placeholder() {
+        let theme = Theme::default_dark();
+        let style = InputStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 16, 1);
+        let empty = InputState::default();
+        let ada = InputState::new("ada");
+        let widget = |state| InputWidget::new(state).themed(&theme);
+
+        let prefixed = paint_adorned(area, widget(&ada).prefix("https://"));
+        assert_eq!(symbols(&prefixed), " https:// ada   ");
+        assert_eq!(prefixed[(1, 0)].fg, style.adornment_foreground);
+        assert_eq!(prefixed[(10, 0)].fg, style.foreground);
+        assert_eq!(
+            symbols(&paint_adorned(area, widget(&ada).suffix(".com"))),
+            " ada       .com "
+        );
+        assert_eq!(
+            symbols(&paint_adorned(
+                area,
+                widget(&empty).prefix("$").suffix("kg").placeholder("Name")
+            )),
+            " $ Name      kg "
+        );
+        let placeholder = paint_adorned(area, widget(&empty).prefix("$").placeholder("Name"));
+        assert_eq!(placeholder[(3, 0)].fg, style.placeholder_foreground);
+    }
+
+    /// An emoji or a CJK prefix takes two cells, and the text has to start
+    /// after both: measured by characters it would paint over the second.
+    #[test]
+    fn a_wide_prefix_measures_in_cells() {
+        let area = Rect::new(0, 0, 10, 1);
+        let state = InputState::new("ab");
+        let buffer = paint_adorned(area, InputWidget::new(&state).prefix("🔍"));
+        assert_eq!(buffer[(1, 0)].symbol(), "🔍");
+        assert_eq!(
+            (buffer[(4, 0)].symbol(), buffer[(5, 0)].symbol()),
+            ("a", "b")
+        );
+    }
+
+    /// A span's own style paints over the muted one, and disabled mutes it
+    /// all again, as it does the text.
+    #[test]
+    fn a_styled_span_shows_unless_the_field_is_disabled() {
+        let theme = Theme::default_dark();
+        let style = InputStyle::from_theme(&theme);
+        let area = Rect::new(0, 0, 10, 1);
+        let state = InputState::new("ab");
+        let prefix = || Line::styled("$", Style::default().fg(Color::Green));
+        let paint = |disabled| {
+            paint_adorned(
+                area,
+                InputWidget::new(&state)
+                    .themed(&theme)
+                    .prefix(prefix())
+                    .disabled(disabled),
+            )[(1, 0)]
+                .fg
+        };
+        assert_eq!(paint(false), Color::Green);
+        assert_eq!(paint(true), style.disabled_foreground);
+    }
+
+    /// A mask hides the secret, not the field's furniture: a unit after a
+    /// PIN still reads as itself.
+    #[test]
+    fn a_mask_never_reaches_the_adornments() {
+        let mut driver = driver();
+        let state = state("1234");
+        render_with(&mut driver, &state, || input().mask_char('*').suffix("#"));
+        assert_eq!(driver.row(0), " ***  #     ", "scrolled for the cursor");
+    }
+
+    fn adorned() -> Input<State, Msg> {
+        input().prefix("$").suffix("kg")
+    }
+
+    /// The adornments are part of the field: a press on one focuses it and
+    /// places the cursor at the nearest end of the text.
+    #[test]
+    fn a_click_on_an_adornment_places_the_cursor_at_that_end() {
+        let mut driver = driver();
+        let mut state = State {
+            focus: FocusState::none(),
+            ..state("ab")
+        };
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(ChildId::Static("name"), adorned(), Rect::new(0, 0, 12, 1));
+            });
+        };
+        render(&mut driver, &state);
+        assert_eq!(driver.row(0), " $ ab    kg ");
+
+        let EventResult::Emit(Msg::Focus(focus)) = driver.event(mouse(LEFT_DOWN, 1, 0), &state)
+        else {
+            panic!("a press on the prefix must focus the field");
+        };
+        state.focus = focus;
+        render(&mut driver, &state);
+        send(&mut driver, &mut state, mouse(LEFT_UP, 1, 0));
+        assert_eq!(state.name.cursor(), 0, "the prefix");
+
+        render(&mut driver, &state);
+        click(&mut driver, &mut state, 9, 0);
+        assert_eq!(state.name.cursor(), 2, "the suffix");
+        render(&mut driver, &state);
+        click(&mut driver, &mut state, 4, 0);
+        assert_eq!(state.name.cursor(), 1, "the text starts after the prefix");
+    }
+
+    /// Long text scrolls inside the cells between the adornments, and never
+    /// paints over either.
+    #[test]
+    fn long_text_scrolls_between_the_adornments() {
+        let mut driver = driver();
+        let mut state = state("abcdefghij");
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component(ChildId::Static("name"), adorned(), Rect::new(0, 0, 12, 1));
+            });
+        };
+        render(&mut driver, &state);
+        assert_eq!(
+            driver.row(0),
+            " $ ghij  kg ",
+            "five text cells, one the cursor's"
+        );
+
+        send(&mut driver, &mut state, key(KeyCode::Home));
+        render(&mut driver, &state);
+        assert_eq!(driver.row(0), " $ abcde kg ");
+    }
+
+    /// Adornments that leave no cell for the text leave a field that edits
+    /// text nobody sees: it takes no focus, typing, or clicks.
+    #[test]
+    fn a_field_the_adornments_fill_takes_no_focus() {
+        let mut driver = driver();
+        let state = state("");
+        driver.render(&state, |ctx| {
+            ctx.component(ChildId::Static("name"), adorned(), Rect::new(0, 0, 7, 1));
+        });
+        assert!(
+            driver
+                .ratcn
+                .focus_path(&[ChildId::Static("name")])
+                .is_none()
+        );
+        for event in [key(KeyCode::Char('x')), mouse(LEFT_DOWN, 3, 0)] {
+            assert!(
+                matches!(driver.event(event.clone(), &state), EventResult::Ignored),
+                "{event:?}"
+            );
+        }
     }
 }
