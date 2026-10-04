@@ -115,7 +115,9 @@ impl demo_shared::Demo for App {
         }
     }
 
-    /// What a copy or cut in a field put on the clipboard.
+    /// What a copy or cut in a field put on the clipboard, for the demo host
+    /// to write out. To hook up the clipboard in an app of your own, see
+    /// <https://ratcn.com/docs/concepts/host-integration#the-clipboard>.
     fn take_clipboard(&mut self) -> Option<String> {
         self.ratcn.take_clipboard()
     }
