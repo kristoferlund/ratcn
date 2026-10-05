@@ -178,8 +178,7 @@ it, and a captured drag keeps its own. A frame where nothing asks shows
 
 Your own component or a `ctx.paint` closure inside a named scope asks the same
 way; `PaintCtx::pointer_captured` says whether it holds the pointer, for
-`Grabbing`. The
-kanban and drag demos do this for their cards. Read `Ratcn::pointer_shape()`
+`Grabbing`. The kanban and drag demos do this for their cards. Read `Ratcn::pointer_shape()`
 after rendering and hand it to the host, which writes only when it changes:
 
 - **Terminal:** `Session::set_pointer_shape` writes OSC 22. Before its first
@@ -198,7 +197,7 @@ browser, the page's own cursor.
 | kitty | Full support |
 | foot | Supported, resets on exit |
 | iTerm2 | Supported |
-| Ghostty | Supported; 1.3.1 ignores the exit's reset (fixed later, [ghostty#14495](https://github.com/ghostty-org/ghostty/issues/14495)), but switching mouse reporting off on exit resets it anyway |
+| Ghostty | Supported; 1.3.1 ignores the exit's reset (fixed later, [ghostty#14495](https://github.com/ghostty-org/ghostty/pull/14495)), but switching mouse reporting off on exit resets it anyway |
 | [WezTerm](https://github.com/wezterm/wezterm/pull/6292) | Not yet: the support is in review |
 | Alacritty, Windows Terminal, VTE (GNOME Terminal) | Ignored |
 | tmux (mainline), herdr | Not forwarded to the outer terminal, so no shapes inside them |

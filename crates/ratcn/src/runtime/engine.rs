@@ -2499,7 +2499,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             // motion, and that is news to the next frame — what is hovered
             // and the shape it asks for changed — whether or not anything
             // handled the release.
-            let unfrozen = hit.clone().unwrap_or_default();
+            let unfrozen = hit.unwrap_or_default();
             if !self.gestures.in_flight() && self.hover != unfrozen {
                 self.hover = unfrozen;
                 if matches!(result, EventResult::Ignored) {

@@ -330,17 +330,10 @@ impl Session {
     /// | kitty | Full support |
     /// | foot | Supported, resets on exit |
     /// | iTerm2 | Supported |
-    /// | Ghostty | Supported; 1.3.1 ignores the exit's reset (fixed later, [ghostty#14495](https://github.com/ghostty-org/ghostty/issues/14495)), but switching mouse reporting off on exit resets it anyway |
+    /// | Ghostty | Supported; 1.3.1 ignores the exit's reset (fixed later, [ghostty#14495](https://github.com/ghostty-org/ghostty/pull/14495)), but switching mouse reporting off on exit resets it anyway |
     /// | [WezTerm](https://github.com/wezterm/wezterm/pull/6292) | Not yet: the support is in review |
     /// | Alacritty, Windows Terminal, VTE (GNOME Terminal) | Ignored |
     /// | tmux (mainline), herdr | Not forwarded to the outer terminal, so no shapes inside them |
-    ///
-    /// Ghostty 1.3.1 ignores both the pop and the empty reset; later releases
-    /// read the empty reset ([ghostty#14495](https://github.com/ghostty-org/ghostty/issues/14495)).
-    /// It still gives its own pointer back on exit, because switching mouse
-    /// reporting off — which the session does after the reset, when it was
-    /// opened with [`SessionOptions::mouse`] — resets 1.3.1's pointer to the
-    /// text beam. Leaving the alternate screen alone does not.
     ///
     /// # Errors
     ///

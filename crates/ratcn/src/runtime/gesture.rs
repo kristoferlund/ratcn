@@ -196,7 +196,7 @@ impl Gestures {
     }
 
     /// The path holding the most recent claim still live, if any gesture has
-    /// one: what [`PaintCtx::dragging`](super::PaintCtx::dragging) answers.
+    /// one: what [`PaintCtx::pointer_captured`](super::PaintCtx::pointer_captured) answers.
     pub(super) fn captured(&self) -> Option<&[ChildId]> {
         self.tracked
             .iter()
