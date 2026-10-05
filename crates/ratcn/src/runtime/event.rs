@@ -442,10 +442,11 @@ mod browser_clipboard {
 
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
-        ClipboardEvent, Document, Element, KeyboardEvent, Window,
+        ClipboardEvent, Document, Element, HtmlElement, KeyboardEvent, Window,
         wasm_bindgen::{JsCast, JsValue, prelude::Closure},
     };
 
+    use super::super::PointerShape;
     use super::Event;
 
     /// The browser's clipboard, wired to the runtime for as long as the guard
@@ -700,10 +701,39 @@ mod browser_clipboard {
             );
         }
     }
+
+    /// Show `shape` as the mouse pointer over `app`, the element the app is
+    /// drawn in: the canvas a canvas backend draws on, or the element holding
+    /// it; for a `DomBackend`, the element whose id was given as its
+    /// `grid_id`. A canvas found by id is an `Element`; `dyn_into` makes it
+    /// the `HtmlElement` this takes.
+    ///
+    /// It sets the element's CSS `cursor`, and only when that changes, so hand
+    /// it [`Ratcn::pointer_shape`](super::super::Ratcn::pointer_shape) after
+    /// every frame. [`PointerShape::Default`] removes the property, giving the
+    /// pointer back to the page's own styles. Nothing is installed: unlike
+    /// [`BrowserClipboard`], there is no guard to keep.
+    pub fn set_browser_pointer_shape(app: &HtmlElement, shape: PointerShape) {
+        let style = app.style();
+        let wanted = match shape {
+            PointerShape::Default => "",
+            shape => shape.css_name(),
+        };
+        if style.get_property_value("cursor").ok().as_deref() == Some(wanted) {
+            return;
+        }
+        // Only a read-only declaration refuses, and an element's own style is
+        // not one.
+        let _ = if wanted.is_empty() {
+            style.remove_property("cursor").map(drop)
+        } else {
+            style.set_property("cursor", wanted)
+        };
+    }
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-pub use browser_clipboard::BrowserClipboard;
+pub use browser_clipboard::{BrowserClipboard, set_browser_pointer_shape};
 
 #[cfg(feature = "ratzilla")]
 mod ratzilla_conv {

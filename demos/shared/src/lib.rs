@@ -327,7 +327,7 @@ mod web_host {
 
     use gloo_timers::callback::Timeout;
     use ratatui::{Terminal, backend::Backend};
-    use ratcn::runtime::{BrowserClipboard, Event, set_browser_pointer};
+    use ratcn::runtime::{BrowserClipboard, Event, set_browser_pointer_shape};
     use ratzilla::{
         WebEventHandler, WebRenderer,
         web_sys::{
@@ -467,7 +467,7 @@ mod web_host {
                 false
             };
             if let Some(pointer) = &self.pointer {
-                set_browser_pointer(pointer, self.demo.borrow().pointer_shape());
+                set_browser_pointer_shape(pointer, self.demo.borrow().pointer_shape());
             }
             // The canvas adopted a resize while this frame was flushed, so the
             // frame that settles on the new grid is the next one.

@@ -897,7 +897,9 @@ impl<'a, State> PaintCtx<'a, State> {
 /// terminal, the CSS `cursor` in a browser.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PointerShape {
-    /// The terminal's or browser's own pointer.
+    /// No shape asked for. In a terminal it is the arrow, written as
+    /// `default`; in the browser it is the page's own cursor, by removing the
+    /// app element's `cursor`.
     #[default]
     Default,
     /// A hand: something pressable.
@@ -925,31 +927,6 @@ impl PointerShape {
             Self::Grabbing => "grabbing",
         }
     }
-}
-
-/// Show `shape` as the mouse pointer over `app`, the element the app is drawn
-/// in: the canvas, the element holding it, or the page body.
-///
-/// It sets the element's CSS `cursor`, and only when that changes, so hand it
-/// [`Ratcn::pointer_shape`](super::Ratcn::pointer_shape) after every frame.
-/// [`PointerShape::Default`] removes the property, giving the pointer back to
-/// the page's own styles.
-#[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-pub fn set_browser_pointer(app: &web_sys::HtmlElement, shape: PointerShape) {
-    let style = app.style();
-    let wanted = match shape {
-        PointerShape::Default => "",
-        shape => shape.css_name(),
-    };
-    if style.get_property_value("cursor").ok().as_deref() == Some(wanted) {
-        return;
-    }
-    // Only a read-only declaration refuses, and an element's own style is not one.
-    let _ = if wanted.is_empty() {
-        style.remove_property("cursor").map(drop)
-    } else {
-        style.set_property("cursor", wanted)
-    };
 }
 
 /// How the focus scope around a component's descendants behaves.

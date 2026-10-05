@@ -2281,7 +2281,7 @@ impl<State, Msg> Ratcn<State, Msg> {
     ///
     /// Read it after each [`render`](Self::render) and show it: natively with
     /// the `termina` feature's `Session::set_pointer_shape`, in the browser
-    /// with the `ratzilla` feature's `set_browser_pointer`. Both write only
+    /// with the `ratzilla` feature's `set_browser_pointer_shape`. Both write only
     /// when the shape changed, so handing them every frame's answer is cheap.
     #[must_use]
     pub const fn pointer_shape(&self) -> PointerShape {
