@@ -10,9 +10,9 @@
 //! The text is app-owned, like every other value here: the field reads an
 //! [`InputState`] from app state and emits a new one for each keystroke.
 //! Editing, cursor movement, selection, and horizontal scrolling belong to the
-//! editor inside that state; what lives in this module is the look, the keys
-//! the field takes and the ones it leaves to bubble, how a paste becomes one
-//! line, and what the mouse does.
+//! [ratatui-textarea](ratatui_textarea) editor inside that state; what lives
+//! in this module is the look, the keys the field takes and the ones it leaves
+//! to bubble, how a paste becomes one line, and what the mouse does.
 
 use std::{fmt, rc::Rc};
 
@@ -276,6 +276,8 @@ fn press_target(editor: &Editor<'_>, well: Rect, text: Rect, pointer: Position) 
 
 /// A single-line text field that only draws — an ordinary ratatui [`Widget`]
 /// with no focus, events, or state of its own.
+///
+/// A themed paint adapter for [ratatui-textarea](ratatui_textarea).
 ///
 /// It paints the [`InputState`] it is given: the text, scrolled to keep the
 /// cursor in view, the cursor when [`focused`](Self::focused), and any
@@ -554,6 +556,9 @@ type OnSubmitFn<M> = Rc<dyn Fn() -> M>;
 type StyleFn = Rc<dyn Fn(&Theme) -> InputStyle>;
 
 /// A single-line text field the user types in.
+///
+/// Built on [ratatui-textarea](ratatui_textarea), which handles editing,
+/// cursor movement, selection, and horizontal scrolling.
 ///
 /// The text lives in app state as an [`InputState`] and arrives through
 /// [`value`](Self::value); every edit and every cursor movement emits a new
