@@ -58,11 +58,6 @@ enum ScrollHold {
     Held { offset: u16, base: Option<u16> },
 }
 
-/// Whether the thumb is being dragged: written by each gutter event, read by
-/// the declaration to show the grabbing pointer.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct ThumbDragged(bool);
-
 type ReadOffsetFn<S> = Box<dyn Fn(&S) -> u16>;
 type OnChangeFn<M> = Box<dyn Fn(u16) -> M>;
 type ContentFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
@@ -364,10 +359,7 @@ impl<S, M> ScrollArea<S, M> {
             let start = self.thumb_start(area, current).unwrap_or(0);
             anchor.y = i16::try_from(start).unwrap_or(i16::MAX);
         }
-        let phase = ctx.drag(mouse, DragOptions::new(anchor).start_if(can_start));
-        *ctx.transient::<ThumbDragged>() =
-            ThumbDragged(matches!(phase, DragPhase::Down | DragPhase::Moved { .. }));
-        match phase {
+        match ctx.drag(mouse, DragOptions::new(anchor).start_if(can_start)) {
             DragPhase::Down => Self::consume(jumped),
             DragPhase::Moved { offset, .. } => {
                 // Only a new thumb row moves the view. Remapping the row the
@@ -450,17 +442,16 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
             .saturating_sub(viewport_height)
             .saturating_add(1);
         let thumb = self.thumb_span(area, offset);
-        let dragged = ctx.transient::<ThumbDragged>().0;
         ctx.paint(move |ctx| {
-            // The hovered area is under the pointer only on its gutter, or
-            // while a drag it captured runs on.
+            // Grab over the thumb; Grabbing for the whole drag, wherever the
+            // pointer goes. The area holds the pointer only for a gutter drag.
             let over_thumb = ctx.hover_position().is_some_and(|position| {
                 gutter.contains(position)
                     && thumb.is_some_and(|(start, len)| {
                         (area.y + start..area.y + start + len).contains(&position.y)
                     })
             });
-            if dragged {
+            if ctx.dragging() {
                 ctx.set_pointer_shape(PointerShape::Grabbing);
             } else if over_thumb {
                 ctx.set_pointer_shape(PointerShape::Grab);
@@ -1556,8 +1547,38 @@ mod tests {
         assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Grabbing);
 
         driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 3), &state);
-        driver.event(mouse(MouseKind::Moved, 1, 3), &state);
         render(&mut driver, &state);
+        assert_eq!(
+            driver.ratcn.pointer_shape(),
+            PointerShape::Default,
+            "the release opens the hand at once, with no motion after it"
+        );
+    }
+
+    /// A modal opening mid-drag calls the drag off, so the closed hand goes
+    /// with it: once the modal closes again, the button still down, the area
+    /// shows no grip it no longer has.
+    #[test]
+    fn a_modal_opening_mid_drag_lets_go_of_the_thumb() {
+        let mut driver = driver(6, 4);
+        let state = State::default();
+        let render = |driver: &mut Driver<State, Msg>, modal: bool| {
+            driver.render(&State::default(), |ctx| {
+                ctx.component("scroll", scroll_area(6, |_| {}), Rect::new(0, 0, 6, 4));
+                if modal {
+                    ctx.modal(ChildId::Static("modal"), ModalProbe, Rect::new(0, 0, 6, 1));
+                }
+            });
+        };
+        render(&mut driver, false);
+        driver.event(mouse(MouseKind::Moved, 5, 2), &state);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 2), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), 1, 3), &state);
+        render(&mut driver, false);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Grabbing);
+
+        render(&mut driver, true);
+        render(&mut driver, false);
         assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
     }
 

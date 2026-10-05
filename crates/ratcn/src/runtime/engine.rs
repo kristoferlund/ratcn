@@ -252,8 +252,8 @@ struct ViewportRecord {
 }
 
 /// What the finished tree resolved this frame: the node paint styles as
-/// focused, and the node the pointer rests on, each `None` where there is
-/// none.
+/// focused, the node the pointer rests on, and the node holding the pointer's
+/// capture, each `None` where there is none.
 ///
 /// Both are answered once declaring has ended, from the tree the pass built,
 /// and both travel into the replay together because every paint reads them
@@ -262,6 +262,7 @@ struct ViewportRecord {
 struct Resolved {
     focus: Option<usize>,
     hover: Option<usize>,
+    capture: Option<usize>,
 }
 
 /// What asking to reveal focus in a tree came to.
@@ -473,7 +474,7 @@ impl<State, Msg> Surface<State, Msg> {
         path.starts_with(self.path_of(index))
     }
 
-    /// Where `index` sits in this frame's resolved focus and hover — the four
+    /// Where `index` sits in this frame's resolved focus, hover, and capture — the
     /// flags [`PaintCtx`] reports.
     fn interaction_flags(&self, index: usize, resolved: Resolved) -> InteractionFlags {
         let (focused, contains_focus) = self.leaf_match(index, resolved.focus);
@@ -483,6 +484,7 @@ impl<State, Msg> Surface<State, Msg> {
             contains_focus,
             hovered,
             contains_hover,
+            dragging: resolved.capture == Some(index),
         }
     }
 
@@ -2037,6 +2039,13 @@ impl<State, Msg> Ratcn<State, Msg> {
                 .leaf_of(resolved_focus.path())
                 .filter(|&target| pass.surface.takes_focus(target)),
             hover: pass.surface.leaf_of(&resolved_hover),
+            // A claim the pointer could no longer reach is about to be called
+            // off by the commit, so it already paints released.
+            capture: self
+                .gestures
+                .captured()
+                .and_then(|path| pass.surface.leaf_of(path))
+                .filter(|&index| pass.surface.hittable(index)),
         };
         pass.replay_paint(buffer, state, theme, resolved);
         self.pointer_shape = pass.pointer_shape;

@@ -11,8 +11,8 @@ use crate::Theme;
 use crate::geometry::{is_border, wrapped_height};
 use crate::runtime::{
     CellOffset, ChildId, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx,
-    EventResult, KeyChord, KeyCode, MeasuredComponent, PaintCtx, ScopeOptions, TabWrap,
-    clamp_offset, offset_rect,
+    EventResult, KeyChord, KeyCode, MeasuredComponent, PaintCtx, PointerShape, ScopeOptions,
+    TabWrap, clamp_offset, offset_rect,
 };
 use crate::text_width::{display_width_u16, wrap_to_width};
 use crate::theme::resolve_style;
@@ -697,6 +697,16 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
                 layout.main_area,
             );
         }
+        // The border is the drag handle: an open hand over it, closed while
+        // it is held.
+        let on_border = ctx
+            .hover_position()
+            .is_some_and(|position| is_border(layout.box_area, position.x, position.y));
+        if ctx.dragging() {
+            ctx.set_pointer_shape(PointerShape::Grabbing);
+        } else if self.drag_enabled() && on_border {
+            ctx.set_pointer_shape(PointerShape::Grab);
+        }
     }
 
     fn scope_options(&self, _state: &S) -> ScopeOptions {
@@ -1175,6 +1185,50 @@ mod tests {
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 59, 9), &state),
             EventResult::Consumed
+        );
+    }
+
+    /// The border offers the grab hand only where a press would drag, and
+    /// keeps it closed for the whole drag, the pointer wherever it went.
+    #[test]
+    fn the_draggable_border_shows_a_grab_hand() {
+        let mut state = State::default();
+        let mut driver = driver(60, 10);
+        render_dialog(&mut driver, &state, false);
+        let shape_after = |driver: &mut Driver<State, Msg>, event, state: &mut State| {
+            if let EventResult::Emit(Msg::Moved(offset)) = driver.event(event, state) {
+                state.offset = offset;
+            }
+            render_dialog(driver, state, false);
+            driver.ratcn.pointer_shape()
+        };
+
+        let border = mouse(MouseKind::Moved, 6, 3);
+        assert_eq!(
+            shape_after(&mut driver, border.clone(), &mut state),
+            PointerShape::Grab
+        );
+        let inside = mouse(MouseKind::Moved, 9, 5);
+        assert_eq!(
+            shape_after(&mut driver, inside, &mut state),
+            PointerShape::Default
+        );
+
+        shape_after(&mut driver, border.clone(), &mut state);
+        let press = mouse(MouseKind::Down(MouseButton::Left), 6, 3);
+        assert_eq!(
+            shape_after(&mut driver, press, &mut state),
+            PointerShape::Grabbing
+        );
+        let far = mouse(MouseKind::Moved, 30, 9);
+        assert_eq!(
+            shape_after(&mut driver, far, &mut state),
+            PointerShape::Grabbing
+        );
+        let release = mouse(MouseKind::Up(MouseButton::Left), 30, 9);
+        assert_ne!(
+            shape_after(&mut driver, release, &mut state),
+            PointerShape::Grabbing
         );
     }
 

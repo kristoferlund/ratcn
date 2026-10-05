@@ -70,8 +70,8 @@ pub struct DeclareCtx<'a, State, Msg> {
     pub(crate) state: &'a State,
 }
 
-/// Where one identified declaration sits in this frame's focus and hover, as
-/// the four flags paint styles from.
+/// Where one identified declaration sits in this frame's focus, hover, and
+/// pointer capture, as the flags paint styles from.
 ///
 /// They travel as a unit because they are answered as one, from the same node
 /// against the focus and the hover this frame resolved, at the one moment they
@@ -79,13 +79,14 @@ pub struct DeclareCtx<'a, State, Msg> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "two independent (leaf, within) flag pairs — focus and hover; the bools are the natural shape"
+    reason = "two independent (leaf, within) flag pairs — focus and hover — and the capture; the bools are the natural shape"
 )]
 pub(crate) struct InteractionFlags {
     pub(crate) focused: bool,
     pub(crate) contains_focus: bool,
     pub(crate) hovered: bool,
     pub(crate) contains_hover: bool,
+    pub(crate) dragging: bool,
 }
 
 impl<State, Msg> fmt::Debug for DeclareCtx<'_, State, Msg> {
@@ -119,7 +120,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Layout the closure's caller computed must be moved in.
     ///
     /// The flags are the declaring node's, and the root closure has no
-    /// identity of its own — paint queued there always reports all four as
+    /// identity of its own — paint queued there always reports every flag as
     /// false. Enter a named [`scope`](Self::scope) when container chrome needs
     /// to know whether focus or the pointer is somewhere inside it.
     pub fn paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
@@ -726,7 +727,7 @@ fn with_projected_buffer<R>(
 /// [`DeclareCtx::paint`]. Both run during the replay that follows the
 /// declaration walk, which is why this context can declare nothing: by the
 /// time it exists the tree is closed and focus is resolved. That is also the
-/// only reason it can carry the four interaction flags at all — they are
+/// only reason it can carry the interaction flags at all — they are
 /// derived from that resolution, and there is nothing to derive them from
 /// while the tree is still being built.
 ///
@@ -835,6 +836,19 @@ impl<'a, State> PaintCtx<'a, State> {
     #[must_use]
     pub const fn contains_hover(&self) -> bool {
         self.flags.contains_hover
+    }
+
+    /// This declaration holds the pointer: it claimed the gesture of a button
+    /// still held, with [`EventCtx::capture_pointer`] or [`EventCtx::drag`],
+    /// from the press until the release.
+    ///
+    /// It ends the moment the gesture is called off — a modal opening, the
+    /// pointer leaving the terminal, or a redraw that hides this declaration —
+    /// even though the button may still be down. Paint a drag handle's
+    /// grabbed look from it, and ask for [`PointerShape::Grabbing`].
+    #[must_use]
+    pub const fn dragging(&self) -> bool {
+        self.flags.dragging
     }
 
     /// The pointer position from the most recent mouse event, if it is still
