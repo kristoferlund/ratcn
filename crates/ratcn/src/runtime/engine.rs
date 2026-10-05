@@ -28,7 +28,7 @@ use crate::backdrop::dim_background;
 
 use super::{
     ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyEvent, ModalState,
-    MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
+    MouseButton, MouseEvent, MouseKind, PaintCtx, PointerShape, ScopeOptions, Step, TabWrap,
     component::{InteractionFlags, PaintRoute, PaintTarget, PointerInputs, TransientMap},
     focus,
     gesture::Gestures,
@@ -1079,6 +1079,8 @@ pub(crate) struct RenderPass<State, Msg> {
     /// The buffer clipped paint lays out in, shared by every paint call the
     /// frame makes — see [`PaintTarget`].
     scratch: Buffer,
+    /// The pointer shape the hovered declaration asked for while painting.
+    pointer_shape: PointerShape,
 }
 
 impl<State, Msg> RenderPass<State, Msg> {
@@ -1095,6 +1097,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             open_viewport: None,
             layer_stack: Vec::new(),
             scratch: Buffer::empty(Rect::ZERO),
+            pointer_shape: PointerShape::Default,
         }
     }
 
@@ -1567,6 +1570,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             flags,
             hover_position,
             state,
+            pointer_shape: &mut self.pointer_shape,
         };
         match op {
             // `assert_valid` saw every region close before replay, and a
@@ -1675,6 +1679,8 @@ pub struct Ratcn<State, Msg> {
     reveal_pending: bool,
     /// The latest text an event put on the clipboard, until the host takes it.
     clipboard: Option<String>,
+    /// The pointer shape the last committed frame painted.
+    pointer_shape: PointerShape,
 }
 
 impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
@@ -1692,6 +1698,7 @@ impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
             .field("resolved_focus", &self.resolved_focus)
             .field("reveal_pending", &self.reveal_pending)
             .field("clipboard", &self.clipboard)
+            .field("pointer_shape", &self.pointer_shape)
             .finish()
     }
 }
@@ -1711,6 +1718,7 @@ impl<State, Msg> Default for Ratcn<State, Msg> {
             resolved_focus: FocusState::default(),
             reveal_pending: false,
             clipboard: None,
+            pointer_shape: PointerShape::Default,
         }
     }
 }
@@ -2031,6 +2039,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             hover: pass.surface.leaf_of(&resolved_hover),
         };
         pass.replay_paint(buffer, state, theme, resolved);
+        self.pointer_shape = pass.pointer_shape;
         for (path, slots) in pass.settled_transients {
             self.transients.entry(path).or_default().extend(slots);
         }
@@ -2255,6 +2264,19 @@ impl<State, Msg> Ratcn<State, Msg> {
     #[must_use = "the text is gone from the runtime once taken"]
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard.take()
+    }
+
+    /// The pointer shape the last frame painted: what the hovered declaration
+    /// asked for with [`PaintCtx::set_pointer_shape`], or
+    /// [`PointerShape::Default`] when nothing did.
+    ///
+    /// Read it after each [`render`](Self::render) and show it: natively with
+    /// the `termina` feature's `Session::set_pointer_shape`, in the browser
+    /// with the `ratzilla` feature's `set_browser_pointer`. Both write only
+    /// when the shape changed, so handing them every frame's answer is cheap.
+    #[must_use]
+    pub const fn pointer_shape(&self) -> PointerShape {
+        self.pointer_shape
     }
 
     /// Route one non-pointer event, and answer for it when nothing in the

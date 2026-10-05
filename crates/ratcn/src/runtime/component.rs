@@ -743,6 +743,9 @@ pub struct PaintCtx<'a, State> {
     pub(crate) flags: InteractionFlags,
     pub(crate) hover_position: Option<Position>,
     pub(crate) state: &'a State,
+    /// The frame's pointer shape, which [`set_pointer_shape`](Self::set_pointer_shape)
+    /// writes.
+    pub(crate) pointer_shape: &'a mut PointerShape,
 }
 
 impl<State> fmt::Debug for PaintCtx<'_, State> {
@@ -851,6 +854,88 @@ impl<'a, State> PaintCtx<'a, State> {
     pub const fn state(&self) -> &'a State {
         self.state
     }
+
+    /// Ask for `shape` as the mouse pointer while it rests on this
+    /// declaration: a hand over something pressable, a text beam over a field.
+    ///
+    /// Only the [`hovered`](Self::hovered) declaration is heard; a call from
+    /// anything else is ignored, so a paint may call this without checking
+    /// hover first and can never fight the one the pointer is on. The last
+    /// call wins, which lets a component pick a region by
+    /// [`hover_position`](Self::hover_position). A frame where nothing asked
+    /// shows [`PointerShape::Default`]. Queued paint from the root closure has
+    /// no declaration to be hovered, so app chrome asks from inside a named
+    /// [`scope`](DeclareCtx::scope).
+    ///
+    /// The host reads the result with
+    /// [`Ratcn::pointer_shape`](super::Ratcn::pointer_shape) after rendering.
+    pub fn set_pointer_shape(&mut self, shape: PointerShape) {
+        if self.hovered() {
+            *self.pointer_shape = shape;
+        }
+    }
+}
+
+/// The mouse pointer's shape, named after the CSS cursor it shows.
+///
+/// A component asks for one while painting with
+/// [`PaintCtx::set_pointer_shape`]; the host shows it — with OSC 22 in a
+/// terminal, the CSS `cursor` in a browser.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PointerShape {
+    /// The terminal's or browser's own pointer.
+    #[default]
+    Default,
+    /// A hand: something pressable.
+    Pointer,
+    /// A text beam: an editable text field.
+    Text,
+    /// A disabled control that would otherwise take input.
+    NotAllowed,
+    /// Something that can be dragged.
+    Grab,
+    /// Something being dragged.
+    Grabbing,
+}
+
+impl PointerShape {
+    /// The CSS `cursor` name, which is also the name OSC 22 takes.
+    #[must_use]
+    pub const fn css_name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Pointer => "pointer",
+            Self::Text => "text",
+            Self::NotAllowed => "not-allowed",
+            Self::Grab => "grab",
+            Self::Grabbing => "grabbing",
+        }
+    }
+}
+
+/// Show `shape` as the mouse pointer over `app`, the element the app is drawn
+/// in: the canvas, the element holding it, or the page body.
+///
+/// It sets the element's CSS `cursor`, and only when that changes, so hand it
+/// [`Ratcn::pointer_shape`](super::Ratcn::pointer_shape) after every frame.
+/// [`PointerShape::Default`] removes the property, giving the pointer back to
+/// the page's own styles.
+#[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
+pub fn set_browser_pointer(app: &web_sys::HtmlElement, shape: PointerShape) {
+    let style = app.style();
+    let wanted = match shape {
+        PointerShape::Default => "",
+        shape => shape.css_name(),
+    };
+    if style.get_property_value("cursor").ok().as_deref() == Some(wanted) {
+        return;
+    }
+    // Only a read-only declaration refuses, and an element's own style is not one.
+    let _ = if wanted.is_empty() {
+        style.remove_property("cursor").map(drop)
+    } else {
+        style.set_property("cursor", wanted)
+    };
 }
 
 /// How the focus scope around a component's descendants behaves.

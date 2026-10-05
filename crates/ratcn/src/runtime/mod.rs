@@ -191,8 +191,11 @@ impl fmt::Display for ChildId {
     }
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
+pub use component::set_browser_pointer;
 pub use component::{
-    Component, DeclareCtx, EventCtx, MeasuredComponent, PaintCtx, PopupOptions, ScopeOptions, Step,
+    Component, DeclareCtx, EventCtx, MeasuredComponent, PaintCtx, PointerShape, PopupOptions,
+    ScopeOptions, Step,
 };
 pub use drag::{CellOffset, DragOptions, DragPhase, clamp_offset, offset_rect};
 pub use engine::Ratcn;
