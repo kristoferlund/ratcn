@@ -289,6 +289,12 @@ impl Component<AppState, Msg> for KanbanCard {
                 paint_card(buf, area, &self.card_id, theme)
             });
         }
+        // Heard only while this card is hovered, which a drag keeps it.
+        ctx.set_pointer_shape(if ctx.dragging() {
+            PointerShape::Grabbing
+        } else {
+            PointerShape::Grab
+        });
     }
 
     fn handle_event(
