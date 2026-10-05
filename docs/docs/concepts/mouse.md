@@ -158,6 +158,40 @@ The path semantics, the split between app-owned focus and runtime-owned hover,
 and the `hover_focus` boundary rules are covered in
 [Focus, hover, and identity](./focus-hover-identity).
 
+## Pointer shape
+
+The mouse pointer shows what it is over: a hand over anything pressable, a text
+beam over a field. A component asks for a shape while painting, with
+`PaintCtx::set_pointer_shape`. Only the hovered declaration is heard, so the
+deepest component under the pointer decides, a modal hides the shapes beneath
+it, and a captured drag keeps its own. A frame where nothing asks shows
+`PointerShape::Default`.
+
+| Component | Shape |
+|---|---|
+| Button, Checkbox, Cycle, Select and its options, Tabs, List rows | `Pointer` |
+| Input, TextArea | `Text`, or `NotAllowed` when disabled |
+| ScrollArea's thumb | `Grab`, then `Grabbing` while dragged |
+| A disabled control | `Default` |
+
+Your own component or a `ctx.paint` closure inside a named scope asks the same
+way. Read `Ratcn::pointer_shape()` after rendering and hand it to the host,
+which writes only when it changes:
+
+- **Terminal:** `Session::set_pointer_shape` writes OSC 22. Its first shape is
+  pushed onto the terminal's pointer stack, and dropping the session pops it and
+  sends the empty reset, so the terminal's own pointer comes back on exit.
+- **Browser:** `ratcn::runtime::set_browser_pointer` sets the CSS `cursor` of the
+  app's element.
+
+| Terminal | OSC 22 |
+|---|---|
+| kitty, Ghostty, foot, iTerm2 | Supported |
+| WezTerm | Not yet ([wezterm#6292](https://github.com/wezterm/wezterm/pull/6292)) |
+| Alacritty, Windows Terminal, VTE (GNOME Terminal), tmux | Ignored |
+
+See [Host integration](./host-integration#the-event-loop) for the loop.
+
 ## In the browser
 
 The browser backend (ratzilla) reports mouse positions directly in **terminal

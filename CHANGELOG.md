@@ -24,6 +24,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Ratcn::take_clipboard` and written with `Session::set_clipboard` (OSC 52) or
   `BrowserClipboard::write`. `Event::Copy` and `Event::Cut` carry the
   platform's copy and cut gestures.
+- Pointer shapes: the hovered component asks with `PaintCtx::set_pointer_shape`,
+  the host reads `Ratcn::pointer_shape` and shows it with
+  `Session::set_pointer_shape` (OSC 22) or `runtime::set_browser_pointer`.
+  Pressable built-ins show a hand, text fields a text beam.
 
 ## [0.0.5] - 2026-10-03
 
