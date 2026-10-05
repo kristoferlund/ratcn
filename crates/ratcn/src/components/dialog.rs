@@ -702,7 +702,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         let on_border = ctx
             .hover_position()
             .is_some_and(|position| is_border(layout.box_area, position.x, position.y));
-        if ctx.dragging() {
+        if ctx.pointer_captured() {
             ctx.set_pointer_shape(PointerShape::Grabbing);
         } else if self.drag_enabled() && on_border {
             ctx.set_pointer_shape(PointerShape::Grab);

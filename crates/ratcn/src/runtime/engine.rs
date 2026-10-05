@@ -484,7 +484,7 @@ impl<State, Msg> Surface<State, Msg> {
             contains_focus,
             hovered,
             contains_hover,
-            dragging: resolved.capture == Some(index),
+            pointer_captured: resolved.capture == Some(index),
         }
     }
 
@@ -2039,8 +2039,9 @@ impl<State, Msg> Ratcn<State, Msg> {
                 .leaf_of(resolved_focus.path())
                 .filter(|&target| pass.surface.takes_focus(target)),
             hover: pass.surface.leaf_of(&resolved_hover),
-            // A claim the pointer could no longer reach is about to be called
-            // off by the commit, so it already paints released.
+            // A claim on a declaration the pointer can no longer reach — under
+            // a modal, scrolled out of its viewport, no longer declared —
+            // paints released, whether or not the gesture is called off.
             capture: self
                 .gestures
                 .captured()
@@ -2493,6 +2494,18 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         if let MouseKind::Up(button) = raw.kind {
             self.gestures.end(button);
+            // The last release unfreezes hover. Where the pointer has left
+            // what the gesture froze it on, hover moves now, as it would for
+            // motion, and that is news to the next frame — what is hovered
+            // and the shape it asks for changed — whether or not anything
+            // handled the release.
+            let unfrozen = hit.clone().unwrap_or_default();
+            if !self.gestures.in_flight() && self.hover != unfrozen {
+                self.hover = unfrozen;
+                if matches!(result, EventResult::Ignored) {
+                    result = EventResult::Consumed;
+                }
+            }
         }
         result
     }

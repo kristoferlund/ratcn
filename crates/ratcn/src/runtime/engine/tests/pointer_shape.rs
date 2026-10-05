@@ -120,6 +120,35 @@ fn a_modal_blocks_the_shapes_beneath_it() {
     assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Text);
 }
 
+/// Releasing a press dragged off its button unfreezes hover onto empty space.
+/// Nothing handles that release, but it still asks for a frame, and that frame
+/// shows the default pointer without waiting for the pointer to move again.
+#[test]
+fn the_last_release_asks_for_the_frame_that_drops_a_stale_shape() {
+    let mut driver = Driver::<(), ()>::new(10, 3);
+    let declare = |ctx: &mut DeclareCtx<'_, (), ()>| {
+        let button = crate::Button::new("Go").on_press(|| ());
+        ctx.component("go", button, Rect::new(0, 0, 4, 1));
+    };
+    driver.render(&(), declare);
+    driver.event(mouse(MouseKind::Moved, 1, 0), &());
+    driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &());
+    driver.event(mouse(MouseKind::Moved, 8, 2), &());
+    driver.render(&(), declare);
+    assert_eq!(
+        driver.ratcn.pointer_shape(),
+        PointerShape::Pointer,
+        "the held press keeps hover on the button"
+    );
+
+    assert_eq!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 8, 2), &()),
+        EventResult::Consumed
+    );
+    driver.render(&(), declare);
+    assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
+}
+
 /// A drag that leaves the component it pressed keeps that component hovered,
 /// so its shape stays with the pointer rather than changing under the drag.
 #[test]

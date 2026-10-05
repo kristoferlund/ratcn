@@ -129,8 +129,9 @@ impl Component<AppState, Msg> for DraggableBlock {
                 .style(Style::default().fg(theme.foreground).bg(background_color)),
             text_area,
         );
-        // Heard only while the block is hovered, which a drag keeps it.
-        ctx.set_pointer_shape(if ctx.dragging() {
+        // Only the hovered declaration is heard; a drag keeps this one hovered
+        // wherever the pointer goes.
+        ctx.set_pointer_shape(if ctx.pointer_captured() {
             PointerShape::Grabbing
         } else {
             PointerShape::Grab

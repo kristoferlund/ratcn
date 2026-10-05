@@ -25,7 +25,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `BrowserClipboard::write`. `Event::Copy` and `Event::Cut` carry the
   platform's copy and cut gestures.
 - Pointer shapes: components ask with `PaintCtx::set_pointer_shape` (a hand when
-  pressable, a text beam in fields, `Grabbing` while `PaintCtx::dragging`); the
+  pressable, a text beam in fields, `Grabbing` while `PaintCtx::pointer_captured`); the
   host shows `Ratcn::pointer_shape` with `Session::set_pointer_shape` (OSC 22)
   or `runtime::set_browser_pointer_shape`.
 

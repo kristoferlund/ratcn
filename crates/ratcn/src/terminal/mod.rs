@@ -327,13 +327,13 @@ impl Session {
     ///
     /// | Terminal | OSC 22 |
     /// |---|---|
-    /// | kitty | full support, with the stack |
-    /// | foot | supported, resets on exit |
-    /// | iTerm2 | supported |
-    /// | Ghostty | supported; see below |
-    /// | [WezTerm](https://github.com/wezterm/wezterm/pull/6292) | not yet, the support is in review |
-    /// | Alacritty, Windows Terminal, VTE (GNOME Terminal) | ignored |
-    /// | tmux (mainline), herdr | not forwarded to the outer terminal |
+    /// | kitty | Full support |
+    /// | foot | Supported, resets on exit |
+    /// | iTerm2 | Supported |
+    /// | Ghostty | Supported; 1.3.1 ignores the exit's reset (fixed later, [ghostty#14495](https://github.com/ghostty-org/ghostty/issues/14495)), but switching mouse reporting off on exit resets it anyway |
+    /// | [WezTerm](https://github.com/wezterm/wezterm/pull/6292) | Not yet: the support is in review |
+    /// | Alacritty, Windows Terminal, VTE (GNOME Terminal) | Ignored |
+    /// | tmux (mainline), herdr | Not forwarded to the outer terminal, so no shapes inside them |
     ///
     /// Ghostty 1.3.1 ignores both the pop and the empty reset; later releases
     /// read the empty reset ([ghostty#14495](https://github.com/ghostty-org/ghostty/issues/14495)).

@@ -271,12 +271,12 @@ impl Component<AppState, Msg> for KanbanCard {
     fn paint(&mut self, ctx: &mut PaintCtx<'_, AppState>) {
         let area = ctx.area();
         let theme = ctx.theme;
-        let dragging = ctx
+        let left_slot = ctx
             .state()
             .active_drag
             .as_ref()
             .is_some_and(|active_drag| active_drag.card_id == self.card_id);
-        if dragging {
+        if left_slot {
             // The card left an empty slot behind: only its outline stays.
             ctx.widget(
                 Block::bordered()
@@ -289,8 +289,10 @@ impl Component<AppState, Msg> for KanbanCard {
                 paint_card(buf, area, &self.card_id, theme)
             });
         }
-        // Heard only while this card is hovered, which a drag keeps it.
-        ctx.set_pointer_shape(if ctx.dragging() {
+        // The outline follows app state; the hand follows the live gesture.
+        // Only the hovered declaration is heard; a drag keeps this one hovered
+        // wherever the pointer goes.
+        ctx.set_pointer_shape(if ctx.pointer_captured() {
             PointerShape::Grabbing
         } else {
             PointerShape::Grab

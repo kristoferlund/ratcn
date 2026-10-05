@@ -86,7 +86,7 @@ pub(crate) struct InteractionFlags {
     pub(crate) contains_focus: bool,
     pub(crate) hovered: bool,
     pub(crate) contains_hover: bool,
-    pub(crate) dragging: bool,
+    pub(crate) pointer_captured: bool,
 }
 
 impl<State, Msg> fmt::Debug for DeclareCtx<'_, State, Msg> {
@@ -838,17 +838,21 @@ impl<'a, State> PaintCtx<'a, State> {
         self.flags.contains_hover
     }
 
-    /// This declaration holds the pointer: it claimed the gesture of a button
-    /// still held, with [`EventCtx::capture_pointer`] or [`EventCtx::drag`],
-    /// from the press until the release.
+    /// This declaration holds the pointer capture: it claimed the gesture of a
+    /// button still held, with [`EventCtx::capture_pointer`] or
+    /// [`EventCtx::drag`], from the press until the release — the paint-time
+    /// counterpart of [`EventCtx::pointer_captured`].
     ///
-    /// It ends the moment the gesture is called off — a modal opening, the
-    /// pointer leaving the terminal, or a redraw that hides this declaration —
-    /// even though the button may still be down. Paint a drag handle's
-    /// grabbed look from it, and ask for [`PointerShape::Grabbing`].
+    /// That is any capture, not only a drag that has moved: a bare press with
+    /// no motion yet, and a text selection in [`Input`](crate::Input) or
+    /// [`TextArea`](crate::TextArea), count too. It ends with the release, and
+    /// as soon as the pointer can no longer reach this declaration — a modal
+    /// covering it, a redraw that hides it — even though the button may still
+    /// be down. Paint a drag handle's grabbed look from it, and ask for
+    /// [`PointerShape::Grabbing`].
     #[must_use]
-    pub const fn dragging(&self) -> bool {
-        self.flags.dragging
+    pub const fn pointer_captured(&self) -> bool {
+        self.flags.pointer_captured
     }
 
     /// The pointer position from the most recent mouse event, if it is still
@@ -897,9 +901,10 @@ impl<'a, State> PaintCtx<'a, State> {
 /// terminal, the CSS `cursor` in a browser.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PointerShape {
-    /// No shape asked for. In a terminal it is the arrow, written as
-    /// `default`; in the browser it is the page's own cursor, by removing the
-    /// app element's `cursor`.
+    /// No shape asked for. In a terminal, the arrow (written as `default`)
+    /// once a shape has been shown; before that, the terminal's own pointer.
+    /// In the browser, the page's own cursor: the app element's `cursor` is
+    /// removed.
     #[default]
     Default,
     /// A hand: something pressable.

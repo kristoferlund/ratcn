@@ -122,7 +122,9 @@ need:
   read the pointer position itself through `PaintCtx::hover_position` (a tabs
   row highlights the tab under the pointer that way), so motion *within* one
   component matters as much as motion between two. That result is the redraw
-  signal for a host that redraws on anything but `Ignored`.
+  signal for a host that redraws on anything but `Ignored`. The release that
+  ends the last gesture counts too when it moves hover off what the gesture
+  froze it on.
 - **A gesture freezes hover.** While a button is held — captured or not —
   hover stays on whatever the gesture started on, so the geometry a drag moves
   does not chase the pointer dragging it. The release hands it back. The
@@ -175,7 +177,8 @@ it, and a captured drag keeps its own. A frame where nothing asks shows
 | A disabled control | `Default` |
 
 Your own component or a `ctx.paint` closure inside a named scope asks the same
-way; `PaintCtx::dragging` says whether it holds a drag, for `Grabbing`. The
+way; `PaintCtx::pointer_captured` says whether it holds the pointer, for
+`Grabbing`. The
 kanban and drag demos do this for their cards. Read `Ratcn::pointer_shape()`
 after rendering and hand it to the host, which writes only when it changes:
 
@@ -186,8 +189,9 @@ after rendering and hand it to the host, which writes only when it changes:
 - **Browser:** `ratcn::runtime::set_browser_pointer_shape` sets the CSS
   `cursor` of the app's element.
 
-`PointerShape::Default` is the arrow in a terminal, written as `default`, and
-the page's own cursor in the browser.
+`PointerShape::Default` is, in a terminal, the arrow (written as `default`)
+once a shape has been shown, and before that the terminal's own pointer; in the
+browser, the page's own cursor.
 
 | Terminal | OSC 22 |
 |---|---|
@@ -195,19 +199,25 @@ the page's own cursor in the browser.
 | foot | Supported, resets on exit |
 | iTerm2 | Supported |
 | Ghostty | Supported; 1.3.1 ignores the exit's reset (fixed later, [ghostty#14495](https://github.com/ghostty-org/ghostty/issues/14495)), but switching mouse reporting off on exit resets it anyway |
-| WezTerm | Not yet ([wezterm#6292](https://github.com/wezterm/wezterm/pull/6292)) |
+| [WezTerm](https://github.com/wezterm/wezterm/pull/6292) | Not yet: the support is in review |
 | Alacritty, Windows Terminal, VTE (GNOME Terminal) | Ignored |
 | tmux (mainline), herdr | Not forwarded to the outer terminal, so no shapes inside them |
 
 A host on `ratcn::crossterm` writes OSC 22 itself, with `css_name()` as the
 hook. Write only on change; before the first shape, write a bare push
 (`ESC ] 22 ; >`, never a name after `>`, which Ghostty and foot reject); on
-exit, pop and then reset, before leaving the alternate screen, and never write
-`default`:
+exit, pop then send the empty reset, not `default`, before leaving the
+alternate screen:
 
 ```rust
 use std::io::Write;
 
+// Before the first frame: nothing has been shown, so nothing is written
+// until a frame asks for a shape.
+let mut last = PointerShape::Default;
+let mut pushed = false;
+
+// After each frame:
 if shape != last {
     if !pushed {
         write!(out, "\x1b]22;>\x1b\\")?;

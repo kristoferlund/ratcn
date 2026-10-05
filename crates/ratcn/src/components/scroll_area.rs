@@ -451,7 +451,7 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
                         (area.y + start..area.y + start + len).contains(&position.y)
                     })
             });
-            if ctx.dragging() {
+            if ctx.pointer_captured() {
                 ctx.set_pointer_shape(PointerShape::Grabbing);
             } else if over_thumb {
                 ctx.set_pointer_shape(PointerShape::Grab);
