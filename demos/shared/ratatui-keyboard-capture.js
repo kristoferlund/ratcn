@@ -1,6 +1,6 @@
 // Keyboard capture for the WebAssembly demos.
 //
-// ratzilla delivers key events through a listener on its own canvas element
+// ratzilla delivers key events through a listener on its own canvas/grid element
 // (since 0.3.1 — it used to listen on `document`), and browsers only send
 // keydown to the focused element. This script makes the whole page act as the
 // keyboard surface instead: while focus is anywhere in the page, keys the demo
@@ -73,9 +73,9 @@ function installKeyboardCapture(root = document.body) {
   hint.textContent = "Keyboard captured - press Esc to release";
   root.appendChild(hint);
 
-  // ratzilla's canvas exists once the wasm module has booted; look it up per
+  // ratzilla's canvas/grid exists once the wasm module has booted; look it up per
   // event rather than at install time.
-  const target = () => root.querySelector("canvas") ?? root;
+  const target = () => root.querySelector("canvas, #grid") ?? root;
 
   // Focus anywhere in the page counts as capture: clicking the demo focuses
   // the canvas (ratzilla makes it focusable), tabbing into the iframe lands
@@ -93,7 +93,13 @@ function installKeyboardCapture(root = document.body) {
   document.addEventListener("focusin", syncActive);
   document.addEventListener("focusout", () => window.setTimeout(syncActive, 0));
 
-  root.addEventListener("pointerdown", () => root.focus());
+  root.addEventListener("pointerdown", () => root.focus({ preventScroll: true }));
+  // The browser's default mousedown focus would scroll a tall grid/canvas to
+  // its top between down and up, moving the control away from the pointer.
+  root.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    root.focus({ preventScroll: true });
+  });
 
   document.addEventListener(
     "keydown",

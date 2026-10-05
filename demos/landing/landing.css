@@ -24,22 +24,22 @@ canvas {
 }
 
 #grid {
+  width: max-content;
   overflow: hidden;
 }
 
 #grid > pre {
   width: 100%;
-  height: 19px !important;
-  line-height: 20px !important;
 }
 
 pre {
   margin: 0;
   width: 100%;
-  height: 100%;
   box-sizing: border-box;
   overflow: hidden;
   font-family: "JetBrainsMono Nerd Font Mono";
+  font-size: 14px;
+  line-height: normal;
   font-variant-ligatures: none;
 }
 

@@ -426,8 +426,9 @@ mod tests {
     /// in, or a scrolled page would clip its last row or trail empty space.
     #[test]
     fn grid_height_is_the_height_tile_areas_fills_at_full_tile_height() {
-        // One column, and the widest the grid ever gets.
-        for width in [TILE_WIDTH, 4 * (TILE_WIDTH + TILE_GAP)] {
+        // Both sides of every responsive breakpoint: the browser must reserve
+        // enough height for portrait, landscape, and desktop layouts alike.
+        for width in [TILE_WIDTH, 85, 86, 129, 130, 173, 174] {
             let height = grid_height(width);
             let tiles = tile_areas(Rect::new(0, 0, width, height));
             assert!(

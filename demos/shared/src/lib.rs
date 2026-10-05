@@ -269,7 +269,35 @@ where
 /// installed.
 #[cfg(target_arch = "wasm32")]
 pub fn run<D: Demo + 'static>(demo: D) -> io::Result<()> {
-    web_host::start(demo)
+    let backend = web_backend(D::THEME.background)?;
+    web_host::start(demo, Terminal::new(backend)?, true)
+}
+
+/// Run a tall browser demo without a GPU-sized canvas.
+///
+/// The demo's initializer sizes the iframe before boot; the embedding page
+/// reloads it on width changes. A fixed
+/// viewport uses DomBackend's measured dimensions rather than its legacy
+/// `Backend::size` estimate; reloading also keeps its input listeners attached
+/// to the current grid (the backend replaces that element on resize).
+///
+/// # Errors
+///
+/// Returns an I/O error if the DOM backend or event listeners cannot be installed.
+#[cfg(target_arch = "wasm32")]
+pub fn run_dom<D: Demo + 'static>(demo: D) -> io::Result<()> {
+    use ratatui::{TerminalOptions, Viewport};
+
+    let mut backend =
+        ratzilla::DomBackend::new().map_err(|error| io::Error::other(error.to_string()))?;
+    let size = backend.window_size()?.columns_rows;
+    let terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, size.width, size.height)),
+        },
+    )?;
+    web_host::start(demo, terminal, false)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -281,10 +309,10 @@ mod web_host {
     };
 
     use gloo_timers::callback::Timeout;
-    use ratatui::Terminal;
+    use ratatui::{Terminal, backend::Backend};
     use ratcn::runtime::{BrowserClipboard, Event};
     use ratzilla::{
-        WebGl2Backend, WebRenderer,
+        WebEventHandler, WebRenderer,
         web_sys::{
             self,
             wasm_bindgen::{JsCast, prelude::Closure},
@@ -298,9 +326,10 @@ mod web_host {
     /// Ratzilla's `draw_web` re-arms `requestAnimationFrame` unconditionally,
     /// so an idle demo would render sixty frames a second. This host keeps the
     /// [`Terminal`] and asks for a frame only when there is something new.
-    struct Host<D> {
+    struct Host<D, B: Backend> {
         demo: RefCell<D>,
-        terminal: RefCell<Terminal<WebGl2Backend>>,
+        terminal: RefCell<Terminal<B>>,
+        auto_resize: bool,
         /// The callback handed to `requestAnimationFrame`, kept alive for as
         /// long as the host is.
         frame: RefCell<Option<Closure<dyn FnMut()>>>,
@@ -321,11 +350,15 @@ mod web_host {
     /// Nothing holds the returned host: the animation-frame callback owns a
     /// reference to the host, the host owns the callback, and that cycle is
     /// what keeps the demo alive after `main` returns.
-    pub fn start<D: Demo + 'static>(demo: D) -> io::Result<()> {
-        let backend = super::web_backend(D::THEME.background)?;
+    pub fn start<D, B>(demo: D, terminal: Terminal<B>, auto_resize: bool) -> io::Result<()>
+    where
+        D: Demo + 'static,
+        B: Backend<Error = io::Error> + WebEventHandler + 'static,
+    {
         let host = Rc::new(Host {
             demo: RefCell::new(demo),
-            terminal: RefCell::new(Terminal::new(backend)?),
+            terminal: RefCell::new(terminal),
+            auto_resize,
             frame: RefCell::new(None),
             requested: Cell::new(false),
             timer: RefCell::new(None),
@@ -378,21 +411,40 @@ mod web_host {
             *host._clipboard.borrow_mut() = Some(listener);
         }
 
-        host.watch_resize()?;
+        if auto_resize {
+            host.watch_resize()?;
+        }
         host.request_frame();
         Ok(())
     }
 
-    impl<D: Demo + 'static> Host<D> {
+    impl<D, B> Host<D, B>
+    where
+        D: Demo + 'static,
+        B: Backend<Error = io::Error> + WebEventHandler + 'static,
+    {
         /// Paint one frame and decide when the next one is due.
         fn render(self: &Rc<Self>) {
             self.requested.set(false);
-            let outgrew = super::draw_frame(
-                &mut *self.demo.borrow_mut(),
-                &mut self.terminal.borrow_mut(),
-                &D::THEME,
-            )
-            .expect("the canvas backend refused a frame");
+            let outgrew = if self.auto_resize {
+                super::draw_frame(
+                    &mut *self.demo.borrow_mut(),
+                    &mut self.terminal.borrow_mut(),
+                    &D::THEME,
+                )
+                .expect("the canvas backend refused a frame")
+            } else {
+                self.terminal
+                    .borrow_mut()
+                    .draw(|frame| {
+                        let area = frame.area();
+                        self.demo
+                            .borrow_mut()
+                            .draw(frame.buffer_mut(), area, &D::THEME);
+                    })
+                    .expect("the DOM backend refused a frame");
+                false
+            };
             // The canvas adopted a resize while this frame was flushed, so the
             // frame that settles on the new grid is the next one.
             if outgrew {
@@ -480,7 +532,7 @@ mod web_host {
         }
     }
 
-    impl<D> Drop for Host<D> {
+    impl<D, B: Backend> Drop for Host<D, B> {
         /// Take the resize listener off the window with the host. The clipboard
         /// listener is a guard that removes itself; a bare [`Closure`] cannot.
         fn drop(&mut self) {
