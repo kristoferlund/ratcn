@@ -14,7 +14,7 @@ use ratatui::{
 use crate::Theme;
 use crate::runtime::{
     CellOffset, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx, EventResult,
-    KeyCode, MouseButton, MouseEvent, MouseKind, ScopeOptions, ScrollDirection,
+    KeyCode, MouseButton, MouseEvent, MouseKind, PointerShape, ScopeOptions, ScrollDirection,
 };
 use crate::theme::resolve_style;
 
@@ -57,6 +57,11 @@ enum ScrollHold {
     /// returning to the offset the hold was taken at cannot revive it.
     Held { offset: u16, base: Option<u16> },
 }
+
+/// Whether the thumb is being dragged: written by each gutter event, read by
+/// the declaration to show the grabbing pointer.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ThumbDragged(bool);
 
 type ReadOffsetFn<S> = Box<dyn Fn(&S) -> u16>;
 type OnChangeFn<M> = Box<dyn Fn(u16) -> M>;
@@ -359,7 +364,10 @@ impl<S, M> ScrollArea<S, M> {
             let start = self.thumb_start(area, current).unwrap_or(0);
             anchor.y = i16::try_from(start).unwrap_or(i16::MAX);
         }
-        match ctx.drag(mouse, DragOptions::new(anchor).start_if(can_start)) {
+        let phase = ctx.drag(mouse, DragOptions::new(anchor).start_if(can_start));
+        *ctx.transient::<ThumbDragged>() =
+            ThumbDragged(matches!(phase, DragPhase::Down | DragPhase::Moved { .. }));
+        match phase {
             DragPhase::Down => Self::consume(jumped),
             DragPhase::Moved { offset, .. } => {
                 // Only a new thumb row moves the view. Remapping the row the
@@ -441,7 +449,22 @@ impl<S: 'static, M: 'static> Component<S, M> for ScrollArea<S, M> {
             .content_height
             .saturating_sub(viewport_height)
             .saturating_add(1);
+        let thumb = self.thumb_span(area, offset);
+        let dragged = ctx.transient::<ThumbDragged>().0;
         ctx.paint(move |ctx| {
+            // The hovered area is under the pointer only on its gutter, or
+            // while a drag it captured runs on.
+            let over_thumb = ctx.hover_position().is_some_and(|position| {
+                gutter.contains(position)
+                    && thumb.is_some_and(|(start, len)| {
+                        (area.y + start..area.y + start + len).contains(&position.y)
+                    })
+            });
+            if dragged {
+                ctx.set_pointer_shape(PointerShape::Grabbing);
+            } else if over_thumb {
+                ctx.set_pointer_shape(PointerShape::Grab);
+            }
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
                 .end_symbol(None)
@@ -1497,6 +1520,45 @@ mod tests {
             EventResult::Emit(Msg::Area(2)),
             "dragging keeps the grabbed thumb cell under the pointer"
         );
+    }
+
+    /// The open hand is for the thumb alone — not the track, which jumps, and
+    /// not the content beside it — and it closes for as long as the thumb is
+    /// held, wherever the drag takes the pointer.
+    #[test]
+    fn the_thumb_shows_a_grab_hand_that_closes_while_dragged() {
+        let mut driver = driver(6, 4);
+        let mut state = State::default();
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component("scroll", scroll_area(6, |_| {}), Rect::new(0, 0, 6, 4));
+            });
+        };
+        let shape_at = |driver: &mut Driver<State, Msg>, column, row| {
+            driver.event(mouse(MouseKind::Moved, column, row), &State::default());
+            render(driver, &State::default());
+            driver.ratcn.pointer_shape()
+        };
+        render(&mut driver, &state);
+        // Row 2 is thumb and row 3 is track; see the test above.
+        assert_eq!(shape_at(&mut driver, 5, 2), PointerShape::Grab);
+        assert_eq!(shape_at(&mut driver, 5, 3), PointerShape::Default);
+        assert_eq!(shape_at(&mut driver, 2, 2), PointerShape::Default);
+
+        driver.event(mouse(MouseKind::Moved, 5, 2), &state);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 2), &state);
+        if let EventResult::Emit(Msg::Area(offset)) =
+            driver.event(mouse(MouseKind::Drag(MouseButton::Left), 1, 3), &state)
+        {
+            state.offset = offset;
+        }
+        render(&mut driver, &state);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Grabbing);
+
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 3), &state);
+        driver.event(mouse(MouseKind::Moved, 1, 3), &state);
+        render(&mut driver, &state);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
     }
 
     /// Every row the thumb can occupy maps to an offset painted on that same

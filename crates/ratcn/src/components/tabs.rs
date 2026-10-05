@@ -16,7 +16,7 @@ use crate::linear_nav::{self, Axis};
 use crate::list_core::{self, KeyIntent};
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MeasuredComponent, MouseButton,
-    MouseKind, PaintCtx, ScopeOptions, Step,
+    MouseKind, PaintCtx, PointerShape, ScopeOptions, Step,
 };
 use crate::theme::resolve_style;
 
@@ -822,6 +822,14 @@ where
             .style(style)
             .layout(&self.hits);
         ctx.widget(widget, area);
+        // A hand over an enabled tab, and over an overflow marker.
+        let over_marker = ctx
+            .hover_position()
+            .is_some_and(|position| self.marker_at(position.x, position.y).is_some());
+        let over_tab = hovered_item.is_some_and(|index| !self.disabled_at(index));
+        if !self.disabled && (over_tab || over_marker) {
+            ctx.set_pointer_shape(PointerShape::Pointer);
+        }
     }
 
     fn handle_event(

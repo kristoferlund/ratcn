@@ -30,7 +30,7 @@ use crate::{
     geometry::fixed_height,
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, Modifiers,
-        MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions,
+        MouseButton, MouseEvent, MouseKind, PaintCtx, PointerShape, ScopeOptions,
     },
     text_edit::{
         CursorMove, Editor, InputState, WrapMode, cursor_at, editor_input, is_editor_binding,
@@ -933,6 +933,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
         }
         let editor = ctx.with_buffer(ctx.area(), |area, buf| widget.paint(area, buf));
         self.painted = Some((state.version(), editor));
+        ctx.set_pointer_shape(if self.disabled {
+            PointerShape::NotAllowed
+        } else {
+            PointerShape::Text
+        });
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
@@ -1131,6 +1136,22 @@ mod tests {
 
     fn render(driver: &mut Driver<State, Msg>, state: &State) {
         render_with(driver, state, input);
+    }
+
+    /// A text beam says "type here"; a disabled field says it won't take any.
+    #[test]
+    fn a_hovered_field_shows_a_text_beam_or_not_allowed_when_disabled() {
+        for (make, shape) in [
+            (input as fn() -> Input<State, Msg>, PointerShape::Text),
+            (|| input().disabled(true), PointerShape::NotAllowed),
+        ] {
+            let mut driver = driver();
+            let mut state = state("hello");
+            render_with(&mut driver, &state, make);
+            route(&mut driver, &mut state, mouse(MouseKind::Moved, 2, 0));
+            render_with(&mut driver, &state, make);
+            assert_eq!(driver.ratcn.pointer_shape(), shape);
+        }
     }
 
     /// Route one event and store what it emits, as the app's update would.

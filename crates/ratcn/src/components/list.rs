@@ -18,7 +18,7 @@ use crate::list_core::{
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MouseKind, PaintCtx,
-    ScopeOptions, ScrollDirection,
+    PointerShape, ScopeOptions, ScrollDirection,
 };
 use crate::selection_indicator;
 use crate::text_width::display_width;
@@ -963,6 +963,15 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                 .focus_symbol(&self.focus_symbol),
             area,
         );
+        // A hand over an enabled row a click would select.
+        let row = ctx.hover_position().and_then(|position| {
+            self.viewport
+                .row_at(area, self.items.len(), position.x, position.y)
+        });
+        let selects = self.selected.is_some() || self.selected_many.is_some();
+        if !self.disabled && selects && row.is_some_and(|index| !self.disabled_at(index)) {
+            ctx.set_pointer_shape(PointerShape::Pointer);
+        }
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
