@@ -317,18 +317,30 @@ impl Session {
     ///
     /// Hand it [`Ratcn::pointer_shape`](crate::runtime::Ratcn::pointer_shape)
     /// after every frame: it writes only when the shape changed, and nothing
-    /// at all until the first shape other than the default. That first one is
-    /// pushed onto the terminal's pointer stack; on the way out — a drop or a
-    /// panic — the session pops it and sends the empty reset, which hands the
-    /// pointer back to the terminal rather than leaving an arrow behind.
+    /// at all until the first shape other than the default. Before that first
+    /// shape it pushes an empty entry onto kitty's pointer stack (a bare
+    /// `ESC ] 22 ; >`, which other terminals ignore); every shape is then a
+    /// plain set. On the way out — a drop or a panic, once — the session pops
+    /// that entry and sends the empty reset, both before it leaves the
+    /// alternate screen, which hands the pointer back to the terminal rather
+    /// than leaving an arrow behind.
     ///
     /// | Terminal | OSC 22 |
     /// |---|---|
-    /// | kitty | yes, with the stack |
-    /// | Ghostty, foot | yes |
-    /// | iTerm2 | yes, with the empty reset |
+    /// | kitty | full support, with the stack |
+    /// | foot | supported, resets on exit |
+    /// | iTerm2 | supported |
+    /// | Ghostty | supported; see below |
     /// | [WezTerm](https://github.com/wezterm/wezterm/pull/6292) | not yet, the support is in review |
-    /// | Alacritty, Windows Terminal, VTE (GNOME Terminal), tmux | ignored |
+    /// | Alacritty, Windows Terminal, VTE (GNOME Terminal) | ignored |
+    /// | tmux (mainline), herdr | not forwarded to the outer terminal |
+    ///
+    /// Ghostty 1.3.1 ignores both the pop and the empty reset; later releases
+    /// read the empty reset ([ghostty#14495](https://github.com/ghostty-org/ghostty/issues/14495)).
+    /// It still gives its own pointer back on exit, because switching mouse
+    /// reporting off — which the session does after the reset, when it was
+    /// opened with [`SessionOptions::mouse`] — resets 1.3.1's pointer to the
+    /// text beam. Leaving the alternate screen alone does not.
     ///
     /// # Errors
     ///
@@ -476,7 +488,8 @@ fn write_clipboard(out: &mut impl io::Write, text: &str) -> io::Result<()> {
 }
 
 /// OSC 22, `ESC ] 22 ; <shape> ST`, when `shape` is not what `shown` already
-/// is. The first write pushes (`>`), so the exit's pop has something to take.
+/// is. The first write is preceded by a bare push (`>` with no name), so the
+/// exit's pop has something to take: Ghostty and foot reject a name after `>`.
 fn write_pointer_shape(
     out: &mut impl io::Write,
     shown: &mut PointerShape,
@@ -486,21 +499,22 @@ fn write_pointer_shape(
     if shape == *shown {
         return Ok(());
     }
-    let push = if pushed.swap(true, Ordering::Relaxed) {
-        ""
-    } else {
-        ">"
-    };
-    write!(out, "\x1b]22;{push}{}\x1b\\", shape.css_name())?;
+    if !pushed.swap(true, Ordering::Relaxed) {
+        write!(out, "\x1b]22;>\x1b\\")?;
+    }
+    write!(out, "\x1b]22;{}\x1b\\", shape.css_name())?;
     *shown = shape;
     out.flush()
 }
 
-/// Give the pointer back, if a shape was ever pushed: pop kitty's stack, then
-/// the empty reset Ghostty and iTerm2 read. Never `default`, which would
-/// leave kitty showing an arrow over text after the app has gone.
+/// Give the pointer back, once, if a shape was ever pushed: pop kitty's
+/// stack, then the empty reset foot, iTerm2, and newer Ghostty read. Never
+/// `default`, which would leave kitty showing an arrow over text after the app
+/// has gone. Clearing `pushed` is what keeps a panic, restored by the hook and
+/// then again by the unwinding drop, from popping a second entry — one the
+/// shell pushed on the main screen.
 fn restore_pointer(out: &mut impl io::Write, pushed: &AtomicBool) -> io::Result<()> {
-    if !pushed.load(Ordering::Relaxed) {
+    if !pushed.swap(false, Ordering::Relaxed) {
         return Ok(());
     }
     write!(out, "\x1b]22;<\x1b\\\x1b]22;\x1b\\")?;
@@ -624,8 +638,9 @@ mod tests {
     }
 
     /// The bytes a run of frames writes for the pointer: nothing while it is
-    /// the terminal's own, a push for the first shape, plain sets after, and
-    /// nothing for a frame that asks for the shape already showing.
+    /// the terminal's own, a bare push before the first shape, every shape a
+    /// plain set — Ghostty and foot reject a name after `>` — and nothing for
+    /// a frame that asks for the shape already showing.
     #[test]
     fn the_pointer_is_pushed_once_then_set_only_on_change() {
         let mut terminal = FakeTerminal::scripted("");
@@ -644,7 +659,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8_lossy(&terminal.written),
-            "\x1b]22;>pointer\x1b\\\x1b]22;text\x1b\\\x1b]22;default\x1b\\"
+            "\x1b]22;>\x1b\\\x1b]22;pointer\x1b\\\x1b]22;text\x1b\\\x1b]22;default\x1b\\"
         );
     }
 
@@ -658,6 +673,35 @@ mod tests {
 
         restore_pointer(&mut terminal, &AtomicBool::new(true)).expect("writable");
         assert_eq!(terminal.written, b"\x1b]22;<\x1b\\\x1b]22;\x1b\\");
+    }
+
+    /// A panic restores in the hook and then again as the session unwinds.
+    /// The pointer is given back once: a second pop would land on the main
+    /// screen and take an entry the shell pushed there.
+    #[test]
+    fn a_panic_then_the_drop_restore_the_pointer_once() {
+        let live = Arc::new(AtomicBool::new(true));
+        let pushed = Arc::new(AtomicBool::new(true));
+        let hook = panic_restore::<Vec<u8>>(
+            Arc::clone(&live),
+            Arc::clone(&pushed),
+            modes(SessionOptions::new().mouse(), false),
+        );
+
+        let mut written = Vec::new();
+        hook(&mut written);
+        // What `Drop` does next, on the same terminal.
+        live.store(false, Ordering::Relaxed);
+        restore_pointer(&mut written, &pushed).expect("a vector accepts every write");
+        restore_modes(&mut written, &modes(SessionOptions::new().mouse(), false))
+            .expect("a vector accepts every write");
+
+        let written = String::from_utf8(written).expect("escape sequences are ASCII");
+        assert_eq!(written.matches("\x1b]22;<").count(), 1, "{written:?}");
+        assert!(
+            written.starts_with("\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b[?1006l"),
+            "pop and reset come before any mode, the alternate screen included: {written:?}"
+        );
     }
 
     #[test]
