@@ -25,7 +25,7 @@ use ratcn::{
     Theme,
     runtime::{
         CellOffset, ChildId, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx,
-        EventResult, MouseKind, PaintCtx, Ratcn, ScopeOptions, offset_rect,
+        EventResult, MouseKind, PaintCtx, PointerShape, Ratcn, ScopeOptions, offset_rect,
     },
 };
 
@@ -107,6 +107,10 @@ impl demo_shared::Demo for App {
             EventResult::Ignored => false,
         };
         cancelled || routed
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

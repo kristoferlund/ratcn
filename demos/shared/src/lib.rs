@@ -23,7 +23,10 @@ use ratatui::style::Color;
 use ratatui::{Terminal, backend::Backend, buffer::Buffer, layout::Rect};
 #[cfg(not(target_arch = "wasm32"))]
 use ratcn::terminal::{Session, SessionEvent, SessionOptions, termina};
-use ratcn::{Theme, runtime::Event};
+use ratcn::{
+    Theme,
+    runtime::{Event, PointerShape},
+};
 
 /// The shortest wait worth honoring: a wake sooner than the display refreshes
 /// cannot show anything new. [`Demo::wake`] values this small or smaller mean
@@ -90,6 +93,12 @@ pub trait Demo {
     fn take_clipboard(&mut self) -> Option<String> {
         None
     }
+
+    /// The mouse pointer the last frame asked for, for the host to show:
+    /// `Ratcn::pointer_shape`, for a demo built on the runtime.
+    fn pointer_shape(&self) -> PointerShape {
+        PointerShape::Default
+    }
 }
 
 /// Run `demo` until it quits (natively) or forever (in the browser).
@@ -139,6 +148,9 @@ trait Host {
 
     /// Put `text` on the system clipboard.
     fn set_clipboard(&mut self, text: &str) -> io::Result<()>;
+
+    /// Show `shape` as the mouse pointer.
+    fn set_pointer_shape(&mut self, shape: PointerShape) -> io::Result<()>;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -160,6 +172,10 @@ impl Host for Session {
     fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
         Session::set_clipboard(self, text)
     }
+
+    fn set_pointer_shape(&mut self, shape: PointerShape) -> io::Result<()> {
+        Session::set_pointer_shape(self, shape)
+    }
 }
 
 /// Draw, wait, route, repeat, until the quit key.
@@ -171,6 +187,7 @@ fn drive<D: Demo, H: Host>(demo: &mut D, host: &mut H) -> io::Result<()> {
             // Read every frame: this is what follows a terminal that re-themes.
             let theme = host.theme(D::THEME);
             stale = draw_frame(demo, host.terminal(), &theme)?;
+            host.set_pointer_shape(demo.pointer_shape())?;
         }
 
         // The wait is as long as the demo will allow. A deadline sooner than one
@@ -310,7 +327,7 @@ mod web_host {
 
     use gloo_timers::callback::Timeout;
     use ratatui::{Terminal, backend::Backend};
-    use ratcn::runtime::{BrowserClipboard, Event};
+    use ratcn::runtime::{BrowserClipboard, Event, set_browser_pointer};
     use ratzilla::{
         WebEventHandler, WebRenderer,
         web_sys::{
@@ -338,6 +355,8 @@ mod web_host {
         requested: Cell<bool>,
         /// The pending [`Demo::wake`] deadline. Dropping it cancels the timer.
         timer: RefCell<Option<Timeout>>,
+        /// The element whose CSS cursor shows the demo's pointer shape.
+        pointer: Option<web_sys::HtmlElement>,
         /// The clipboard listeners, held for their `Drop`: the host owns them
         /// for as long as it drives the demo, and letting go uninstalls them.
         _clipboard: RefCell<Option<BrowserClipboard>>,
@@ -355,7 +374,13 @@ mod web_host {
         D: Demo + 'static,
         B: Backend<Error = io::Error> + WebEventHandler + 'static,
     {
+        // The body, as for the clipboard below: the page is the demo.
+        let body = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.body())
+            .ok_or_else(|| io::Error::other("no document body"))?;
         let host = Rc::new(Host {
+            pointer: D::INPUT.then(|| body.clone()),
             demo: RefCell::new(demo),
             terminal: RefCell::new(terminal),
             auto_resize,
@@ -393,10 +418,6 @@ mod web_host {
             // capture script makes the whole page the demo's keyboard
             // surface. Esc blurs it, which hands the clipboard back to the
             // page. An app sharing a page passes its own element.
-            let body = web_sys::window()
-                .and_then(|window| window.document())
-                .and_then(|document| document.body())
-                .ok_or_else(|| io::Error::other("no document body"))?;
             let listener = BrowserClipboard::install(
                 &body,
                 {
@@ -445,6 +466,9 @@ mod web_host {
                     .expect("the DOM backend refused a frame");
                 false
             };
+            if let Some(pointer) = &self.pointer {
+                set_browser_pointer(pointer, self.demo.borrow().pointer_shape());
+            }
             // The canvas adopted a resize while this frame was flushed, so the
             // frame that settles on the new grid is the next one.
             if outgrew {
@@ -602,8 +626,8 @@ mod tests {
     };
 
     use super::{
-        ANIMATION_FRAME, Backend, Buffer, Demo, Duration, Event, Host, Rect, SessionEvent,
-        SessionOptions, Terminal, draw_frame, drive, io,
+        ANIMATION_FRAME, Backend, Buffer, Demo, Duration, Event, Host, PointerShape, Rect,
+        SessionEvent, SessionOptions, Terminal, draw_frame, drive, io,
     };
 
     /// A [`TestBackend`] that reports a native host's error type, and that can
@@ -704,6 +728,9 @@ mod tests {
         /// What each routed event put on the clipboard, in order. A spent
         /// script wrote nothing.
         clipboard: VecDeque<Option<String>>,
+        /// The pointer each frame asks for, by frame. Missing entries ask for
+        /// the default.
+        pointers: Vec<PointerShape>,
     }
 
     impl Demo for Probe {
@@ -724,6 +751,11 @@ mod tests {
 
         fn take_clipboard(&mut self) -> Option<String> {
             self.clipboard.pop_front().flatten()
+        }
+
+        fn pointer_shape(&self) -> PointerShape {
+            let drawn = self.frames.saturating_sub(1);
+            self.pointers.get(drawn).copied().unwrap_or_default()
         }
     }
 
@@ -746,6 +778,8 @@ mod tests {
         waits: Vec<Option<Duration>>,
         /// What the loop put on the clipboard, in order.
         clipboard: Vec<String>,
+        /// The pointer shown after each frame, in order.
+        pointers: Vec<PointerShape>,
     }
 
     impl Script {
@@ -759,6 +793,7 @@ mod tests {
                 steps: steps.into_iter().collect(),
                 waits: Vec::new(),
                 clipboard: Vec::new(),
+                pointers: Vec::new(),
             }
         }
     }
@@ -788,6 +823,11 @@ mod tests {
 
         fn set_clipboard(&mut self, text: &str) -> io::Result<()> {
             self.clipboard.push(text.to_owned());
+            Ok(())
+        }
+
+        fn set_pointer_shape(&mut self, shape: PointerShape) -> io::Result<()> {
+            self.pointers.push(shape);
             Ok(())
         }
     }
@@ -881,6 +921,26 @@ mod tests {
             .map(Cell::symbol)
             .collect();
         assert!(painted.contains("probe"), "the frame reached the backend");
+    }
+
+    /// The pointer follows the frame: each one drawn shows what that frame
+    /// asked for, so hovering onto a button shows its hand without waiting
+    /// for another event.
+    #[test]
+    fn each_frame_shows_the_pointer_it_asked_for() {
+        let mut probe = Probe {
+            handled: VecDeque::from([true]),
+            pointers: vec![PointerShape::Default, PointerShape::Pointer],
+            ..Probe::default()
+        };
+        let mut script = Script::new(HostBackend::new(20, 5), [Some(key('a'))]);
+
+        run_scripted(&mut probe, &mut script);
+
+        assert_eq!(
+            script.pointers,
+            [PointerShape::Default, PointerShape::Pointer]
+        );
     }
 
     #[test]

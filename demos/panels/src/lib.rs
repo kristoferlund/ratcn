@@ -17,7 +17,9 @@ use ratatui::{
 };
 use ratcn::{
     Button, Theme,
-    runtime::{DeclareCtx, Event, EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
+    runtime::{
+        DeclareCtx, Event, EventResult, FocusState, PointerShape, Ratcn, ScopeOptions, TabWrap,
+    },
 };
 
 const PADDING_X: u16 = 2;
@@ -116,6 +118,10 @@ impl demo_shared::Demo for App {
             EventResult::Consumed => true,
             EventResult::Ignored => false,
         }
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

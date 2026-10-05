@@ -16,7 +16,8 @@ use ratatui::{
 use ratcn::{
     Theme, Toast, ToasterState, ToasterWidget,
     runtime::{
-        Event, EventResult, FocusState, KeyChord, KeyCode, ModalState, MouseKind, Ratcn, TabWrap,
+        Event, EventResult, FocusState, KeyChord, KeyCode, ModalState, MouseKind, PointerShape,
+        Ratcn, TabWrap,
     },
 };
 
@@ -216,6 +217,10 @@ impl demo_shared::Demo for App {
             return expiry;
         }
         Some(expiry.map_or(SCREENSAVER_FRAME, |expiry| expiry.min(SCREENSAVER_FRAME)))
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

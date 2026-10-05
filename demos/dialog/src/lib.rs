@@ -8,7 +8,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, Dialog, List, ListItem, Theme, Toast, ToasterState, ToasterWidget,
-    runtime::{CellOffset, Event, EventResult, FocusState, ModalState, Ratcn},
+    runtime::{CellOffset, Event, EventResult, FocusState, ModalState, PointerShape, Ratcn},
 };
 
 const WRITERS: [&str; 8] = [
@@ -139,6 +139,10 @@ impl demo_shared::Demo for App {
         self.state
             .toasts
             .time_until_next_expiry(demo_shared::monotonic_time())
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

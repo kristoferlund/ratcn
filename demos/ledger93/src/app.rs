@@ -9,7 +9,7 @@ use ratatui::{
 };
 use ratcn::{
     TabsSize, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
+    runtime::{Event, EventResult, FocusState, PointerShape, Ratcn, ScopeOptions, TabWrap},
 };
 
 use crate::nav::{self, Nav, NavMsg, Screen};
@@ -104,6 +104,10 @@ impl demo_shared::Demo for App {
             EventResult::Consumed => true,
             EventResult::Ignored => false,
         }
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

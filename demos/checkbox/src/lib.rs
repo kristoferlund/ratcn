@@ -16,7 +16,7 @@ use ratatui::{
 };
 use ratcn::{
     Checkbox, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, PointerShape, Ratcn, TabWrap},
 };
 
 const DEMO_WIDTH: u16 = 26;
@@ -74,6 +74,10 @@ impl demo_shared::Demo for App {
             EventResult::Consumed => true,
             EventResult::Ignored => false,
         }
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

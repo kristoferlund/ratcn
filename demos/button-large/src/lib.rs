@@ -9,7 +9,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, ButtonSize, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, PointerShape, Ratcn, TabWrap},
 };
 
 /// Declaration order is also Tab order, so the split below keeps the two rows
@@ -70,6 +70,10 @@ impl demo_shared::Demo for App {
             EventResult::Consumed => true,
             EventResult::Ignored => false,
         }
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

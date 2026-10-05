@@ -17,7 +17,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, Theme, Tooltip, TooltipSide,
-    runtime::{Event, EventResult, FocusState, KeyCode, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, KeyCode, PointerShape, Ratcn, TabWrap},
 };
 
 /// The child id every Tooltip gives the button inside it. Unique among its own
@@ -148,6 +148,10 @@ impl demo_shared::Demo for App {
             EventResult::Ignored => false,
         };
         switched || routed
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
