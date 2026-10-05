@@ -36,7 +36,6 @@ const GRID_PADDING_Y: u16 = 3;
 /// cadence shows every step a flake takes — asking for more frames would repaint
 /// the same one.
 const SCREENSAVER_FRAME: Duration = Duration::from_millis(50);
-const QUAKE_DOWNLOAD_FRAME: Duration = Duration::from_millis(100);
 
 pub struct App {
     state: AppState,
@@ -48,12 +47,12 @@ struct AppState {
     focus: FocusState,
     controls_disabled: bool,
     themes_state: tiles::themes::State,
+    message_state: tiles::message::State,
     /// What the terminal says it looks like, refreshed each frame.
     resolved_theme: Theme,
     notifications_state: tiles::notifications::State,
     agent_settings_state: tiles::tooltip::State,
     payout_state: tiles::payout::State,
-    quake_state: tiles::release_pulse::State,
     release_state: tiles::release::State,
     modals_state: ModalState,
     screensaver: screensaver::State,
@@ -74,10 +73,10 @@ enum AppMsg {
     ScreensaverDismissed,
     Toast(Toast<'static>),
     Themes(tiles::themes::Msg),
+    Message(tiles::message::Msg),
     Notifications(tiles::notifications::Msg),
     AgentSettings(tiles::tooltip::Msg),
     Payout(tiles::payout::Msg),
-    Quake(tiles::release_pulse::Msg),
     Release(tiles::release::Msg),
 }
 
@@ -121,10 +120,14 @@ impl App {
             }
             AppMsg::Toast(toast) => self.toast(toast),
             AppMsg::Themes(msg) => self.state.themes_state.update(msg),
+            AppMsg::Message(msg) => {
+                if let Some(msg) = self.state.message_state.update(msg) {
+                    self.update(msg);
+                }
+            }
             AppMsg::Notifications(msg) => self.state.notifications_state.update(msg),
             AppMsg::AgentSettings(msg) => self.state.agent_settings_state.update(msg),
             AppMsg::Payout(msg) => self.state.payout_state.update(msg),
-            AppMsg::Quake(msg) => self.state.quake_state.update(msg),
             AppMsg::Release(msg) => {
                 let next_msg = self.state.release_state.update(
                     msg,
@@ -160,9 +163,8 @@ impl App {
 }
 
 impl demo_shared::Demo for App {
-    /// Bracketed paste natively, and the browser's `paste` event on the web:
-    /// the wiring is the demonstration, since no component reads a paste yet.
-    const PASTE: bool = true;
+    /// Pastes, and a browser's copy and cut, reach the focused field.
+    const CLIPBOARD: bool = true;
 
     /// Paint with the terminal's own colors, falling back to `THEME`. The
     /// picker lists whatever that resolves to alongside the presets.
@@ -196,19 +198,24 @@ impl demo_shared::Demo for App {
         }
     }
 
-    /// The next toast expiry, bounded by the cadence the animated tile needs;
-    /// the screensaver runs at its tighter cadence while its snow is visible.
+    /// What a copy or cut in a field put on the clipboard, for the demo host
+    /// to write out. To hook up the clipboard in an app of your own, see
+    /// <https://ratcn.com/docs/concepts/host-integration#the-clipboard>.
+    fn take_clipboard(&mut self) -> Option<String> {
+        self.ratcn.take_clipboard()
+    }
+
+    /// The next toast expiry, bounded by the screensaver's cadence while its
+    /// snow is visible.
     fn wake(&self) -> Option<Duration> {
         let expiry = self
             .state
             .toasts
             .time_until_next_expiry(demo_shared::monotonic_time());
-        let frame = if self.state.modals_state.is_open(screensaver::ID) {
-            SCREENSAVER_FRAME
-        } else {
-            QUAKE_DOWNLOAD_FRAME
-        };
-        Some(expiry.map_or(frame, |expiry| expiry.min(frame)))
+        if !self.state.modals_state.is_open(screensaver::ID) {
+            return expiry;
+        }
+        Some(expiry.map_or(SCREENSAVER_FRAME, |expiry| expiry.min(SCREENSAVER_FRAME)))
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
@@ -419,8 +426,9 @@ mod tests {
     /// in, or a scrolled page would clip its last row or trail empty space.
     #[test]
     fn grid_height_is_the_height_tile_areas_fills_at_full_tile_height() {
-        // One column, and the widest the grid ever gets.
-        for width in [TILE_WIDTH, 4 * (TILE_WIDTH + TILE_GAP)] {
+        // Both sides of every responsive breakpoint: the browser must reserve
+        // enough height for portrait, landscape, and desktop layouts alike.
+        for width in [TILE_WIDTH, 85, 86, 129, 130, 173, 174] {
             let height = grid_height(width);
             let tiles = tile_areas(Rect::new(0, 0, width, height));
             assert!(
@@ -445,13 +453,13 @@ mod tests {
         let (mut app, mut terminal) = app();
         let expected = [
             ("1", &[tiles::themes::ID, "themes"] as &[_]),
-            ("2", &[tiles::release::ID, "create_release"] as &[_]),
-            ("3", &[tiles::button_variants::ID, "default"] as &[_]),
-            ("4", &[tiles::notifications::ID, "notifications"] as &[_]),
-            ("5", &[tiles::tooltip::ID, "Change mode"] as &[_]),
-            ("6", &[tiles::contributions::ID] as &[_]),
-            ("7", &[tiles::payout::ID, "currency"] as &[_]),
-            ("8", &[tiles::release_pulse::ID, "assets"] as &[_]),
+            ("2", &[tiles::message::ID, "title"] as &[_]),
+            ("3", &[tiles::release::ID, "create_release"] as &[_]),
+            ("4", &[tiles::button_variants::ID, "default"] as &[_]),
+            ("5", &[tiles::notifications::ID, "notifications"] as &[_]),
+            ("6", &[tiles::tooltip::ID, "Change mode"] as &[_]),
+            ("7", &[tiles::contributions::ID] as &[_]),
+            ("8", &[tiles::payout::ID, "currency"] as &[_]),
         ];
 
         for (number, path) in expected {
@@ -515,10 +523,126 @@ mod tests {
         assert_focus(&app, &path);
     }
 
+    fn type_text(app: &mut App, terminal: &mut Terminal<TestBackend>, text: &str) {
+        for char in text.chars() {
+            let code = if char == '\n' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(char)
+            };
+            assert!(press(app, terminal, code), "{char:?} was not typed");
+        }
+    }
+
+    /// The labels are painted by each tile, the keys come from `TILES`: the
+    /// two must agree with where the tile sits in the grid.
+    #[test]
+    fn every_tile_is_labelled_with_its_alt_key() {
+        let (mut app, mut terminal) = app();
+        draw(&mut app, &mut terminal);
+        let area = Rect::new(0, 0, TEST_WIDTH, TEST_HEIGHT);
+        let buffer = terminal.backend().buffer();
+        for (index, tile) in tile_areas(area).into_iter().enumerate() {
+            let border: String = (tile.left()..tile.right())
+                .map(|x| buffer[(x, tile.y)].symbol())
+                .collect();
+            let label = format!(" alt+{} ", index + 1);
+            assert!(
+                border.contains(&label),
+                "tile {} ({}) lacks {label:?}: {border}",
+                index + 1,
+                tiles::TILES[index].id,
+            );
+        }
+    }
+
+    /// Letters the landing binds elsewhere — Vim keys, the Alt+D and Alt+S
+    /// letters, a quit key — are text inside a field.
+    #[test]
+    fn typing_lands_in_the_message_fields() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '2');
+        assert_focus(&app, &[tiles::message::ID, "title"]);
+
+        let typed = "jkdsq hl JKDSQ 0123456789 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+        type_text(&mut app, &mut terminal, typed);
+        assert_focus(&app, &[tiles::message::ID, "title"]);
+
+        // Enter moves on to the message, as a mail client's subject line does.
+        assert!(press(&mut app, &mut terminal, KeyCode::Enter));
+        assert_focus(&app, &[tiles::message::ID, "message"]);
+        type_text(&mut app, &mut terminal, "jk\nds q");
+        for code in [KeyCode::Up, KeyCode::Left, KeyCode::Char('!')] {
+            assert!(press(&mut app, &mut terminal, code));
+        }
+        assert_focus(&app, &[tiles::message::ID, "message"]);
+
+        draw(&mut app, &mut terminal);
+        let message = &app.state.message_state;
+        assert_eq!(message.title.value(), typed);
+        assert_eq!(
+            message.message.value(),
+            "j!k\nds q",
+            "the arrows moved the cursor"
+        );
+        assert!(!app.state.modals_state.is_open(screensaver::ID));
+        assert!(!app.state.controls_disabled);
+
+        // The fields leave Tab alone, so it leaves the tile.
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::message::ID, "send"]);
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::release::ID, "create_release"]);
+    }
+
+    #[test]
+    fn send_raises_a_toast_and_clears_the_fields() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '2');
+        type_text(&mut app, &mut terminal, "Lunch");
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        type_text(&mut app, &mut terminal, "Tacos?");
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        assert_focus(&app, &[tiles::message::ID, "send"]);
+
+        assert!(press(&mut app, &mut terminal, KeyCode::Enter));
+        let toast = app.state.toasts.pop_newest().expect("a toast");
+        assert_eq!(toast.title(), "Message sent");
+        assert_eq!(toast.description(), Some("Lunch"));
+        assert_eq!(app.state.message_state.title.value(), "");
+        assert_eq!(app.state.message_state.message.value(), "");
+    }
+
+    /// Enter breaks the line in the message, so sending from it takes the
+    /// chord: Ctrl+Enter, which a terminal reports as Ctrl+J.
+    #[test]
+    fn ctrl_j_sends_from_the_message() {
+        let (mut app, mut terminal) = app();
+        focus_tile(&mut app, &mut terminal, '2');
+        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
+        type_text(&mut app, &mut terminal, "See you\nthere");
+
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        };
+        assert!(press_with(
+            &mut app,
+            &mut terminal,
+            KeyCode::Char('j'),
+            ctrl
+        ));
+        let toast = app.state.toasts.pop_newest().expect("a toast");
+        assert_eq!(toast.title(), "Message sent");
+        assert_eq!(toast.description(), None, "no title, no description");
+        assert_eq!(app.state.message_state.message.value(), "");
+        assert_focus(&app, &[tiles::message::ID, "message"]);
+    }
+
     #[test]
     fn release_tile_has_one_independent_control() {
         let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '2');
+        focus_tile(&mut app, &mut terminal, '3');
         let path = [tiles::release::ID, "create_release"];
 
         for code in [
@@ -543,7 +667,7 @@ mod tests {
     #[test]
     fn button_tile_uses_tab_only_and_reaches_all_five_buttons() {
         let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '3');
+        focus_tile(&mut app, &mut terminal, '4');
         let first = [tiles::button_variants::ID, "default"];
 
         for code in [
@@ -573,7 +697,7 @@ mod tests {
     #[test]
     fn notifications_list_keeps_j_and_k_internal_and_rejects_modifiers() {
         let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '4');
+        focus_tile(&mut app, &mut terminal, '5');
         let path = [tiles::notifications::ID, "notifications"];
 
         for (code, expected) in [
@@ -611,7 +735,7 @@ mod tests {
     #[test]
     fn cycle_settings_use_tab_between_fields_and_horizontal_keys_for_values() {
         let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '5');
+        focus_tile(&mut app, &mut terminal, '6');
         let change_mode = [tiles::tooltip::ID, "Change mode"];
 
         assert!(press(&mut app, &mut terminal, KeyCode::Char('l')));
@@ -649,7 +773,7 @@ mod tests {
     #[test]
     fn controls_free_tile_tabs_to_the_next_independent_control() {
         let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '6');
+        focus_tile(&mut app, &mut terminal, '7');
         assert_focus(&app, &[tiles::contributions::ID]);
         assert!(!press(&mut app, &mut terminal, KeyCode::Down));
         assert_focus(&app, &[tiles::contributions::ID]);
@@ -661,7 +785,7 @@ mod tests {
     #[test]
     fn payout_select_closes_on_first_tab_then_traverses_actions() {
         let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '7');
+        focus_tile(&mut app, &mut terminal, '8');
         let currency = [tiles::payout::ID, "currency"];
 
         assert!(press(&mut app, &mut terminal, KeyCode::Enter));
@@ -689,56 +813,7 @@ mod tests {
         assert!(press(&mut app, &mut terminal, KeyCode::Tab));
         assert_focus(&app, &[tiles::payout::ID, "save"]);
         assert!(press(&mut app, &mut terminal, KeyCode::Tab));
-        assert_focus(&app, &[tiles::release_pulse::ID, "assets"]);
-        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
-        assert_focus(&app, &[tiles::payout::ID, "save"]);
-    }
-
-    #[test]
-    fn quake_assets_navigate_and_toggle_as_one_list_and_tab_leaves_it() {
-        let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '8');
-        let path = [tiles::release_pulse::ID, "assets"];
-
-        for (code, expected) in [
-            (KeyCode::Char('j'), "Powerup icons"),
-            (KeyCode::Down, "Quad damage glow"),
-            (KeyCode::Char('k'), "Powerup icons"),
-            (KeyCode::Up, "Tournament skins"),
-            (KeyCode::End, "Quad damage glow"),
-            (KeyCode::Home, "Tournament skins"),
-        ] {
-            draw(&mut app, &mut terminal);
-            let EventResult::Emit(AppMsg::Quake(tiles::release_pulse::Msg::FocusChanged(focused))) =
-                app.ratcn
-                    .handle_event(Event::Key(KeyEvent::new(code)), &app.state)
-            else {
-                panic!("{code:?} must move the asset cursor without changing component focus");
-            };
-            assert_eq!(focused, expected);
-            app.update(AppMsg::Quake(tiles::release_pulse::Msg::FocusChanged(
-                focused,
-            )));
-            assert_focus(&app, &path);
-        }
-        for code in [KeyCode::Enter, KeyCode::Char(' ')] {
-            draw(&mut app, &mut terminal);
-            let EventResult::Emit(AppMsg::Quake(tiles::release_pulse::Msg::Toggled(value))) = app
-                .ratcn
-                .handle_event(Event::Key(KeyEvent::new(code)), &app.state)
-            else {
-                panic!("{code:?} must toggle the focused asset");
-            };
-            assert_eq!(value, "Tournament skins");
-            app.update(AppMsg::Quake(tiles::release_pulse::Msg::Toggled(value)));
-            assert_focus(&app, &path);
-        }
-        assert!(press(&mut app, &mut terminal, KeyCode::Char('k')));
-        assert_focus(&app, &path); // At the first item, navigation stays in the list.
-        assert!(press(&mut app, &mut terminal, KeyCode::Tab));
         assert_focus(&app, &[tiles::themes::ID, "themes"]);
-        assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
-        assert_focus(&app, &path);
         assert!(press(&mut app, &mut terminal, KeyCode::BackTab));
         assert_focus(&app, &[tiles::payout::ID, "save"]);
     }
@@ -746,7 +821,7 @@ mod tests {
     #[test]
     fn disabled_controls_are_skipped_by_traversal_and_focus_hotkeys() {
         let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '3');
+        focus_tile(&mut app, &mut terminal, '4');
         assert!(press_with(
             &mut app,
             &mut terminal,
@@ -759,12 +834,12 @@ mod tests {
 
         assert!(press(&mut app, &mut terminal, KeyCode::Tab));
         assert_focus(&app, &[tiles::contributions::ID]);
-        focus_tile(&mut app, &mut terminal, '6');
+        focus_tile(&mut app, &mut terminal, '7');
         let before = app.state.focus.clone();
         assert!(!press_with(
             &mut app,
             &mut terminal,
-            KeyCode::Char('3'),
+            KeyCode::Char('4'),
             Modifiers {
                 alt: true,
                 ..Modifiers::NONE
@@ -784,7 +859,7 @@ mod tests {
     #[test]
     fn plain_escape_dismisses_screensaver_and_restores_focus() {
         let (mut app, mut terminal) = app();
-        focus_tile(&mut app, &mut terminal, '3');
+        focus_tile(&mut app, &mut terminal, '4');
         let return_focus = app.state.focus.clone();
         assert!(press_with(
             &mut app,

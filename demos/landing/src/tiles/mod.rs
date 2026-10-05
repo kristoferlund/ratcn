@@ -1,9 +1,9 @@
 pub mod button_variants;
 pub mod contributions;
+pub mod message;
 pub mod notifications;
 pub mod payout;
 pub mod release;
-pub mod release_pulse;
 pub mod shared;
 pub mod themes;
 pub mod tooltip;
@@ -28,6 +28,11 @@ pub const TILES: [Tile; 8] = [
         id: themes::ID,
         has_controls: true,
         declare: themes::declare,
+    },
+    Tile {
+        id: message::ID,
+        has_controls: true,
+        declare: message::declare,
     },
     Tile {
         id: release::ID,
@@ -58,11 +63,6 @@ pub const TILES: [Tile; 8] = [
         id: payout::ID,
         has_controls: true,
         declare: payout::declare,
-    },
-    Tile {
-        id: release_pulse::ID,
-        has_controls: true,
-        declare: release_pulse::declare,
     },
 ];
 

@@ -1673,6 +1673,8 @@ pub struct Ratcn<State, Msg> {
     /// path no surface has declared yet, or a reveal an event asked for
     /// outright. The frame that answers it clears it.
     reveal_pending: bool,
+    /// The latest text an event put on the clipboard, until the host takes it.
+    clipboard: Option<String>,
 }
 
 impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
@@ -1689,6 +1691,7 @@ impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
             .field("hover", &self.hover)
             .field("resolved_focus", &self.resolved_focus)
             .field("reveal_pending", &self.reveal_pending)
+            .field("clipboard", &self.clipboard)
             .finish()
     }
 }
@@ -1707,6 +1710,7 @@ impl<State, Msg> Default for Ratcn<State, Msg> {
             hover: Vec::new(),
             resolved_focus: FocusState::default(),
             reveal_pending: false,
+            clipboard: None,
         }
     }
 }
@@ -2240,6 +2244,19 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
     }
 
+    /// The latest text a component put on the clipboard while handling an
+    /// event, taken: a second call answers `None` until another event writes.
+    ///
+    /// The host carries the write out after each
+    /// [`handle_event`](Self::handle_event): natively with the `termina`
+    /// feature's `Session::set_clipboard` or crossterm's `CopyToClipboard`
+    /// (its `osc52` feature), in the browser with the `ratzilla` feature's
+    /// `BrowserClipboard`.
+    #[must_use = "the text is gone from the runtime once taken"]
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
+    }
+
     /// Route one non-pointer event, and answer for it when nothing in the
     /// surface does.
     ///
@@ -2591,6 +2608,9 @@ impl<State, Msg> Ratcn<State, Msg> {
                 },
             );
             result = component.handle_event(delivered, state, &mut ctx);
+            if let Some(text) = ctx.clipboard.take() {
+                self.clipboard = Some(text);
+            }
             if !matches!(result, EventResult::Ignored) {
                 break;
             }

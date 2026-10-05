@@ -50,7 +50,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         .unwrap_or(0);
     let button_layout = Layout::horizontal([Constraint::Length(button_width)]).flex(Flex::Center);
     let inner_area =
-        declare_tile_panel_with_padding(ctx, area, " alt+3 ", Padding::new(2, 2, 0, 0));
+        declare_tile_panel_with_padding(ctx, area, " alt+4 ", Padding::new(2, 2, 0, 0));
     let rows = button_rows(inner_area);
 
     for ((id, button), row) in buttons.into_iter().zip(rows) {

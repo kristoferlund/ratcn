@@ -7,6 +7,24 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `runtime::BrowserPasteListener` is `BrowserClipboard`. `install` takes the
+  app's element, acting only while focus is within it, and a closure returning
+  `Ratcn::take_clipboard`. It carries copy and cut, and stops Cmd chords and
+  (off a Mac) Ctrl+C/X/V reaching ratzilla as keys.
+
+### Added
+
+- `Input` and `TextArea`, single-line and multi-line text fields, each with its
+  paint widget and style. Their text lives in app state as an `InputState` or a
+  `TextAreaState`; `text_edit` holds the state types and the editing mechanics
+  a text component of your own builds on. `Input` takes a `prefix` and `suffix`.
+- Clipboard writes: `EventCtx::set_clipboard`, taken by the host with
+  `Ratcn::take_clipboard` and written with `Session::set_clipboard` (OSC 52) or
+  `BrowserClipboard::write`. `Event::Copy` and `Event::Cut` carry the
+  platform's copy and cut gestures.
+
 ## [0.0.5] - 2026-10-03
 
 ### Breaking

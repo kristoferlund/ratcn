@@ -178,8 +178,11 @@ synthesizes `Click` and `Drag` from them before routing; see
 
 Two patterns cover app-level keys:
 
-- A shortcut that must always work, no matter what is focused (quit, suspend):
-  check the event *before* calling `handle_event`.
+- A shortcut that must always work, no matter what is focused (suspend, say):
+  check the event *before* calling `handle_event`. Once the app has text
+  fields, `Ctrl+C` is the exception: a field copies its selection on it, so
+  route it first and quit only if nothing was copied — see
+  [The clipboard](./host-integration#the-clipboard).
 - A shortcut that should only fire when no component wanted the event: call
   `handle_event` first and act only on `EventResult::Ignored`.
 

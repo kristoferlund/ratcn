@@ -113,7 +113,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
     .flex(Flex::Center)
     .spacing(1);
     let button_layout = Layout::horizontal([Constraint::Length(button_width)]).flex(Flex::Center);
-    let inner_area = declare_tile_panel(ctx, area, " alt+2 ");
+    let inner_area = declare_tile_panel(ctx, area, " alt+3 ");
     let [header_area, body_area, button_row] = inner_area.layout(&content_layout);
     let theme = ctx.theme;
     ctx.paint_widget(

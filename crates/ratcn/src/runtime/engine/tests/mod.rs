@@ -352,3 +352,49 @@ impl Component<FocusTestState, FocusTestMsg> for LoggingComponent {
         ScopeOptions::default().focusable(self.focusable)
     }
 }
+
+/// Writes each typed character to the clipboard.
+struct ClipboardWriter;
+
+impl Component<(), ()> for ClipboardWriter {
+    fn declare(&mut self, _ctx: &mut DeclareCtx<'_, (), ()>) {}
+
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        _state: &(),
+        ctx: &mut EventCtx<'_>,
+    ) -> EventResult<()> {
+        match event {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(char),
+                ..
+            }) => {
+                ctx.set_clipboard(char.to_string());
+                EventResult::Consumed
+            }
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn scope_options(&self, _state: &()) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
+    }
+}
+
+/// The host takes what the last event wrote, once: an older write the host
+/// never took is overwritten, and a taken one is gone, so the host never
+/// writes the same text twice.
+#[test]
+fn the_host_takes_the_latest_clipboard_write_once() {
+    let mut driver = Driver::<(), ()>::new(10, 3);
+    driver.render(&(), |ctx| {
+        ctx.component("writer", ClipboardWriter, Rect::new(0, 0, 10, 1));
+    });
+
+    driver.event(Event::from(KeyCode::Char('a')), &());
+    driver.event(Event::from(KeyCode::Char('b')), &());
+
+    assert_eq!(driver.ratcn.take_clipboard().as_deref(), Some("b"));
+    assert_eq!(driver.ratcn.take_clipboard(), None);
+}

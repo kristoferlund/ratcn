@@ -102,7 +102,7 @@ pub fn declare(ctx: &mut DeclareCtx<'_, AppState, AppMsg>) {
         .disabled(controls_disabled);
     let actions_width = cancel.width() + 1 + save.width();
 
-    let inner = declare_tile_panel_with_padding(ctx, area, " alt+7 ", Padding::new(2, 2, 1, 1));
+    let inner = declare_tile_panel_with_padding(ctx, area, " alt+8 ", Padding::new(2, 2, 1, 1));
     let [
         title_area,
         _gap_one,

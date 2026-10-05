@@ -439,8 +439,8 @@ fn blit(destination: &mut Buffer, source: &Buffer, target: Rect, source_y: u16) 
 }
 
 impl demo_shared::Demo for App {
-    /// So a paste reaches an embedded demo that wants one.
-    const PASTE: bool = true;
+    /// So the clipboard's events reach an embedded demo that wants them.
+    const CLIPBOARD: bool = true;
 
     /// Paint with the terminal's own colors, falling back to `THEME`. Each
     /// embedded demo then resolves its own theme from that.
@@ -524,6 +524,12 @@ impl demo_shared::Demo for App {
     fn wake(&self) -> Option<Duration> {
         self.embed?;
         self.shown().and_then(Embedded::wake)
+    }
+
+    /// Whatever the demo on screen put on the clipboard: a copy in an
+    /// embedded text field reaches the terminal, over SSH too.
+    fn take_clipboard(&mut self) -> Option<String> {
+        self.shown_mut().and_then(Embedded::take_clipboard)
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

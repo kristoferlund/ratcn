@@ -19,10 +19,10 @@
 //!   configures terminal Cargo packages and can install a starter only over Cargo's
 //!   untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
 //!   you want to own its source.
-//! - **Twelve components are available:** [`Button`],
-//!   [`List`], [`Select`], [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget),
-//!   [`BarChartWidget`], [`Tooltip`], [`ScrollArea`], [`Checkbox`], [`Cycle`],
-//!   and [`ProgressWidget`].
+//! - **Fourteen components are available:** [`Button`], [`Input`],
+//!   [`TextArea`], [`List`], [`Select`], [`Tabs`], [`Dialog`],
+//!   [`Toaster`](ToasterWidget), [`BarChartWidget`], [`Tooltip`],
+//!   [`ScrollArea`], [`Checkbox`], [`Cycle`], and [`ProgressWidget`].
 //!
 //! # Getting started
 //!
@@ -80,20 +80,21 @@
 //! # Where things live
 //!
 //! Components, themes, and the state types you store ([`ToasterState`],
-//! [`Theme`]) are at the crate root. Runtime types — the
-//! engine, focus, events, and the traits for writing your own components — are
-//! under [`runtime`].
+//! [`InputState`], [`TextAreaState`], [`Theme`]) are at the crate root.
+//! Runtime types — the engine, focus, events, and the traits for writing your
+//! own components — are under [`runtime`].
 //!
 //! Beside them sit the copy-support modules: [`button_shape`], [`color`],
-//! [`geometry`], [`linear_nav`], [`list_core`], [`selection_indicator`], and
-//! [`text_width`]. They hold the pieces more than one component needs — the
-//! button idiom's cap and fill rows, the color arithmetic every focus, hover,
-//! and disabled state derives through, area arithmetic, item-index movement,
-//! value-keyed items and their row viewport, the radio and checkbox markers,
-//! display-width measurement — so a component module depends on the crate root
-//! and these, and on no sibling component. That is what lets you copy one
-//! component module into your own project and have it compile against `ratcn`
-//! alone.
+//! [`geometry`], [`linear_nav`], [`list_core`], [`selection_indicator`],
+//! [`text_edit`], and [`text_width`]. They hold the pieces more than one
+//! component needs — the button idiom's cap and fill rows, the color
+//! arithmetic every focus, hover, and disabled state derives through, area
+//! arithmetic, item-index movement, value-keyed items and their row viewport,
+//! the radio and checkbox markers, the text states and their editing
+//! mechanics, display-width measurement — so a component module depends on the
+//! crate root and these, and on no sibling component. That is what lets you
+//! copy one component module into your own project and have it compile against
+//! `ratcn` alone.
 //!
 //! # Examples
 //! ```no_run
@@ -163,6 +164,7 @@ pub mod selection_indicator;
 pub mod terminal;
 #[cfg(test)]
 mod test_support;
+pub mod text_edit;
 pub mod text_width;
 pub mod theme;
 pub mod toast;
@@ -174,16 +176,20 @@ pub use components::{
     checkbox::{Checkbox, CheckboxStyle, CheckboxWidget},
     cycle::{Cycle, CycleStyle, CycleWidget},
     dialog::{Dialog, DialogStyle},
+    input::{Input, InputStyle, InputWidget},
     list::{List, ListStyle, ListWidget},
     progress::{ProgressStyle, ProgressWidget},
     scroll_area::{ScrollArea, ScrollAreaStyle},
     select::{Select, SelectStyle, SelectWidget},
     tabs::{Tab, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget},
+    textarea::{TextArea, TextAreaStyle, TextAreaWidget},
     toast::{ToastPosition, ToasterStyle, ToasterWidget},
     tooltip::{Tooltip, TooltipSide, TooltipStyle, TooltipWidget},
 };
 #[doc(inline)]
 pub use list_core::{ListItem, ListItemState};
+#[doc(inline)]
+pub use text_edit::{InputState, TextAreaState};
 #[doc(inline)]
 pub use theme::{BorderStyle, Theme};
 #[doc(inline)]
