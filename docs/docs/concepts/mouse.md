@@ -122,7 +122,9 @@ need:
   read the pointer position itself through `PaintCtx::hover_position` (a tabs
   row highlights the tab under the pointer that way), so motion *within* one
   component matters as much as motion between two. That result is the redraw
-  signal for a host that redraws on anything but `Ignored`.
+  signal for a host that redraws on anything but `Ignored`. The release that
+  ends the last gesture counts too when it moves hover off what the gesture
+  froze it on.
 - **A gesture freezes hover.** While a button is held — captured or not —
   hover stays on whatever the gesture started on, so the geometry a drag moves
   does not chase the pointer dragging it. The release hands it back. The
@@ -157,6 +159,79 @@ let ratcn = Ratcn::new().focus(|state: &AppState| &state.focus, Msg::FocusChange
 The path semantics, the split between app-owned focus and runtime-owned hover,
 and the `hover_focus` boundary rules are covered in
 [Focus, hover, and identity](./focus-hover-identity).
+
+## Pointer shape
+
+The mouse pointer shows what it is over: a hand over anything pressable, a text
+beam over a field. A component asks for a shape while painting, with
+`PaintCtx::set_pointer_shape`. Only the hovered declaration is heard, so the
+deepest component under the pointer decides, a modal hides the shapes beneath
+it, and a captured drag keeps its own. A frame where nothing asks shows
+`PointerShape::Default`.
+
+| Component | Shape |
+|---|---|
+| Button, Checkbox, Cycle, Select and its options, Tabs, List rows | `Pointer` |
+| Input, TextArea | `Text`, or `NotAllowed` when disabled |
+| ScrollArea's thumb, Dialog's draggable border | `Grab`, then `Grabbing` while dragged |
+| A disabled control | `Default` |
+
+Your own component or a `ctx.paint` closure inside a named scope asks the same
+way; `PaintCtx::pointer_captured` says whether it holds the pointer, for
+`Grabbing`. The kanban and drag demos do this for their cards. Read `Ratcn::pointer_shape()`
+after rendering and hand it to the host, which writes only when it changes:
+
+- **Terminal:** `Session::set_pointer_shape` writes OSC 22. Before its first
+  shape it pushes a bare entry onto the terminal's pointer stack; dropping the
+  session pops it and sends the empty reset, before leaving the alternate
+  screen, so the terminal's own pointer comes back on exit.
+- **Browser:** `ratcn::runtime::set_browser_pointer_shape` sets the CSS
+  `cursor` of the app's element.
+
+`PointerShape::Default` is, in a terminal, the arrow (written as `default`)
+once a shape has been shown, and before that the terminal's own pointer; in the
+browser, the arrow (`cursor: default`), even over a `DomBackend`'s text.
+
+| Terminal | OSC 22 |
+|---|---|
+| kitty | Full support |
+| foot | Supported, resets on exit |
+| iTerm2 | Supported |
+| Ghostty | Supported; 1.3.1 ignores the exit's reset (fixed later, [ghostty#14495](https://github.com/ghostty-org/ghostty/pull/14495)), but switching mouse reporting off on exit resets it anyway |
+| [WezTerm](https://github.com/wezterm/wezterm/pull/6292) | Not yet: the support is in review |
+| Alacritty, Windows Terminal, VTE (GNOME Terminal) | Ignored |
+| tmux (mainline), herdr | Not forwarded to the outer terminal, so no shapes inside them |
+
+A host on `ratcn::crossterm` writes OSC 22 itself, with `css_name()` as the
+hook. Write only on change; before the first shape, write a bare push
+(`ESC ] 22 ; >`, never a name after `>`, which Ghostty and foot reject); on
+exit, pop then send the empty reset, not `default`, before leaving the
+alternate screen:
+
+```rust
+use std::io::Write;
+
+// Before the first frame: nothing has been shown, so nothing is written
+// until a frame asks for a shape.
+let mut last = PointerShape::Default;
+let mut pushed = false;
+
+// After each frame:
+if shape != last {
+    if !pushed {
+        write!(out, "\x1b]22;>\x1b\\")?;
+        pushed = true;
+    }
+    write!(out, "\x1b]22;{}\x1b\\", shape.css_name())?;
+    out.flush()?;
+    last = shape;
+}
+
+// On exit, when `pushed`:
+write!(out, "\x1b]22;<\x1b\\\x1b]22;\x1b\\")?;
+```
+
+See [Host integration](./host-integration#the-event-loop) for the loop.
 
 ## In the browser
 

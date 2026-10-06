@@ -30,7 +30,7 @@ use crate::{
     linear_nav::{Axis, step_key},
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
-        MouseButton, MouseKind, PaintCtx, ScopeOptions, Step,
+        MouseButton, MouseKind, PaintCtx, PointerShape, ScopeOptions, Step,
     },
     text_width,
     theme::resolve_style,
@@ -386,6 +386,9 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
             .disabled(self.disabled)
             .style(style);
         ctx.widget(widget, self.value_area(ctx.area(), ctx.state()));
+        if self.can_act() {
+            ctx.set_pointer_shape(PointerShape::Pointer);
+        }
     }
 
     fn handle_event(

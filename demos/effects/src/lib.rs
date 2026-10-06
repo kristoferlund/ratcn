@@ -23,7 +23,7 @@ use ratatui::{
 use ratcn::{
     Button, ButtonSize, Theme,
     geometry::wrapped_height,
-    runtime::{Event, EventResult, FocusState, Ratcn},
+    runtime::{Event, EventResult, FocusState, PointerShape, Ratcn},
 };
 
 /// How often to look for a completion while a fetch is in flight. The channel
@@ -132,6 +132,10 @@ impl demo_shared::Demo for App {
     /// event, so it is the only reason to wake on the clock.
     fn wake(&self) -> Option<Duration> {
         self.state.joke.is_loading().then_some(POLL_INTERVAL)
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

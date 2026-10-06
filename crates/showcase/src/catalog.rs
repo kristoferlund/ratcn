@@ -4,7 +4,10 @@
 use std::time::Duration;
 
 use ratatui::{buffer::Buffer, layout::Rect};
-use ratcn::{Theme, runtime::Event};
+use ratcn::{
+    Theme,
+    runtime::{Event, PointerShape},
+};
 
 /// One demo, in the shape a host can drive through a trait object.
 ///
@@ -12,7 +15,7 @@ use ratcn::{Theme, runtime::Event};
 /// theme a demo paints with, and whether it follows the terminal instead — are
 /// associated consts, and a const is not dispatchable. This is the same
 /// contract with those turned into a method.
-/// The four [`demo_shared::Demo`] methods keep that trait's contracts; only
+/// The five [`demo_shared::Demo`] methods keep that trait's contracts; only
 /// `theme` is new.
 pub trait Embedded {
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme);
@@ -22,6 +25,8 @@ pub trait Embedded {
     fn wake(&self) -> Option<Duration>;
 
     fn take_clipboard(&mut self) -> Option<String>;
+
+    fn pointer_shape(&self) -> PointerShape;
 
     /// The theme this demo paints with, given what the terminal resolves to.
     fn theme(&self, terminal: &Theme) -> Theme;
@@ -42,6 +47,10 @@ impl<D: demo_shared::Demo> Embedded for D {
 
     fn take_clipboard(&mut self) -> Option<String> {
         demo_shared::Demo::take_clipboard(self)
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        demo_shared::Demo::pointer_shape(self)
     }
 
     /// The answer `demo_shared::run` gives a demo on its own: it opens an

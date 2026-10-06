@@ -84,6 +84,8 @@ fn main() -> io::Result<()> {
         session
             .terminal_mut()
             .draw(|frame| app.draw(frame, &theme, now))?;
+        // A hand over the button, in terminals that can show one.
+        session.set_pointer_shape(app.ratcn.pointer_shape())?;
 
         // Wait for input, or wake when the next toast is due to disappear.
         let timeout = app.state.toasts.time_until_next_expiry(now);

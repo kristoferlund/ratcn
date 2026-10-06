@@ -12,7 +12,7 @@ use ratatui::{
 };
 use ratcn::{
     TextArea, TextAreaState, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn},
+    runtime::{Event, EventResult, FocusState, PointerShape, Ratcn},
 };
 
 #[derive(Default)]
@@ -68,6 +68,10 @@ impl demo_shared::Demo for App {
     /// <https://ratcn.com/docs/concepts/host-integration#the-clipboard>.
     fn take_clipboard(&mut self) -> Option<String> {
         self.ratcn.take_clipboard()
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

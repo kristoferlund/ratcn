@@ -24,7 +24,8 @@ use ratcn::{
     Theme,
     linear_nav::cursor_visible_offset,
     runtime::{
-        Event, EventResult, FocusState, KeyCode, MouseButton, MouseEvent, MouseKind, Ratcn, TabWrap,
+        Event, EventResult, FocusState, KeyCode, MouseButton, MouseEvent, MouseKind, PointerShape,
+        Ratcn, TabWrap,
     },
 };
 
@@ -532,6 +533,17 @@ impl demo_shared::Demo for App {
         self.shown_mut().and_then(Embedded::take_clipboard)
     }
 
+    /// The pointer of whichever runtime the pointer is talking to: the demo
+    /// once entered, since it then has every event, and the chrome before.
+    fn pointer_shape(&self) -> PointerShape {
+        if self.state.entered() {
+            self.shown()
+                .map_or(PointerShape::Default, Embedded::pointer_shape)
+        } else {
+            self.ratcn.pointer_shape()
+        }
+    }
+
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
         buffer.set_style(area, Style::default().bg(theme.background));
 
@@ -595,6 +607,10 @@ mod tests {
             self.seen.set(Some(event));
             self.handled.get()
         }
+
+        fn pointer_shape(&self) -> PointerShape {
+            PointerShape::Text
+        }
     }
 
     /// An app with a probe in place of the demo it shows.
@@ -648,6 +664,34 @@ mod tests {
             row,
             modifiers: ratcn::runtime::Modifiers::default(),
         })
+    }
+
+    /// The pointer is whatever the runtime the pointer talks to asked for:
+    /// the chrome's hand over its nav link, and the demo's own shape once the
+    /// demo has been entered and receives every event.
+    #[test]
+    fn the_pointer_comes_from_the_chrome_until_the_demo_is_entered() {
+        let mut probed = probed();
+        let app = &mut probed.app;
+        let header = draw_at(app, 100, 40);
+        let link = (0..app.body.unwrap().y)
+            .flat_map(|row| (0..95).map(move |x| (x, row)))
+            .find(|&(x, row)| {
+                (0..5).all(|i| header[(x + i, row)].symbol() == &"Demos"[i as usize..=i as usize])
+            })
+            .expect("the header shows the Demos link");
+        route(app, mouse(MouseKind::Moved, link.0, link.1));
+        draw_at(app, 100, 40);
+        assert_eq!(demo_shared::Demo::pointer_shape(app), PointerShape::Pointer);
+
+        let embed = app.embed.expect("the landing view embeds its demo").rect;
+        route(
+            app,
+            mouse(MouseKind::Down(MouseButton::Left), embed.x, embed.y),
+        );
+        draw_at(app, 100, 40);
+        assert!(app.state.entered());
+        assert_eq!(demo_shared::Demo::pointer_shape(app), PointerShape::Text);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use ratatui::{
 };
 use ratcn::{
     ButtonSize, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, ScopeOptions, TabWrap},
+    runtime::{Event, EventResult, FocusState, PointerShape, Ratcn, ScopeOptions, TabWrap},
 };
 
 use crate::nav::{self, Nav, NavMsg, Step};
@@ -106,6 +106,10 @@ impl demo_shared::Demo for App {
     }
 
     /// The wizard paints with the palette its own picker selects.
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
+    }
+
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, _theme: &Theme) {
         let theme = self.palette();
         buffer.set_style(area, Style::default().bg(theme.background));

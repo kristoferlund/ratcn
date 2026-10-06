@@ -70,8 +70,8 @@ pub struct DeclareCtx<'a, State, Msg> {
     pub(crate) state: &'a State,
 }
 
-/// Where one identified declaration sits in this frame's focus and hover, as
-/// the four flags paint styles from.
+/// Where one identified declaration sits in this frame's focus, hover, and
+/// pointer capture, as the flags paint styles from.
 ///
 /// They travel as a unit because they are answered as one, from the same node
 /// against the focus and the hover this frame resolved, at the one moment they
@@ -79,13 +79,14 @@ pub struct DeclareCtx<'a, State, Msg> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "two independent (leaf, within) flag pairs — focus and hover; the bools are the natural shape"
+    reason = "two independent (leaf, within) flag pairs — focus and hover — and the capture; the bools are the natural shape"
 )]
 pub(crate) struct InteractionFlags {
     pub(crate) focused: bool,
     pub(crate) contains_focus: bool,
     pub(crate) hovered: bool,
     pub(crate) contains_hover: bool,
+    pub(crate) pointer_captured: bool,
 }
 
 impl<State, Msg> fmt::Debug for DeclareCtx<'_, State, Msg> {
@@ -119,7 +120,7 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// Layout the closure's caller computed must be moved in.
     ///
     /// The flags are the declaring node's, and the root closure has no
-    /// identity of its own — paint queued there always reports all four as
+    /// identity of its own — paint queued there always reports every flag as
     /// false. Enter a named [`scope`](Self::scope) when container chrome needs
     /// to know whether focus or the pointer is somewhere inside it.
     pub fn paint(&mut self, paint: impl FnOnce(&mut PaintCtx<'_, State>) + 'static) {
@@ -726,7 +727,7 @@ fn with_projected_buffer<R>(
 /// [`DeclareCtx::paint`]. Both run during the replay that follows the
 /// declaration walk, which is why this context can declare nothing: by the
 /// time it exists the tree is closed and focus is resolved. That is also the
-/// only reason it can carry the four interaction flags at all — they are
+/// only reason it can carry the interaction flags at all — they are
 /// derived from that resolution, and there is nothing to derive them from
 /// while the tree is still being built.
 ///
@@ -743,6 +744,9 @@ pub struct PaintCtx<'a, State> {
     pub(crate) flags: InteractionFlags,
     pub(crate) hover_position: Option<Position>,
     pub(crate) state: &'a State,
+    /// The frame's pointer shape, which [`set_pointer_shape`](Self::set_pointer_shape)
+    /// writes.
+    pub(crate) pointer_shape: &'a mut PointerShape,
 }
 
 impl<State> fmt::Debug for PaintCtx<'_, State> {
@@ -834,6 +838,23 @@ impl<'a, State> PaintCtx<'a, State> {
         self.flags.contains_hover
     }
 
+    /// This declaration holds the pointer capture: it claimed the gesture of a
+    /// button still held, with [`EventCtx::capture_pointer`] or
+    /// [`EventCtx::drag`], from the press until the release — the paint-time
+    /// counterpart of [`EventCtx::pointer_captured`].
+    ///
+    /// That is any capture, not only a drag that has moved: a bare press with
+    /// no motion yet, and a text selection in [`Input`](crate::Input) or
+    /// [`TextArea`](crate::TextArea), count too. It ends with the release, and
+    /// as soon as the pointer can no longer reach this declaration — a modal
+    /// covering it, a redraw that hides it — even though the button may still
+    /// be down. Paint a drag handle's grabbed look from it, and ask for
+    /// [`PointerShape::Grabbing`].
+    #[must_use]
+    pub const fn pointer_captured(&self) -> bool {
+        self.flags.pointer_captured
+    }
+
     /// The pointer position from the most recent mouse event, if it is still
     /// inside the terminal.
     ///
@@ -850,6 +871,66 @@ impl<'a, State> PaintCtx<'a, State> {
     #[must_use]
     pub const fn state(&self) -> &'a State {
         self.state
+    }
+
+    /// Ask for `shape` as the mouse pointer while it rests on this
+    /// declaration: a hand over something pressable, a text beam over a field.
+    ///
+    /// Only the [`hovered`](Self::hovered) declaration is heard; a call from
+    /// anything else is ignored, so a paint may call this without checking
+    /// hover first and can never fight the one the pointer is on. The last
+    /// call wins, which lets a component pick a region by
+    /// [`hover_position`](Self::hover_position). A frame where nothing asked
+    /// shows [`PointerShape::Default`]. Queued paint from the root closure has
+    /// no declaration to be hovered, so app chrome asks from inside a named
+    /// [`scope`](DeclareCtx::scope).
+    ///
+    /// The host reads the result with
+    /// [`Ratcn::pointer_shape`](super::Ratcn::pointer_shape) after rendering.
+    pub fn set_pointer_shape(&mut self, shape: PointerShape) {
+        if self.hovered() {
+            *self.pointer_shape = shape;
+        }
+    }
+}
+
+/// The mouse pointer's shape, named after the CSS cursor it shows.
+///
+/// A component asks for one while painting with
+/// [`PaintCtx::set_pointer_shape`]; the host shows it — with OSC 22 in a
+/// terminal, the CSS `cursor` in a browser.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PointerShape {
+    /// No shape asked for. In a terminal, the arrow (written as `default`)
+    /// once a shape has been shown; before that, the terminal's own pointer.
+    /// In the browser, the arrow (`cursor: default`), also over a
+    /// `DomBackend`'s text.
+    #[default]
+    Default,
+    /// A hand: something pressable.
+    Pointer,
+    /// A text beam: an editable text field.
+    Text,
+    /// A disabled control that would otherwise take input.
+    NotAllowed,
+    /// Something that can be dragged.
+    Grab,
+    /// Something being dragged.
+    Grabbing,
+}
+
+impl PointerShape {
+    /// The CSS `cursor` name, which is also the name OSC 22 takes.
+    #[must_use]
+    pub const fn css_name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Pointer => "pointer",
+            Self::Text => "text",
+            Self::NotAllowed => "not-allowed",
+            Self::Grab => "grab",
+            Self::Grabbing => "grabbing",
+        }
     }
 }
 

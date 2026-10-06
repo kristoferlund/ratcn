@@ -31,7 +31,7 @@ use crate::{
     color::{FIELD_FOCUS_SHIFT, FIELD_HOVER_SHIFT, away_from, dim},
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
-        MouseEvent, MouseKind, PaintCtx, ScopeOptions, ScrollDirection,
+        MouseEvent, MouseKind, PaintCtx, PointerShape, ScopeOptions, ScrollDirection,
     },
     text_edit::{
         CursorMove, DataCursor, Editor, TextAreaState, WrapMode, cursor_at, editor_input,
@@ -842,6 +842,11 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
         }
         let editor = ctx.with_buffer(ctx.area(), |area, buf| widget.paint(area, buf));
         self.painted = Some((state.version(), editor));
+        ctx.set_pointer_shape(if self.disabled {
+            PointerShape::NotAllowed
+        } else {
+            PointerShape::Text
+        });
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {

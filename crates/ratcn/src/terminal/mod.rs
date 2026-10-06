@@ -86,7 +86,7 @@ use termina::{
     },
 };
 
-use crate::Theme;
+use crate::{Theme, runtime::PointerShape};
 use watch::Watch;
 
 use query::{TerminalColors, query};
@@ -133,6 +133,11 @@ pub struct Session {
     /// process-global and outlives the session, so this is what keeps a later
     /// panic from writing into a terminal the session already gave back.
     live: Arc<AtomicBool>,
+    /// The pointer shape last written, [`PointerShape::Default`] until one is.
+    pointer: PointerShape,
+    /// Whether a shape went onto the terminal's pointer stack, which exit owes
+    /// a pop. Shared with the panic hook, like `live`.
+    pointer_pushed: Arc<AtomicBool>,
 }
 
 /// What an app wants of its [`Session`]. Each builder switches on the terminal
@@ -225,7 +230,12 @@ impl Session {
         // the modes below. It writes through a handle of its own, so it works
         // while the session is being unwound.
         let live = Arc::new(AtomicBool::new(false));
-        output.set_panic_hook(panic_restore(Arc::clone(&live), modes.clone()));
+        let pointer_pushed = Arc::new(AtomicBool::new(false));
+        output.set_panic_hook(panic_restore(
+            Arc::clone(&live),
+            Arc::clone(&pointer_pushed),
+            modes.clone(),
+        ));
 
         // `Terminal::new` measures the grid and can fail. The modes are still
         // off here, so a failure has nothing to restore.
@@ -237,6 +247,8 @@ impl Session {
             theme,
             modes,
             live,
+            pointer: PointerShape::Default,
+            pointer_pushed,
         };
         session.enable()
     }
@@ -301,6 +313,40 @@ impl Session {
         write_clipboard(self.terminal.backend_mut(), text)
     }
 
+    /// Show `shape` as the mouse pointer, with the OSC 22 escape sequence.
+    ///
+    /// Hand it [`Ratcn::pointer_shape`](crate::runtime::Ratcn::pointer_shape)
+    /// after every frame: it writes only when the shape changed, and nothing
+    /// at all until the first shape other than the default. Before that first
+    /// shape it pushes an empty entry onto kitty's pointer stack (a bare
+    /// `ESC ] 22 ; >`, which other terminals ignore); every shape is then a
+    /// plain set. On the way out — a drop or a panic, once — the session pops
+    /// that entry and sends the empty reset, both before it leaves the
+    /// alternate screen, which hands the pointer back to the terminal rather
+    /// than leaving an arrow behind.
+    ///
+    /// | Terminal | OSC 22 |
+    /// |---|---|
+    /// | kitty | Full support |
+    /// | foot | Supported, resets on exit |
+    /// | iTerm2 | Supported |
+    /// | Ghostty | Supported; 1.3.1 ignores the exit's reset (fixed later, [ghostty#14495](https://github.com/ghostty-org/ghostty/pull/14495)), but switching mouse reporting off on exit resets it anyway |
+    /// | [WezTerm](https://github.com/wezterm/wezterm/pull/6292) | Not yet: the support is in review |
+    /// | Alacritty, Windows Terminal, VTE (GNOME Terminal) | Ignored |
+    /// | tmux (mainline), herdr | Not forwarded to the outer terminal, so no shapes inside them |
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the terminal will not take the write.
+    pub fn set_pointer_shape(&mut self, shape: PointerShape) -> io::Result<()> {
+        write_pointer_shape(
+            self.terminal.backend_mut(),
+            &mut self.pointer,
+            &self.pointer_pushed,
+            shape,
+        )
+    }
+
     /// Switch the modes on. A failure part-way through still restores, because
     /// the session already owns them: resetting a mode that never went on is
     /// what a terminal does with any mode it does not know.
@@ -314,6 +360,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.live.store(false, Ordering::Relaxed);
+        let _ = restore_pointer(self.terminal.backend_mut(), &self.pointer_pushed);
         let _ = restore_modes(self.terminal.backend_mut(), &self.modes);
     }
 }
@@ -433,6 +480,40 @@ fn write_clipboard(out: &mut impl io::Write, text: &str) -> io::Result<()> {
     out.flush()
 }
 
+/// OSC 22, `ESC ] 22 ; <shape> ST`, when `shape` is not what `shown` already
+/// is. The first write is preceded by a bare push (`>` with no name), so the
+/// exit's pop has something to take: Ghostty and foot reject a name after `>`.
+fn write_pointer_shape(
+    out: &mut impl io::Write,
+    shown: &mut PointerShape,
+    pushed: &AtomicBool,
+    shape: PointerShape,
+) -> io::Result<()> {
+    if shape == *shown {
+        return Ok(());
+    }
+    if !pushed.swap(true, Ordering::Relaxed) {
+        write!(out, "\x1b]22;>\x1b\\")?;
+    }
+    write!(out, "\x1b]22;{}\x1b\\", shape.css_name())?;
+    *shown = shape;
+    out.flush()
+}
+
+/// Give the pointer back, once, if a shape was ever pushed: pop kitty's
+/// stack, then the empty reset foot, iTerm2, and newer Ghostty read. Never
+/// `default`, which would leave kitty showing an arrow over text after the app
+/// has gone. Clearing `pushed` is what keeps a panic, restored by the hook and
+/// then again by the unwinding drop, from popping a second entry — one the
+/// shell pushed on the main screen.
+fn restore_pointer(out: &mut impl io::Write, pushed: &AtomicBool) -> io::Result<()> {
+    if !pushed.swap(false, Ordering::Relaxed) {
+        return Ok(());
+    }
+    write!(out, "\x1b]22;<\x1b\\\x1b]22;\x1b\\")?;
+    out.flush()
+}
+
 fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
     for &code in modes {
         let mode = DecPrivateMode::Code(code);
@@ -441,14 +522,17 @@ fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Resu
     out.flush()
 }
 
-/// The panic hook's share of restoring: the modes, while `live` says a session
-/// still has them on, and nothing once it has ended — or never got that far.
+/// The panic hook's share of restoring: the pointer and the modes, while
+/// `live` says a session still has them on, and nothing once it has ended —
+/// or never got that far.
 fn panic_restore<W: io::Write>(
     live: Arc<AtomicBool>,
+    pointer_pushed: Arc<AtomicBool>,
     modes: Vec<DecPrivateModeCode>,
 ) -> impl Fn(&mut W) + Send + Sync + 'static {
     move |out| {
         if live.load(Ordering::Relaxed) {
+            let _ = restore_pointer(out, &pointer_pushed);
             let _ = restore_modes(out, &modes);
         }
     }
@@ -473,10 +557,11 @@ mod tests {
     use std::io;
 
     use super::{
-        Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Ordering, SessionEvent,
-        SessionOptions, TerminalColors, Watch, modes, panic_restore, pump, restore_modes,
+        Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Ordering, PointerShape,
+        SessionEvent, SessionOptions, TerminalColors, Watch, modes, panic_restore, pump,
+        restore_modes, restore_pointer,
         watch::{DEBOUNCE, IDLE},
-        write_clipboard,
+        write_clipboard, write_pointer_shape,
     };
     use crate::terminal::fake::FakeTerminal;
     use ratatui::style::Color;
@@ -543,6 +628,73 @@ mod tests {
         write_clipboard(&mut terminal, "héllo\nworld").expect("a fake terminal takes writes");
 
         assert_eq!(terminal.written, b"\x1b]52;c;aMOpbGxvCndvcmxk\x1b\\");
+    }
+
+    /// The bytes a run of frames writes for the pointer: nothing while it is
+    /// the terminal's own, a bare push before the first shape, every shape a
+    /// plain set — Ghostty and foot reject a name after `>` — and nothing for
+    /// a frame that asks for the shape already showing.
+    #[test]
+    fn the_pointer_is_pushed_once_then_set_only_on_change() {
+        let mut terminal = FakeTerminal::scripted("");
+        let mut shown = PointerShape::Default;
+        let pushed = AtomicBool::new(false);
+        let mut write = |shape| {
+            write_pointer_shape(&mut terminal, &mut shown, &pushed, shape)
+                .expect("a fake terminal takes writes");
+        };
+
+        write(PointerShape::Default);
+        write(PointerShape::Pointer);
+        write(PointerShape::Pointer);
+        write(PointerShape::Text);
+        write(PointerShape::Default);
+
+        assert_eq!(
+            String::from_utf8_lossy(&terminal.written),
+            "\x1b]22;>\x1b\\\x1b]22;pointer\x1b\\\x1b]22;text\x1b\\\x1b]22;default\x1b\\"
+        );
+    }
+
+    /// Exit pops what was pushed and then sends the empty reset — never
+    /// `default` — and a session that never showed a shape writes nothing.
+    #[test]
+    fn restoring_the_pointer_pops_then_resets_only_after_a_push() {
+        let mut terminal = FakeTerminal::scripted("");
+        restore_pointer(&mut terminal, &AtomicBool::new(false)).expect("writable");
+        assert!(terminal.written.is_empty(), "{:?}", terminal.written);
+
+        restore_pointer(&mut terminal, &AtomicBool::new(true)).expect("writable");
+        assert_eq!(terminal.written, b"\x1b]22;<\x1b\\\x1b]22;\x1b\\");
+    }
+
+    /// A panic restores in the hook and then again as the session unwinds.
+    /// The pointer is given back once: a second pop would land on the main
+    /// screen and take an entry the shell pushed there.
+    #[test]
+    fn a_panic_then_the_drop_restore_the_pointer_once() {
+        let live = Arc::new(AtomicBool::new(true));
+        let pushed = Arc::new(AtomicBool::new(true));
+        let hook = panic_restore::<Vec<u8>>(
+            Arc::clone(&live),
+            Arc::clone(&pushed),
+            modes(SessionOptions::new().mouse(), false),
+        );
+
+        let mut written = Vec::new();
+        hook(&mut written);
+        // What `Drop` does next, on the same terminal.
+        live.store(false, Ordering::Relaxed);
+        restore_pointer(&mut written, &pushed).expect("a vector accepts every write");
+        restore_modes(&mut written, &modes(SessionOptions::new().mouse(), false))
+            .expect("a vector accepts every write");
+
+        let written = String::from_utf8(written).expect("escape sequences are ASCII");
+        assert_eq!(written.matches("\x1b]22;<").count(), 1, "{written:?}");
+        assert!(
+            written.starts_with("\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b[?1006l"),
+            "pop and reset come before any mode, the alternate screen included: {written:?}"
+        );
     }
 
     #[test]
@@ -738,11 +890,19 @@ mod tests {
     #[test]
     fn the_panic_hook_restores_only_while_its_session_is_live() {
         let live = Arc::new(AtomicBool::new(true));
-        let hook = panic_restore::<Vec<u8>>(Arc::clone(&live), modes(SessionOptions::new(), false));
+        let pushed = Arc::new(AtomicBool::new(true));
+        let hook = panic_restore::<Vec<u8>>(
+            Arc::clone(&live),
+            pushed,
+            modes(SessionOptions::new(), false),
+        );
 
         let mut during = Vec::new();
         hook(&mut during);
-        assert!(!during.is_empty(), "a live session's modes are restored");
+        assert!(
+            during.starts_with(b"\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b[?1049l"),
+            "a live session's pointer and modes are restored: {during:?}"
+        );
 
         live.store(false, Ordering::Relaxed);
         let mut after = Vec::new();

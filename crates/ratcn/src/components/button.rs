@@ -16,7 +16,7 @@ use crate::color::{
 use crate::geometry::fixed_height;
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, MeasuredComponent, MouseButton,
-    MouseKind, PaintCtx, ScopeOptions,
+    MouseKind, PaintCtx, PointerShape, ScopeOptions,
 };
 use crate::theme::resolve_style;
 
@@ -708,6 +708,9 @@ impl<S, M> Component<S, M> for Button<M> {
             .hovered(ctx.hovered())
             .disabled(self.disabled);
         ctx.widget(widget, area);
+        if !self.disabled && self.on_press.is_some() {
+            ctx.set_pointer_shape(PointerShape::Pointer);
+        }
     }
 
     fn handle_event(
@@ -761,7 +764,27 @@ mod tests {
 
     use super::*;
     use crate::runtime::{ChildId, FocusState, Modifiers, MouseEvent, Ratcn};
-    use crate::test_support::Driver;
+    use crate::test_support::{Driver, mouse};
+
+    /// The pointer shape after hovering a button with `disabled` set.
+    fn hovered_shape(disabled: bool) -> PointerShape {
+        let mut driver = Driver::<(), ()>::new(12, 1);
+        let declare = |ctx: &mut DeclareCtx<'_, (), ()>| {
+            let button = Button::new("Save").on_press(|| ()).disabled(disabled);
+            ctx.component("save", button, Rect::new(0, 0, 8, 1));
+        };
+        driver.render(&(), declare);
+        driver.event(mouse(MouseKind::Moved, 2, 0), &());
+        driver.render(&(), declare);
+        driver.ratcn.pointer_shape()
+    }
+
+    /// A hand says "this presses"; a disabled button would be lying with one.
+    #[test]
+    fn a_hovered_button_shows_a_hand_unless_disabled() {
+        assert_eq!(hovered_shape(false), PointerShape::Pointer);
+        assert_eq!(hovered_shape(true), PointerShape::Default);
+    }
 
     #[test]
     fn message_factory_runs_for_each_accepted_press_with_non_clone_message() {

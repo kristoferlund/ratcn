@@ -52,14 +52,18 @@ Declaring and painting are two methods because they happen in two walks.
 `declare` lays the component out and declares its descendants, and paints
 nothing. `paint` writes cells, after the whole tree is declared and focus has
 resolved — which is why the interaction flags (`ctx.focused()`,
-`ctx.contains_focus()`, `ctx.hovered()`, `ctx.contains_hover()`) live on
-`PaintCtx` and not on `DeclareCtx`: while `declare` runs, focus has nothing
-complete to resolve against yet. Hover is the exception, because it predates
-the frame rather than following from it: `DeclareCtx::pointer_within()` reports
-whether the pointer is inside this declaration, for the rare component whose
+`ctx.contains_focus()`, `ctx.hovered()`, `ctx.contains_hover()`,
+`ctx.pointer_captured()`) live on `PaintCtx` and not on `DeclareCtx`: while
+`declare` runs, focus has nothing complete to resolve against yet. Hover is the
+exception, because it predates the frame rather than following from it:
+`DeclareCtx::pointer_within()` reports whether the pointer is inside this
+declaration, for the rare component whose
 *structure* depends on it. Neither method sees the frame's resolved flags, so
 anything `handle_event` reads back must be recorded in `declare`, and must
 therefore not depend on those flags.
+
+`paint` is also where a component asks for its mouse pointer, with
+`ctx.set_pointer_shape`; see [Pointer shape](./mouse#pointer-shape).
 
 Every method except `declare` has a default:
 

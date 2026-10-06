@@ -33,7 +33,7 @@ use crate::list_core::{
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
-    MouseEvent, MouseKind, PaintCtx, PopupOptions, ScopeOptions,
+    MouseEvent, MouseKind, PaintCtx, PointerShape, PopupOptions, ScopeOptions,
 };
 use crate::selection_indicator;
 use crate::theme::resolve_style;
@@ -1025,6 +1025,9 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             .disabled(self.disabled)
             .style(style);
         ctx.widget(trigger, area);
+        if !self.disabled && !self.items.is_empty() {
+            ctx.set_pointer_shape(PointerShape::Pointer);
+        }
     }
 
     fn handle_event(
@@ -1162,6 +1165,14 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         let area = ctx.area();
         ctx.widget(Clear, area);
         ctx.widget(SelectPanelWidget(widget), area);
+        // A hand over an option a click would choose.
+        let option = ctx.hover_position().and_then(|position| {
+            self.viewport
+                .row_at(self.inner, self.items.len(), position.x, position.y)
+        });
+        if self.selected.is_some() && option.is_some_and(|index| !self.items[index].is_disabled()) {
+            ctx.set_pointer_shape(PointerShape::Pointer);
+        }
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {

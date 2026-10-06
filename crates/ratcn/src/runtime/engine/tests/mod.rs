@@ -26,6 +26,7 @@ mod hover;
 mod modal;
 mod paint;
 mod pointer;
+mod pointer_shape;
 mod popup;
 mod viewport;
 

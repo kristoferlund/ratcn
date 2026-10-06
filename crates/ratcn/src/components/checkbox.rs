@@ -32,7 +32,7 @@ use crate::{
     color::ghost_fills,
     runtime::{
         Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MeasuredComponent,
-        MouseButton, MouseKind, PaintCtx, ScopeOptions,
+        MouseButton, MouseKind, PaintCtx, PointerShape, ScopeOptions,
     },
     selection_indicator::MarkerGlyphs,
     text_width,
@@ -491,6 +491,9 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
             .disabled(self.disabled)
             .style(style);
         ctx.widget(widget, ctx.area());
+        if self.can_act() {
+            ctx.set_pointer_shape(PointerShape::Pointer);
+        }
     }
 
     fn handle_event(

@@ -314,9 +314,11 @@ fn an_abandoned_drag_does_not_resume_on_a_later_gesture_that_reaches_it_by_hit_t
         EventResult::Ignored,
         "motion of a gesture that did not start here must not move it"
     );
+    // The release moves hover onto the component, which is news to the next
+    // frame, but the component itself answers nothing.
     assert_eq!(
         driver.event(mouse(MouseKind::Up(MouseButton::Left), 2, 1), &state),
-        EventResult::Ignored,
+        EventResult::Consumed,
         "and its release is not the end of a drag"
     );
     assert!(driver.ratcn.transients.is_empty());

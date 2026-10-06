@@ -13,7 +13,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, ButtonSize, Theme,
-    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, PointerShape, Ratcn, TabWrap},
 };
 
 /// One entry per button: the child id and the label it shows.
@@ -68,6 +68,10 @@ impl demo_shared::Demo for App {
             EventResult::Consumed => true,
             EventResult::Ignored => false,
         }
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

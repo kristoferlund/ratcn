@@ -195,6 +195,15 @@ impl Gestures {
         !self.tracked.is_empty()
     }
 
+    /// The path holding the most recent claim still live, if any gesture has
+    /// one: what [`PaintCtx::pointer_captured`](super::PaintCtx::pointer_captured) answers.
+    pub(super) fn captured(&self) -> Option<&[ChildId]> {
+        self.tracked
+            .iter()
+            .rev()
+            .find_map(|gesture| gesture.routing.capture())
+    }
+
     /// The press that opened the gesture this event continues, when a claim
     /// is what routes the event there.
     pub(super) fn captured_press(&self, kind: MouseKind) -> Option<Press> {

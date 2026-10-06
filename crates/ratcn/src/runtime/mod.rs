@@ -192,12 +192,13 @@ impl fmt::Display for ChildId {
 }
 
 pub use component::{
-    Component, DeclareCtx, EventCtx, MeasuredComponent, PaintCtx, PopupOptions, ScopeOptions, Step,
+    Component, DeclareCtx, EventCtx, MeasuredComponent, PaintCtx, PointerShape, PopupOptions,
+    ScopeOptions, Step,
 };
 pub use drag::{CellOffset, DragOptions, DragPhase, clamp_offset, offset_rect};
 pub use engine::Ratcn;
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-pub use event::BrowserClipboard;
+pub use event::{BrowserClipboard, set_browser_pointer_shape};
 pub use event::{
     Event, EventResult, KeyChord, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind,
     ScrollDirection, Unsupported,

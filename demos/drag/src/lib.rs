@@ -21,7 +21,7 @@ use ratcn::{
     color::dim,
     runtime::{
         CellOffset, Component, DeclareCtx, DragOptions, DragPhase, Event, EventCtx, EventResult,
-        PaintCtx, Ratcn, clamp_offset, offset_rect,
+        PaintCtx, PointerShape, Ratcn, clamp_offset, offset_rect,
     },
 };
 
@@ -68,6 +68,10 @@ impl demo_shared::Demo for App {
             EventResult::Consumed => true,
             EventResult::Ignored => false,
         }
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {
@@ -125,6 +129,13 @@ impl Component<AppState, Msg> for DraggableBlock {
                 .style(Style::default().fg(theme.foreground).bg(background_color)),
             text_area,
         );
+        // Only the hovered declaration is heard; a drag keeps this one hovered
+        // wherever the pointer goes.
+        ctx.set_pointer_shape(if ctx.pointer_captured() {
+            PointerShape::Grabbing
+        } else {
+            PointerShape::Grab
+        });
     }
 
     fn handle_event(

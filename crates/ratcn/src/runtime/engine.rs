@@ -28,7 +28,7 @@ use crate::backdrop::dim_background;
 
 use super::{
     ChildId, Component, DeclareCtx, Event, EventCtx, EventResult, FocusState, KeyEvent, ModalState,
-    MouseButton, MouseEvent, MouseKind, PaintCtx, ScopeOptions, Step, TabWrap,
+    MouseButton, MouseEvent, MouseKind, PaintCtx, PointerShape, ScopeOptions, Step, TabWrap,
     component::{InteractionFlags, PaintRoute, PaintTarget, PointerInputs, TransientMap},
     focus,
     gesture::Gestures,
@@ -252,8 +252,8 @@ struct ViewportRecord {
 }
 
 /// What the finished tree resolved this frame: the node paint styles as
-/// focused, and the node the pointer rests on, each `None` where there is
-/// none.
+/// focused, the node the pointer rests on, and the node holding the pointer's
+/// capture, each `None` where there is none.
 ///
 /// Both are answered once declaring has ended, from the tree the pass built,
 /// and both travel into the replay together because every paint reads them
@@ -262,6 +262,7 @@ struct ViewportRecord {
 struct Resolved {
     focus: Option<usize>,
     hover: Option<usize>,
+    capture: Option<usize>,
 }
 
 /// What asking to reveal focus in a tree came to.
@@ -473,7 +474,7 @@ impl<State, Msg> Surface<State, Msg> {
         path.starts_with(self.path_of(index))
     }
 
-    /// Where `index` sits in this frame's resolved focus and hover — the four
+    /// Where `index` sits in this frame's resolved focus, hover, and capture — the
     /// flags [`PaintCtx`] reports.
     fn interaction_flags(&self, index: usize, resolved: Resolved) -> InteractionFlags {
         let (focused, contains_focus) = self.leaf_match(index, resolved.focus);
@@ -483,6 +484,7 @@ impl<State, Msg> Surface<State, Msg> {
             contains_focus,
             hovered,
             contains_hover,
+            pointer_captured: resolved.capture == Some(index),
         }
     }
 
@@ -1079,6 +1081,8 @@ pub(crate) struct RenderPass<State, Msg> {
     /// The buffer clipped paint lays out in, shared by every paint call the
     /// frame makes — see [`PaintTarget`].
     scratch: Buffer,
+    /// The pointer shape the hovered declaration asked for while painting.
+    pointer_shape: PointerShape,
 }
 
 impl<State, Msg> RenderPass<State, Msg> {
@@ -1095,6 +1099,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             open_viewport: None,
             layer_stack: Vec::new(),
             scratch: Buffer::empty(Rect::ZERO),
+            pointer_shape: PointerShape::Default,
         }
     }
 
@@ -1567,6 +1572,7 @@ impl<State, Msg> RenderPass<State, Msg> {
             flags,
             hover_position,
             state,
+            pointer_shape: &mut self.pointer_shape,
         };
         match op {
             // `assert_valid` saw every region close before replay, and a
@@ -1675,6 +1681,8 @@ pub struct Ratcn<State, Msg> {
     reveal_pending: bool,
     /// The latest text an event put on the clipboard, until the host takes it.
     clipboard: Option<String>,
+    /// The pointer shape the last committed frame painted.
+    pointer_shape: PointerShape,
 }
 
 impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
@@ -1692,6 +1700,7 @@ impl<State, Msg> fmt::Debug for Ratcn<State, Msg> {
             .field("resolved_focus", &self.resolved_focus)
             .field("reveal_pending", &self.reveal_pending)
             .field("clipboard", &self.clipboard)
+            .field("pointer_shape", &self.pointer_shape)
             .finish()
     }
 }
@@ -1711,6 +1720,7 @@ impl<State, Msg> Default for Ratcn<State, Msg> {
             resolved_focus: FocusState::default(),
             reveal_pending: false,
             clipboard: None,
+            pointer_shape: PointerShape::Default,
         }
     }
 }
@@ -2029,8 +2039,17 @@ impl<State, Msg> Ratcn<State, Msg> {
                 .leaf_of(resolved_focus.path())
                 .filter(|&target| pass.surface.takes_focus(target)),
             hover: pass.surface.leaf_of(&resolved_hover),
+            // A claim on a declaration the pointer can no longer reach — under
+            // a modal, scrolled out of its viewport, no longer declared —
+            // paints released, whether or not the gesture is called off.
+            capture: self
+                .gestures
+                .captured()
+                .and_then(|path| pass.surface.leaf_of(path))
+                .filter(|&index| pass.surface.hittable(index)),
         };
         pass.replay_paint(buffer, state, theme, resolved);
+        self.pointer_shape = pass.pointer_shape;
         for (path, slots) in pass.settled_transients {
             self.transients.entry(path).or_default().extend(slots);
         }
@@ -2257,6 +2276,19 @@ impl<State, Msg> Ratcn<State, Msg> {
         self.clipboard.take()
     }
 
+    /// The pointer shape the last frame painted: what the hovered declaration
+    /// asked for with [`PaintCtx::set_pointer_shape`], or
+    /// [`PointerShape::Default`] when nothing did.
+    ///
+    /// Read it after each [`render`](Self::render) and show it: natively with
+    /// the `termina` feature's `Session::set_pointer_shape`, in the browser
+    /// with the `ratzilla` feature's `set_browser_pointer_shape`. Both write only
+    /// when the shape changed, so handing them every frame's answer is cheap.
+    #[must_use]
+    pub const fn pointer_shape(&self) -> PointerShape {
+        self.pointer_shape
+    }
+
     /// Route one non-pointer event, and answer for it when nothing in the
     /// surface does.
     ///
@@ -2462,6 +2494,18 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         if let MouseKind::Up(button) = raw.kind {
             self.gestures.end(button);
+            // The last release unfreezes hover. Where the pointer has left
+            // what the gesture froze it on, hover moves now, as it would for
+            // motion, and that is news to the next frame — what is hovered
+            // and the shape it asks for changed — whether or not anything
+            // handled the release.
+            let unfrozen = hit.unwrap_or_default();
+            if !self.gestures.in_flight() && self.hover != unfrozen {
+                self.hover = unfrozen;
+                if matches!(result, EventResult::Ignored) {
+                    result = EventResult::Consumed;
+                }
+            }
         }
         result
     }

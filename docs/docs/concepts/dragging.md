@@ -82,6 +82,9 @@ lifecycle helper with a start policy that requires both an offset handler and a
 border hit. Pointer capture continues outside the box until release, and the
 dialog clamps every emitted offset to the screen.
 
+A drag handle shows its [pointer shape](./mouse#pointer-shape) from paint:
+`Grab` while hovered, `Grabbing` while `ctx.pointer_captured()`.
+
 ## Making your own component draggable
 
 A component becomes draggable with the same parts. The drag demo's

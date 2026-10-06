@@ -15,7 +15,7 @@ use ratatui::{
 };
 use ratcn::{
     Button, ButtonSize, Theme, Toast, ToastKind, ToasterState, ToasterWidget,
-    runtime::{Event, EventResult, FocusState, Ratcn, TabWrap},
+    runtime::{Event, EventResult, FocusState, PointerShape, Ratcn, TabWrap},
 };
 
 /// One entry per toast kind, with the text it shows.
@@ -125,6 +125,10 @@ impl demo_shared::Demo for App {
         self.state
             .toasts
             .time_until_next_expiry(demo_shared::monotonic_time())
+    }
+
+    fn pointer_shape(&self) -> PointerShape {
+        self.ratcn.pointer_shape()
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

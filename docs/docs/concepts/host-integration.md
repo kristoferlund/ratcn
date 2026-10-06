@@ -103,6 +103,7 @@ loop {
     app.state.toasts.prune_expired(now);
     let theme = session.theme();
     session.terminal_mut().draw(|frame| app.draw(frame, &theme, now))?;
+    session.set_pointer_shape(app.ratcn.pointer_shape())?;
 
     let timeout = app.state.toasts.time_until_next_expiry(app_time());
     let Some(event) = session.next(timeout)? else {
@@ -124,7 +125,8 @@ loop {
 }
 ```
 
-When nothing is time-dependent, pass `None` and let the wait block.
+When nothing is time-dependent, pass `None` and let the wait block. The line
+after the draw shows the frame's [pointer shape](./mouse#pointer-shape).
 
 A `termina::Event` goes straight to `Ratcn::handle_event`; the conversion is a
 `TryFrom` the runtime provides. Resize, terminal focus, and key releases come
@@ -171,7 +173,8 @@ cargo add ratatui --no-default-features --features layout-cache,std
 cargo add ratzilla
 ```
 
-The browser-only API (`BrowserClipboard`) exists only on `wasm32`; read its
+The browser-only API (`BrowserClipboard`, `set_browser_pointer_shape`) exists only
+on `wasm32`; read its
 rustdoc with
 `cargo doc -p ratcn --features ratzilla --target wasm32-unknown-unknown`.
 
@@ -201,10 +204,25 @@ terminal.on_key_event({
     move |event| app.borrow_mut().handle_event(event)
 }).map_err(|error| io::Error::other(error.to_string()))?;
 
-terminal.draw_web(move |frame| app.borrow_mut().draw(frame));
+use ratcn::runtime::set_browser_pointer_shape;
+use ratzilla::web_sys::{self, wasm_bindgen::JsCast};
+
+// The element the app is drawn in, whose CSS cursor shows its pointer shape:
+// here the container given to the backend as `grid_id`.
+let element: web_sys::HtmlElement = web_sys::window()
+    .and_then(|window| window.document())
+    .and_then(|document| document.get_element_by_id("app"))
+    .and_then(|element| element.dyn_into().ok())
+    .ok_or_else(|| io::Error::other("no #app element"))?;
+terminal.draw_web(move |frame| {
+    app.borrow_mut().draw(frame);
+    set_browser_pointer_shape(&element, app.borrow().ratcn.pointer_shape());
+});
 ```
 
-An app with text fields routes through the `route` function in
+`set_browser_pointer_shape` shows the frame's [pointer shape](./mouse#pointer-shape)
+as the element's CSS `cursor`. An app with text fields routes through the
+`route` function in
 [The clipboard](#the-clipboard) instead, so a copy reaches the clipboard. Wire
 mouse callbacks the same way; see
 [Mouse Input](./mouse#in-the-browser) for the details. Time-based cleanup,
