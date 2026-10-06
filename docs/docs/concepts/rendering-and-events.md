@@ -52,7 +52,7 @@ sandbox, though: a base widget can still paint outside its rect. Events arrive
 in screen coordinates, and routing input between several hosted trees is up to
 your app.
 
-### Declaring comes before painting
+## Declaring comes before painting
 
 Declaring does not paint. `ctx.paint` queues a `'static` closure at the point
 the declaration reaches it. Once the tree is complete and focus has resolved,
@@ -170,7 +170,7 @@ absorbed rather than reaching the UI underneath (see
 
 Mouse buttons arrive as raw `Down`/`Up`/`Moved` events and the runtime
 synthesizes `Click` and `Drag` from them before routing; see
-[Mouse Input](./mouse).
+[Mouse input](./mouse).
 
 ## App shortcuts
 

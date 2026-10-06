@@ -262,12 +262,13 @@ Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mou
 
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`List`](https://docs.rs/ratcn/latest/ratcn/struct.List.html),
 [`ListItem`](https://docs.rs/ratcn/latest/ratcn/struct.ListItem.html),
 [`ListItemState`](https://docs.rs/ratcn/latest/ratcn/struct.ListItemState.html),
 [`ListWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ListWidget.html),
-[`ListStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ListStyle.html).
+and [`ListStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ListStyle.html)
+on docs.rs for the full API.
 
 ## See also
 

@@ -188,14 +188,15 @@ everything the builders set; see their API pages below.
 
 ## Full API
 
-Every method, with parameter and edge-case detail:
+See
 [`Toast`](https://docs.rs/ratcn/latest/ratcn/toast/struct.Toast.html),
 [`ToastKind`](https://docs.rs/ratcn/latest/ratcn/toast/enum.ToastKind.html),
 [`ToasterState`](https://docs.rs/ratcn/latest/ratcn/toast/struct.ToasterState.html),
 [`ToastEntry`](https://docs.rs/ratcn/latest/ratcn/toast/struct.ToastEntry.html),
 [`ToasterWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ToasterWidget.html),
 [`ToastPosition`](https://docs.rs/ratcn/latest/ratcn/enum.ToastPosition.html),
-[`ToasterStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ToasterStyle.html).
+and [`ToasterStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ToasterStyle.html)
+on docs.rs for the full API.
 
 ## See also
 

@@ -203,7 +203,7 @@ match ctx.drag(
 ```
 
 `column_index_at` answers `None` for a release outside every column, which the
-update treats as a cancelled drag.
+update treats as a canceled drag.
 
 Which column each card sits in, and the active drag, are both plain app state;
 the drop is just one more message through `update`. While a card is dragged,

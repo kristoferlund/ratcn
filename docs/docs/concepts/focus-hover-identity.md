@@ -184,9 +184,8 @@ nowhere better to put it.
 to focus, not hover, because hover needs no message. The motion that enters a
 `hover_focus` scope emits the focus change *and* moves hover, so the frame that
 first paints the new pane focused already paints the component under the
-pointer hovered. Because the focus
-change is that event's one message, the motion returns before the components
-under the pointer are offered it.
+pointer hovered. Because that focus change is the event's one message, the
+motion returns before the components under the pointer see it.
 
 Any other motion that changes hover goes on to the components under the
 pointer, so a list whose cursor follows the mouse moves it on the entering

@@ -130,9 +130,7 @@ frame.render_widget(
 );
 ```
 
-It takes a theme and a couple of bools. If you already have focus and event
-handling you like, keep it, and adopt the runtime later, one component at a
-time, if you want to.
+It takes a theme and a couple of bools.
 
 `Dialog` and `ScrollArea` are the exceptions: they are composites, with no
 widget of their own.

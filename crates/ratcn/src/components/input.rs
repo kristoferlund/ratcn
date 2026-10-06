@@ -674,7 +674,7 @@ impl<S, M> Input<S, M> {
     }
 
     /// The message unmodified <kbd>Enter</kbd> emits. Without it Enter
-    /// bubbles, to a dialog's default action for instance.
+    /// bubbles to the enclosing components and the app.
     #[must_use]
     pub fn on_submit(mut self, on_submit: impl Fn() -> M + 'static) -> Self {
         self.on_submit = Some(Rc::new(on_submit));

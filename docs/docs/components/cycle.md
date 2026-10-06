@@ -72,7 +72,7 @@ Small/Medium/Large, are a Cycle.
 ## Disabled
 
 `.disabled(true)` mutes the value, takes it out of Tab order, and ignores
-events. Pass the value from app state, as with any declaration prop.
+events. Pass the flag from app state, which is in scope while declaring.
 
 ## Styling
 
@@ -101,7 +101,6 @@ colors.
 
 | Input | Does |
 |---|---|
-| `Tab` `Shift+Tab` | Move focus to the next / previous control |
 | `Enter` `Space` &nbsp;`→` `l` &nbsp;`Ctrl+N` | Next option, wrapping to the first |
 | `←` `h` &nbsp;`Ctrl+P` | Previous option, wrapping to the last |
 | Left click | Next option |
@@ -115,10 +114,11 @@ Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mou
 
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`Cycle`](https://docs.rs/ratcn/latest/ratcn/struct.Cycle.html),
 [`CycleWidget`](https://docs.rs/ratcn/latest/ratcn/struct.CycleWidget.html),
-[`CycleStyle`](https://docs.rs/ratcn/latest/ratcn/struct.CycleStyle.html).
+and [`CycleStyle`](https://docs.rs/ratcn/latest/ratcn/struct.CycleStyle.html)
+on docs.rs for the full API.
 
 ## See also
 

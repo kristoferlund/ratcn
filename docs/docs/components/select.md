@@ -65,9 +65,9 @@ keep the cursor visible; `.max_visible_items(...)` changes that limit. The
 panel stays put while the cursor moves, shifting only when it must to stay
 inside the frame.
 
-Esc, Tab, and a press outside the panel all close it through the `open`
-binding as `on_open_change(false)`, so one message handles every way of
-dismissing it. A press outside leaves the control underneath clickable.
+Esc, Tab, a click on the trigger, and a press outside the panel all close it
+through the `open` binding as `on_open_change(false)`, so one message handles
+every way of dismissing it. A press outside leaves the control underneath clickable.
 
 ## Disabled
 
@@ -162,6 +162,7 @@ exact colors.
 | `Home` `End` `Page Up` `Page Down` &nbsp;`Ctrl+U` `Ctrl+D` | Move the cursor while open |
 | `Esc` | Close the panel |
 | `Tab` `Shift+Tab` | Close the panel; the next press moves focus |
+| Click the trigger | Open or close the panel |
 | Pointer motion | Move the cursor |
 | Click | Select the option under the pointer |
 | Wheel | Scroll the panel, leaving the cursor |
@@ -175,12 +176,13 @@ Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mou
 
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`Select`](https://docs.rs/ratcn/latest/ratcn/struct.Select.html),
 [`SelectWidget`](https://docs.rs/ratcn/latest/ratcn/struct.SelectWidget.html),
 [`SelectStyle`](https://docs.rs/ratcn/latest/ratcn/struct.SelectStyle.html),
 [`ListItem`](https://docs.rs/ratcn/latest/ratcn/struct.ListItem.html),
-[`ListItemState`](https://docs.rs/ratcn/latest/ratcn/struct.ListItemState.html).
+and [`ListItemState`](https://docs.rs/ratcn/latest/ratcn/struct.ListItemState.html)
+on docs.rs for the full API.
 
 ## See also
 

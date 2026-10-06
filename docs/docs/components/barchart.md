@@ -154,10 +154,11 @@ that bar to match, or hide values with `.show_values(false)`.
 
 ## Full API
 
-Every method, with parameter and edge-case detail:
+See
 [`BarChartWidget`](https://docs.rs/ratcn/latest/ratcn/struct.BarChartWidget.html),
 [`BarChartGroup`](https://docs.rs/ratcn/latest/ratcn/struct.BarChartGroup.html),
-[`BarChartStyle`](https://docs.rs/ratcn/latest/ratcn/struct.BarChartStyle.html).
+and [`BarChartStyle`](https://docs.rs/ratcn/latest/ratcn/struct.BarChartStyle.html)
+on docs.rs for the full API.
 
 ## See also
 

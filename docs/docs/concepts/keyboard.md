@@ -123,7 +123,7 @@ Dialog dismissal and app focus shortcuts follow their configured `KeyChord`.
 **Shift is not item navigation.** `J` is not `j`; Shift-modified item navigation
 is left unclaimed. Shift+Tab still traverses backward between controls.
 
-**An unhandled key bubbles.** A key a component does not recognise is reported
+**An unhandled key bubbles.** A key a component does not recognize is reported
 as ignored, and travels up to its ancestors and then to your app. So a
 single-letter hotkey can keep working while a List has focus, except for its
 vertical navigation letters (`j`, `k`). Horizontal controls take `h` and `l`

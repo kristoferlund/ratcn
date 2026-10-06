@@ -55,7 +55,7 @@ let mut ratcn = Ratcn::new()
 state.modals.open("confirm", &mut state.focus)?;
 state.modals.close(&mut state.focus);
 
-// In render(), after the base layer:
+// In draw(), after the base layer:
 let area = frame.area();
 ratcn.render(frame, area, &state, &theme, |ctx| {
     // ... base content first ...
@@ -144,10 +144,11 @@ Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mou
 
 ## Full API
 
-Every method, with panics and edge-case detail:
+See
 [`Dialog`](https://docs.rs/ratcn/latest/ratcn/struct.Dialog.html),
 [`DialogStyle`](https://docs.rs/ratcn/latest/ratcn/struct.DialogStyle.html),
-[`ModalState`](https://docs.rs/ratcn/latest/ratcn/runtime/struct.ModalState.html).
+and [`ModalState`](https://docs.rs/ratcn/latest/ratcn/runtime/struct.ModalState.html)
+on docs.rs for the full API.
 
 ## See also
 

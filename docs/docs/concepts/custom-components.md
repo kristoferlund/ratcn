@@ -155,8 +155,9 @@ send exactly one message to the app's `update`. Only `Ignored` bubbles.
 Components never mutate app state; the message is the only output.
 
 For a primary-button `Down`, the result also decides focus. When the event
-bubbles out `Ignored`, the runtime focuses the pressed component or its nearest
-focusable ancestor; `Consumed` and `Emit` leave focus alone. Pointer capture is
+bubbles out `Ignored`, the runtime focuses the innermost focusable target under
+the press (see [Mouse input](./mouse) for the exceptions); `Consumed` and `Emit`
+leave focus alone. Pointer capture is
 independent: a component can call `ctx.capture_pointer(MouseButton::Left)` and
 still return `Ignored`, capturing the gesture while focus moves as usual.
 

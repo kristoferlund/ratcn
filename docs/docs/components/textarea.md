@@ -9,7 +9,7 @@ block cursor while focused, and an optional titled border around it. It wraps a
 line longer than it is wide and scrolls to keep the cursor in view.
 
 Built on [ratatui-textarea](https://docs.rs/ratatui-textarea/), which handles
-editing, cursor movement, selection, wrapping, and scrolling. ratcn adds
+editing, cursor movement, selection, wrapping, and scrolling. The library adds
 theming and app-state binding.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 330px">
@@ -152,6 +152,38 @@ TextArea::new()
 `TextAreaStyle::fallback()` is the no-theme starting point: plain ANSI colors
 that render on any terminal.
 
+## Paint-only widget
+
+`TextAreaWidget` draws a field without focus or events. It is an ordinary
+Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime: it
+paints the `TextAreaState` it is given over the whole area, scrolled to keep
+the cursor in view, and you supply the interaction states.
+
+```rust
+use ratcn::TextAreaWidget;
+
+frame.render_widget(
+    TextAreaWidget::new(&state.notes)
+        .title("Notes")
+        .placeholder("What happened today?")
+        .focused(is_focused)
+        .hovered(is_hovered)
+        .themed(&theme),
+    area,
+);
+```
+
+`.wrap_mode(...)`, `.invalid(...)`, and `.disabled(...)` match the component's.
+Replace `.themed(...)` with `.style(...)` to supply exact colors.
+
+Driving the editing is then yours. `ratcn::text_edit` holds the key conversion
+and the editor's binding table, and `.paint(...)` paints the field and hands
+back the editor it painted, which knows the view: how far the text is
+scrolled, how tall a page is, and where lines wrap. Edit that editor and store
+the result with `TextAreaState::from_editor`.
+[`TextAreaWidget::paint`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaWidget.html#method.paint)
+has a minimal key handler to start from.
+
 ## Keyboard
 
 Editing comes from [`ratatui-textarea`](https://crates.io/crates/ratatui-textarea),
@@ -192,8 +224,8 @@ See [Keyboard](../concepts/keyboard) for the rules the other components follow.
 
 ## Mouse
 
-A click focuses the field and places the cursor on the character clicked. A
-drag selects from the character pressed to the one under the pointer, across
+A click focuses the field and places the cursor on the character clicked,
+when the button is released. A drag selects from the character pressed to the one under the pointer, across
 lines, and keeps scrolling the text while the pointer moves on past an edge of
 the field.
 
@@ -217,49 +249,18 @@ from it, on the keys each platform's users expect:
 In a terminal, `Cmd+C` and `Ctrl+Shift+C` belong to the terminal, which copies
 its own selection. In the browser the platform's chords arrive as
 `Event::Copy`, `Event::Cut`, and `Event::Paste`, never as keys, so an app binds
-those events rather than the keys. A copy or cut also fills the field's own
-buffer, so `Ctrl+Y` pastes it back.
+those events rather than the keys. On a Mac, `Ctrl+C` and `Ctrl+X` stay
+ordinary keys. A copy or cut also fills the field's own buffer, which `Ctrl+Y`
+pastes back.
 
 A paste is inserted at the cursor with its line breaks and tabs kept; every
 other control character is dropped. Without bracketed paste, a terminal
 delivers a paste as keystrokes.
 
-The host carries the clipboard both ways. Pastes only arrive as such when it
+The host carries the clipboard both ways. Pastes arrive as pastes only when it
 asks for them: bracketed paste in a terminal, `BrowserClipboard` in the
 browser. Copies go out when it writes what `Ratcn::take_clipboard` returns
 after each event. See [Host integration](../concepts/host-integration#the-clipboard).
-
-## Paint-only widget
-
-`TextAreaWidget` draws a field without focus or events. It is an ordinary
-Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime: it
-paints the `TextAreaState` it is given over the whole area, scrolled to keep
-the cursor in view, and you supply the interaction states.
-
-```rust
-use ratcn::TextAreaWidget;
-
-frame.render_widget(
-    TextAreaWidget::new(&state.notes)
-        .title("Notes")
-        .placeholder("What happened today?")
-        .focused(is_focused)
-        .hovered(is_hovered)
-        .themed(&theme),
-    area,
-);
-```
-
-`.wrap_mode(...)`, `.invalid(...)`, and `.disabled(...)` match the component's.
-Replace `.themed(...)` with `.style(...)` to supply exact colors.
-
-Driving the editing is then yours. `ratcn::text_edit` holds the key conversion
-and the editor's binding table, and `.paint(...)` paints the field and hands
-back the editor it painted, which knows the view: how far the text is
-scrolled, how tall a page is, and where lines wrap. Edit that editor and store
-the result with `TextAreaState::from_editor`.
-[`TextAreaWidget::paint`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaWidget.html#method.paint)
-has a complete key handler.
 
 ## Limits
 
@@ -289,11 +290,12 @@ has a complete key handler.
 
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`TextArea`](https://docs.rs/ratcn/latest/ratcn/struct.TextArea.html),
 [`TextAreaWidget`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaWidget.html),
 [`TextAreaStyle`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaStyle.html),
-[`TextAreaState`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaState.html).
+and [`TextAreaState`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaState.html)
+on docs.rs for the full API.
 
 ## See also
 

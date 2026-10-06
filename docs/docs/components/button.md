@@ -82,8 +82,8 @@ hard-coding a number, and `.width()` to size a button to its own label.
 
 ## Disabled
 
-A disabled button is greyed out, skipped by Tab, and ignores events. Pass the
-value from state, which is in scope during declaration.
+A disabled button is grayed out, skipped by Tab, and ignores events. Pass the
+flag from app state, which is in scope while declaring.
 
 ```rust
 Button::new("Save")
@@ -138,7 +138,6 @@ frame.render_widget(
 
 | Input | Does |
 |---|---|
-| `Tab` `Shift+Tab` | Move focus to the next / previous control |
 | `Enter` `Space` | Press the focused button |
 | Left click | Press the button |
 
@@ -155,12 +154,13 @@ Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mou
 
 ## Full API
 
-Every method, with parameter and edge-case detail:
+See
 [`Button`](https://docs.rs/ratcn/latest/ratcn/struct.Button.html),
 [`ButtonWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ButtonWidget.html),
 [`ButtonVariant`](https://docs.rs/ratcn/latest/ratcn/enum.ButtonVariant.html),
 [`ButtonSize`](https://docs.rs/ratcn/latest/ratcn/enum.ButtonSize.html),
-[`ButtonStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ButtonStyle.html).
+and [`ButtonStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ButtonStyle.html)
+on docs.rs for the full API.
 
 ## See also
 

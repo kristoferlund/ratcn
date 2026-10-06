@@ -8,9 +8,9 @@ A single-line text field: the value in a well, a block cursor while focused,
 and an optional titled border around it. Typing, selection, and scrolling a
 value longer than the field are handled; what the text means is yours.
 
-Editing, cursor movement, selection, and horizontal scrolling come from
-[ratatui-textarea](https://docs.rs/ratatui-textarea/). ratcn adds theming and
-app-state binding.
+Built on [ratatui-textarea](https://docs.rs/ratatui-textarea/), which handles
+editing, cursor movement, selection, and horizontal scrolling. The library adds
+theming and app-state binding.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 400px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -84,8 +84,8 @@ is no `PartialEq`, so compare `.value()`.
 ## Submitting
 
 Unmodified <kbd>Enter</kbd> emits `.on_submit(...)` and never inserts a line
-break. Without `on_submit`, Enter bubbles: to a [Dialog](./dialog)'s default
-action, for instance.
+break. Without `on_submit`, Enter bubbles to the enclosing components and your
+app.
 
 ## Placeholder and title
 
@@ -180,6 +180,38 @@ Input::new()
 `InputStyle::fallback()` is the no-theme starting point: plain ANSI colors that
 render on any terminal.
 
+## Paint-only widget
+
+`InputWidget` draws a field without focus or events. It is an ordinary Ratatui
+widget, so it works in a plain Ratatui app with no `Ratcn` runtime: it paints
+the `InputState` it is given, scrolled to keep the cursor in view, and you
+supply the interaction states.
+
+```rust
+use ratcn::InputWidget;
+
+frame.render_widget(
+    InputWidget::new(&state.name)
+        .title("Name")
+        .placeholder("Ada Lovelace")
+        .focused(is_focused)
+        .hovered(is_hovered)
+        .themed(&theme),
+    area,
+);
+```
+
+`.prefix(...)`, `.suffix(...)`, `.mask_char(...)`, `.invalid(...)`, and
+`.disabled(...)` match the component's. Replace `.themed(...)` with
+`.style(...)` to supply exact colors.
+
+Driving the editing is then yours. `ratcn::text_edit` holds the key conversion
+and the editor's binding table, and `.paint(...)` paints the field and hands
+back the editor it painted, which knows how far the text is scrolled. Edit that
+editor and store the result with `InputState::from_editor`.
+[`InputWidget::paint`](https://docs.rs/ratcn/latest/ratcn/struct.InputWidget.html#method.paint)
+has a minimal key handler to start from.
+
 ## Keyboard
 
 Editing comes from [`ratatui-textarea`](https://crates.io/crates/ratatui-textarea),
@@ -253,38 +285,6 @@ asks for them: bracketed paste in a terminal, `BrowserClipboard` in the
 browser. Copies go out when it writes what `Ratcn::take_clipboard` returns
 after each event. See [Host integration](../concepts/host-integration#the-clipboard).
 
-## Paint-only widget
-
-`InputWidget` draws a field without focus or events. It is an ordinary Ratatui
-widget, so it works in a plain Ratatui app with no `Ratcn` runtime: it paints
-the `InputState` it is given, scrolled to keep the cursor in view, and you
-supply the interaction states.
-
-```rust
-use ratcn::InputWidget;
-
-frame.render_widget(
-    InputWidget::new(&state.name)
-        .title("Name")
-        .placeholder("Ada Lovelace")
-        .focused(is_focused)
-        .hovered(is_hovered)
-        .themed(&theme),
-    area,
-);
-```
-
-`.prefix(...)`, `.suffix(...)`, `.mask_char(...)`, `.invalid(...)`, and
-`.disabled(...)` match the component's. Replace `.themed(...)` with
-`.style(...)` to supply exact colors.
-
-Driving the editing is then yours. `ratcn::text_edit` holds the key conversion
-and the editor's binding table, and `.paint(...)` paints the field and hands
-back the editor it painted, which knows how far the text is scrolled. Edit that
-editor and store the result with `InputState::from_editor`.
-[`InputWidget::paint`](https://docs.rs/ratcn/latest/ratcn/struct.InputWidget.html#method.paint)
-has a complete key handler.
-
 ## Limits
 
 - **No undo or redo.** A state is replaced on every keystroke, so an app that
@@ -311,11 +311,12 @@ has a complete key handler.
 
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`Input`](https://docs.rs/ratcn/latest/ratcn/struct.Input.html),
 [`InputWidget`](https://docs.rs/ratcn/latest/ratcn/struct.InputWidget.html),
 [`InputStyle`](https://docs.rs/ratcn/latest/ratcn/struct.InputStyle.html),
-[`InputState`](https://docs.rs/ratcn/latest/ratcn/struct.InputState.html).
+and [`InputState`](https://docs.rs/ratcn/latest/ratcn/struct.InputState.html)
+on docs.rs for the full API.
 
 ## See also
 

@@ -221,7 +221,7 @@ See [Host integration](./host-integration#the-event-loop) for the loop.
 
 ## In the browser
 
-The browser backend (ratzilla) reports mouse positions directly in **terminal
+The browser backend (Ratzilla) reports mouse positions directly in **terminal
 cell** coordinates (`col`/`row`), the same space as crossterm, so no pixel
 conversion or app-side mapping is needed. With ratcn's `ratzilla` feature, pass
 the callback event directly to the runtime:
@@ -233,8 +233,8 @@ terminal.on_mouse_event({
 }).map_err(|error| io::Error::other(error.to_string()))?;
 ```
 
-The conversion accepts ratzilla's raw `ButtonDown`/`ButtonUp`/`Moved` stream,
-plus `Exited` for the pointer leaving the grid. It ignores ratzilla's
+The conversion accepts Ratzilla's raw `ButtonDown`/`ButtonUp`/`Moved` stream,
+plus `Exited` for the pointer leaving the grid. It ignores Ratzilla's
 `SingleClick`/`DoubleClick`, because the runtime synthesizes clicks and drags
 the same way for native and browser input. An app that writes the clipboard
 routes mouse events through the `route` function in
@@ -242,5 +242,5 @@ routes mouse events through the `route` function in
 
 Page focus, key capture, and browser default prevention stay with the host.
 The demos' shared host script shows one working policy (forwarding captured
-keys to ratzilla's canvas and normalizing macOS Option chords from
+keys to Ratzilla's canvas and normalizing macOS Option chords from
 `KeyboardEvent.code`), and an application can supply its own.

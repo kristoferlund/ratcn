@@ -17,7 +17,7 @@ draw callback drains it before painting the next frame. The
 forms.
 
 This page covers three hosts: a terminal opened by ratcn's own `Session`, an
-app on crossterm that owns its terminal, and a browser app on ratzilla. It ends
+app on crossterm that owns its terminal, and a browser app on Ratzilla. It ends
 with the clipboard, which each host carries out in its own way.
 
 ## A terminal session
@@ -73,7 +73,7 @@ drawing you already write.
 colors it uses while opening, subscribes to the changes it reports, and asks
 again when the window regains focus, shortly after every change signal, and when
 input resumes after a pause. That way a change still reaches the app when the
-terminal was recoloured from outside, or has no change notification to send.
+terminal was recolored from outside, or has no change notification to send.
 
 `session.theme()` is the theme the terminal's answer becomes, falling back to
 `Theme::default_dark()` where the terminal keeps quiet.
@@ -150,7 +150,7 @@ after the draw shows the frame's [pointer shape](./mouse#pointer-shape), and the
 A `termina::Event` goes straight to `Ratcn::handle_event`, through a `TryFrom`
 conversion the runtime provides. Resize, terminal focus, and key releases come
 back as `EventResult::Ignored` for the host to act on. For global shortcuts, see
-[App Shortcuts](./rendering-and-events#app-shortcuts).
+[App shortcuts](./rendering-and-events#app-shortcuts).
 
 ## Apps on a crossterm backend
 
@@ -171,12 +171,12 @@ let _input_modes = ratcn::crossterm::InputModes::new()
 ```
 
 Bind the guard to a name, as above: the modes stay on for as long as it lives.
-The host owns raw mode and the alternate screen. See [Mouse Input](./mouse) for
+The host owns raw mode and the alternate screen. See [Mouse input](./mouse) for
 mouse capture.
 
 ## In the browser
 
-Enable the `ratzilla` feature for ratzilla key and mouse conversions, the
+Enable the `ratzilla` feature for Ratzilla key and mouse conversions, the
 browser clipboard listener, and the browser pointer shape:
 
 ```sh
@@ -192,7 +192,7 @@ only on `wasm32`. Read its rustdoc with
 ### Routing events
 
 Ratzilla drives callbacks, so shared mutable app state normally lives in an
-`Rc<RefCell<App>>`. Its key and mouse callbacks hand you ratzilla events, so the
+`Rc<RefCell<App>>`. Its key and mouse callbacks hand you Ratzilla events, so the
 app's `handle_event` takes anything that converts to an `Event`, applies an
 `Emit`, and returns the result:
 
@@ -218,7 +218,7 @@ terminal.on_key_event({
 }).map_err(|error| io::Error::other(error.to_string()))?;
 ```
 
-Wire mouse callbacks the same way; see [Mouse Input](./mouse#in-the-browser).
+Wire mouse callbacks the same way; see [Mouse input](./mouse#in-the-browser).
 An app with text fields routes both through the `route` function in
 [The browser clipboard](#the-browser-clipboard) instead, so a copy reaches the
 clipboard.
@@ -314,7 +314,7 @@ and `cut` events and hands them to your first closure as `Event::Paste`,
 event. On a copy or cut, the listener asks your second closure for the text the
 app wrote and puts it on the clipboard (a paste's write goes out too).
 
-The listener also stops clipboard chords from reaching ratzilla as keys.
+The listener also stops clipboard chords from reaching Ratzilla as keys.
 `Cmd+C`, `Cmd+X`, and `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`
 elsewhere, become `Event::Copy`, `Event::Cut`, and `Event::Paste`, so an app
 binds those events rather than the keys. Off a Mac, `Shift+Delete` becomes
@@ -367,7 +367,7 @@ cross-origin iframe only with `allow="clipboard-write"`. Anywhere else the
 write is skipped.
 
 Either a key or a click can write, so route both through one function that
-writes afterwards:
+writes afterward:
 
 ```rust
 fn route(app: &RefCell<App>, event: impl TryInto<Event>) {

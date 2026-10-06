@@ -69,7 +69,7 @@ Two options are a Checkbox wearing its states as labels; three or more are a
 ## Disabled
 
 `.disabled(true)` mutes the row, takes it out of Tab order, and ignores events.
-Pass the value from app state, as with any declaration prop.
+Pass the flag from app state, which is in scope while declaring.
 
 ## Styling
 
@@ -99,9 +99,8 @@ space, label), the same in both states. Replace `.themed(...)` with
 
 | Input | Does |
 |---|---|
-| `Tab` `Shift+Tab` | Move focus to the next / previous control |
 | `Enter` `Space` | Toggle the focused checkbox |
-| Left click on the marker or label | Toggle the checkbox |
+| Left click on the row | Toggle the checkbox |
 
 Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
@@ -112,10 +111,11 @@ Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mou
 
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`Checkbox`](https://docs.rs/ratcn/latest/ratcn/struct.Checkbox.html),
 [`CheckboxWidget`](https://docs.rs/ratcn/latest/ratcn/struct.CheckboxWidget.html),
-[`CheckboxStyle`](https://docs.rs/ratcn/latest/ratcn/struct.CheckboxStyle.html).
+and [`CheckboxStyle`](https://docs.rs/ratcn/latest/ratcn/struct.CheckboxStyle.html)
+on docs.rs for the full API.
 
 ## See also
 

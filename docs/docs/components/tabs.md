@@ -51,11 +51,10 @@ doubles as its value, like `List`'s string sugar.
 ## Activation
 
 Activation decides whether the arrow keys switch tabs or only move a cursor. It
-matters when switching
-is expensive or destructive: manual lets the user look before committing.
-
-Manual is the default. `TabsActivation::Automatic` drops the separate cursor and
-selects immediately, so it needs only `.selection(...)`.
+matters when switching is expensive or destructive. Manual activation, the
+default, lets the user look before committing. `TabsActivation::Automatic`
+drops the separate cursor and selects immediately, so it needs only
+`.selection(...)`.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 320px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -125,9 +124,9 @@ always has an identifiable tab.
 Tab::new(Screen::Reports, "Reports").disabled(!state.reports_enabled)
 ```
 
-Current state is in scope while declaring, so pass the flag directly.
+Pass the flag from app state, which is in scope while declaring.
 
-`.disabled(true)` on the row disables the whole control: every tab greys out,
+`.disabled(true)` on the row disables the whole control: every tab grays out,
 events are ignored, and Tab traversal skips it. `Button` and `List` have the
 same whole-control switch.
 
@@ -137,25 +136,6 @@ When the row is narrower than its tabs, it scrolls to keep the focused tab
 visible (or the selected one, when there is no separate cursor) and marks the
 hidden sides with `‹` and `›`. Clicking a marker moves toward the nearest hidden
 enabled tab.
-
-## Keyboard and mouse
-
-| Input | Does |
-|---|---|
-| `←` `→` &nbsp;`h` `l` &nbsp;`Ctrl+P` `Ctrl+N` | Move to the previous / next enabled tab |
-| `Home` `End` | Move to the first / last enabled tab |
-| `Enter` `Space` | Select the focused tab (manual activation) |
-| Click | Select the tab |
-| Hover | Highlight the tab, without switching |
-
-A tab strip is horizontal, so its `vi` keys are `h` and `l` rather than `j` and
-`k`. See [Keyboard](../concepts/keyboard).
-
-Hover only paints here. In List and Select it moves the cursor, but under
-automatic activation the cursor *is* the selection, so hovering would switch
-the panel's content on the way past.
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## Styling
 
@@ -206,15 +186,40 @@ layout needs to reserve space for it. `width()` is the width the row wants
 before it starts scrolling. Replace `.themed(...)` with `.style(...)` to supply
 exact widget colors.
 
+## Keyboard and mouse
+
+| Input | Does |
+|---|---|
+| `←` `→` &nbsp;`h` `l` &nbsp;`Ctrl+P` `Ctrl+N` | Move to the previous / next enabled tab |
+| `Home` `End` | Move to the first / last enabled tab |
+| `Enter` `Space` | Select the focused tab (manual activation) |
+| Click | Select the tab |
+| Hover | Highlight the tab, without switching |
+
+A tab strip is horizontal, so its Vim keys are `h` and `l` rather than `j` and
+`k`. See [Keyboard](../concepts/keyboard).
+
+Hover only paints here. In List and Select it moves the cursor, but under
+automatic activation the cursor *is* the selection, so hovering would switch
+the panel's content on the way past.
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+
+## Limits
+
+- In an area taller than the row, only its own one or three rows paint and take
+  input.
+
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`Tabs`](https://docs.rs/ratcn/latest/ratcn/struct.Tabs.html),
 [`Tab`](https://docs.rs/ratcn/latest/ratcn/type.Tab.html),
 [`TabsWidget`](https://docs.rs/ratcn/latest/ratcn/struct.TabsWidget.html),
 [`TabsActivation`](https://docs.rs/ratcn/latest/ratcn/enum.TabsActivation.html),
 [`TabsSize`](https://docs.rs/ratcn/latest/ratcn/enum.TabsSize.html),
-[`TabsStyle`](https://docs.rs/ratcn/latest/ratcn/struct.TabsStyle.html).
+and [`TabsStyle`](https://docs.rs/ratcn/latest/ratcn/struct.TabsStyle.html)
+on docs.rs for the full API.
 
 ## See also
 

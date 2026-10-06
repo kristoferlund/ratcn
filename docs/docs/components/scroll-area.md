@@ -145,9 +145,12 @@ the window.
 
 ## Full API
 
-See [`ScrollArea`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollArea.html)
-and [`ScrollAreaStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollAreaStyle.html).
+See
+[`ScrollArea`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollArea.html)
+and [`ScrollAreaStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollAreaStyle.html)
+on docs.rs for the full API.
 
 ## See also
 
-- [List](./list): a scrollable list of items, with its own cursor and offset.
+Use [List](./list) for a scrollable list of items with its own cursor and
+offset.

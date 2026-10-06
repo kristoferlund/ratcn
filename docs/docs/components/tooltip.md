@@ -79,29 +79,6 @@ for `true` when the pointer moves onto the trigger, and `false` on Esc while
 showing. Neither `.open_when(...)` nor the default emits anything, since there
 is nothing to write.
 
-## Keyboard and mouse
-
-| Input | Does |
-|---|---|
-| Pointer onto the trigger | Show the bubble |
-| Pointer off the trigger | Hide the bubble |
-| `Esc`, with focus inside the trigger | Ask to close it (the `.open(...)` form only) |
-
-Showing and hiding on hover is the default rule; a custom reader decides for
-itself.
-
-A hover-driven tooltip ignores Esc: there is no stored flag to clear, and the
-pointer still says the bubble belongs on screen. Nothing else is captured.
-Keys bubble through to the app, and a press over the bubble goes to whatever it
-covers. A Tooltip is never a Tab stop, and neither is its bubble, so focus
-passes straight through to the trigger.
-
-A hover change that does not come from the pointer, such as a modal opening
-over a showing tooltip, can reach the bubble one frame late. See
-[Focus, hover, and identity](../concepts/focus-hover-identity#where-paint-and-structure-disagree).
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
-
 ## Placement
 
 `.side(...)` picks the preferred side: `TooltipSide::Top` (the default),
@@ -157,13 +134,37 @@ rows it needs once wrapped to that width. Both include the border, so a layout
 reserves exactly what paints. Replace `.themed(...)` with `.style(...)`
 to supply exact colors.
 
+## Keyboard and mouse
+
+| Input | Does |
+|---|---|
+| Pointer onto the trigger | Show the bubble |
+| Pointer off the trigger | Hide the bubble |
+| `Esc`, with focus inside the trigger | Ask to close it (the `.open(...)` form only) |
+
+Showing and hiding on hover is the default rule; a custom reader decides for
+itself.
+
+A hover-driven tooltip ignores Esc: there is no stored flag to clear, and the
+pointer still says the bubble belongs on screen. Nothing else is captured.
+Keys bubble through to the app, and a press over the bubble goes to whatever it
+covers. A Tooltip is never a Tab stop, and neither is its bubble, so focus
+passes straight through to the trigger.
+
+A hover change that does not come from the pointer, such as a modal opening
+over a showing tooltip, can reach the bubble one frame late. See
+[Focus, hover, and identity](../concepts/focus-hover-identity#where-paint-and-structure-disagree).
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`Tooltip`](https://docs.rs/ratcn/latest/ratcn/struct.Tooltip.html),
 [`TooltipWidget`](https://docs.rs/ratcn/latest/ratcn/struct.TooltipWidget.html),
 [`TooltipStyle`](https://docs.rs/ratcn/latest/ratcn/struct.TooltipStyle.html),
-[`TooltipSide`](https://docs.rs/ratcn/latest/ratcn/enum.TooltipSide.html).
+and [`TooltipSide`](https://docs.rs/ratcn/latest/ratcn/enum.TooltipSide.html)
+on docs.rs for the full API.
 
 ## See also
 

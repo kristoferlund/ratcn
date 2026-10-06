@@ -72,9 +72,10 @@ muted foreground, and `value` the ordinary foreground. `.style(...)` takes a
 
 ## Full API
 
-Every method, with edge-case detail:
-[`ProgressWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ProgressWidget.html),
-[`ProgressStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ProgressStyle.html).
+See
+[`ProgressWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ProgressWidget.html)
+and [`ProgressStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ProgressStyle.html)
+on docs.rs for the full API.
 
 ## See also
 
