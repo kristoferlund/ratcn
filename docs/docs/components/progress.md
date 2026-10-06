@@ -5,11 +5,12 @@ description: "A slim progress bar for Ratatui apps: a themed take on ratatui's G
 # Progress
 
 A slim bar showing how far a task has come: the fill's share of the track is
-the work done. This is a themed, opinionated take on
-[ratatui's `Gauge`](https://docs.rs/ratatui/latest/ratatui/widgets/struct.Gauge.html)
-— the gauge keeps drawing, down to the fractional block that lets the fill
-move in eighths of a cell — and adds what an application bar wants: theme
-colors, and an optional label and percentage above the track.
+the work done. It builds on
+[ratatui's `Gauge`](https://docs.rs/ratatui/latest/ratatui/widgets/struct.Gauge.html),
+which does the drawing down to the fractional block that moves the fill in
+eighths of a cell, and adds theme colors and an optional label and percentage
+above the track. A progress bar only paints, so it works like any other Ratatui
+widget, with no runtime required.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 300px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -34,8 +35,8 @@ in, so a division that briefly misbehaves cannot smear the bar off its track.
 
 ## Label and value
 
-`.label(...)` names the task, flush left above the track;
-`.show_value(true)` prints the percentage, flush right on that same row —
+`.label(...)` names the task, flush left above the track, and
+`.show_value(true)` prints the percentage, flush right on that same row. It is
 the composition shadcn/ui reaches by stacking `ProgressLabel` and
 `ProgressValue` over `ProgressTrack`:
 
@@ -51,32 +52,33 @@ frame.render_widget(
 );
 ```
 
-The composition costs one extra row: `.height()` answers `2` when either
-option shows and `1` when neither does. Given a single row anyway, the bar
-keeps it and the header is dropped; given taller rows than it needs, the bar
-stays one row of track and leaves the rest alone. The percentage and the fill
-round independently — the gauge rounds its last cell in eighths — so at a
-width's rounding edge the number can briefly sit one eighth of a cell away
-from the bar it describes.
+The header costs one extra row. `.height()` returns `2` when either option
+shows and `1` when neither does, so a layout can ask the bar how tall it is.
 
-## Colors
+## Styling
 
-Themed, the four roles derive from the theme: `fill` takes the primary,
-`track` the inset well the other control surfaces use, `label` the muted
-foreground, and `value` the ordinary foreground. `.style(...)` supplies exact
-colors for the same four roles instead.
+`.themed(&theme)` derives four color roles from the theme: `fill` takes the
+primary, `track` the inset well the other control surfaces use, `label` the
+muted foreground, and `value` the ordinary foreground. `.style(...)` takes a
+`ProgressStyle` with exact colors for the same four roles instead.
+
+## Limits
+
+- The bar is always one row of track. Given a single row, it keeps the row and
+  drops the header; given more rows than it needs, it leaves the rest alone.
+- The percentage and the fill round independently (the gauge rounds its last
+  cell in eighths), so at a width's rounding edge the number can sit one eighth
+  of a cell away from the bar it describes.
 
 ## Full API
 
-Every method, with edge-case detail:
-[`ProgressWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ProgressWidget.html),
-[`ProgressStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ProgressStyle.html).
-
-A progress bar paints only: it takes no focus, handles no events, and works
-like any other ratatui widget — no runtime required.
+See
+[`ProgressWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ProgressWidget.html)
+and [`ProgressStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ProgressStyle.html)
+on docs.rs for the full API.
 
 ## See also
 
 [BarChartWidget](./barchart) compares several values at once; a Progress
-follows one value over time. For a step counter that never animates — three
-of five files migrated — plain text in a [List](./list) row may say it best.
+follows one value over time. For a step counter that never animates, such as
+three of five files migrated, plain text in a [List](./list) row may say it best.

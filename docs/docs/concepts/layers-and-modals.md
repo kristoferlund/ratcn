@@ -4,13 +4,14 @@ description: "Paint ordering and the three layer kinds in ratcn: hint, popup, an
 
 # Layers and modals
 
-Ratcn paints in declaration order: what you declare later paints on top of what
-you declared earlier. Nothing paints during the declaration itself — every paint
-is queued where it was reached and replayed in that order once the tree is
-complete — but the order you see on screen is the order you wrote. Two
-mechanisms go beyond that order — **layers** for content that must float above
-everything, and **viewports** for content that scrolls inside a window. Pick the
-smallest one that does the job:
+The runtime paints in declaration order: what you declare later paints on top of
+what you declared earlier. Nothing paints during the declaration itself. Every
+paint is queued where it was reached and replayed in that order once the tree is
+complete, so the order you see on screen is the order you wrote.
+
+Two mechanisms go beyond that order: **layers** for content that must float
+above everything, and **viewports** for content that scrolls inside a window.
+Pick the smallest one that does the job:
 
 | Mechanism | Paint time and purpose | Interaction |
 | --- | --- | --- |
@@ -21,29 +22,32 @@ smallest one that does the job:
 | `modal` | A layer that takes over: dialogs | Dims, captures, holds focus, traps keys |
 | `viewport` | Declaration order, clipped to a visible rectangle | Descendants keep identity, focus, and events, in logical coordinates |
 
-A passive overlay that must land on top of later siblings — a floating dragged
-card, say — is a `hint`: it paints above everything declared outside it and
-takes no input, so the pointer still reaches whatever it floats over. A `paint`
-closure in the right declaration position is simpler when ordering already works
-out. Decoration that must sit above every layer, modals included — a toast stack
-— is painted by the app onto the buffer after `render` returns.
+A passive overlay that must land on top of later siblings, such as a floating
+dragged card, is a `hint`: it paints above everything declared outside it and
+takes no input, so the pointer still reaches whatever it floats over. When the
+ordering already works out, a `paint` closure in the right declaration position
+is simpler. Decoration that must sit above every layer, modals included (a
+toast stack, say), is painted by the app onto the buffer after `render`
+returns.
 
 ## The three layer kinds
 
-All three are one mechanism — a subtree that paints after everything declared
+All three are one mechanism: a subtree that paints after everything declared
 outside it, and so above it. They differ only in policy. Layers paint in the
 order they were declared, except that a layer outside the topmost modal paints
 beneath that modal whatever the order.
 
-Layers are **transparent**. A layer covers exactly the cells its content writes;
-everything else shows what is beneath it. A layer that should hide what it covers
-paints a background first — a `Clear` over its area, then a filled block — which
-is what the built-in dialog, select panel, and tooltip bubble do. A modal's dim
-applies beneath it either way. Layer paint is clipped to the render area, and a
-widget in a layer lays out against the part of its area that shows.
-Every one is callable from anywhere in the tree and anchors its subtree at the
+Each one is callable from anywhere in the tree and anchors its subtree at the
 declaring node, so `if open { ctx.popup(...) }` inside a component is the whole
 ceremony.
+
+Layers are **transparent**. A layer covers exactly the cells its content writes,
+and everything else shows what is beneath it. A layer that should hide what it
+covers paints a background first (a `Clear` over its area, then a filled
+block), which is what the built-in dialog, select panel, and tooltip bubble do.
+A modal's dim applies beneath it either way. Layer paint is clipped to the
+render area, and a widget in a layer lays out against the part of its area that
+shows.
 
 A **hint** takes nothing. It is not a pointer target, so a press over it goes
 to whatever it covers, and nothing inside it can hold focus even if the
@@ -53,23 +57,23 @@ of its own: whatever state opened it is what closes it. See
 
 A **popup** blocks pointer input over exactly its own footprint. A press inside
 it that nothing handles is consumed at the popup root rather than reaching the
-control beneath; a press outside routes to whatever is visibly there and
-additionally emits the popup's `on_dismiss` message. Focus is never stolen —
-move it in with your own message, in the same update that opens the popup. Keys
-bubble *through* the popup root to the component that declared it. See
+control beneath. A press outside routes to whatever is visibly there and also
+emits the popup's `on_dismiss` message. Focus is never stolen: move it in with
+your own message, in the same update that opens the popup. Keys bubble
+*through* the popup root to the component that declared it. See
 [Select](../components/select).
 
 A **modal** is the strongest: it becomes the **active layer**. While it is open
-the area behind is dimmed, keyboard and mouse routing are confined to it,
-and input that nothing inside handles is absorbed rather than
-reaching the UI underneath. Declare stacked modals bottom to top.
+the area behind is dimmed, keyboard and mouse routing are confined to it, and
+input that nothing inside handles is absorbed rather than reaching the UI
+underneath. Declare stacked modals bottom to top.
 
 ## Modal state in your app
 
 Whether a modal is open is app state, like everything else. `ModalState` stores
-the stack of open modal IDs plus, for each, the focus to restore when it
-closes. Open and close it in `update`, and declare the modal whenever your
-state says it is open:
+the stack of open modal IDs and, for each, the focus to restore when it closes.
+Open and close it in `update`, and declare the modal whenever your state says
+it is open:
 
 ```rust
 state.modals.open("confirm", &mut state.focus)?;
@@ -87,15 +91,15 @@ state.modals.close(&mut state.focus);
 ```
 
 `open` saves the current focus and moves focus intent to the new modal.
-`close` pops the top modal and restores its exact saved focus. Ratcn provides
-the stack and the focus bookkeeping; *when* and *which* modal opens stays your
-decision.
+`close` pops the top modal and restores its exact saved focus. The runtime
+provides the stack and the focus bookkeeping; *when* and *which* modal opens
+stays your decision.
 
 The modal root does not have to be a component. `DeclareCtx::modal_scope` opens
-the same layer around a plain scope closure — paint your own chrome and declare
-children with `component`, exactly like a base-layer panel. Reach for it to
-hand-roll a dialog-like layer that stays entirely app-owned; `Dialog` is the
-packaged alternative with chrome, dragging, and dismiss keys built in.
+the same layer around a plain scope closure, where you paint your own chrome and
+declare children with `component`, exactly like a base-layer panel. Reach for
+it to hand-roll a dialog-like layer that stays entirely app-owned. `Dialog` is
+the packaged alternative, with chrome, dragging, and dismiss keys built in.
 
 ## Binding the stack
 
@@ -107,16 +111,17 @@ let ratcn = Ratcn::new()
 ```
 
 With the binding in place, every render must declare exactly the modal IDs the
-state says are open — a mismatch is a declaration bug and fails the render.
-The binding also covers the brief gap between opening or closing a modal in
+state says are open. A mismatch is a declaration bug and fails the render. The
+binding also covers the brief gap between opening or closing a modal in
 `update` and the redraw that reflects it: events arriving in that gap are
-consumed instead of landing on a layer your state considers closed. Focus
-takeover does not require this binding: the topmost eligible modal takes over
-default focus and declared paths it covers, when it has a focusable target.
-Explicit `FocusState::none()` stays unfocused; an intent naming an absent path
-stays parked. Merely declaring a modal does not reset app-held focus.
-Opening a new modal through `ModalState::open` saves that focus and resets it
-to `default()`, allowing the modal to take focus; closing restores the snapshot.
+consumed instead of landing on a layer your state considers closed.
+
+Focus takeover does not depend on this binding. The topmost eligible modal
+takes over default focus, and declared paths it covers, when it has a focusable
+target. Explicit `FocusState::none()` stays unfocused, and an intent naming an
+absent path stays parked. Merely declaring a modal does not reset the focus the
+app holds; `ModalState::open` saves that focus and resets it to `default()`, so
+the modal can take it, and closing restores the snapshot.
 
 Only modals have semantic state to validate this way. Popups and hints are
 opened by whatever app state your own component reads, and the runtime holds
@@ -128,12 +133,12 @@ See [Dialog](../components/dialog) for the packaged modal component.
 
 `DeclareCtx::viewport` opens a clipped logical space. Descendants are declared
 against content as wide as the visible rectangle and as tall as the content
-height you give it, and the offset names the first content row on screen; an
+height you give it, and the offset names the first content row on screen. An
 offset past the end is clamped to the last one that fills the rectangle.
-Everything a descendant sees is in that logical space — its area, its paint,
-and the pointer coordinates its events carry — so a component inside a viewport
-needs to know nothing about the scrolling around it. A viewport declared inside
-another viewport panics, unless a layer opens between them.
+Everything a descendant sees is in that logical space (its area, its paint,
+and the pointer coordinates its events carry), so a component inside a
+viewport needs to know nothing about the scrolling around it. A viewport
+declared inside another viewport panics, unless a layer opens between them.
 
 Layers escape the viewport entirely. A `modal`, `popup`, or `hint` takes its
 area in the coordinates of the declaration that gave it, opens at the place on
@@ -143,24 +148,18 @@ layer therefore paints at `ctx.area()`, not at a rectangle captured before the
 layer opened. A dropdown near the bottom edge of a scroll area stays whole, a
 dialog opened from content that has scrolled away is still on screen, and a
 scroll area inside a dialog or a popup inside a scroll area is ordinary
-nesting. A popup or hint anchors
-to the declaration it was reached from, and follows it out of sight: once the
-viewport has scrolled that declaration off screen the layer is skipped for the
-frame, and it comes back with its anchor.
+nesting. A popup or hint follows the declaration it was reached from out of
+sight: once the viewport has scrolled that declaration off screen, the layer is
+skipped for the frame, and it comes back with its anchor.
 
 When focus reaches a descendant the viewport is clipping, the runtime calls
-`Component::reveal_in_viewport` on the component that opened the viewport, with
-that descendant's logical area, and it returns whether it moved its offset.
-The call comes once the frame has declared, before it paints, and it covers
-every way focus moves: Tab, a press, and a path the app stores from its own
-update function. That is how a scrolled-away control comes into view as focus
-arrives at it.
-
-The reveal is answered against the tree the frame just declared, so it also
-covers a target that frame declares for the first time: startup focus, focus
-handed back as a modal closes, a row appended and focused together. Only when
-the component scrolls does the frame declare once more, with the new offset,
-before it paints.
+[`Component::reveal_in_viewport`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.reveal_in_viewport)
+on the component that opened the viewport, with that descendant's logical area,
+and the component scrolls it into view. This covers every way focus moves: Tab,
+a press, a path the app stores from its own update function, and a target the
+frame declares for the first time, such as startup focus, focus handed back as
+a modal closes, or a row appended and focused together. The scroll lands in the
+same frame, before it paints.
 
 [ScrollArea](../components/scroll-area) is this mechanism packaged with a
 scrollbar and wheel and key handling.

@@ -5,9 +5,9 @@ description: "How dragging works in ratcn: one shared mechanism any component ca
 # Dragging
 
 Dragging in ratcn is not a property of any one component. It is a small, shared
-mechanism that any component — a built-in like `Dialog`, or one you write
-yourself — can opt into. The position being dragged is ordinary **app-owned
-state**, moved the same way focus is: the component emits a message, your
+mechanism that any component, a built-in like `Dialog` or one you write
+yourself, can opt into. The position being dragged is ordinary **app-owned
+state**, moved the same way focus is: the component emits a message, and your
 `update` persists it. See [State and messages](./state-and-messages) for the
 ownership boundary.
 
@@ -25,9 +25,9 @@ Drag the block below by clicking anywhere on it and moving the mouse.
   </div>
 </div>
 
-The block in that demo is not a library component — it is an ordinary
-component declared by the app, which is the point: the same pieces that make
-`Dialog` draggable are available to your own components.
+The block in that demo is not a library component. It is an ordinary component
+declared by the app, and that is the point: the same pieces that make `Dialog`
+draggable are available to your own components.
 
 ## The lifecycle helper
 
@@ -36,10 +36,10 @@ Making something draggable takes three pieces:
 1. **An app-owned offset.** A `CellOffset { x, y }` lives in your state. The
    declaration passes its current value and persists changes through an
    `on_change` message.
-2. **`EventCtx::drag`.** Pass each mouse event and `DragOptions`. The helper
-   matches the left button by default, anchors the initial offset, captures on
-   `Down`, and retains capture and movement state by declaration path across
-   rebuilds.
+2. **`EventCtx::drag`.** Pass it each mouse event and a `DragOptions`. The
+   helper matches the left button by default, anchors the initial offset,
+   captures the pointer on `Down`, and keeps the capture and movement state by
+   declaration path across rebuilds.
 3. **Phase handling.** `Down` consumes the press, `Moved { offset, position }`
    updates app state, and `Ended { position, moved }` handles a click-release
    or commits a drop. Unrelated events produce `Ignored`.
@@ -76,18 +76,17 @@ let area = ctx.area();
 ctx.modal("confirm", dialog, area);
 ```
 
-The durable offset remains yours, in app state. Events use the dialog geometry
-and resolved offset from the last successful render. `Dialog` calls the same
-lifecycle helper with a start policy that requires both an offset handler and a
-border hit. Pointer capture continues outside the box until release, and the
-dialog clamps every emitted offset to the screen.
+The durable offset stays yours, in app state. `Dialog` calls the same lifecycle
+helper, starting a drag only when it has an offset handler and the press lands
+on its border. The pointer stays captured outside the box until release, and
+the dialog clamps every emitted offset to the screen.
 
 A drag handle shows its [pointer shape](./mouse#pointer-shape) from paint:
 `Grab` while hovered, `Grabbing` while `ctx.pointer_captured()`.
 
 ## Making your own component draggable
 
-A component becomes draggable with the same parts. The drag demo's
+A component becomes draggable with the same parts. Here is the drag demo's
 `DraggableBlock`, with its `paint` and its label field left out:
 
 ```rust
@@ -131,26 +130,26 @@ impl Component<AppState, Msg> for DraggableBlock {
 
 The declaring side offsets the block's area with `offset_rect` before passing
 it to `ctx.component`, and `paint` styles it from `ctx.hovered()`. Three details
-worth noting:
+are worth noting:
 
-- **Gesture state follows identity.** `EventCtx::drag` stores its transient by
-  declaration path, so replacement and reordering do not interrupt a captured
-  gesture while that path remains present. Durable position still belongs in
-  app state.
+- **Gesture state follows identity.** `EventCtx::drag` stores its state by
+  declaration path, so replacing or reordering components does not interrupt a
+  captured gesture while that path remains present. The durable position still
+  belongs in app state.
 - **You choose the handle.** `DragOptions::start_if` decides *what is
   draggable*. The block above never calls it and takes the default, a press
   anywhere in its area; `Dialog` passes a border hit test, and the kanban cards
   below pass "no card is in flight yet".
-- **You choose the bounds.** The `Moved` phase decides *how far it can go* —
+- **You choose the bounds.** The `Moved` phase decides *how far it can go*.
   `clamp_offset` keeps a box inside an area, and a resizable pane clamps to
   min/max sizes of its own.
 
 ## Dropping onto a target
 
-Free movement only needs the offset; *drag and drop* — releasing a dragged
-thing onto a target — additionally uses `DragPhase::Ended`. Its `position` is
-where the release happened, so a component can hit-test exactly where the drop
-landed, and `moved` distinguishes a drag from a click on the handle.
+Free movement only needs the offset. *Drag and drop*, releasing a dragged thing
+onto a target, also uses `DragPhase::Ended`. Its `position` is where the
+release happened, so a component can hit-test exactly where the drop landed,
+and `moved` tells a drag apart from a click on the handle.
 
 Drag a card to another column below; releasing it commits the move.
 
@@ -166,8 +165,8 @@ Drag a card to another column below; releasing it commits the move.
   </div>
 </div>
 
-Each card is, again, an ordinary app-written component. `KanbanCard`'s phase
-handling:
+Each card is, again, an ordinary app-written component. This is `KanbanCard`'s
+phase handling:
 
 ```rust
 match ctx.drag(
@@ -204,15 +203,14 @@ match ctx.drag(
 ```
 
 `column_index_at` answers `None` for a release outside every column, which the
-update treats as a cancelled drag.
+update treats as a canceled drag.
 
-While a card is dragged, its slot paints as an empty bordered placeholder —
-the stack never reflows mid-drag, and an aborted drag has nowhere to "jump
-back" from. Which column each card sits in, and the active drag, are both
-plain app state — the drop is just one more message through `update`.
-
-The dragged card shifts its original slot by `Moved.offset`, so the cell where
-the press began stays under the pointer.
+Which column each card sits in, and the active drag, are both plain app state;
+the drop is just one more message through `update`. While a card is dragged,
+its slot paints as an empty bordered placeholder, so the stack never reflows
+mid-drag and an aborted drag has nowhere to "jump back" from. The dragged card
+itself is drawn at its original slot shifted by `Moved.offset`, so the cell
+where the press began stays under the pointer.
 
 The demo creates its cards at launch. Each card's creation number becomes both
 its displayed label and its dynamic id (`number.to_string().into()` builds the
@@ -221,19 +219,18 @@ declaration, so identity follows the card when it moves between columns.
 
 The floating dragged card is a `DeclareCtx::hint` layer declared by the card
 being dragged. A hint paints above every card declared after it and takes no
-input — no focus, no hover, no hit target — so the card's declared slot remains
+input (no focus, no hover, no hit target), so the card's declared slot remains
 the interaction source. Layers are transparent, so the dragged card clears its
-area before painting and the border and separator glyphs underneath cannot show
-through. See
-[Layers and modals](./layers-and-modals) for paint ordering.
+area before painting, and the border and separator glyphs underneath cannot
+show through. See [Layers and modals](./layers-and-modals) for paint ordering.
 
 ## Where drag events come from
 
-`Drag` events are synthesized, not raw. `Ratcn` owns one tracker, so
-you feed plain `Down`/`Up`/`Moved` to `handle_event` and a button-held move
-arrives as `MouseKind::Drag` (a `Down`/`Up` on one component as
-`MouseKind::Click`, and the release of a *claimed* drag as
-`MouseKind::DragEnd`) before routing — no separate tracker to wire:
+`Drag` events are synthesized, not raw. `Ratcn` owns one gesture tracker, so
+you feed plain `Down`/`Up`/`Moved` events to `handle_event`, and before routing
+a button-held move arrives as `MouseKind::Drag`. A `Down`/`Up` on one component
+arrives as `MouseKind::Click`, and the release of a *claimed* drag as
+`MouseKind::DragEnd`. There is no separate tracker to wire:
 
 ```rust
 if let EventResult::Emit(msg) = ratcn.handle_event(event, &state) {
@@ -242,19 +239,19 @@ if let EventResult::Emit(msg) = ratcn.handle_event(event, &state) {
 ```
 
 Because the offset is app state and moves are emitted live, dragging needs
-nothing special from the render loop: the message updates state, the next frame
-paints the new position — the same one-event-one-message flow as every other
-interaction.
+nothing special from the render loop. The message updates state, and the next
+frame paints the new position: the same one-event-one-message flow as every
+other interaction.
 
 Hover freezes for the length of the gesture. From the press to the release,
 the runtime keeps hover on whatever the gesture started on instead of following
-the pointer: the thing being dragged moves under a pointer that is by
+the pointer. The thing being dragged moves under a pointer that is by
 definition on it, and the panel it passes over is not something the user is
 pointing at. So a dragged component can style itself with `PaintCtx::hovered`
 throughout, and nothing beneath the drag lights up on the way past. The freeze
-holds the path, so a dragged target redeclared at its new position keeps
-painting hovered; if it is covered by a modal or stops being declared, it loses
-hover on that frame even though the gesture continues.
+holds the declaration path, so a dragged target redeclared at its new position
+keeps painting hovered. If a modal covers it or it stops being declared, it
+loses hover on that frame even though the gesture continues.
 
 ## What stays your responsibility
 
@@ -269,10 +266,12 @@ component or app policy:
 
 If the thing being dragged stops being declared mid-gesture, the runtime ends
 the capture cleanly, so the release cannot land on whatever is now under the
-pointer. It cannot know what the drag *meant*, though — clear your own drag
+pointer. It cannot know what the drag *meant*, though, so clear your own drag
 state in the same `update` that removes the thing.
 
 For gestures that do not fit this shape, `EventCtx::transient` and
-`EventCtx::capture_pointer` are public and documented on docs.rs. Check
-`EventCtx::pointer_captured` before continuing such a gesture: a descendant's
-captured drag bubbles up too, and only the owner sees it as captured.
+`EventCtx::capture_pointer` are public and documented on
+[docs.rs](https://docs.rs/ratcn/latest/ratcn/runtime/struct.EventCtx.html).
+Check `EventCtx::pointer_captured` before continuing such a gesture: a
+descendant's captured drag bubbles up too, and only the owner sees it as
+captured.

@@ -1,13 +1,13 @@
 ---
-description: "BarChartWidget is a themed adapter over Ratatui's BarChart, adding theme colors, bar grouping, and a value-display switch. Paint-only, so no runtime is needed."
+description: "BarChartWidget is a themed bar chart for Ratatui apps, built on Ratatui's BarChart with theme colors, bar grouping, and a value-display switch. Paint-only, so no runtime is needed."
 ---
 
 # BarChartWidget
 
-A themed adapter over Ratatui's `BarChart`, adding grouping and a value display
-switch. The bars, labels, and painting are Ratatui's; ratcn supplies the theme
-colors on top. It is paint-only and an ordinary Ratatui widget — no `Ratcn`
-runtime needed, just `frame.render_widget(...)`.
+A themed bar chart. The bars, labels, and painting come from Ratatui's
+`BarChart`; ratcn adds theme colors, bar grouping, and a switch for the values
+printed in the bars. It only paints, so it is an ordinary Ratatui widget that
+needs no `Ratcn` runtime, just `frame.render_widget(...)`.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 320px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -34,9 +34,7 @@ let bars = vec![
 frame.render_widget(BarChartWidget::new(bars).themed(&theme), area);
 ```
 
-Bars run upward by default. `.span()` measures the bar grouping axis — the
-width of a vertical chart, the height of a horizontal one. The other axis
-remains area-driven because it contains the scaled bar length.
+Bars run upward by default, and the chart fills the area it is given.
 
 ## Scale
 
@@ -52,7 +50,7 @@ BarChartWidget::new(bars).themed(&theme).max_value(24)
 
 `BarChartWidget::horizontal(...)` runs the bars across instead of up. Each bar
 gets a whole row to itself, so labels have room to be phrases rather than
-abbreviations — usually the reason to choose this direction.
+abbreviations. That is usually the reason to choose this direction.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 320px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -78,12 +76,8 @@ BarChartWidget::horizontal(bars)
 `BarChartWidget::grouped(...)` clusters bars so several series can be compared
 across categories. Groups are `BarChartGroup` values rather than Ratatui's
 `BarGroup`, so widget-level options such as `.show_values(false)` apply to
-grouped bars too. Set `.direction(Direction::Horizontal)` for horizontal groups
-— that is `ratatui::layout::Direction`, the layout axis. The runtime's own
-`Forward`/`Backward` enum is `ratcn::runtime::Step`, a different type.
-Horizontal group labels occupy the space reserved by `.group_gap(...)` and are
-not painted when that gap is `0`. A group with no bars is dropped: it paints
-nothing, and it takes neither space nor a group gap in `.span()`.
+grouped bars too. For horizontal groups, add
+`.direction(Direction::Horizontal)` (Ratatui's `ratatui::layout::Direction`).
 
 ```rust
 use ratcn::BarChartGroup;
@@ -101,13 +95,15 @@ BarChartWidget::grouped(vec![
 `.bar_width(...)` and `.bar_gap(...)` size the bars; `.group_gap(...)` adds space
 between clusters in a grouped chart, on top of the bar gap that already separates
 the two bars either side of the boundary. `.show_values(false)` hides the number
-printed inside each bar, for bars too narrow to fit one.
+printed inside each bar, for bars too narrow to fit one. To size a layout to the
+chart, `.span()` measures the axis the bars sit along: the width of a vertical
+chart, the height of a horizontal one.
 
 A vertical bar rarely ends exactly on a cell boundary, so its top cell is
-painted with a partial block. `.bar_set(...)` chooses those glyphs — the
+painted with a partial block. `.bar_set(...)` chooses those glyphs. The
 default gives the smoothest result, and coarser sets exist for terminals whose
-fonts lack them. Horizontal bars use whole cells and only use the set's `full` and `empty`
-symbols.
+fonts lack the finer blocks. Horizontal bars use whole cells, so only the set's
+`full` and `empty` symbols apply.
 
 ```rust
 use ratatui::symbols;
@@ -123,9 +119,7 @@ BarChartWidget::new(bars)
 `.themed(&theme)` derives every color from the active theme. Use
 `.style(BarChartStyle)` for explicit colors, starting from
 `BarChartStyle::from_theme(...)` or from `BarChartStyle::fallback()` when there
-is no theme. `BarChartStyle::label_foreground` colors vertical bar labels and group labels.
-Ratatui does not apply its chart-level label style to ordinary horizontal bar
-labels, so set those labels' `Line` or `Span` foreground directly:
+is no theme:
 
 ```rust
 use ratcn::BarChartStyle;
@@ -139,7 +133,7 @@ BarChartWidget::new(bars).style(style)
 ### Per-bar colors
 
 Bars reach Ratatui untouched, so Ratatui's own `Bar::style` works and patches
-over the chart-wide bar color — one bar, or one series in a grouped chart:
+over the chart-wide bar color, for one bar or one series in a grouped chart:
 
 ```rust
 Bar::default().value(18).style(Style::default().fg(Color::Red))
@@ -149,12 +143,22 @@ The value printed inside a bar is not covered: it keeps the chart's
 `value_foreground` on the chart's `bar` background. Set `Bar::value_style` on
 that bar to match, or hide values with `.show_values(false)`.
 
+## Limits
+
+- `BarChartStyle::label_foreground` colors vertical bar labels and group
+  labels, but Ratatui does not apply a chart-level label style to ordinary
+  horizontal bar labels. Set those labels' `Line` or `Span` foreground directly.
+- Horizontal group labels sit in the space `.group_gap(...)` reserves, so they
+  are not painted when that gap is `0`.
+- A group with no bars is dropped: it paints nothing and takes no space.
+
 ## Full API
 
-Every method, with parameter and edge-case detail:
+See
 [`BarChartWidget`](https://docs.rs/ratcn/latest/ratcn/struct.BarChartWidget.html),
 [`BarChartGroup`](https://docs.rs/ratcn/latest/ratcn/struct.BarChartGroup.html),
-[`BarChartStyle`](https://docs.rs/ratcn/latest/ratcn/struct.BarChartStyle.html).
+and [`BarChartStyle`](https://docs.rs/ratcn/latest/ratcn/struct.BarChartStyle.html)
+on docs.rs for the full API.
 
 ## See also
 
