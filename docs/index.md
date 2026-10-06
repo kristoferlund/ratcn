@@ -12,6 +12,17 @@ import { ref, onMounted } from 'vue'
 // drift. A failed or rate-limited request simply keeps the build-time value.
 const stars = ref(__GITHUB_STARS__)
 
+// The live showcase pill copies its command. Without a clipboard (an insecure
+// origin, say) the command is still there to read.
+const copied = ref(false)
+async function copyShowcase() {
+  try {
+    await navigator.clipboard.writeText('ssh ratcn.com')
+    copied.value = true
+    setTimeout(() => (copied.value = false), 1600)
+  } catch {}
+}
+
 onMounted(async () => {
   try {
     const response = await fetch(`https://api.github.com/repos/${__GITHUB_REPO__}`, {
@@ -48,6 +59,11 @@ onMounted(async () => {
 
 <main class="ratcn-home">
   <section class="ratcn-hero" aria-labelledby="ratcn-title">
+    <button type="button" class="ratcn-badge" @click="copyShowcase" aria-label="Copy the command ssh ratcn.com to try the components live in your terminal">
+      <span class="ratcn-badge-dot" aria-hidden="true"></span>
+      <span>Try it live in your terminal</span>
+      <code class="ratcn-badge-command">{{ copied ? 'Copied' : 'ssh ratcn.com' }}</code>
+    </button>
     <h1 id="ratcn-title">The Foundation for your Terminal UI</h1>
     <p class="ratcn-lede">
       A set of beautifully designed components that you can copy and paste into
@@ -81,7 +97,8 @@ onMounted(async () => {
     </div>
     <p class="ratcn-preview-caption">
       Every component above is real Ratatui, compiled to WebAssembly and rendered
-      live in your browser. The exact same code runs in your terminal.
+      live in your browser. The exact same code runs in your terminal: try
+      <code>ssh ratcn.com</code>.
     </p>
   </section>
 </main>

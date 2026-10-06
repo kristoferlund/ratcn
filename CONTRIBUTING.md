@@ -3,11 +3,9 @@
 Thanks for taking an interest. This file covers what you need to know before
 opening a pull request.
 
-ratcn is a **preview release**, so the API is still moving. That makes some
-kinds of contribution easier than usual (breaking changes are acceptable) and
-others harder (a large feature may collide with work already in progress). If
-you are planning something substantial, [open an issue][issues] first so we can
-agree on the shape before you write it.
+ratcn is below 1.0, so breaking changes are acceptable when they make the
+library better. If you are planning something substantial, [open an issue][issues]
+first so we can agree on the shape before you write it.
 
 [issues]: https://github.com/kristoferlund/ratcn/issues
 

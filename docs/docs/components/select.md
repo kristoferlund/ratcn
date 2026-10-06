@@ -35,12 +35,9 @@ let select = Select::new([
 ctx.component("fruit", select, area);
 ```
 
-Options use the same value-keyed `ListItem` as `List`, so reordering them does
-not change the selected value. Those values must be unique within one Select; a
-debug build panics on duplicates as the Select declares, and a release build
-takes them on trust, exactly as in [List](./list). In Select terminology, an item
-supplies value identity, an option is one choice, and a row is the terminal space
-used to paint that option.
+Options use the same value-keyed `ListItem` as [List](./list), so reordering
+them does not change the selected value. The values must be unique within one
+`Select`; a debug build panics on duplicates.
 
 ## State
 
@@ -56,38 +53,21 @@ Msg::Selected(fruit) => {
 }
 ```
 
-Keyboard operation requires `open`, `item_focus`, and `selection`. Partial
-binding combinations remain available for paint-only or pointer-only uses, but
-do not make the Select a keyboard focus stop or consume keyboard input.
+Keyboard operation needs all three bindings: `open`, `item_focus`, and
+`selection`. With only some of them bound, the `Select` still paints and can
+work with the pointer, but it is not a focus stop and takes no keys.
 
-## Interaction
+## The panel
 
-Enter or Space opens a focused Select, and so does any key that would step the
-cursor — Up, Down, `k`, `j`, Ctrl+P, or Ctrl+N. While open, the full
-[navigation key map](../concepts/keyboard) moves the cursor; Enter or Space
-selects; Esc closes. The first Tab or Shift+Tab closes the panel, and the next
-traversal key moves focus. Every closing gesture arrives through the `open` binding as
-`on_open_change(false)`, so one message handles them all.
+The panel opens with its top border one row above the trigger, so the first
+option covers the trigger row. It shows at most eight options and scrolls to
+keep the cursor visible; `.max_visible_items(...)` changes that limit. The
+panel stays put while the cursor moves, shifting only when it must to stay
+inside the frame.
 
-Pointer motion moves the cursor, and a left click selects the option under the
-pointer, including the first option where it overlays the trigger row. Pressing
-outside dismisses the panel while leaving the underlying control clickable.
-The mouse wheel is the one input that does not follow the cursor. It scrolls
-the panel and leaves the cursor where it is, so the cursor can scroll out of
-sight — the same wheel behavior as [List](./list), and held under the same rule:
-only while the option under the cursor is still that option, still on that row,
-in an option list of the same length. Moving the cursor, or changing the options
-under it, scrolls the cursor back into view.
-Modified keys other than the supported Ctrl navigation and closing Shift+Tab
-chords bubble to app hotkeys. Other letters and paste events also bubble:
-Select has neither typeahead nor text-editing behavior.
-
-The panel shows at most eight options by default and scrolls to keep the cursor
-visible, except while the wheel is holding the view elsewhere.
-`.max_visible_items(...)` changes that limit. Its top border starts
-one row above the trigger, so the first option covers the trigger row. The panel
-stays fixed while the cursor moves, shifting only when needed to remain inside
-the frame.
+Esc, Tab, a click on the trigger, and a press outside the panel all close it
+through the `open` binding as `on_open_change(false)`, so one message handles
+every way of dismissing it. A press outside leaves the control underneath clickable.
 
 ## Disabled
 
@@ -100,13 +80,12 @@ ListItem::new(Fruit::Durian, "Durian").disabled(!state.durian_available)
 
 ## Custom rows
 
-`.paint_item(...)` paints each option yourself — columns, secondary text,
-per-option icons — from the same `ListItemState` row description `List` uses.
+`.paint_item(...)` paints each option yourself (columns, secondary text,
+per-option icons) from the same `ListItemState` row description `List` uses.
 The row's state colors are painted underneath what you return, so unstyled text
 picks them up, and any color you set explicitly on a `Text`, `Line`, or `Span`
-is kept.
-Return more than one line and set `.row_height(...)` to match, so every option
-is the same height and clicks land on the right one:
+is kept. For more than one line, set `.row_height(...)` to match, so every
+option is the same height and clicks land on the right one:
 
 ```rust
 Select::new(items)
@@ -119,11 +98,11 @@ Select::new(items)
 
 ## Styling
 
-The trigger's default, focus, and hover backdrops match List and follow the
-same rule — see [List's styling](./list#styling). `SelectStyle` controls the
-trigger, panel, cursor, selection, and disabled colors.
+The trigger's default, focus, and hover backdrops match
+[List's](./list#styling). `SelectStyle` controls the trigger, panel, cursor,
+selection, and disabled colors.
 
-Override one Select with `.style(...)`. The closure receives the active theme
+Override one `Select` with `.style(...)`. The closure receives the active theme
 each render, so a derived style follows theme switches:
 
 ```rust
@@ -141,11 +120,10 @@ render on any terminal.
 
 ## Paint-only widget
 
-`SelectWidget` paints a Select without focus or events. It is an ordinary
+`SelectWidget` paints a select without focus or events. It is an ordinary
 Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime.
-Unlike the interactive component's overlaid popup, its open panel paints below
-the trigger inside the area passed to the widget. Options and state are
-addressed by index:
+Its open panel paints below the trigger, inside the area you give the widget,
+rather than in a popup layer. Options and state are addressed by index:
 
 ```rust
 use ratcn::SelectWidget;
@@ -169,23 +147,42 @@ frame.render_widget(
 );
 ```
 
-`.visible_item_rows(...)` accepts screen rows you build for the options
-actually painted — the ones from `first_item` on, in paint order — while
-`.options(...)` takes every option, because the panel's height is measured
-from their count. Pair it with `.row_height(...)` for multi-line rows. Together
-they are the paint-only counterpart of the component's `.paint_item(...)`.
-Replace `.themed(...)` with `.style(...)` to supply exact widget colors.
+For custom rows, `.visible_item_rows(...)` takes the rows you build for the
+options actually painted (from `first_item` on), and `.row_height(...)` sets
+their height; `.options(...)` still takes every option, since the panel is
+sized from their count. Replace `.themed(...)` with `.style(...)` to supply
+exact colors.
+
+## Keyboard and mouse
+
+| Input | Does |
+|---|---|
+| `Enter` `Space` | Open the panel; select the cursor option while open |
+| `↑` `↓` &nbsp;`k` `j` &nbsp;`Ctrl+P` `Ctrl+N` | Open the panel; move the cursor while open |
+| `Home` `End` `Page Up` `Page Down` &nbsp;`Ctrl+U` `Ctrl+D` | Move the cursor while open |
+| `Esc` | Close the panel |
+| `Tab` `Shift+Tab` | Close the panel; the next press moves focus |
+| Click the trigger | Open or close the panel |
+| Pointer motion | Move the cursor |
+| Click | Select the option under the pointer |
+| Wheel | Scroll the panel, leaving the cursor |
+
+As in [List](./list), the wheel can scroll the cursor out of sight, and moving
+the cursor or changing the options brings it back into view. Other letters,
+other modified keys, and pastes bubble to your app: `Select` has no typeahead.
+See [Keyboard](../concepts/keyboard) for the rules every component shares.
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`Select`](https://docs.rs/ratcn/latest/ratcn/struct.Select.html),
 [`SelectWidget`](https://docs.rs/ratcn/latest/ratcn/struct.SelectWidget.html),
 [`SelectStyle`](https://docs.rs/ratcn/latest/ratcn/struct.SelectStyle.html),
 [`ListItem`](https://docs.rs/ratcn/latest/ratcn/struct.ListItem.html),
-[`ListItemState`](https://docs.rs/ratcn/latest/ratcn/struct.ListItemState.html).
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+and [`ListItemState`](https://docs.rs/ratcn/latest/ratcn/struct.ListItemState.html)
+on docs.rs for the full API.
 
 ## See also
 

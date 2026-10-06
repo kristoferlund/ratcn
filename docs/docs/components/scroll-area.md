@@ -42,7 +42,7 @@ ctx.component("content", scroll, Rect::new(0, 0, 40, 12));
 ```
 
 The area owns its offset. Bind it with `.scroll(...)` when the app needs the
-value — to persist it, or to scroll from elsewhere. The message carries the
+value, to persist it or to scroll from elsewhere. The message carries the
 new first visible content row:
 
 ```rust
@@ -56,77 +56,56 @@ match msg {
 }
 ```
 
+The reader runs for every event, so repeated wheel or page events compose
+without a redraw between them, as long as the app applies each message as it
+arrives.
+
 ## Focus
 
-Focus moving to a descendant the viewport is clipping scrolls that descendant
-into view on the same frame, however focus got there — a path the app stores
-from its own update function included — and a descendant declared for the
-first time by that frame, such as a row appended and focused together. Focus
-itself travels through `Ratcn::focus(read, on_change)` as it does everywhere
-else: Tab, BackTab, focus keys, and pointer focus all produce that message, and
-the area adds the reveal on top of it.
+When focus moves to a descendant the viewport is clipping, the area scrolls it
+into view on the same frame. That holds however focus got there: Tab, a click,
+or a focus path your update function stores. It also holds for a descendant
+declared for the first time on that frame, such as a row appended and focused
+together. Focus itself travels through `Ratcn::focus(read, on_change)` as it
+does everywhere else; the area only adds the reveal.
 
-Focus reveal currently does not emit the `.scroll(...)` change message, so a
-controlled offset may differ from the effective offset used for painting. There
-is no public effective-offset readback. If you paint related content outside the
-ScrollArea, synchronize its windowing explicitly, as the showcase does for its
-landing preview; ordinary descendants need no extra synchronization.
+A reveal moves the view without emitting the `.scroll(...)` message, so a
+bound offset can differ from the one the area paints with, and there is no way
+to read the effective offset back. The next offset the area emits starts from
+where the reveal left it. Ordinary descendants need nothing extra, but if you
+paint related content outside the area, keep its windowing in step yourself.
 
 ## Layout and clipping
 
-One column on the right is reserved for the scrollbar gutter. The content
-callback receives the remaining width and exactly the configured logical
-height, so ordinary Ratatui layout and real fixed-height allocations work
-inside it.
+One column on the right is reserved for the scrollbar. The content callback
+receives the remaining width and exactly the configured logical height, so
+ordinary Ratatui layout and fixed-height allocations work inside it.
 
-Everything paints against the full logical area; the result is translated and
-clipped to the viewport. Offscreen descendants stay declared and focusable, and
-paint, hover, and take uncaptured pointer events on the rows that are visible. A
-captured pointer gesture keeps routing to its owner after leaving the viewport,
-so drag components work as they do elsewhere. Paint outside the logical content
-is clipped away.
+Everything paints against the full logical area, and the result is translated
+and clipped to the viewport. Offscreen descendants stay declared and
+focusable. Visible rows paint, hover, and take pointer events as usual, and a
+captured drag keeps routing to its owner after it leaves the viewport. Mouse
+events and `DragPhase` positions arrive in content coordinates, matching
+`EventCtx::area`.
 
-## Input
+## Layers
 
-The mouse wheel scrolls three rows. Page Up and Page Down scroll by the visible
-height; Home and End jump to the bounds. Press the scrollbar thumb and it stays
-put until the pointer moves, then the grabbed point stays under the pointer.
-Press the track outside the thumb to jump the view to that row. Capture keeps
-the drag after the pointer leaves the column. Descendants receive each event
-first, so a focused list can take Page Down and a nested control can take the
-wheel. An event that leaves the offset where it is — every one of these keys at
-an edge, and a horizontal wheel — bubbles on to the app, which keeps app hotkeys
-on those keys alive.
+Hints, popups, and modals keep their normal layer behavior. Each opens at the
+place on screen its area names and declares in screen coordinates from there,
+so a scroll area inside a dialog, or a popup inside a scroll area, is ordinary
+nesting. A popup or hint follows its anchor: once scrolling carries the anchor
+off screen, the layer is skipped, and it comes back with the anchor.
 
-A bound offset reader runs for every event, so applying each emitted message
-before routing the next one makes repeated wheel or page events compose even
-without a redraw between them.
-
-An area holding no focusable descendant is a focus stop itself, so keyboard
-scrolling stays available for paint-only content.
+## Hover focus
 
 Pointer motion leaves focus alone. For a pane or tile grid whose direct
 children should take focus as the pointer crosses them, opt in with
 `.hover_focus()`.
 
-Mouse events and `DragPhase` positions arrive in content coordinates, matching
-`EventCtx::area`. A drag anchor is screen-absolute inside the runtime, so
-scrolling under a held pointer leaves the travel it measures alone.
-
-## Layers
-
-Hints, popups, and modals keep their normal layer behavior. Each
-opens at the place on screen its area names and declares in screen coordinates
-from there, so layer content paints at its own `ctx.area()`, and a scroll area
-inside a dialog or popup inside a scroll area is ordinary nesting. A popup or
-hint follows its declaring anchor out of sight: once the scroll has carried
-that anchor off screen the layer is skipped for the frame, and it comes back
-with its anchor.
-
 ## Styling
 
 The scrollbar uses Ratatui's `Scrollbar`. Its thumb comes from the theme's
-primary color and its track from the theme border color. Override both with
+primary color and its track from the theme's border color. Override both with
 `.style(...)`:
 
 ```rust
@@ -138,6 +117,25 @@ let scroll = ScrollArea::new(100).style(|theme| ScrollAreaStyle {
 });
 ```
 
+## Keyboard and mouse
+
+| Input | Does |
+|---|---|
+| Wheel | Scroll three rows |
+| `Page Up` `Page Down` | Scroll by the visible height |
+| `Home` `End` | Jump to the top / bottom |
+| Drag the scrollbar thumb | Scroll, keeping the grabbed point under the pointer |
+| Press the track | Jump the view to that row |
+
+Descendants receive each event first, so a focused list can take Page Down and
+a nested control can take the wheel. An event that leaves the offset where it
+is, such as any of these keys at an edge or a horizontal wheel, bubbles on to
+the app, so app hotkeys on those keys keep working. An area with no focusable
+descendant is a focus stop itself, so keyboard scrolling works for paint-only
+content too.
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+
 ## Limits
 
 A `ScrollArea` inside another `ScrollArea` panics. So does content above
@@ -145,11 +143,14 @@ A `ScrollArea` inside another `ScrollArea` panics. So does content above
 For larger data sets, window the rows yourself and give the area the height of
 the window.
 
-## See also
-
-- [List](./list) — a scrollable list of items, with its own cursor and offset.
-
 ## Full API
 
-See [`ScrollArea`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollArea.html)
-and [`ScrollAreaStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollAreaStyle.html).
+See
+[`ScrollArea`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollArea.html)
+and [`ScrollAreaStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ScrollAreaStyle.html)
+on docs.rs for the full API.
+
+## See also
+
+Use [List](./list) for a scrollable list of items with its own cursor and
+offset.

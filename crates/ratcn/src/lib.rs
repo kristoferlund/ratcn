@@ -10,19 +10,13 @@
 //! a foreground someone else chose. `ratcn::terminal` (feature `termina`) asks
 //! the terminal for that pair and re-solves when the user changes it.
 //!
-//! # Preview status
+//! # Components
 //!
-//! This is a preview release.
-//!
-//! - **The API is unstable.** Pin an exact version.
-//! - **The CLI sets up terminal apps and copies components.** `cargo ratcn init`
-//!   configures terminal Cargo packages and can install a starter only over Cargo's
-//!   untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
-//!   you want to own its source.
-//! - **Fourteen components are available:** [`Button`], [`Input`],
-//!   [`TextArea`], [`List`], [`Select`], [`Tabs`], [`Dialog`],
-//!   [`Toaster`](ToasterWidget), [`BarChartWidget`], [`Tooltip`],
-//!   [`ScrollArea`], [`Checkbox`], [`Cycle`], and [`ProgressWidget`].
+//! [`Button`], [`Input`], [`TextArea`], [`List`], [`Select`], [`Tabs`],
+//! [`Dialog`], [`Toaster`](ToasterWidget), [`BarChartWidget`], [`Tooltip`],
+//! [`ScrollArea`], [`Checkbox`], [`Cycle`], and [`ProgressWidget`].
+//! `cargo ratcn add` copies any of them into your project when you want to own
+//! its source.
 //!
 //! # Getting started
 //!

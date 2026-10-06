@@ -4,14 +4,14 @@ description: "Writing your own ratcn component: the Component trait, the four ki
 
 # Custom components
 
-Ratcn's built-ins are not special. `DeclareCtx::component` accepts any
+The built-in components are not special. `DeclareCtx::component` accepts any
 implementation of the `Component` trait, and the runtime gives a custom
 component the same identity, focus, hover, hit-testing, and event routing it
-gives `Button`. The kanban demo's `KanbanCard` — a draggable card with
-board-aware drop handling — is a complete custom component in about a hundred
+gives `Button`. The kanban demo's `KanbanCard`, a draggable card with
+board-aware drop handling, is a complete custom component in about a hundred
 lines.
 
-Write a component when the demoed behavior needs real event handling or its own
+Write a component when the content needs real event handling or its own
 interaction identity. Purely decorative content should stay direct paint:
 build a Ratatui widget and paint it from a `ctx.paint` closure. Paint-only
 content declared as a component takes on identity, traversal, and hit-testing
@@ -50,17 +50,18 @@ impl Component<AppState, Msg> for MyComponent {
 
 Declaring and painting are two methods because they happen in two walks.
 `declare` lays the component out and declares its descendants, and paints
-nothing. `paint` writes cells, after the whole tree is declared and focus has
-resolved — which is why the interaction flags (`ctx.focused()`,
+nothing. `paint` writes cells after the whole tree is declared and focus has
+resolved. That is why the interaction flags (`ctx.focused()`,
 `ctx.contains_focus()`, `ctx.hovered()`, `ctx.contains_hover()`,
 `ctx.pointer_captured()`) live on `PaintCtx` and not on `DeclareCtx`: while
-`declare` runs, focus has nothing complete to resolve against yet. Hover is the
-exception, because it predates the frame rather than following from it:
+`declare` runs, focus has nothing complete to resolve against yet.
+
+Hover is the exception, because the pointer's position is known before the
+frame starts. For the rare component whose *structure* depends on it,
 `DeclareCtx::pointer_within()` reports whether the pointer is inside this
-declaration, for the rare component whose
-*structure* depends on it. Neither method sees the frame's resolved flags, so
-anything `handle_event` reads back must be recorded in `declare`, and must
-therefore not depend on those flags.
+declaration. `handle_event` never sees the frame's resolved flags either, so
+anything it reads back must be recorded in `declare`, and must therefore not
+depend on those flags.
 
 `paint` is also where a component asks for its mouse pointer, with
 `ctx.set_pointer_shape`; see [Pointer shape](./mouse#pointer-shape).
@@ -82,13 +83,11 @@ Every method except `declare` has a default:
   ignores the event, letting it bubble to the parent.
 - [`reveal_in_viewport`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.Component.html#method.reveal_in_viewport)
   is called on the component that declared a viewport when focus lands on a
-  descendant the viewport clips, so it can scroll that descendant into view;
-  it returns whether it moved. The offset lives in a transient: the reveal
-  writes the new one through `ctx.transient::<Offset>()` on its `EventCtx`,
-  and `declare` reads it back with the same `ctx.transient::<Offset>()` on
-  its `DeclareCtx` to open the viewport there. A
-  reveal that returns `true` has the frame declared again with that offset.
-  [Layers and modals](./layers-and-modals) covers when the call arrives.
+  descendant the viewport clips, so it can scroll that descendant into view.
+  It writes the new offset to a transient (below), which `declare` reads to
+  open the viewport there, and returns whether it moved; a `true` has the
+  frame declared again. [Layers and modals](./layers-and-modals) covers when
+  the call arrives.
 
 [`MeasuredComponent`](https://docs.rs/ratcn/latest/ratcn/runtime/trait.MeasuredComponent.html)
 adds a `measure` method so containers such as the Dialog action row can size a
@@ -96,8 +95,8 @@ component before declaring it.
 
 A reusable component is worth splitting into the library's two halves: a
 stateless paint widget that only paints, and the `Component` that owns behavior
-and paints by constructing the widget. Keep shared vocabulary — dimensions,
-variants, `width()` — on the paint widget so layout constraints and actual paint
+and paints by constructing the widget. Keep shared vocabulary (dimensions,
+variants, `width()`) on the paint widget so layout constraints and actual paint
 cannot disagree. A one-off app component can skip the split and paint directly.
 
 ## What a component may hold
@@ -108,14 +107,14 @@ an event arrives it may describe a slightly older frame than the state does.
 That is fine, as long as each piece of what it holds is read at the right
 moment. There are four kinds.
 
-**Declaration props** — label, disabled, variant, colors. Plain values taken
-from state while declaring (`.disabled(state.saving)`). These are one frame
-old: they describe what the user actually saw, and what the user saw
+**Declaration props**, such as label, disabled, variant, and colors, are plain
+values taken from state while declaring (`.disabled(state.saving)`). They are
+one frame old: they describe what the user actually saw, and what the user saw
 is what their click meant. A button that looked enabled on screen should press.
 
-**Controlled bindings** — the focused row, the scroll offset, the selection.
-Stored as closures (`Fn(&S) -> …`) and called inside `handle_event`, so they
-read state as it is *now*. This matters because two events can arrive before the
+**Controlled bindings**, such as the focused row, the scroll offset, and the
+selection, are stored as closures (`Fn(&S) -> …`) and called inside
+`handle_event`, so they read state as it is *now*. This matters because two events can arrive before the
 next frame is painted, and each one has to build on the last:
 
 ```text
@@ -129,14 +128,14 @@ Had the value been copied in at declaration time, key `b` would also have
 started from `""` and the first keystroke would be lost. An edit acts on the
 state left by the previous *edit*, not the previous *render*.
 
-**Declaration-derived caches** — anything a later pointer event needs in order
-to be interpreted, such as a scroll offset used for hit-testing. Set them in
-`declare`, read them in `handle_event`. They are safe because they live in the same
+**Declaration-derived caches** hold anything a later pointer event needs in
+order to be interpreted, such as a scroll offset used for hit-testing. Set them
+in `declare`, read them in `handle_event`. They are safe because they live in the same
 retained instance the event routes to. They must never become a second copy of
 app state. The declared area needs no cache: `EventCtx::area` hands
 `handle_event` the same rect the event was hit-tested against.
 
-**Transient interaction state** — gesture mechanics that must outlive the
+**Transient interaction state** covers gesture mechanics that must outlive the
 instance itself, such as a drag anchor. A field would reset every frame, so
 `ctx.transient::<T>()` stores one value per type at an identity path instead,
 kept for as long as that path keeps being declared. Each type has its own slot,
@@ -144,7 +143,7 @@ so a component's transients never collide with those `ctx.drag` keeps. See
 [Dragging](./dragging) for the standard use.
 
 `declare` reaches the same value with `ctx.transient::<T>()` on its
-`DeclareCtx` — that is how a wheel scroll survives a redraw. A declaration may
+`DeclareCtx`; that is how a wheel scroll survives a redraw. A declaration may
 settle it too; its write lands only when the frame commits. Prefer writing from
 the event side, where a single event carries the change.
 
@@ -155,11 +154,12 @@ Return `EventResult::Ignored` when routing should continue to the parent,
 send exactly one message to the app's `update`. Only `Ignored` bubbles.
 Components never mutate app state; the message is the only output.
 
-For a primary-button `Down`, `Ignored` also permits the runtime's focus fallback
-after bubbling. Pointer capture is independent: a component can call
-`ctx.capture_pointer(MouseButton::Left)` and still return `Ignored` to capture
-the gesture and receive the normal focus change. `Consumed` vetoes fallback;
-`Emit(msg)` takes precedence and returns the component message.
+For a primary-button `Down`, the result also decides focus. When the event
+bubbles out `Ignored`, the runtime focuses the innermost focusable target under
+the press (see [Mouse input](./mouse) for the exceptions); `Consumed` and `Emit`
+leave focus alone. Pointer capture is
+independent: a component can call `ctx.capture_pointer(MouseButton::Left)` and
+still return `Ignored`, capturing the gesture while focus moves as usual.
 
 Match the built-ins' conventions: name event-wiring builders `on_<event>`, keep
 a continuously tracked value (`<thing>` / `on_<thing>_change`) distinct from a
@@ -169,24 +169,24 @@ rather than becoming unfocusable-but-reactive.
 ## Composites
 
 A component may declare descendants from its own `declare` through the same
-`DeclareCtx` methods the root uses — `ctx.component` for a child with
+`DeclareCtx` methods the root uses: `ctx.component` for a child with
 behavior, `ctx.scope` for a region that only needs its own Tab boundary and
 path segment. Children nest under the component's identity, and their
-focusability is discovered as they declare — there is nothing to announce.
+focusability is discovered as they declare, so there is nothing to announce.
 
 Container pixels need no care about order. Every component's `paint` is queued
-where `declare` declared it and replayed in that order, and a component is
-queued at the point it opens — so a container's background and border land
+where it was declared and replayed in that order, and a component is
+queued at the point it opens. A container's background and border therefore land
 beneath everything it declares inside itself, whatever order the two methods
 are written in. The same holds for `ctx.paint` closures: each is queued where
 it was reached.
 
 The queue position is fixed, so decoration that has to cover a composite's
-*descendants* — a dimming wash — cannot come from `Component::paint` at all,
-which is queued before them. A `ctx.paint` closure reached *after* those
+*descendants*, such as a dimming wash, cannot come from `Component::paint` at
+all, which is queued before them. A `ctx.paint` closure reached *after* those
 declarations is queued after them, on the same layer, and is the usual answer.
-Decoration that must also cover *later siblings* — a drag ghost — goes one step
-further: declare it as a `ctx.hint` layer, which paints above everything
+Decoration that must also cover *later siblings*, such as a drag ghost, goes one
+step further: declare it as a `ctx.hint` layer, which paints above everything
 declared outside it and takes no input. Layers are transparent, so paint only
 the cells the decoration covers, and a background first if it should hide what
 is beneath.
@@ -205,7 +205,7 @@ pieces:
 owns what it paints with: it is `'static` and receives a `PaintCtx` carrying the
 theme, the state, the area, and the interaction flags. Layout computed while
 declaring has to be moved in. Where a style-dependent widget also produces
-layout — a bordered `Block` whose colors follow focus — compute the layout from
+layout, such as a bordered `Block` whose colors follow focus, compute the layout from
 a plain block (`Block::bordered().padding(p).inner(area)`, which depends only on
 borders and padding) and build the styled one inside the closure.
 
@@ -221,15 +221,15 @@ sibling namespace, so ids must be unique across every body it declares.
 **Measured children.** A child the composite places itself has to be sized
 before it is declared. Accept it as `impl MeasuredComponent<S, M> + 'static`,
 call `measure()` in the builder, and keep the `Size` beside a closure that
-declares it — the closure is what gets boxed, not the child, because
+declares it. The closure is what gets boxed, not the child, because
 `Box<dyn Component>` does not itself implement `Component`. `declare` computes
 each area from the stored sizes and runs the closures in insertion order, which
 is also Tab order.
 
 **Geometry that outlives the closures.** `handle_event` runs on the retained
 instance, after `declare` has taken every closure, and it still has to recompute
-the box the pointer landed in. So keep the layout *facts* — heights, measured
-sizes, the fact that a body was configured at all — in fields that taking a
+the box the pointer landed in. So keep the layout *facts* (heights, measured
+sizes, the fact that a body was configured at all) in fields that taking a
 closure does not empty, and derive the rects from them in one function that
 `declare`, `paint`, `interaction_area`, and `handle_event` all call. Anything
 derived twice from two places will eventually disagree, and hit-testing is where
@@ -251,8 +251,8 @@ what you can use too.
 - Props that describe the declaration: plain values, set while declaring.
 - State that events compose against: reader closures, read in `handle_event`.
 - Geometry needed to interpret events: `EventCtx::area` is the rect the event
-  was hit-tested against — the interaction area, narrowed if
-  `interaction_area` returned one. Retain the paint allocation in `declare` when
+  was hit-tested against (the interaction area, narrowed if
+  `interaction_area` returned one). Retain the paint allocation in `declare` when
   the geometry has to come from that instead, and cache anything else there
   too, never in `paint`.
 - Everything that paints: `paint`, styled from its interaction flags.

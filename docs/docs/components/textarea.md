@@ -9,7 +9,7 @@ block cursor while focused, and an optional titled border around it. It wraps a
 line longer than it is wide and scrolls to keep the cursor in view.
 
 Built on [ratatui-textarea](https://docs.rs/ratatui-textarea/), which handles
-editing, cursor movement, selection, wrapping, and scrolling. ratcn adds
+editing, cursor movement, selection, wrapping, and scrolling; ratcn adds
 theming and app-state binding.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 330px">
@@ -58,7 +58,7 @@ edge, inside the border when there is one.
 
 ## State
 
-The text lives in your state as a `TextAreaState`, not in the component. It
+The text lives in your app state as a `TextAreaState`, not in the component. It
 holds the lines, the cursor, and any selection, which is why it is a type of
 its own rather than a `String`.
 
@@ -76,9 +76,9 @@ filled.lines();  // ["Met Ada today.", "She counts."]
 filled.cursor(); // (1, 11): the line, then the character within it
 ```
 
-`TextAreaState::new` splits at `\n`, `\r\n`, and `\r`, keeps tabs, and drops
+`TextAreaState::new` splits lines at any line ending, keeps tabs, and drops
 every other control character, as a paste does. To clear or replace the text,
-assign a new state. There is no `PartialEq`; compare `.value()`.
+assign a new state. There is no `PartialEq`, so compare `.value()`.
 
 ## Submitting
 
@@ -87,13 +87,13 @@ that emits `.on_submit(...)`, and so is <kbd>Ctrl+J</kbd>. Without `on_submit`
 both bubble.
 
 ::: warning Ctrl+Enter needs a terminal that reports it
-ratcn's terminal session does not enable the kitty keyboard protocol, so most
+The terminal session ratcn sets up does not enable the kitty keyboard protocol, so most
 terminals send <kbd>Ctrl+Enter</kbd> as a plain Enter, which inserts a line
 break. Terminals that send a line feed instead deliver it as
 <kbd>Ctrl+J</kbd>, which the field treats as the same submit chord. In the
 browser it is the other way round: <kbd>Ctrl+Enter</kbd> arrives, and the
-browser keeps <kbd>Ctrl+J</kbd> for itself. Give a form a second way to submit
-— the demo has a Save button, and its help line names the chord that works on
+browser keeps <kbd>Ctrl+J</kbd> for itself. Give a form a second way to submit.
+The demo has a Save button, and its help line names the chord that works on
 each host.
 :::
 
@@ -152,89 +152,6 @@ TextArea::new()
 `TextAreaStyle::fallback()` is the no-theme starting point: plain ANSI colors
 that render on any terminal.
 
-## Keyboard
-
-Editing comes from [`ratatui-textarea`](https://crates.io/crates/ratatui-textarea),
-so its readline-style keys apply:
-
-| Keys | Does |
-|---|---|
-| `←` `→` `↑` `↓` &nbsp;`Ctrl+B` `Ctrl+F` `Ctrl+P` `Ctrl+N` | Move one character or one row |
-| `Ctrl+←` `Ctrl+→` &nbsp;`Alt+B` `Alt+F` | Move one word |
-| `Home` `End` &nbsp;`Ctrl+A` `Ctrl+E` | Move to the start / end of the line |
-| `Ctrl+↑` `Ctrl+↓` | Move one paragraph |
-| `Alt+<` `Alt+>` | Move to the top / bottom of the text |
-| `Page Up` `Page Down` &nbsp;`Alt+V` `Ctrl+V` | Move one page up / down |
-| `Shift` + a movement | Select |
-| `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
-| `Ctrl+W` `Alt+Backspace` `Alt+H` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
-| `Ctrl+K` | Delete to the end of the line; at its end, join the next line |
-| `Ctrl+C` `Ctrl+X` | Copy / cut the selection to the clipboard |
-| `Ctrl+Y` | Paste the field's last copy or cut |
-| `Enter` | Insert a line break |
-| `Ctrl+Enter` `Ctrl+J` | Submit |
-
-In a terminal, `Ctrl+C` and `Ctrl+X` act only on a selection; with nothing
-selected they bubble, so an app that quits on `Ctrl+C` still does with a field
-focused. In the browser, `Cmd+C`/`Cmd+X` on a Mac and `Ctrl+C`/`Ctrl+X`
-elsewhere arrive as `Event::Copy` and `Event::Cut`, not as keys, and so does
-`Shift+Delete` off a Mac; on a Mac, `Ctrl+C` and `Ctrl+X` are still keys. See [Copy and paste](#copy-and-paste).
-
-Keys route by binding, not by effect. A key the editor binds is the field's
-even where it changes nothing — <kbd>↑</kbd> on the first line,
-<kbd>Ctrl+K</kbd> at the end of a line — and every unmodified letter, `j` and
-`k` included, is typing. A chord the editor does not bind bubbles, which is how
-`Ctrl+S` reaches your save handler through a focused field; that includes
-<kbd>Ctrl+U</kbd> and <kbd>Ctrl+R</kbd>, undo and redo upstream, since a state
-keeps no history.
-
-The field also leaves <kbd>Tab</kbd> and <kbd>Shift+Tab</kbd>, <kbd>Esc</kbd>,
-and the function keys alone, so they reach focus traversal, an enclosing
-dialog, and your app. Tab moves focus; it does not indent. See
-[Keyboard](../concepts/keyboard) for the rules the other components follow.
-
-## Mouse
-
-A click focuses the field and places the cursor on the character clicked,
-counting wrapped rows and scrolled lines as they are on screen. The cursor
-moves on the release, not on the press. A drag selects from the character
-pressed to the one under the pointer, across lines, and keeps extending —
-scrolling the text — while the pointer moves on past an edge of the field.
-
-The wheel scrolls the text three rows a notch and needs no focus. The cursor
-has to stay in view, so scrolling it off the edge moves it along with the text.
-Once the text has no further to go the wheel is left to whatever encloses the
-field, so a form scrolls on from there.
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
-
-## Copy and paste
-
-Copy and cut write the selection to the system clipboard, and a paste comes in
-from it, on the keys each platform's users expect:
-
-| Where | Copy | Cut | Paste |
-|---|---|---|---|
-| Browser, Mac | `Cmd+C` | `Cmd+X` | `Cmd+V` |
-| Browser, Linux and Windows | `Ctrl+C` | `Ctrl+X`, `Shift+Delete` | `Ctrl+V` |
-| Terminal, any OS | `Ctrl+C` on a selection | `Ctrl+X` on a selection | the terminal's own: `Cmd+V` (Mac), `Ctrl+Shift+V` (Linux), `Ctrl+V` (Windows Terminal) |
-
-In a terminal, `Cmd+C` and `Ctrl+Shift+C` belong to the terminal, which copies
-its own selection. In the browser the platform's chords arrive as
-`Event::Copy`, `Event::Cut`, and `Event::Paste`, never as keys, so an app binds
-those events rather than the keys. A copy keeps the selection; a cut removes
-it. A copy or cut also fills the field's own buffer, so `Ctrl+Y`
-pastes it back.
-
-A paste is inserted at the cursor with its line breaks and tabs kept, whichever
-line ending the terminal sent; every other control character is dropped.
-Without bracketed paste, a terminal delivers a paste as keystrokes.
-
-The host carries the clipboard both ways. Pastes only arrive as such when it
-asks for them: bracketed paste in a terminal, `BrowserClipboard` in the
-browser. Copies go out when it writes what `Ratcn::take_clipboard` returns
-after each event. See [Host integration](../concepts/host-integration#the-clipboard).
-
 ## Paint-only widget
 
 `TextAreaWidget` draws a field without focus or events. It is an ordinary
@@ -259,88 +176,126 @@ frame.render_widget(
 `.wrap_mode(...)`, `.invalid(...)`, and `.disabled(...)` match the component's.
 Replace `.themed(...)` with `.style(...)` to supply exact colors.
 
-Driving the editing is then yours, and `ratcn::text_edit` holds the key
-conversion and the editor's binding table. Only the editor that was painted
-knows the view — how far it is scrolled, how tall a page is, and where lines
-wrap — so paint with `.paint(...)`, which hands that editor back, edit it, and
-store the result. Which keys reach the editor is your policy; this is the
-least of one:
+Driving the editing is then yours. `ratcn::text_edit` holds the key conversion
+and the editor's binding table, and `.paint(...)` paints the field and hands
+back the editor it painted, which knows the view: how far the text is
+scrolled, how tall a page is, and where lines wrap. Edit that editor and store
+the result with `TextAreaState::from_editor`.
+[`TextAreaWidget::paint`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaWidget.html#method.paint)
+has a minimal key handler to start from.
 
-```rust
-use ratcn::{
-    TextAreaState,
-    runtime::KeyCode,
-    text_edit::{Editor, editor_input, is_editor_binding},
-};
+## Keyboard
 
-// Beside the state, the editor the last paint handed back, with the version
-// of the state it was painted from:
-painted: Option<(u64, Editor<'static>)>,
+Editing comes from [`ratatui-textarea`](https://crates.io/crates/ratatui-textarea),
+so its readline-style keys apply:
 
-// In draw():
-let editor = TextAreaWidget::new(&self.notes)
-    .focused(true)
-    .paint(area, frame.buffer_mut());
-self.painted = Some((self.notes.version(), editor));
+| Keys | Does |
+|---|---|
+| `←` `→` `↑` `↓` &nbsp;`Ctrl+B` `Ctrl+F` `Ctrl+P` `Ctrl+N` | Move one character or one row |
+| `Ctrl+←` `Ctrl+→` &nbsp;`Alt+B` `Alt+F` | Move one word |
+| `Home` `End` &nbsp;`Ctrl+A` `Ctrl+E` | Move to the start / end of the line |
+| `Ctrl+↑` `Ctrl+↓` | Move one paragraph |
+| `Alt+<` `Alt+>` | Move to the top / bottom of the text |
+| `Page Up` `Page Down` &nbsp;`Alt+V` `Ctrl+V` | Move one page up / down |
+| `Shift` + a movement | Select |
+| `Backspace` `Delete` &nbsp;`Ctrl+H` `Ctrl+D` | Delete one character |
+| `Ctrl+W` `Alt+Backspace` `Alt+H` &nbsp;/&nbsp; `Alt+D` `Alt+Delete` | Delete the word before / after |
+| `Ctrl+K` | Delete to the end of the line; at its end, join the next line |
+| `Ctrl+C` `Ctrl+X` | Copy / cut the selection to the clipboard |
+| `Ctrl+Y` | Paste the field's last copy or cut |
+| `Enter` | Insert a line break |
+| `Ctrl+Enter` `Ctrl+J` | Submit |
 
-// On a key:
-match key.code {
-    // Enter is a line break, so submitting takes a chord. Ctrl+J is how a
-    // terminal that sends a line feed reports Ctrl+Enter, and some report it
-    // as `J`: either way it must never reach the editor, whose Ctrl+J deletes
-    // to the line start.
-    KeyCode::Enter | KeyCode::Char('j' | 'J') if key.modifiers.ctrl => self.save(),
-    // Focus traversal and the enclosing view.
-    KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc => {}
-    _ => {
-        if let Some(input) = editor_input(&key).filter(is_editor_binding) {
-            // The painted editor, while the state is still the one it was
-            // painted from.
-            let mut editor = match self.painted.take() {
-                Some((version, editor)) if version == self.notes.version() => editor,
-                _ => self.notes.editor().clone(),
-            };
-            editor.input(input);
-            self.notes = TextAreaState::from_editor(editor);
-        }
-    }
-}
-```
+`Ctrl+C` and `Ctrl+X` act only on a selection. With nothing selected they
+bubble, so an app that quits on `Ctrl+C` still does with a field focused. In
+the browser the platform's copy and cut chords arrive as events rather than
+keys; see [Copy and paste](#copy-and-paste).
+
+Every unmodified letter is typing, `j` and `k` included, and a key the editor
+binds belongs to the field even where it changes nothing, such as `↑` on the
+first line. Everything else bubbles to your app:
+
+- chords the editor does not bind, such as `Ctrl+S` for your save handler, and
+  `Ctrl+U` and `Ctrl+R`, since a state keeps no undo history;
+- `Tab`, `Shift+Tab`, `Esc`, and the function keys. Tab moves focus; it does
+  not indent.
+
+See [Keyboard](../concepts/keyboard) for the rules the other components follow.
+
+## Mouse
+
+A click focuses the field and places the cursor on the character clicked,
+when the button is released. A drag selects from the character pressed to the one under the pointer, across
+lines, and keeps scrolling the text while the pointer moves on past an edge of
+the field.
+
+The wheel scrolls the text without needing focus, and carries the cursor along
+to keep it in view. Once the text has no further to go, the wheel is left to
+whatever encloses the field, so a form scrolls on from there.
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+
+## Copy and paste
+
+Copy and cut write the selection to the system clipboard, and a paste comes in
+from it, on the keys each platform's users expect:
+
+| Where | Copy | Cut | Paste |
+|---|---|---|---|
+| Browser, Mac | `Cmd+C` | `Cmd+X` | `Cmd+V` |
+| Browser, Linux and Windows | `Ctrl+C` | `Ctrl+X`, `Shift+Delete` | `Ctrl+V` |
+| Terminal, any OS | `Ctrl+C` on a selection | `Ctrl+X` on a selection | the terminal's own: `Cmd+V` (Mac), `Ctrl+Shift+V` (Linux), `Ctrl+V` (Windows Terminal) |
+
+In a terminal, `Cmd+C` and `Ctrl+Shift+C` belong to the terminal, which copies
+its own selection. In the browser the platform's chords arrive as
+`Event::Copy`, `Event::Cut`, and `Event::Paste`, never as keys, so an app binds
+those events rather than the keys. On a Mac, `Ctrl+C` and `Ctrl+X` stay
+ordinary keys. A copy or cut also fills the field's own buffer, which `Ctrl+Y`
+pastes back.
+
+A paste is inserted at the cursor with its line breaks and tabs kept; every
+other control character is dropped. Without bracketed paste, a terminal
+delivers a paste as keystrokes.
+
+The host carries the clipboard both ways. Pastes arrive as pastes only when it
+asks for them: bracketed paste in a terminal, `BrowserClipboard` in the
+browser. Copies go out when it writes what `Ratcn::take_clipboard` returns
+after each event. See [Host integration](../concepts/host-integration#the-clipboard).
 
 ## Limits
 
-- **No undo or redo.** A state is replaced on every keystroke, which is the
-  wrong place to keep a history. An app that wants undo keeps its own stack of
-  states.
+- **No undo or redo.** A state is replaced on every keystroke, so an app that
+  wants undo keeps its own stack of states.
 - **No maximum length.** Check the value in `update` and keep the previous
   state if the new one is too long.
 - **No double-click word selection.**
 - **No copy in macOS Terminal.app or the VTE terminals** (GNOME Terminal,
-  xfce4-terminal, Tilix). A terminal app writes the clipboard with the OSC 52
-  escape sequence, which they ignore. iTerm2 honors it only with its
-  clipboard-access setting on, and tmux only with `set -g set-clipboard on`.
+  xfce4-terminal, Tilix), which ignore the OSC 52 sequence a terminal app
+  writes the clipboard with. iTerm2 honors it only with its clipboard-access
+  setting on, and tmux only with `set -g set-clipboard on`.
 - **No in-app paste in a terminal.** Terminals do not let an app read the
   clipboard, so `Ctrl+V` cannot paste it; the terminal's own paste does.
 - **No Linux primary selection** (select, then middle-click).
-- **Cmd editing chords do nothing in the browser on a Mac** — `Cmd+←`, `Cmd+→`,
-  `Cmd+Backspace` and the like. Use `Home`, `End`, and the `Ctrl` chords.
+- **Cmd editing chords do nothing in the browser on a Mac** (`Cmd+←`, `Cmd+→`,
+  `Cmd+Backspace` and the like). Use `Home`, `End`, and the `Ctrl` chords.
 - **A page selection survives a click into the field in the browser.** It
   stays highlighted, but a copy in the field never copies it.
 - **Safari is unverified.**
-- **Ctrl+Enter** submits only on a terminal that reports it, and **Ctrl+J**
-  not in the browser, as above.
-- **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the
-  cursor off from the character clicked. Keyboard editing is unaffected.
-- Text fields currently build against a fork of `ratatui-textarea`, until
-  upstream releases the changes they depend on.
+- **Ctrl+Enter submits only on a terminal that reports it**, and Ctrl+J not in
+  the browser. See [Submitting](#submitting).
+- **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) may place the cursor
+  away from the character clicked. Keyboard editing is unaffected.
+- **Built against a fork of `ratatui-textarea`** until upstream releases the
+  changes text fields depend on.
 
 ## Full API
 
-Every method, with binding requirements and edge-case detail:
+See
 [`TextArea`](https://docs.rs/ratcn/latest/ratcn/struct.TextArea.html),
 [`TextAreaWidget`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaWidget.html),
 [`TextAreaStyle`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaStyle.html),
-[`TextAreaState`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaState.html).
+and [`TextAreaState`](https://docs.rs/ratcn/latest/ratcn/struct.TextAreaState.html)
+on docs.rs for the full API.
 
 ## See also
 
