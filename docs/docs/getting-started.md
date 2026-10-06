@@ -130,7 +130,7 @@ frame.render_widget(
 );
 ```
 
-It takes a theme and a couple of bools.
+It takes a theme and the interaction states you track, such as `focused`.
 
 `Dialog` and `ScrollArea` are the exceptions: they are composites, with no
 widget of their own.

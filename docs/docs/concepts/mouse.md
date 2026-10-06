@@ -51,7 +51,7 @@ for keys:
 ```rust
 use ratcn::runtime::EventResult;
 
-// In your event loop — hand the backend event straight to Ratcn, no
+// In your event loop: hand the backend event straight to Ratcn, no
 // conversion step (an unsupported event maps to `Ignored`):
 let event = ratatui::crossterm::event::read()?;
 if let EventResult::Emit(msg) = ratcn.handle_event(event, &state) {

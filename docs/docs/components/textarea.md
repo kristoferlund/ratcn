@@ -9,7 +9,7 @@ block cursor while focused, and an optional titled border around it. It wraps a
 line longer than it is wide and scrolls to keep the cursor in view.
 
 Built on [ratatui-textarea](https://docs.rs/ratatui-textarea/), which handles
-editing, cursor movement, selection, wrapping, and scrolling. The library adds
+editing, cursor movement, selection, wrapping, and scrolling; ratcn adds
 theming and app-state binding.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 330px">
@@ -58,7 +58,7 @@ edge, inside the border when there is one.
 
 ## State
 
-The text lives in your state as a `TextAreaState`, not in the component. It
+The text lives in your app state as a `TextAreaState`, not in the component. It
 holds the lines, the cursor, and any selection, which is why it is a type of
 its own rather than a `String`.
 
@@ -78,7 +78,7 @@ filled.cursor(); // (1, 11): the line, then the character within it
 
 `TextAreaState::new` splits lines at any line ending, keeps tabs, and drops
 every other control character, as a paste does. To clear or replace the text,
-assign a new state. There is no `PartialEq`; compare `.value()`.
+assign a new state. There is no `PartialEq`, so compare `.value()`.
 
 ## Submitting
 

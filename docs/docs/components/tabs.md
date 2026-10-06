@@ -209,6 +209,7 @@ Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mou
 
 - In an area taller than the row, only its own one or three rows paint and take
   input.
+- In an area shorter than that, the tabs paint nothing and take no input.
 
 ## Full API
 
