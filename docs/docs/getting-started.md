@@ -17,7 +17,7 @@ cd my-app
 cargo ratcn init
 ```
 
-::: note Arch Linux
+::: info Arch Linux
 The CLI is available from the official
 [`cargo-ratcn` package](https://archlinux.org/packages/extra/x86_64/cargo-ratcn/):
 
