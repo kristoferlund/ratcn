@@ -1688,8 +1688,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-textarea"
-version = "0.9.2"
-source = "git+https://github.com/kristoferlund/ratatui-textarea?rev=2c805b08edb1b7ca60b37c0876111ffa6069a9d3#2c805b08edb1b7ca60b37c0876111ffa6069a9d3"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78cdce79220909bec1bb8307c29fad7d0df7434280da6ecaf44cb208393bed00"
 dependencies = [
  "ratatui-core",
  "ratatui-widgets",
