@@ -8,6 +8,10 @@ A single-line text field: the value in a well, a block cursor while focused,
 and an optional titled border around it. Typing, selection, and scrolling a
 value longer than the field are handled; what the text means is yours.
 
+Built on [ratatui-textarea](https://docs.rs/ratatui-textarea/), which handles
+editing, cursor movement, selection, and horizontal scrolling. ratcn adds
+theming and app-state binding.
+
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 400px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
     <span class="ratcn-dot"></span>

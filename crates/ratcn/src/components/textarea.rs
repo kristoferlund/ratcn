@@ -12,9 +12,9 @@
 //! The text is app-owned, like every other value here: the field reads a
 //! [`TextAreaState`] from app state and emits a new one for each keystroke.
 //! Editing, cursor movement, selection, wrapping, and scrolling belong to the
-//! editor inside that state; what lives in this module is the look, the keys
-//! the field takes and the ones it leaves to bubble, how a paste goes in, and
-//! what the mouse does.
+//! [ratatui-textarea](ratatui_textarea) editor inside that state; what lives
+//! in this module is the look, the keys the field takes and the ones it leaves
+//! to bubble, how a paste goes in, and what the mouse does.
 
 use std::{fmt, rc::Rc};
 
@@ -202,6 +202,8 @@ const WHEEL_ROWS: u16 = 3;
 
 /// A multi-line text field that only draws — an ordinary ratatui [`Widget`]
 /// with no focus, events, or state of its own.
+///
+/// A themed paint adapter for [ratatui-textarea](ratatui_textarea).
 ///
 /// It paints the [`TextAreaState`] it is given over the whole area: the
 /// text, scrolled to keep the cursor in view, the cursor when
@@ -451,6 +453,9 @@ type OnSubmitFn<M> = Rc<dyn Fn() -> M>;
 type StyleFn = Rc<dyn Fn(&Theme) -> TextAreaStyle>;
 
 /// A multi-line text field the user types in.
+///
+/// Built on [ratatui-textarea](ratatui_textarea), which handles editing,
+/// cursor movement, selection, wrapping, and scrolling.
 ///
 /// The multi-line sibling of [`Input`](crate::Input), bound the same way: the
 /// text lives in app state as a [`TextAreaState`] and arrives through
