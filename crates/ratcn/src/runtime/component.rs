@@ -903,8 +903,8 @@ impl<'a, State> PaintCtx<'a, State> {
 pub enum PointerShape {
     /// No shape asked for. In a terminal, the arrow (written as `default`)
     /// once a shape has been shown; before that, the terminal's own pointer.
-    /// In the browser, the page's own cursor: the app element's `cursor` is
-    /// removed.
+    /// In the browser, the arrow (`cursor: default`), also over a
+    /// `DomBackend`'s text.
     #[default]
     Default,
     /// A hand: something pressable.

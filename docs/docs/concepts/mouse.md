@@ -190,7 +190,7 @@ after rendering and hand it to the host, which writes only when it changes:
 
 `PointerShape::Default` is, in a terminal, the arrow (written as `default`)
 once a shape has been shown, and before that the terminal's own pointer; in the
-browser, the page's own cursor.
+browser, the arrow (`cursor: default`), even over a `DomBackend`'s text.
 
 | Terminal | OSC 22 |
 |---|---|

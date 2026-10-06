@@ -710,25 +710,19 @@ mod browser_clipboard {
     ///
     /// It sets the element's CSS `cursor`, and only when that changes, so hand
     /// it [`Ratcn::pointer_shape`](super::super::Ratcn::pointer_shape) after
-    /// every frame. [`PointerShape::Default`] removes the property, giving the
-    /// pointer back to the page's own styles. Nothing is installed: unlike
+    /// every frame. [`PointerShape::Default`] is the arrow (`cursor:
+    /// default`), not the browser's automatic cursor, which over a
+    /// `DomBackend`'s text would be a text beam. Nothing is installed: unlike
     /// [`BrowserClipboard`], there is no guard to keep.
     pub fn set_browser_pointer_shape(app: &HtmlElement, shape: PointerShape) {
         let style = app.style();
-        let wanted = match shape {
-            PointerShape::Default => "",
-            shape => shape.css_name(),
-        };
+        let wanted = shape.css_name();
         if style.get_property_value("cursor").ok().as_deref() == Some(wanted) {
             return;
         }
         // Only a read-only declaration refuses, and an element's own style is
         // not one.
-        let _ = if wanted.is_empty() {
-            style.remove_property("cursor").map(drop)
-        } else {
-            style.set_property("cursor", wanted)
-        };
+        let _ = style.set_property("cursor", wanted);
     }
 }
 
