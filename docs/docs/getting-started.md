@@ -4,7 +4,10 @@ description: "Initialize a terminal app with cargo ratcn and get a focusable but
 
 # Getting started
 
-The recommended way to set up a terminal project is with the `cargo-ratcn` CLI.
+The quickest way to a running app is the `cargo-ratcn` CLI. It sets up a
+terminal project, can write a first app for you, and copies components into your
+code when you want to own them. ratcn needs Rust 1.88, or 1.90 for the browser
+build.
 
 ## Initialize a terminal app
 
@@ -16,15 +19,6 @@ cargo new my-app
 cd my-app
 cargo ratcn init
 ```
-
-::: info Arch Linux
-The CLI is available from the official
-[`cargo-ratcn` package](https://archlinux.org/packages/extra/x86_64/cargo-ratcn/):
-
-```sh
-pacman -S cargo-ratcn
-```
-:::
 
 `init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
 `ratcn.toml`, and creates `src/components/mod.rs`. It configures terminal apps

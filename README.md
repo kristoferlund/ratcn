@@ -24,10 +24,25 @@
   </video>
 </div>
 
-A shadcn-inspired, themeable component library for [Ratatui](https://ratatui.rs),
-plus a small interaction runtime for focus, hover, and event routing. It is a
-toolkit, not a framework: every piece is usable piecemeal, and nothing takes
-over your app loop.
+ratcn is an opinionated library of beautifully designed terminal UI components
+for [Ratatui](https://ratatui.rs). You copy them into your application code,
+theme them, and make them your own.
+
+Every component paints through a plain Ratatui widget, so it fits into the app
+you already have. Add the ratcn engine and the components come alive: it handles
+focus, keyboard and mouse input, hover, and layers, and tells your app what the
+user did.
+
+Your app stays in charge. The state lives in your app, and the screen is a
+function of it: each frame describes the UI from that state, and components
+report what happened as messages for your app to apply. The components are yours
+as well. When one doesn't do what you need, copy its source into your project
+and change it.
+
+Terminal apps can be as pleasant to use as anything on the web. Buttons light up
+under the pointer, fields take clicks and selections, and the patterns you know
+from the web are here too: toasts, tooltips, dropdowns, and modal dialogs that
+float above the rest of your app.
 
 ## Try the showcase
 
@@ -43,47 +58,29 @@ board, and explore full demo apps. These are working Ratatui interfaces, not
 recordings. Try the controls with your keyboard and mouse, then
 [explore the demos and their source](https://ratcn.com/docs/demos).
 
-## Preview status
+## Widgets, the engine, or both
 
-This is a preview release. Three things are worth knowing before you build on
-it:
+Each component comes in up to two parts, and each part works on its own:
 
-- **The API is unstable.** The public surface is still moving. Pin an exact
-  version and expect to edit when you upgrade.
-- **The CLI sets up terminal apps and copies components.** `cargo ratcn init`
-  configures terminal Cargo packages and can install a starter only over Cargo's
-  untouched default `main.rs`; `cargo ratcn add` copies a built-in component when
-  you want to own its source.
-- **Fourteen components are available:**
-  `Button`, `Input`, `TextArea`, `List`, `Select`, `Tabs`, `Dialog`,
-  `ToasterWidget`, `BarChartWidget`, `Tooltip`, `ScrollArea`, `Checkbox`,
-  `Cycle`, and `ProgressWidget`.
+- **Paint-only widgets**, such as `ButtonWidget` and `BarChartWidget`, are
+  ordinary Ratatui widgets. They drop into any Ratatui app with
+  `frame.render_widget(...)`: no engine, no message type, no change to how your
+  app already works.
+- **Interactive components**, such as `Button`, `List`, `Tabs`, and `Dialog`,
+  add focus, keyboard and mouse handling, and messages on top. You declare them
+  through the engine, the `Ratcn` runtime, which enters your app at two calls:
+  `Ratcn::render` and `Ratcn::handle_event`.
 
-If you want specific components, patterns, or features, please
+The components: `Button`, `Input`, `TextArea`, `List`, `ScrollArea`, `Select`,
+`Tabs`, `Dialog`, `ToasterWidget`, `BarChartWidget`, `Tooltip`, `Checkbox`,
+`Cycle`, and `ProgressWidget`. If there is a component or pattern you would like to see, please
 [open an issue](https://github.com/kristoferlund/ratcn/issues).
-
-## What it is
-
-A component module holds up to two cooperating halves:
-
-- A **paint-only widget** (`ButtonWidget`, `ListWidget`, `BarChartWidget`, ...)
-  is a plain ratatui `Widget` that only paints. It is usable on its own without
-  the runtime. BarChart and Toast are paint-only and stop here.
-- An **interactive component** (`Button`, `List`, `Select`, ...) — declared
-  through the runtime each frame, it handles focus, events, and messages. Most
-  paint via a widget half. Dialog and ScrollArea are the exceptions:
-  interactive composites with no separate paint widget.
-
-Your app owns state, events, and updates. The library enters your loop at
-exactly two removable call sites: `Ratcn::render` and `Ratcn::handle_event`.
-Components read state and return messages; your `update` function is the only
-state writer.
 
 ## Getting started
 
-Requires Rust 1.88 (1.90 for the browser build). The recommended way to set up a
-terminal project is with the `cargo-ratcn` CLI. Install it, create a Cargo
-package, and initialize it:
+ratcn needs Rust 1.88, or 1.90 for the browser build. The quickest way to a
+running app is the `cargo-ratcn` CLI. Install it, create a Cargo package, and
+initialize it:
 
 ```sh
 cargo install cargo-ratcn
@@ -92,41 +89,31 @@ cd my-app
 cargo ratcn init
 ```
 
-> [!NOTE]
-> On Arch Linux, the CLI is available from the official
-> [`cargo-ratcn` package](https://archlinux.org/packages/extra/x86_64/cargo-ratcn/):
-> `pacman -S cargo-ratcn`
-
 `init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
-`ratcn.toml`, and creates `src/components/mod.rs`. In an interactive terminal,
-on Cargo's untouched default `src/main.rs`, it offers **Keep it unchanged**,
-**Create a minimal app**, or **Create a demo app**. Custom application source
-and `src/main.rs` in noninteractive runs remain unchanged.
+`ratcn.toml`, and creates `src/components/mod.rs`. On Cargo's untouched default
+`src/main.rs`, it offers to keep it, or to write a minimal app or a demo app.
+Choose **Create a demo app**, then `cargo run`: a button that pops a toast. The
+[Getting started](https://ratcn.com/docs/getting-started) guide walks through
+its source.
 
-Choose **Create a demo app**, then run `cargo run` for a button and a Hello World
-toast. See [Getting started](https://ratcn.com/docs/getting-started)
-for the source. Use `cargo ratcn --help` for available commands.
+The `termina` feature's `ratcn::terminal::Session` opens and restores the
+terminal, and can paint in the terminal's own colors, following them when the
+user changes them.
 
-For a native crossterm app that already owns its event loop:
+For an app on a crossterm backend that already owns its event loop:
 
 ```sh
 cargo add ratcn --features crossterm
 cargo add ratatui --no-default-features --features layout-cache,std,crossterm
 ```
 
-For a browser app, select the ratzilla integration instead:
+For an app in the browser, through [Ratzilla](https://github.com/orhun/ratzilla):
 
 ```sh
 cargo add ratcn --features ratzilla
 cargo add ratatui --no-default-features --features layout-cache,std
 cargo add ratzilla
 ```
-
-The crate also ships a terminal host of its own: `ratcn::terminal::Session`
-(feature `termina`) opens the terminal, asks it for its background and
-foreground, solves a `Theme` from the pair with `Theme::adaptive`, and
-re-solves when the user changes it. Use it in place of crossterm when you want
-the app to paint in the terminal's own colors.
 
 ## Copying a component
 
@@ -149,7 +136,7 @@ your edits.** Use `cargo ratcn add --help` for add options.
 
 A copied module still depends on:
 
-- the `ratcn` runtime — the `Component` trait, `DeclareCtx`/`EventCtx`,
+- the `ratcn` runtime: the `Component` trait, `DeclareCtx`/`EventCtx`,
   `EventResult`, and the normalized event types;
 - the theme types (`Theme`, and `BorderStyle` where a border is painted), plus
   the copy-support modules: `button_shape`, `geometry`, `linear_nav`,
