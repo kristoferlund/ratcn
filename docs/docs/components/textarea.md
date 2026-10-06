@@ -329,10 +329,12 @@ match key.code {
 - **Safari is unverified.**
 - **Ctrl+Enter** submits only on a terminal that reports it, and **Ctrl+J**
   not in the browser, as above.
-- **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the
-  cursor off from the character clicked. Keyboard editing is unaffected.
-- Text fields currently build against a fork of `ratatui-textarea`, until
-  upstream releases the changes they depend on.
+- **Clicks near joined emoji or accented characters** (👩‍💻, 👩🏽, or an `é`
+  written as `e` plus an accent) may place the cursor off from the character
+  clicked, or between a letter and its accent. Keyboard editing is unaffected.
+- **A wrapped row can start with a space** where a line breaks between words.
+- **With wrapping off, wide characters scrolled sideways** can hide the cursor
+  at the edge of the field.
 
 ## Full API
 

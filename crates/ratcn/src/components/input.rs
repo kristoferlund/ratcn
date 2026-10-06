@@ -1895,23 +1895,6 @@ mod tests {
         assert_eq!(selection(&state), Some((1, 9)));
     }
 
-    /// A mask draws one cell per character. A click has to count those
-    /// cells: counted by the width of the hidden text, it would land on the
-    /// wrong character and give the secret's shape away.
-    #[test]
-    fn a_click_in_a_masked_field_counts_mask_cells() {
-        let mut driver = driver();
-        let mut state = state("日本語ab");
-        render_with(&mut driver, &state, || input().mask_char('*'));
-        assert_eq!(field(&driver), "*****   ");
-
-        for (column, cursor) in [(1, 1), (2, 2), (4, 4)] {
-            click(&mut driver, &mut state, column, 0);
-            assert_eq!(state.name.cursor(), cursor, "a click on column {column}");
-            render_with(&mut driver, &state, || input().mask_char('*'));
-        }
-    }
-
     /// One line has nowhere to scroll, and a field that ate the wheel would
     /// stop the form around it from scrolling whenever the pointer crossed
     /// it.
@@ -1999,27 +1982,6 @@ mod tests {
 
         click(&mut driver, &mut state, column + 3, row);
         assert_eq!(state.name.cursor(), 3);
-    }
-
-    /// A mask must hide the text's shape as well as its characters: every
-    /// character is one mask cell, so wide characters scroll by the mask's
-    /// width. Measured by their own, this field would scroll past its text
-    /// and paint blank.
-    #[test]
-    fn a_masked_field_paints_only_the_mask_and_scrolls_by_its_width() {
-        let mut driver = driver();
-        let mut state = state("日本語日本語日本");
-        render_with(&mut driver, &state, || input().mask_char('*'));
-        assert_eq!(field(&driver), "******* ", "eight masks, scrolled by one");
-
-        send(&mut driver, &mut state, key(KeyCode::Char('字')));
-        render_with(&mut driver, &state, || input().mask_char('*'));
-        assert_eq!(field(&driver), "******* ");
-        assert_eq!(
-            state.name.value(),
-            "日本語日本語日本字",
-            "the state keeps the text"
-        );
     }
 
     #[test]

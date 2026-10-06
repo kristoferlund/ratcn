@@ -360,10 +360,14 @@ back from `InputState::from_editor` as one, its lines joined with spaces.
 - **A page selection survives a click into the field in the browser.** It
   stays highlighted, but a copy in the field never copies it.
 - **Safari is unverified.**
-- **Clicks after a joined emoji** (such as 👩‍💻 or 👩🏽) on a line may place the
-  cursor off from the character clicked. Keyboard editing is unaffected.
-- Text fields currently build against a fork of `ratatui-textarea`, until
-  upstream releases the changes they depend on.
+- **Clicks near joined emoji or accented characters** (👩‍💻, 👩🏽, or an `é`
+  written as `e` plus an accent) may place the cursor off from the character
+  clicked, or between a letter and its accent. Keyboard editing is unaffected.
+- **Masked wide characters.** A masked field holding wide characters (CJK,
+  most emoji) paints the wrong number of mask cells, a long one can paint
+  blank, and clicks in it land off. Narrow text masks correctly.
+- **Wide characters scrolled sideways** can hide the cursor at the edge of the
+  field.
 
 ## Full API
 
