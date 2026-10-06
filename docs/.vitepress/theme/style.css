@@ -384,3 +384,40 @@
   width: 100%;
   height: auto;
 }
+
+/* The ui = f(state) diagram. Its styles live here, not in the SVG: Vue drops
+   <style> from page templates on client-side navigation. */
+.ratcn-diagram .d-box {
+  fill: var(--vp-c-bg-soft);
+  stroke: var(--vp-c-divider);
+  stroke-width: 1.5;
+}
+.ratcn-diagram .d-key {
+  fill: var(--vp-c-brand-soft);
+  stroke: var(--vp-c-brand-1);
+  stroke-width: 1.5;
+}
+.ratcn-diagram .d-name {
+  fill: var(--vp-c-text-1);
+  font: 600 16px var(--vp-font-family-base);
+}
+.ratcn-diagram .d-sub {
+  fill: var(--vp-c-text-2);
+  font: 13px var(--vp-font-family-base);
+}
+.ratcn-diagram .d-verb {
+  fill: var(--vp-c-text-2);
+  font: 13px var(--vp-font-family-mono);
+}
+.ratcn-diagram .d-line {
+  fill: none;
+  stroke: var(--vp-c-text-3);
+  stroke-width: 1.5;
+}
+.ratcn-diagram .d-head {
+  fill: var(--vp-c-text-3);
+}
+.ratcn-diagram .d-formula {
+  fill: var(--vp-c-brand-1);
+  font: 600 20px var(--vp-font-family-mono);
+}

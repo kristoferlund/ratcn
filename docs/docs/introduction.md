@@ -16,16 +16,6 @@ user did.
 <figure class="ratcn-diagram">
 <svg viewBox="0 0 640 230" role="img" aria-labelledby="ratcn-uifn-title" xmlns="http://www.w3.org/2000/svg">
 <title id="ratcn-uifn-title">ui = f(state): your app state is rendered into the UI, user input becomes a message, and update applies the message to the state.</title>
-<style>
-.d-box{fill:var(--vp-c-bg-soft);stroke:var(--vp-c-divider);stroke-width:1.5}
-.d-key{fill:var(--vp-c-brand-soft);stroke:var(--vp-c-brand-1);stroke-width:1.5}
-.d-name{fill:var(--vp-c-text-1);font:600 16px var(--vp-font-family-base)}
-.d-sub{fill:var(--vp-c-text-2);font:13px var(--vp-font-family-base)}
-.d-verb{fill:var(--vp-c-text-2);font:13px var(--vp-font-family-mono)}
-.d-line{fill:none;stroke:var(--vp-c-text-3);stroke-width:1.5}
-.d-head{fill:var(--vp-c-text-3)}
-.d-formula{fill:var(--vp-c-brand-1);font:600 20px var(--vp-font-family-mono)}
-</style>
 <defs><marker id="ratcn-uifn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="d-head" d="M0 0 L10 5 L0 10 z"/></marker></defs>
 <text class="d-formula" x="320" y="30" text-anchor="middle">ui = f(state)</text>
 <rect class="d-key" x="30" y="62" width="150" height="64" rx="10"/>
