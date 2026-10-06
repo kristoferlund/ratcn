@@ -212,8 +212,24 @@
   box-shadow: 0 0 12px 1px rgba(99, 102, 241, 0.8);
 }
 
-.ratcn-badge-arrow {
-  color: #8b8f9a;
+.ratcn-badge {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.ratcn-badge-command {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #ffffff;
+  font-family: var(--vp-font-family-mono);
+  font-size: 12.5px;
+}
+
+.ratcn-preview-caption code {
+  color: #ffffff;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.95em;
 }
 
 .ratcn-hero h1 {
@@ -277,43 +293,6 @@
 .ratcn-button-secondary:hover {
   border-color: rgba(255, 255, 255, 0.26);
   background: rgba(255, 255, 255, 0.04);
-}
-
-.ratcn-showcase {
-  display: grid;
-  justify-items: center;
-  gap: 12px;
-  max-width: 480px;
-  margin-top: 36px;
-}
-
-.ratcn-showcase h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.ratcn-showcase code {
-  padding: 12px 24px;
-  border: 1px solid var(--ratcn-border);
-  border-radius: 9px;
-  background: var(--ratcn-panel);
-  font-family: var(--vp-font-family-mono);
-  font-size: 20px;
-  user-select: all;
-}
-
-.ratcn-showcase p {
-  margin: 0;
-  color: var(--ratcn-muted);
-  font-size: 15px;
-  line-height: 1.6;
-}
-
-.ratcn-showcase a {
-  font-size: 14px;
-  text-decoration: underline;
-  text-underline-offset: 4px;
 }
 
 /* Preview window */

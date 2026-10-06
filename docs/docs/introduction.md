@@ -57,6 +57,18 @@ under the pointer, fields take clicks and selections, and the patterns you know
 from the web are here too: toasts, tooltips, dropdowns, and modal dialogs that
 float above the rest of your app.
 
+## See it live
+
+The components run in your terminal right now, with nothing to install:
+
+```sh
+ssh ratcn.com
+```
+
+The showcase lets you browse every component, switch themes, drag cards across a
+Kanban board, and try full demo apps with your keyboard and mouse. The previews
+on the component pages run live in your browser as well.
+
 ## Widgets, the engine, or both
 
 Each component comes in up to two parts, and each part works on its own:
