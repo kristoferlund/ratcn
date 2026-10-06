@@ -20,61 +20,38 @@ cd my-app
 cargo ratcn init
 ```
 
-`init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
-`ratcn.toml`, and creates `src/components/mod.rs`. It configures terminal apps
-only.
-
-In an interactive terminal, when `src/main.rs` is Cargo's untouched default,
-`init` offers three options:
-
-- **Keep it unchanged**
-- **Create a minimal app**
-- **Create a demo app**
-
-If `src/main.rs` already holds your own code, `init` leaves it alone.
-Noninteractive runs also leave `src/main.rs` unchanged and complete project
-setup without a prompt.
-
-Use `cargo ratcn --help` for commands or `cargo ratcn add --help` for add options.
-Use `cargo ratcn --version` (or `-V`) to check the installed CLI version.
+`init` adds `ratcn` and a compatible `ratatui` to the project, and offers to
+write a first app for you. It never touches a `main.rs` you have already written.
 
 ## A first app
 
-Choose **Create a demo app** during `init`, then run `cargo run` to start it.
-The app follows the terminal's colors, centers a primary **Hello** button, and
-shows a **World** toast when pressed. `Ctrl+C` exits.
+Choose **Create a demo app** during `init`, then `cargo run`. The app follows
+the terminal's colors and centers a **Hello** button that pops a **World**
+toast. `Ctrl+C` exits.
 
 The generated `src/main.rs`:
 
 <<< ../../crates/cargo-ratcn/templates/first-app.rs
 
 Two calls do the work. `render` declares what is on screen this frame and
-paints it; `handle_event` routes one input event and hands back a message if
-something happened. The generated loop opens and restores the terminal through
-`Session`; its `update` function remains the only state writer.
-
-Keeping `update` in its own function means every state change is a plain call
-you can test without a terminal, and messages from elsewhere (a timer, a
-background task) get the same single path into state.
+paints it; `handle_event` routes one input event and hands back a message when
+something happened. `update` applies that message, and it is the only place the
+state changes, which makes every change a plain function call you can test
+without a terminal.
 
 ## Copy a component
 
-From your initialized project, list the available components and copy one:
+When you want to change how a component looks or behaves beyond what its
+options allow, copy its source into your project:
 
 ```sh
-cargo ratcn add --list
 cargo ratcn add dialog
 ```
 
-`add` copies source from the exact `ratcn` package your project resolved into
-`src/components/` and registers the component module. It adds `mod components;`
-when there is a single conventional crate entrypoint; otherwise, it asks you to
-add that declaration yourself. Import `crate::components::dialog::Dialog` to use
-your copy.
-
-Existing component files are preserved unless you pass `--force`.
-**`cargo ratcn add dialog --force` overwrites `src/components/dialog.rs`, including
-your edits.**
+The copy lands in `src/components/`. Import
+`crate::components::dialog::Dialog` instead of `ratcn::Dialog`, and the
+component is yours to edit. `cargo ratcn add --list` shows what is available.
+An existing copy is only replaced with `--force`, which overwrites your edits.
 
 ## Try the wizard
 

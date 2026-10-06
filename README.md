@@ -89,10 +89,9 @@ cd my-app
 cargo ratcn init
 ```
 
-`init` adds `ratcn` with its `termina` feature and a compatible `ratatui`, writes
-`ratcn.toml`, and creates `src/components/mod.rs`. On Cargo's untouched default
-`src/main.rs`, it offers to keep it, or to write a minimal app or a demo app.
-Choose **Create a demo app**, then `cargo run`: a button that pops a toast. The
+`init` adds `ratcn` and a compatible `ratatui` to the project, and offers to
+write a first app for you. Choose **Create a demo app**, then `cargo run`: a
+button that pops a toast. The
 [Getting started](https://ratcn.com/docs/getting-started) guide walks through
 its source.
 
@@ -117,36 +116,17 @@ cargo add ratzilla
 
 ## Copying a component
 
-Each component module is written as one self-contained unit, so you can copy
-the module into your project and modify it there when the built-in styling and
-behavior hooks are not enough:
+When you want to change how a component looks or behaves beyond what its options
+allow, copy its source into your project:
 
 ```sh
 cargo ratcn add dialog
 ```
 
-`cargo ratcn add --list` shows the built-ins available from the exact `ratcn`
-package your project resolved. The command adds the component file and module
-declarations; switch the app import to `crate::components::dialog::Dialog` to
-use the copy.
-
-Existing component files are preserved unless you pass `--force`.
-**`cargo ratcn add dialog --force` overwrites `src/components/dialog.rs`, including
-your edits.** Use `cargo ratcn add --help` for add options.
-
-A copied module still depends on:
-
-- the `ratcn` runtime: the `Component` trait, `DeclareCtx`/`EventCtx`,
-  `EventResult`, and the normalized event types;
-- the theme types (`Theme`, and `BorderStyle` where a border is painted), plus
-  the copy-support modules: `button_shape`, `geometry`, `linear_nav`,
-  `list_core`, `selection_indicator`, and `text_width`;
-- `ratatui` itself.
-
-Components never depend on sibling components, so each module copies alone.
-The `copy-fixture` crate in this repository makes that copy at build time and
-compiles each component on its own, so the claim is checked by the build rather
-than asserted.
+The copy lands in `src/components/`. Import `crate::components::dialog::Dialog`
+instead of `ratcn::Dialog`, and the component is yours to edit. Components never
+depend on each other, so each one copies on its own; the `copy-fixture` crate in
+this repository builds every component from a copy to keep it that way.
 
 ## Documentation
 
