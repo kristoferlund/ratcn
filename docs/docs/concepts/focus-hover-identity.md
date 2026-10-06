@@ -14,7 +14,7 @@ it moves or the list reorders. The
 its focus and drag state when dragged between columns.
 
 Scopes create the nesting. A scope is a named grouping with its own path
-segment and focus boundary — no component needed:
+segment and focus boundary, and it needs no component:
 
 ```rust
 ctx.scope(
@@ -36,27 +36,24 @@ but a second `save` directly under `editor` is a declaration error.
 
 ## Focus
 
-Focus is a path stored in your app state — a `FocusState` bound with
+Focus is a path stored in your app state: a `FocusState` bound with
 `Ratcn::focus(read, on_change)`. Focus changes come back as messages for your
 `update` to store, like every other state change.
 
-You never have to compute a starting focus: `FocusState::default()` or an empty
+You never have to compute a starting focus. `FocusState::default()` or an empty
 `FocusState::intent(path)` means "default startup focus", and the runtime
 resolves it to the first focusable component it finds. The first time the user
 moves focus, your app receives a concrete path to store.
 
 **No focus.** Store `FocusState::none()` when no component should paint as
-focused, such as in an inactive hosted pane. It is distinct from default focus
-even though both have empty paths: `is_none()` distinguishes them, and
-`contains_path` is false for every query on `none()`, including an empty query.
-Unlike a parked path waiting for its target to appear, `none()` has no pending
-target to reveal.
-
-This does not disable input. Tab enters the first eligible control, Shift+Tab
-the last, root `focus_key` bindings still work, and pointer input can focus a
-control. The host decides which events reach an inactive pane. Explicit no-focus
-also survives modal resolution, but `ModalState::open` saves it and resets focus
-to `default()` so the new modal takes focus; `close` restores the saved `none()`.
+focused, such as in an inactive hosted pane. It is distinct from default focus,
+even though both have empty paths, and it does not disable input: Tab enters the
+first eligible control, Shift+Tab the last, root `focus_key` bindings still
+work, and pointer input can focus a control. Your app decides which events reach
+an inactive pane. Opening a modal saves `none()` and moves focus into the modal;
+closing it restores `none()`. See
+[`FocusState`](https://docs.rs/ratcn/latest/ratcn/runtime/struct.FocusState.html)
+for the exact semantics.
 
 **Tab order follows declaration order.** `TabWrap::Wrap` cycles within a scope;
 `TabWrap::Escape` lets Tab leave it and continue in the parent. Shift+Tab walks
@@ -65,55 +62,56 @@ backwards.
 **Focus keys** jump between panes: a `focus_key` binding on the root or a scope
 maps a key chord to a path, and focus lands on that target's first focusable
 leaf. Character chords ignore Shift and letter case, while Ctrl and Alt must
-match exactly; the same matching is available to your own hotkey checks as
-`KeyChord::matches`. There is no per-pane focus memory — jumping back into a
+match exactly; your own hotkey checks can use the same matching through
+`KeyChord::matches`. There is no per-pane focus memory, so jumping back into a
 pane starts at its first focusable leaf again.
 
 **Parked focus.** If the focused component disappears, is disabled, or
-collapses to zero size, Ratcn keeps the stored path as-is rather than guessing
-a replacement — focus is *parked*. A parked target can still paint as focused
-when it comes back, disabled controls ignore input meanwhile, and Tab simply
-moves on to an eligible target. The one exception is an open modal: a stored
-path that names something real outside it is pulled into the modal, because
-the modal owns input until it closes — while a path that matches nothing stays
-parked even then.
+collapses to zero size, the runtime keeps the stored path as it is rather than
+guessing a replacement. Focus is *parked*. A parked target can still paint as
+focused when it comes back, disabled controls ignore input meanwhile, and Tab
+simply moves on to an eligible target. The one exception is an open modal,
+which owns input until it closes: a stored path that names something real
+outside the modal is pulled into it. A path that matches nothing stays parked
+even then.
 
 **Programmatic focus.** `FocusState::intent(path)` names a path without
-validating it — use it when app policy points focus somewhere that may not
-exist yet, such as into a modal that opens this frame. `Ratcn::focus_path(path)`
+validating it. Use it when app policy points focus somewhere that may not exist
+yet, such as into a modal that opens this frame. `Ratcn::focus_path(path)`
 instead validates against the last rendered frame and returns `None` for
 missing, disabled, or covered targets; if the path ends at a scope, it descends
 to the scope's first focusable leaf.
 
-## Telling Ratcn what can be focused
+## What can be focused
 
-Nothing, usually: focusable components make themselves known, and the runtime
-discovers them — every frame is declared in full before focus resolves against
-it, so whether focus can descend into a scope is observed, never promised. One
-option changes a scope's own role:
+Usually you declare nothing: focusable components make themselves known, and
+the runtime discovers them. Every frame is declared in full before focus
+resolves against it, so whether focus can descend into a scope is observed,
+never promised.
 
-- `focusable(true)` makes the scope itself the Tab stop — for a pane with
-  nothing focusable inside, such as a read-only chart. Focus still prefers a
-  focusable descendant when one exists.
+One option changes a scope's own role. `ScopeOptions::focusable(true)` makes
+the scope itself the Tab stop, for a pane with nothing focusable inside, such
+as a read-only chart. Focus still prefers a focusable descendant when one
+exists.
 
-The declare-then-paint mechanics behind this live in
+The declare-then-paint mechanics behind this are in
 [Rendering and event routing](./rendering-and-events).
 
 ## Hover
 
-Hover is the runtime's, not yours. It is a path like focus — what the pointer
-is on, root-first — but nothing in your app stores it, no message carries it,
-and no `update` arm applies it. Ratcn writes it itself: every pointer event
-records where the pointer is, and every frame it commits resolves hover from
-that position against the surface it just declared — because a redraw can move
-a component out from under a pointer that never moved.
+Hover belongs to the runtime, not to your app. It is a path like focus (what
+the pointer is on, root-first), but nothing in your app stores it, no message
+carries it, and no `update` arm applies it. The runtime records where the
+pointer is on every pointer event, and each frame it resolves hover from that
+position against the tree it just declared, because a redraw can move a
+component out from under a pointer that never moved.
 
 The two paths are independent: typing keeps going to the focused field while
 the mouse drifts across other controls.
 
-Why the split? Focus is a decision your app can make on its own — open a
-dialog, focus its first field — so it lives in your state and moves by
-message. Hover is a fact about where the mouse physically is, which no app
+The split follows who decides. Focus is something your app can decide on its
+own (open a dialog, focus its first field), so it lives in your state and moves
+by message. Hover is a fact about where the mouse physically is, which no app
 decides, so the runtime keeps it and answers for it.
 
 Two places read it:
@@ -121,39 +119,36 @@ Two places read it:
 - `PaintCtx::hovered` and `PaintCtx::contains_hover`, for styling under the
   pointer.
 - `DeclareCtx::pointer_within()`, while declaring, for the rarer case where
-  *structure* depends on the pointer — a tooltip deciding whether to declare
-  its bubble. It reports whether the pointer is on the current declaration or
-  anything inside it.
+  *structure* depends on the pointer, such as a tooltip deciding whether to
+  declare its bubble. It reports whether the pointer is on the current
+  declaration or anything inside it.
 
-A motion always comes back as at least `Consumed`, whether or not it moved
-hover and whether or not a component handled it. That is your redraw signal:
-the frame on screen may no longer show what the pointer is on, or where it is.
+A pointer motion always returns at least `Consumed`, whether or not it moved
+hover and whether or not a component handled it. Treat that as your redraw
+signal: the frame on screen may no longer show what the pointer is on, or where
+it is.
 
 ### Where paint and structure disagree
 
-The two readers answer from different moments, and it is worth knowing which.
-Paint flags are *this* frame's, resolved against the tree the declaration just
-finished building. `pointer_within()` is read while that tree is still being
-built, so it answers with the hover the **previous** frame resolved.
+The two readers answer from different moments. Paint flags describe *this*
+frame, resolved against the tree the declaration just finished building.
+`pointer_within()` is read while that tree is still being built, so it answers
+with the hover the **previous** frame resolved.
 
-Motion does not expose the gap: a motion returns non-`Ignored`, the host
-redraws, and that redraw declares with the new hover. What lags by one frame is
-hover changing *without* the pointer moving — a modal opening over the hovered
-node, a redraw sliding geometry out from under it. Such a frame paints the new
-answer and declares from the old one, so a tooltip whose trigger has just been
-covered keeps its bubble for exactly one frame.
+Pointer motion hides the gap, because the redraw it triggers declares with the
+new hover. The lag shows only when hover changes *without* the pointer moving,
+for example when a modal opens over the hovered component or a redraw slides
+geometry out from under it. That frame paints the new answer but declares from
+the old one, so a tooltip whose trigger has just been covered keeps its bubble
+for exactly one frame.
 
 ### Gestures freeze it
 
 While a mouse button is held, hover stops following the pointer and stays on
-whatever the gesture started on — otherwise the geometry a drag moves would
-chase the pointer dragging it. Releasing hands it back.
-
-The freeze holds the *path*, not the geometry: a frozen target that is
-redeclared somewhere else paints hovered where it now is. And it lasts only
-while that target could still be under the pointer at all — a modal that covers
-it, or a redraw that drops it, ends the freeze on the frame that does so, even
-though the gesture itself runs on.
+whatever the gesture started on, so the geometry a drag moves does not chase
+the pointer dragging it. Releasing the button hands hover back. The freeze ends
+early if a modal covers the target or a redraw stops declaring it, even though
+the gesture itself runs on.
 
 ### Focus following the mouse
 
@@ -166,7 +161,7 @@ choose between**, and that is usually the root. Motion focuses the *direct
 child* of that scope which the pointer entered, descending to its first
 focusable leaf; motion between components *inside* that child changes nothing.
 
-A pane grid with `hover_focus()` at the root behaves as expected — the mouse
+A pane grid with `hover_focus()` at the root behaves as expected: the mouse
 picks the pane, then the keyboard works inside it. Set it on the pane instead
 and every drift between two buttons in that pane moves focus, which is rarely
 what anyone wants:
@@ -185,22 +180,22 @@ nowhere better to put it.
 
 ### One event, one message
 
-`Ratcn::handle_event` returns at most one message per event. That limit binds
-focus, not hover: the motion that enters a scope emits the focus change *and*
-moves hover, because hover needs no message — the runtime writes its own. The
-frame that first paints the new scope focused already paints the new target
-hovered.
+`Ratcn::handle_event` returns at most one message per event. That limit applies
+to focus, not hover, because hover needs no message. The motion that enters a
+`hover_focus` scope emits the focus change *and* moves hover, so the frame that
+first paints the new pane focused already paints the component under the
+pointer hovered. Because the focus
+change is that event's one message, the motion returns before the components
+under the pointer are offered it.
 
-A motion that changes hover is not swallowed by having done so: it goes on to
-the components under the pointer, so a list whose cursor follows the mouse
-moves it on the entering motion rather than the one after. The `hover_focus`
-case is the exception — the focus change *is* the event's one message, so that
-motion returns before the components under it are offered anything.
+Any other motion that changes hover goes on to the components under the
+pointer, so a list whose cursor follows the mouse moves it on the entering
+motion rather than the one after.
 
 ## Gesture state
 
 Some interaction state is too short-lived for your app state but must survive
-the frame-by-frame rebuild of component instances — a drag anchor, for
+the frame-by-frame rebuild of component instances. A drag anchor is the typical
 example. `EventCtx::transient` stores such values by identity path: they
 persist while the path stays declared and are cleaned up when it disappears.
 Durable values still belong in app state. See [Dragging](./dragging) for the

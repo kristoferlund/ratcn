@@ -4,20 +4,20 @@ description: "Splitting state, messages, and rendering per screen once one modul
 
 # Structuring a larger app
 
-One screen is easy. This page is about what happens after that — when an app has
-several screens, each with its own state and messages, and you would rather not
-end up with one enormous `AppState`, one `Msg` enum with forty variants, and one
+One screen is easy. This page is about what comes next: an app with several
+screens, each with its own state and messages, where you would rather not end
+up with one enormous `AppState`, one `Msg` enum with forty variants, and one
 `update` nobody wants to open.
 
-Ratcn has no opinion about your module layout. It gives you two things that make
-a layered structure possible: **scopes**, which group declarations without needing
-a container component, and the fact that **state and messages are yours**, so
-they can nest however you like.
+The library has no opinion about your module layout. It gives you two things
+that make a layered structure possible: **scopes**, which group declarations
+without needing a container component, and the fact that **state and messages
+are yours**, so they can nest however you like.
 
 ## Grouping with scopes
 
 A scope is a named grouping around some children. It gives them a shared path
-segment, their own Tab boundary, and a focus target — with no component written
+segment, their own Tab boundary, and a focus target, with no component written
 for it.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 420px">
@@ -50,9 +50,9 @@ fn declare_panel_a(ctx: &mut DeclareCtx<'_, AppState, Msg>) {
 }
 ```
 
-The runtime discovers the button on its own — focusability needs no
-announcement. A scope with nothing focusable inside — a chart, a read-out —
-uses `ScopeOptions::default().focusable(true)`, which makes the scope itself the
+The runtime discovers the button on its own, so focusability needs no
+announcement. A scope with nothing focusable inside, such as a chart or a
+read-out, uses `ScopeOptions::default().focusable(true)`, which makes the scope itself the
 Tab stop. [Focus, hover, and identity](./focus-hover-identity) covers this.
 
 The panel border is a plain Ratatui `Block`, painted from a `ctx.paint` closure
@@ -76,7 +76,7 @@ screen.
   </div>
 </div>
 
-**LEDGER-93** is a small bookkeeping app with three screens — Ledger, Report,
+**LEDGER-93** is a small bookkeeping app with three screens: Ledger, Report and
 Settings. One module per screen, each owning its own state, messages, update, and
 rendering:
 
@@ -128,7 +128,7 @@ pub enum Msg {
 }
 ```
 
-Which turns the shell's update into a router rather than a monolith — each arm
+That turns the shell's update into a router rather than a monolith. Each arm
 hands the message to its owner:
 
 ```rust
@@ -159,7 +159,7 @@ List::new(entries)
 
 The reader dives into the screen's slice; the message constructor wraps the
 screen's `Msg` back into the app's. Those two closures are the only place that
-knows where the screen sits inside the app — everything else in the module names
+knows where the screen sits inside the app. Everything else in the module names
 only its own types.
 
 ## Sharing state between screens
@@ -168,7 +168,7 @@ Some state belongs to no single screen. LEDGER-93 keeps a currency preference in
 `shared.rs`: Settings changes it, Ledger and Report declare with it.
 
 Give it its own module, and let the shell keep dependent screens in step when a
-shared value changes. Resist reaching from one screen module into another — a
+shared value changes. Resist reaching from one screen module into another: a
 screen reading `state.settings.currency` has quietly coupled itself to Settings'
 internals, where `state.shared.prefs.currency` is a contract both can depend on.
 
@@ -183,16 +183,16 @@ Msg::Nav(NavMsg::Selected(screen)) => {
 }
 ```
 
-An intent path naming just the scope is enough — the runtime descends to that
+An intent path naming just the scope is enough: the runtime descends to that
 scope's first focusable child. There is no per-screen focus memory, so switching
 back starts at the top of the screen again.
 
 ## See also
 
-- [State and messages](./state-and-messages) — the ownership rules this builds on.
-- [Focus, hover, and identity](./focus-hover-identity) — scopes, traversal, and
+- [State and messages](./state-and-messages): the ownership rules this builds on.
+- [Focus, hover, and identity](./focus-hover-identity): scopes, traversal, and
   the identity paths scopes create.
-- [Rendering and event routing](./rendering-and-events) — the per-frame contract.
+- [Rendering and event routing](./rendering-and-events): the per-frame contract.
 - [`DeclareCtx::scope`](https://docs.rs/ratcn/latest/ratcn/runtime/struct.DeclareCtx.html#method.scope)
   and [`ScopeOptions`](https://docs.rs/ratcn/latest/ratcn/runtime/struct.ScopeOptions.html)
   for every scope option.

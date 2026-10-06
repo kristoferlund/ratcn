@@ -5,7 +5,7 @@ description: "A labeled boolean control for Ratatui apps: marker left, label rig
 # Checkbox
 
 A labeled boolean control: the marker on the left, the label on the right, and
-the whole row as one hit target — a click on the label checks the box exactly
+the whole row as one hit target, so a click on the label checks the box exactly
 as a click on the marker does.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 260px">
@@ -31,16 +31,20 @@ ctx.component(
 );
 ```
 
-Enter or Space toggles while focused. At rest a checkbox reads as text on the
-surface it sits on — no chrome — and hover or focus lay the same quiet fill
-over the row that every other control uses, so both kinds of users can always
-see what they are about to flip.
+The checked value is app-owned and arrives through `.checked(read, on_change)`:
+`read` answers from app state each frame, and `on_change` receives the
+requested state after every toggle. Without the binding the checkbox paints but
+is not focusable and answers no events.
+
+At rest a checkbox reads as text on the surface it sits on, with no chrome.
+Hover or focus lay the same quiet fill over the row that every other control
+uses, so both keyboard and pointer users can see what they are about to flip.
 
 ## The markers are yours
 
-The default pair is `■` / `□` — the boxes a multi-select [List](./list) ticks
-its rows with. Because both markers are strings you choose,
-the same component covers every binary control:
+The default pair is `■` / `□`, the boxes a multi-select [List](./list) ticks
+its rows with. Because both markers are strings you choose, the same component
+covers every binary control:
 
 ```rust
 // An ASCII checkbox:
@@ -48,7 +52,7 @@ Checkbox::new("Telemetry")
     .checked_marker("[x]")
     .unchecked_marker("[ ]")
 
-// A switch — the words are the point:
+// A switch, where the words are the point:
 Checkbox::new("Terminal bell")
     .checked_marker("[ON]")
     .unchecked_marker("[off]")
@@ -56,18 +60,22 @@ Checkbox::new("Terminal bell")
 
 The marker column takes the wider of the pair, so an uneven pair like
 `[ON]`/`[off]` never moves the label as it flips. `Checkbox::width()` measures
-the whole row — the same in both states — for layouts that hug it, as the
-demo's rows do.
+the whole row, the same in both states, for layouts that hug it, as the demo's
+rows do.
 
 Two options are a Checkbox wearing its states as labels; three or more are a
 [Cycle](./cycle).
 
-## State
+## Disabled
 
-The checked value is app-owned and arrives through `.checked(read, on_change)`:
-`read` answers from app state each frame, `on_change` receives the requested
-state after every toggle. Without the binding the checkbox paints but is not
-focusable and answers no events.
+`.disabled(true)` mutes the row, takes it out of Tab order, and ignores events.
+Pass the value from app state, as with any declaration prop.
+
+## Styling
+
+Colors derive from the theme. To recolor one checkbox, pass `.style(...)` a
+closure that receives the active theme and returns a `CheckboxStyle`, usually
+built from `CheckboxStyle::from_theme(theme)`.
 
 ## Paint-only widget
 
@@ -82,9 +90,25 @@ frame.render_widget(
 );
 ```
 
-`.width()` measures the columns it wants — marker column, space, label — the
-same in both states, for layouts that reserve exactly that. Replace
-`.themed(...)` with `.style(...)` to supply exact colors.
+You supply the interaction states with `.focused(...)`, `.hovered(...)`, and
+`.disabled(...)`. `.width()` measures the columns it wants (marker column,
+space, label), the same in both states. Replace `.themed(...)` with
+`.style(...)` to supply exact colors.
+
+## Keyboard and mouse
+
+| Input | Does |
+|---|---|
+| `Tab` `Shift+Tab` | Move focus to the next / previous control |
+| `Enter` `Space` | Toggle the focused checkbox |
+| Left click on the marker or label | Toggle the checkbox |
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+
+## Limits
+
+- A checkbox is one row. In a taller area only the first row paints and takes
+  clicks.
 
 ## Full API
 
@@ -92,8 +116,6 @@ Every method, with binding requirements and edge-case detail:
 [`Checkbox`](https://docs.rs/ratcn/latest/ratcn/struct.Checkbox.html),
 [`CheckboxWidget`](https://docs.rs/ratcn/latest/ratcn/struct.CheckboxWidget.html),
 [`CheckboxStyle`](https://docs.rs/ratcn/latest/ratcn/struct.CheckboxStyle.html).
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## See also
 

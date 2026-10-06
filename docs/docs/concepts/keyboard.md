@@ -1,5 +1,5 @@
 ---
-description: Every key ratcn components respond to, in one table — traversal, navigation, commit, and dismiss — plus the rules that decide which keys a component claims.
+description: Every key ratcn components respond to, from traversal and navigation to commit and dismiss, plus the rules that decide which keys a component claims.
 ---
 
 # Keyboard
@@ -10,15 +10,15 @@ several buttons or checkboxes does not turn them into a list.
 
 ## The map
 
-### Traversal — moving between components
+### Traversal between components
 
 | Key | Does |
 |---|---|
 | `Tab` | Focus the next focusable component |
 | `Shift+Tab` | Focus the previous one |
 
-Traversal belongs to the runtime, not to components. `Tab` wrapping is
-per-scope — see [Focus, hover, and identity](./focus-hover-identity). Apps add
+Traversal belongs to the runtime, not to components. `Tab` wrapping is set per
+scope (see [Focus, hover, and identity](./focus-hover-identity)), and apps add
 their own jumps with [`focus_key`](./focus-hover-identity#focus).
 
 For example, in the showcase's Agent settings, Tab chooses a setting and
@@ -26,9 +26,9 @@ Left/Right or `h`/`l` changes its value. In Themes and Notifications, Up/Down or
 `k`/`j` moves among the rows of one List. Buttons and individual checkboxes use
 Tab/Shift+Tab, not arrows or Vim letters, to move focus.
 
-### Navigation — moving a cursor inside a component
+### Navigation inside a component
 
-Vertical controls — [List](../components/list) and an open
+Vertical controls are [List](../components/list) and an open
 [Select](../components/select):
 
 | Keys | Moves the cursor |
@@ -39,7 +39,7 @@ Vertical controls — [List](../components/list) and an open
 | `PageDown` / `PageUp` | one viewport |
 | `Ctrl+D` / `Ctrl+U` | half a viewport |
 
-Horizontal controls — [Tabs](../components/tabs):
+Horizontal controls are [Tabs](../components/tabs):
 
 | Keys | Moves the cursor |
 |---|---|
@@ -71,20 +71,24 @@ to the app. Tab traversal reveals a focused descendant that was offscreen.
 ### Text fields
 
 [Input](../components/input) and [TextArea](../components/textarea) route keys
-by binding, not by effect: a key their editor binds is theirs even where it
-changes nothing — `←` at the start of the text, `Ctrl+K` at its end — and a
-chord it does not bind bubbles, so app hotkeys reach the app wherever the
-cursor is. Every unmodified character is text there; `j`, `h`, and Space
-are characters. Both leave Tab, Shift+Tab, Esc, and the function keys alone,
-so traversal and dialogs keep working around a focused field. Input also
-leaves the vertical keys and the editor's chords for them. In a terminal,
-`Ctrl+C` and `Ctrl+X` copy and cut a selection, and bubble without one. In the
-browser, `Cmd+C`, `Cmd+X`, and `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and
-`Ctrl+V` elsewhere, arrive as `Event::Copy`, `Event::Cut`, and `Event::Paste`,
-never as keys, and so does `Shift+Delete` off a Mac: bind those events, not
-the keys. Every other `Cmd` or `Super`
-chord is dropped there, so the Mac's `Cmd` editing chords do nothing in a
-field. Each page lists its editing keys.
+by binding, not by effect. A key their editor binds belongs to the field even
+where it changes nothing (`←` at the start of the text, `Ctrl+K` at its end),
+and a chord the editor does not bind bubbles, so app hotkeys reach your app
+wherever the cursor is.
+
+- Every unmodified character is text: `j`, `h`, and Space are characters.
+- Tab, Shift+Tab, Esc, and the function keys pass through, so traversal and
+  dialogs keep working around a focused field. Input also leaves the vertical
+  keys and the editor's chords for them.
+- In a terminal, `Ctrl+C` and `Ctrl+X` copy and cut a selection, and bubble
+  when there is none.
+- In the browser, `Cmd+C`, `Cmd+X`, and `Cmd+V` on a Mac, `Ctrl+C`, `Ctrl+X`,
+  and `Ctrl+V` elsewhere, and `Shift+Delete` off a Mac arrive as `Event::Copy`,
+  `Event::Cut`, and `Event::Paste`, never as keys, so bind those events rather
+  than the keys. Every other `Cmd` or `Super` chord is dropped there, so the
+  Mac's `Cmd` editing chords do nothing in a field.
+
+Each component page lists its editing keys.
 
 ### Commit and dismiss
 
@@ -102,10 +106,8 @@ Select and Tooltip require plain Esc. A read-only Tooltip (`open_when`) leaves
 Esc to its ancestors or the app. Components require their action bindings to
 emit these changes; disabled controls do not activate.
 
-In the showcase, plain Esc goes to the embedded demo first and returns to the
-host only if the demo leaves it unhandled. The landing screensaver also closes
-on plain Esc. Browser previews additionally release browser keyboard capture
-on Esc; that host behavior is separate from component dismissal.
+The browser previews on this site also release keyboard capture on Esc. That
+is the preview host's behavior, separate from component dismissal.
 
 ## The rules behind the map
 
@@ -113,8 +115,9 @@ Three rules decide whether a component claims a key at all. They matter because
 they are what keeps your app's own hotkeys working.
 
 **Components claim their documented keys.** `Ctrl+S` is not a List key and can
-reach your save handler. The supported Ctrl navigation chords are exceptions
-to the usual unmodified-key rule; horizontal controls do not claim Ctrl+U/D.
+reach your save handler. Most component keys are unmodified; the Ctrl
+navigation chords in the tables above are the exceptions, and horizontal
+controls do not claim Ctrl+U/D.
 Dialog dismissal and app focus shortcuts follow their configured `KeyChord`.
 
 **Shift is not item navigation.** `J` is not `j`; Shift-modified item navigation
@@ -128,7 +131,7 @@ instead. Modal scopes prevent unhandled keys from reaching the underlying app.
 
 An ancestor hotkey does not override a key consumed by its child. If your app
 deliberately needs to override `j`, check it before calling `Ratcn::handle_event`
-— see [Host integration](./host-integration). Do not globally translate Vim
+(see [Host integration](./host-integration)). Do not globally translate Vim
 letters into traversal keys: a custom text editor needs to receive its own
 text and editing keys first.
 
@@ -136,7 +139,7 @@ text and editing keys first.
 
 Typing a letter does not jump to a matching item: there is no typeahead.
 
-A backend key this vocabulary has no place for — a key release, a function key
-beyond `F(u8)` — does not convert into an `Event` and is ignored. See
+A backend key this vocabulary has no place for, such as a key release or a
+function key beyond `F(u8)`, does not convert into an `Event` and is ignored. See
 [`KeyCode`](https://docs.rs/ratcn/latest/ratcn/runtime/enum.KeyCode.html) for
 the full list of what is representable.

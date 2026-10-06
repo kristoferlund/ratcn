@@ -4,11 +4,10 @@ description: "A one-of-many control for Ratatui apps that cycles in place: it sh
 
 # Cycle
 
-A control that cycles through its options in place: the current value is all
-it shows, and every click, <kbd>Enter</kbd>, <kbd>Space</kbd>,
-<kbd>Right</kbd>/<kbd>l</kbd>, or <kbd>Ctrl+N</kbd> advances to the next —
-wrapping at the end. <kbd>Left</kbd>/<kbd>h</kbd> and <kbd>Ctrl+P</kbd> walk
-backward.
+A one-of-many control that cycles through its options in place. It shows only
+the current option, and each press advances to the next, wrapping at the end.
+It suits settings rows, where a column of values should read as values rather
+than as a wall of chrome.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 300px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -33,12 +32,21 @@ ctx.component(
 );
 ```
 
-The row paints like a small ghost button: plain text at rest, a quiet fill
-while hovered or focused. A column of cycles reads as values, not as a wall of
-chrome — which is what makes the settings-row layout work: paint the setting's
-name at the left edge and declare the Cycle on the same row with
-`.align(Alignment::Right)` — the value hugs the right edge, paint and hit
-target together, and nothing needs measuring:
+The selection is app-owned and arrives through `.selection(read, on_change)`:
+`read` returns the index shown each frame, and `on_change` receives the index
+the user moved to. Without the binding the Cycle paints but is not focusable
+and answers no events.
+
+## Settings rows
+
+The value paints like a small ghost button: plain text at rest, a quiet fill
+while hovered or focused. A Cycle is exactly as wide as the text it shows, in
+both paint and hit target, so the fill hugs the value instead of stretching
+across the row.
+
+For a settings row, paint the setting's name at the left edge and declare the
+Cycle on the same row with `.align(Alignment::Right)`. The value hugs the right
+edge, and nothing needs measuring:
 
 ```rust
 ctx.paint_widget(Line::from("Text size").style(name), row);
@@ -52,8 +60,8 @@ ctx.component(
 ```
 
 For layouts that reserve space instead, `Cycle::width()` (and
-`MeasuredComponent`) answer with the widest option plus its padding — the
-columns no value ever outgrows.
+`MeasuredComponent`) return the widest option plus its padding: the columns no
+value ever outgrows.
 
 ## Where a Checkbox ends
 
@@ -61,13 +69,16 @@ Two options are a [Checkbox](./checkbox) wearing its states as labels
 (`[ON]`/`[off]`). Three or more options, or an ordered scale such as
 Small/Medium/Large, are a Cycle.
 
-## State
+## Disabled
 
-The selection is app-owned and arrives through `.selection(read, on_change)`:
-`read` returns the index shown each frame (an out-of-range answer clamps to
-the last option), and `on_change` receives the index the user moved to.
-Without the binding the Cycle paints but is not focusable and answers no
-events.
+`.disabled(true)` mutes the value, takes it out of Tab order, and ignores
+events. Pass the value from app state, as with any declaration prop.
+
+## Styling
+
+Colors derive from the theme. To recolor one Cycle, pass `.style(...)` a
+closure that receives the active theme and returns a `CycleStyle`, usually
+built from `CycleStyle::from_theme(theme)`.
 
 ## Paint-only widget
 
@@ -82,11 +93,25 @@ const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
 frame.render_widget(CycleWidget::new(SIZES[state.size]).themed(&theme), area);
 ```
 
-The interactive component paints and answers events in exactly the columns its
-current value occupies — a Cycle is as wide as the text it shows, so rows of
-different settings end at different columns, and a fill on hover or focus
-hugs the value instead of stretching across the row. Replace `.themed(...)`
-with `.style(...)` to supply exact colors.
+You supply the interaction states with `.focused(...)`, `.hovered(...)`, and
+`.disabled(...)`. Replace `.themed(...)` with `.style(...)` to supply exact
+colors.
+
+## Keyboard and mouse
+
+| Input | Does |
+|---|---|
+| `Tab` `Shift+Tab` | Move focus to the next / previous control |
+| `Enter` `Space` &nbsp;`→` `l` &nbsp;`Ctrl+N` | Next option, wrapping to the first |
+| `←` `h` &nbsp;`Ctrl+P` | Previous option, wrapping to the last |
+| Left click | Next option |
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+
+## Limits
+
+- `Home` and `End` do nothing: the options form a ring with no ends.
+- A `read` index past the last option shows the last option.
 
 ## Full API
 
@@ -94,8 +119,6 @@ Every method, with binding requirements and edge-case detail:
 [`Cycle`](https://docs.rs/ratcn/latest/ratcn/struct.Cycle.html),
 [`CycleWidget`](https://docs.rs/ratcn/latest/ratcn/struct.CycleWidget.html),
 [`CycleStyle`](https://docs.rs/ratcn/latest/ratcn/struct.CycleStyle.html).
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## See also
 

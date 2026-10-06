@@ -37,26 +37,19 @@ ctx.component("folders", list, area);
 ```
 
 Items are identified by your own values, not by row index, so sorting or
-filtering the list keeps the same item selected. Those values must be unique
+filtering the list keeps the same item selected. The values must be unique
 within one list, or focus, selection, and clicks are ambiguous; a debug build
-panics on duplicates as the list declares, and a release build takes the items
-on trust — the scan is quadratic and every frame would repeat it. `item_focus`
-is the cursor and `selection` is the committed choice — separate, so a user can
-browse without changing anything.
+panics on duplicates.
 
-Arrow keys move the cursor one item at a time; Home and End jump to the first
-and last enabled item, and PageUp and PageDown move it a visible page at a time.
-`j`/`k` and Ctrl+N/Ctrl+P step as well, and Ctrl+D/Ctrl+U move half a page — see
-[Keyboard](../concepts/keyboard).
-
-Enter or Space commits the cursor. Every other key is ignored and bubbles, so a
-single-letter app hotkey keeps working while a list has focus.
+`item_focus` is the cursor and `selection` is the committed choice. They are
+separate so a user can browse without changing anything.
 
 ## Multi-selection
 
 Any number of items at once, with checkbox markers. Instead of a selected value
-you give a predicate: `List` asks "is this one selected?" per row it paints, so
-the selection can live in a `HashSet`, a `Vec`, or a flag on each record.
+you give a predicate: `List` asks "is this one selected?" for each row it
+paints, so the selection can live in a `HashSet`, a `Vec`, or a flag on each
+record.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 400px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -82,9 +75,9 @@ List::new(items)
     )
 ```
 
-`on_toggle` reports the item the user flipped; your update function adds or
-removes it. Enter or Space toggles the cursor item. Pick one mode —
-`.selection(...)` and `.multi_selection(...)` together will panic.
+The message reports the item the user flipped, and your update function adds or
+removes it. Enter or Space toggles the cursor item. Pick one mode:
+`.selection(...)` and `.multi_selection(...)` together panic.
 
 ## Custom rows
 
@@ -121,9 +114,10 @@ List::new(people)
 ```
 
 Every item is the same height, which keeps clicking and paging exact. The
-default markers are `■`/`□` and `●`/`○`. To change only the markers — ASCII
-`[x]`/`[ ]`, say — use `.selected_marker(...)` and `.unselected_marker(...)`
-instead of repainting the whole row:
+default markers are `●`/`○` for a single selection and `■`/`□` for a
+multi-selection. To change only the markers, to ASCII `[x]`/`[ ]` say, use
+`.selected_marker(...)` and `.unselected_marker(...)` instead of repainting the
+whole row:
 
 ```rust
 List::new(todos)
@@ -132,13 +126,12 @@ List::new(todos)
     .unselected_marker("[ ]")
 ```
 
-The row's state colors are painted underneath what `paint_item`
-returns, so unstyled text picks up the focused, selected, or disabled colors,
+The row's state colors are painted underneath what `paint_item` returns, so unstyled text picks up the focused, selected, or disabled colors,
 and any color you set explicitly on a `Text`, `Line`, or `Span` is kept.
 
-`.focus_symbol("> ")` adds a marker in front of the cursor row without replacing
-the row. It is painted only while the list is focused or hovered, so a list at
-rest shows no cursor.
+`.focus_symbol("> ")` adds a marker in front of the cursor row without
+replacing the row. Like the cursor highlight, it shows only while the list is
+focused or hovered.
 
 ## Disabled
 
@@ -153,18 +146,16 @@ ListItem::new(Folder::Settings, "Settings").disabled(!state.is_admin)
 
 The list scrolls itself to keep the cursor visible, and the wheel scrolls it
 whether or not anything is bound. Bind `.scroll(...)` only when something
-outside needs the offset — a scrollbar alongside, say. The offset is an item
-index even when items occupy multiple terminal rows.
+outside needs the offset, such as a scrollbar alongside. The offset is an item
+index even when items occupy several terminal rows.
 
 ```rust
 List::new(items).scroll(|s: &AppState| s.scroll, Msg::ScrollChanged)
 ```
 
-To scroll something that is not a list — a form, a pane, a tile grid — see
-[ScrollArea](./scroll-area).
-
-`item_focus` calls its message constructor with both the target item and the
-resulting top-item offset. A bound-scroll app must store both in one update:
+`item_focus` hands its message both the item and the resulting top-item
+offset. With scroll bound, store both in one update, so repeated navigation
+events stay correct even when several arrive before a redraw:
 
 ```rust
 enum Msg {
@@ -178,32 +169,25 @@ Msg::ItemFocused { item, offset } => {
 }
 ```
 
-This keeps repeated navigation events correct even when several arrive before
-redraw. If scroll is unbound, ignore the second callback argument.
+If scroll is unbound, ignore the offset.
 
-The mouse wheel is the one input that does not follow the cursor. It scrolls
-the view and leaves the cursor where it is, so the cursor can scroll out of
-sight — the same behavior a scrollable list has elsewhere. The wheeled view is
-held only while the list stays as it was: the item under the cursor is still
-that item, still on that row, in a list of the same length. Move the cursor,
-replace that item, reorder, filter, insert, or remove, and the hold ends and
-the cursor is scrolled back into view — a held row number means nothing once
-the rows have moved. The list always handles the wheel, including at the top and
-bottom of the range, so it never scrolls an enclosing pane.
+The wheel scrolls the view and leaves the cursor where it is, so the cursor can
+scroll out of sight. Moving the cursor, or changing the items around it,
+scrolls the cursor back into view. The list always handles the wheel, even at
+the ends of its range, so it never scrolls an enclosing pane.
 
-Pointer motion moves the cursor whether or not the list has focus, from the
-motion that enters the list onward. The cursor is only *painted* on a focused
-or hovered list, and the runtime keeps hover itself, so the highlight appears
-on the same frame the pointer arrives.
+To scroll something that is not a list (a form, a pane, a tile grid), see
+[ScrollArea](./scroll-area).
 
 ## Styling
 
-Colors come from the theme. `.style(...)` overrides them, and the closure gets
-the active theme each render so a derived style follows theme switches. Focus
-separates the field backdrop subtly from the background; hover separates it a
-little further, so the pointer remains visible when the list already has
-keyboard focus. Which way that is comes from the theme: a dark theme's well
-lightens, a light theme's darkens.
+Colors come from the theme. Focus separates the list's backdrop subtly from the
+background, and hover separates it a little further, so the pointer stays
+visible when the list already has keyboard focus. Which way that goes comes
+from the theme: a dark theme's well lightens, a light theme's darkens.
+
+`.style(...)` overrides the colors. The closure gets the active theme each
+render, so a derived style follows theme switches:
 
 ```rust
 use ratcn::ListStyle;
@@ -243,33 +227,38 @@ frame.render_widget(
 ```
 
 Scrolling is yours: hand over the rows that are on screen and say where they
-start with `first_item`. Every other index — `focused_item`, `selected_items`,
-`disabled_items` — counts from the start of the list, so scrolling changes only
-that number and the rows. The widget holds no scroll position and never adjusts
-one, so your app stays the only scroll policy. Offscreen rows are free: you
-build `Text`s for the rows you hand over, and the widget allocates nothing per
-item it does not paint.
+start with `first_item`. Every other index counts from the start of the list,
+so scrolling changes only that number and the rows. You build `Text`s only for
+the rows you hand over. Keep their heights uniform, as the `List` component
+does for you.
 
-The widget is area-driven — it fills the area you give it and has nothing to
-measure — and it paints each item at whatever height its `Text` is. Keeping
-those heights uniform is yours to do here, because the arithmetic that maps a
-screen row back to an item counts items rather than lines; the `List` component
-does it for you.
-
-The two row inputs use different encodings: `selected_items` is a list of
-selected indices, since selection is sparse, while `disabled_items` is one flag
-per item. Both are read at the item's own index, and only for the rows
-the widget paints — so a windowed caller can name just the selected rows inside
-its window, but `disabled_items` is a positional mask and has to be padded up to
-the window: entry *n* describes item *n*, and entries past the end of the slice
-read as enabled.
+`selected_items` lists the selected indices, while `disabled_items` is one flag
+per item. A windowed caller pads `disabled_items` up to its window; entries
+past the end read as enabled.
 
 `.focused(...)` picks the focus backdrop and shows the cursor row and focus
-symbol. While there is a cursor, the symbol's column is reserved in front of
-every row, so the text does not shift when the cursor scrolls out of the
-window. `.disabled(true)` dims the whole widget, as `.disabled_items(...)` does
-for single rows. Replace `.themed(...)` with `.style(...)` to supply exact widget
-colors instead of deriving them from a theme.
+symbol. `.disabled(true)` dims the whole widget. Replace `.themed(...)` with
+`.style(...)` to supply exact colors.
+
+## Keyboard and mouse
+
+| Input | Does |
+|---|---|
+| `↑` `↓` &nbsp;`k` `j` &nbsp;`Ctrl+P` `Ctrl+N` | Move the cursor one item |
+| `Home` `End` | Move to the first / last enabled item |
+| `Page Up` `Page Down` | Move a visible page |
+| `Ctrl+U` `Ctrl+D` | Move half a page |
+| `Enter` `Space` | Select, or toggle in a multi-selection |
+| Pointer motion | Move the cursor |
+| Click | Select the item, or toggle it in a multi-selection |
+| Wheel | Scroll the view, leaving the cursor |
+
+Every other key bubbles, so a single-letter app hotkey keeps working while a
+list has focus. Pointer motion moves the cursor whether or not the list has
+focus, but the cursor is painted only on a focused or hovered list. See
+[Keyboard](../concepts/keyboard) for the rules every component shares.
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## Full API
 
@@ -279,8 +268,6 @@ Every method, with binding requirements and edge-case detail:
 [`ListItemState`](https://docs.rs/ratcn/latest/ratcn/struct.ListItemState.html),
 [`ListWidget`](https://docs.rs/ratcn/latest/ratcn/struct.ListWidget.html),
 [`ListStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ListStyle.html).
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## See also
 

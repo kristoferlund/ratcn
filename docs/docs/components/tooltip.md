@@ -5,9 +5,9 @@ description: "A tooltip for Ratatui apps: a short explanation floated beside the
 # Tooltip
 
 A short explanation floated beside the content it describes. The bubble is
-declared in a hint layer: painted above the content around it (beneath a modal
-it sits outside of), but inert — a click over it reaches the control underneath,
-and it never takes focus.
+declared in a hint layer, painted above the content around it (but beneath a
+modal it sits outside of). It is inert: a click over it reaches the control
+underneath, and it never takes focus.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 340px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -34,7 +34,7 @@ ctx.component("save_tip", tooltip, area);
 
 A Tooltip wraps rather than replaces: the area you declare it with is the
 trigger's area, and `.trigger(...)` declares whatever goes there. That content
-keeps its own looks, focus order, and clicks — the Tooltip adds an explanation
+keeps its own looks, focus order, and clicks. The Tooltip adds an explanation
 and nothing else.
 
 ## State
@@ -44,7 +44,7 @@ when the pointer leaves, and the runtime owns hover, so the example above
 stores nothing and routes nothing.
 
 `.open_when(read)` replaces that rule when it is not quite what you want. The
-reader gets your state and the same hover answer the default uses:
+reader gets your state and the hover answer the default uses:
 
 ```rust
 // The default, spelled out.
@@ -57,14 +57,14 @@ reader gets your state and the same hover answer the default uses:
 .open_when(move |s: &AppState, hovered| hovered || s.focus.contains_path([id]))
 ```
 
-The focus query is a root-anchored prefix, so the id you pass is the Tooltip's
-own — its trigger's children sit beneath it in the path.
+Pass the Tooltip's own id to the focus query: its trigger's children sit
+beneath it in the path.
 
-Mind what the focus half does on its own: a click focuses what it hits, so that
-reader keeps the bubble showing after a press until focus moves elsewhere. Pair
-focus with your own note of which device is driving if you want the web's
-`:focus-visible` behavior instead — the app sees every event, so recording
-`state.keyboard = !matches!(event, Event::Mouse(_))` before routing is enough:
+A click focuses what it hits, so a focus-based reader keeps the bubble showing
+after a press until focus moves elsewhere. For the web's `:focus-visible`
+behavior instead, note which device is driving. The app sees every event, so
+recording `state.keyboard = !matches!(event, Event::Mouse(_))` before routing
+is enough:
 
 ```rust
 .open_when(move |s: &AppState, hovered| {
@@ -73,38 +73,38 @@ focus with your own note of which device is driving if you want the web's
 ```
 
 Use `.open(read, on_open_change)` instead when the app keeps a flag of its own
-that the Tooltip should change — a first-run hint, a validation failure. That
-form bundles the same reader with its message, and the component asks for
-`true` when the pointer moves onto the trigger and `false` on Esc while
+that the Tooltip should change, such as a first-run hint or a validation
+failure. That form bundles the same reader with a message: the component asks
+for `true` when the pointer moves onto the trigger, and `false` on Esc while
 showing. Neither `.open_when(...)` nor the default emits anything, since there
 is nothing to write.
 
-## Interaction
+## Keyboard and mouse
 
-Moving the pointer onto the trigger shows the bubble, and moving it off hides
-it again. For a hover-driven tooltip — the two above, and the one in the demo —
-Esc does nothing: there is no stored flag to clear, and the pointer still says
-the bubble belongs on screen.
+| Input | Does |
+|---|---|
+| Pointer onto the trigger | Show the bubble |
+| Pointer off the trigger | Hide the bubble |
+| `Esc`, with focus inside the trigger | Ask to close it (the `.open(...)` form only) |
 
-Esc belongs to the `.open(read, on_open_change)` form. While such a tooltip is
-open and something inside its trigger has focus, an unmodified Esc bubbles out
-to the Tooltip and asks the app to close it, so a keyboard user can dismiss an
-explanation without reaching for the mouse. Nothing else is captured either
-way: keys bubble through the bubble to the app, and a press over the bubble
-goes to whatever it covers.
+Showing and hiding on hover is the default rule; a custom reader decides for
+itself.
 
-A Tooltip is never a Tab stop, and neither is its bubble — focus passes
-straight through to the trigger.
+A hover-driven tooltip ignores Esc: there is no stored flag to clear, and the
+pointer still says the bubble belongs on screen. Nothing else is captured.
+Keys bubble through to the app, and a press over the bubble goes to whatever it
+covers. A Tooltip is never a Tab stop, and neither is its bubble, so focus
+passes straight through to the trigger.
 
-Structure is decided while declaring, so the bubble follows a hover change that
-did not come from the pointer one frame late: open a modal over a showing
-tooltip and the bubble is declared once more, on the frame the modal appears,
-before the next frame drops it. See
+A hover change that does not come from the pointer, such as a modal opening
+over a showing tooltip, can reach the bubble one frame late. See
 [Focus, hover, and identity](../concepts/focus-hover-identity#where-paint-and-structure-disagree).
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## Placement
 
-`.side(...)` picks the preferred side — `TooltipSide::Top` (the default),
+`.side(...)` picks the preferred side: `TooltipSide::Top` (the default),
 `Bottom`, `Left`, or `Right`. The bubble is centered on the trigger's other
 axis, flips to `TooltipSide::opposite()` when the preferred side has no room in
 the frame, and is finally clamped inside the frame so it is always fully
@@ -120,7 +120,7 @@ and the bubble grows taller.
 
 ## Styling
 
-`TooltipStyle` has three colors — `foreground`, `background`, and `border` —
+`TooltipStyle` has three colors (`foreground`, `background`, and `border`)
 and no interaction states, since a tooltip is never focused, hovered, or
 disabled. `.style(...)` overrides them for one tooltip; the closure receives the
 active theme each render, so a derived style follows theme switches:
@@ -141,7 +141,7 @@ that render on any terminal.
 ## Paint-only widget
 
 `TooltipWidget` paints the bubble on its own. It is an ordinary Ratatui widget,
-so it works in a plain Ratatui app with no `Ratcn` runtime — take the look and
+so it works in a plain Ratatui app with no `Ratcn` runtime. Take the look and
 keep your own hover handling:
 
 ```rust
@@ -153,8 +153,8 @@ frame.render_widget(bubble, Rect::new(x, y, width, bubble.height(width)));
 ```
 
 `.width()` reports the width the text needs unwrapped, and `.height(width)` the
-rows it needs once wrapped to that width — both including the border, so a
-layout reserves exactly what paints. Replace `.themed(...)` with `.style(...)`
+rows it needs once wrapped to that width. Both include the border, so a layout
+reserves exactly what paints. Replace `.themed(...)` with `.style(...)`
 to supply exact colors.
 
 ## Full API
@@ -164,8 +164,6 @@ Every method, with binding requirements and edge-case detail:
 [`TooltipWidget`](https://docs.rs/ratcn/latest/ratcn/struct.TooltipWidget.html),
 [`TooltipStyle`](https://docs.rs/ratcn/latest/ratcn/struct.TooltipStyle.html),
 [`TooltipSide`](https://docs.rs/ratcn/latest/ratcn/enum.TooltipSide.html).
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## See also
 

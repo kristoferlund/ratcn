@@ -4,13 +4,12 @@ description: "Enabling mouse reporting for a ratcn app, and how clicks, hover, s
 
 # Mouse input
 
-Mouse support is opt-in and split cleanly between you and the library, the same
-way keyboard is. **You** turn mouse reporting on and feed raw events in; the
+Mouse support is opt-in and split between you and the library, the same way
+keyboard is. **You** turn mouse reporting on and feed raw events in. The
 **library** routes each event to the component under the pointer and turns it
-into a message — buttons press, lists select and scroll, tabs switch, things
-hover, things [drag](./dragging). Where keyboard routes by
-the focus path, the mouse routes through the geometry from the last successful
-`Ratcn::render`.
+into a message: buttons press, lists select and scroll, tabs switch, things
+hover, and things [drag](./dragging). Where keyboard routes by the focus path,
+the mouse routes through the geometry from the last successful `Ratcn::render`.
 
 See [Rendering and event routing](./rendering-and-events) for the shared retained
 surface and bubbling contract, and [Host integration](./host-integration) for
@@ -18,8 +17,10 @@ loop ownership.
 
 ## Turning it on
 
-A terminal reports mouse events once the host asks it to. With Ratcn's
-`crossterm` feature, `InputModes` is the RAII helper that asks:
+A terminal reports mouse events once the host asks it to. A host on ratcn's
+[terminal session](./host-integration#a-terminal-session) opens it with
+`SessionOptions::new().mouse()`. With the `crossterm` feature, `InputModes` is
+the RAII helper that asks:
 
 ```rust
 let _input_modes = ratcn::crossterm::InputModes::new()
@@ -27,9 +28,9 @@ let _input_modes = ratcn::crossterm::InputModes::new()
     .enable()?;
 ```
 
-The host decides when to enable the mode and retains the guard for the event
-loop's lifetime. Dropping the last Ratcn guard that requested a mode restores
-it, including on `?` or panic unwinding. A host with its own terminal lifecycle
+The host decides when to enable the mode and keeps the guard for the event
+loop's lifetime. Dropping the last guard that requested a mode restores it,
+including on `?` or panic unwinding. A host with its own terminal lifecycle
 abstraction can drive the same modes through that.
 
 ::: warning Bind it to a name
@@ -38,17 +39,14 @@ stays on for as long as it lives. The same retention rule applies to bracketed
 paste and host-owned raw mode or alternate-screen guards.
 :::
 
-`InputModes` is feature-gated backend glue: the host's `enable()` call is what
-changes terminal modes.
-
 ## Synthesizing clicks and drags
 
 Backends deliver `Down`, `Up`, and `Moved` (crossterm may also deliver `Drag`).
-A **click** ("a press and release on the same component") and a **drag** ("a
-press, then a move with the button held") are higher-level — and synthesized for
-you.
-The `Ratcn` runtime tracks each button's gesture, so you feed the **raw** mouse
-events straight to `handle_event`, the same call you already use for keys:
+A **click** (a press and release on the same component) and a **drag** (a
+press, then a move with the button held) are higher-level, and the runtime
+synthesizes them for you. `Ratcn` tracks each button's gesture, so you feed the
+**raw** mouse events straight to `handle_event`, the same call you already use
+for keys:
 
 ```rust
 use ratcn::runtime::EventResult;
@@ -61,21 +59,21 @@ if let EventResult::Emit(msg) = ratcn.handle_event(event, &state) {
 }
 ```
 
-`handle_event` synthesizes `Click`/`Drag`/`DragEnd` from the raw
-`Down`/`Up`/`Moved` before routing: a press-then-release on one component
-reaches it as a `Click`, a held-button move as a `Drag`, and the release that
-ends a drag as a `DragEnd`. One raw event still produces at most one message —
-the same one-event-one-message flow as keyboard.
+Before routing, `handle_event` turns the raw events into `Click`, `Drag`, and
+`DragEnd`: a press-then-release on one component reaches it as a `Click`, a
+held-button move as a `Drag`, and the release that ends a drag as a `DragEnd`.
+One raw event still produces at most one message, the same
+one-event-one-message flow as keyboard.
 
-What a click requires is that the **same component** is under the pointer at
-the press and at the release. The pointer may move in between: drifting a
-column while pressing a button still clicks it, the way a real mouse behaves.
-Leaving the component ends the click, and returning to it before releasing
-revives it. If a redraw moved or replaced things in between, a newly exposed
-component at the same cell does not inherit the click.
+A click needs the **same component** under the pointer at the press and at the
+release. The pointer may move in between: drifting a column while pressing a
+button still clicks it, the way a real mouse behaves. Leaving the component
+ends the click, and returning to it before releasing revives it. If a redraw
+moved or replaced things in between, a newly exposed component at the same cell
+does not inherit the click.
 
 Movement only cancels the click when a component claimed the gesture with
-[`capture_pointer`](./dragging) on the `Down` — claiming is what declares the
+[`capture_pointer`](./dragging) on the `Down`. Claiming is what declares the
 movement a drag, and that release arrives as `DragEnd` instead. A claimed press
 that never moved is still a click, so one component can both drag and be
 clicked.
@@ -84,71 +82,60 @@ Hit-testing uses the geometry from the last successful render. When targets
 overlap, the one declared later wins; paint-only widgets are never hit targets.
 The event lands on the component under the pointer first and bubbles to its
 ancestors from there, the same way keyboard events bubble from the focused
-component — see
-[Rendering and event routing](./rendering-and-events#routing).
+component; see [Rendering and event routing](./rendering-and-events#routing).
 
 ## What components do with it
 
-The normalized `MouseKind` a component can receive is `Down`, `Up`, `Click`,
-`Drag`, `DragEnd`, `Moved`, and `Scroll`. Components opt into the ones they
-need:
+A component can receive these `MouseKind`s: `Down`, `Up`, `Click`, `Drag`,
+`DragEnd`, `Moved`, and `Scroll`. Components opt into the ones they need:
 
-- **Primary click** activates by default — a button presses and a list row is
-  chosen.
-  Right and middle clicks do not activate or focus the standard built-ins. A
-  primary click also moves focus, so the component is keyboard-ready immediately
-  after. For a List item cursor or manual Tabs cursor, the click's selection
-  message should update that app-owned cursor along with the committed value;
-  those cursors are separate from runtime component focus.
+- **Primary click** activates by default: a button presses and a list row is
+  chosen. Right and middle clicks do not activate or focus the standard
+  built-ins. A primary click also moves focus, so the component is
+  keyboard-ready immediately after. For a List item cursor or manual Tabs
+  cursor, the click's selection message should update that app-owned cursor
+  along with the committed value; those cursors are separate from runtime
+  component focus.
 - **Primary down focus is a fallback.** After the target and its ancestors
-  return `Ignored`, the runtime focuses the innermost eligible target. Capturing
-  the pointer does not consume the event, so capture plus `Ignored` still gets
-  this fallback. `Consumed` vetoes it, while `Emit` returns the component's
-  message instead. A press inside a scope that already holds focus — its empty
-  space, or a child that takes none — leaves focus where it is.
+  return `Ignored`, the runtime focuses the innermost eligible target.
+  Capturing the pointer does not consume the event, so capture plus `Ignored`
+  still gets this fallback. `Consumed` vetoes it, while `Emit` returns the
+  component's message instead. A press inside a scope that already holds focus
+  (its empty space, or a child that takes none) leaves focus where it is.
 - **Hover** is the runtime's own path, separate from focus and from your
-  state: there is nothing to bind. `PaintCtx::hovered` and `contains_hover`
+  state, so there is nothing to bind. `PaintCtx::hovered` and `contains_hover`
   let a component highlight under the pointer **without stealing focus**, so
   keyboard use of the focused component keeps working while the mouse drifts
-  over a button, and `DeclareCtx::pointer_within()` answers the same question
-  while declaring, for structure that depends on it. Every pointer event —
-  `Down` and `Up` and `Scroll`, not only `Moved` — records where the pointer
-  is; each committed frame then resolves hover from that position against the
-  surface it just declared. A `Moved` event also resolves it immediately, and
-  still reaches the component under the pointer afterwards.
-- **A motion is never `Ignored`** once a surface exists. It comes back as at
-  least `Consumed` whether or not it moved hover and whether or not any
-  component handled it, because it is always news to the next frame: paint may
+  over a button. `DeclareCtx::pointer_within()` answers the same question while
+  declaring, for structure that depends on it. Every pointer event, not only
+  `Moved`, records where the pointer is, and each committed frame resolves
+  hover from that position against the surface it just declared.
+- **Motion is never `Ignored`** once a surface exists. It comes back as at
+  least `Consumed`, whether or not any component handled it, because paint may
   read the pointer position itself through `PaintCtx::hover_position` (a tabs
-  row highlights the tab under the pointer that way), so motion *within* one
-  component matters as much as motion between two. That result is the redraw
-  signal for a host that redraws on anything but `Ignored`. The release that
-  ends the last gesture counts too when it moves hover off what the gesture
-  froze it on.
-- **A gesture freezes hover.** While a button is held — captured or not —
-  hover stays on whatever the gesture started on, so the geometry a drag moves
-  does not chase the pointer dragging it. The release hands it back. The
-  freeze holds the *path*: a frozen target redeclared elsewhere paints hovered
-  where it now is, and a frozen target that a modal covers or a redraw drops
-  loses hover on that frame, gesture or no gesture.
+  row highlights the tab under the pointer that way). That result is the redraw
+  signal for a host that redraws on anything but `Ignored`.
+- **A gesture freezes hover.** While a button is held, hover stays on whatever
+  the gesture started on, so the geometry a drag moves does not chase the
+  pointer dragging it. The release hands it back. See
+  [Dragging](./dragging#where-drag-events-come-from) for the details.
 - **Focus-follows-mouse** is the opt-in exception. By default hover never moves
   focus. `Ratcn::hover_focus()` applies at the implicit root; a nested scope uses
   `ScopeOptions::hover_focus()`. The first move onto another direct focusable
   child focuses that child's first focusable leaf. It is off everywhere it is
   not explicitly set, so hover and focus remain independent there.
-- **Scroll** moves a stored, app-owned offset (lists, scroll areas) — the
-  wheel scrolls the view, independent of the cursor.
+- **Scroll** moves a stored, app-owned offset (lists, scroll areas). The wheel
+  scrolls the view, independent of the cursor.
 - **Drag** moves an app-owned position, and **DragEnd** commits it. Captured
-  gestures return `DragEnd` to their source; its release position lets that
-  source apply its own drop-target hit test. See [Dragging](./dragging) for the
-  full pattern; `EventCtx::drag` owns capture, path-transient gesture state,
-  button matching, and release cleanup.
+  gestures return `DragEnd` to their source, and its release position lets that
+  source apply its own drop-target hit test. `EventCtx::drag` handles capture,
+  button matching, and cleanup; see [Dragging](./dragging) for the full
+  pattern.
 
 `Exited` never reaches a component. A backend reports it when the pointer
-leaves the interactive grid, and the runtime answers for it by clearing every
-tracked gesture and emptying hover until another pointer event arrives — so a
-release outside the terminal grid cannot leave a stale drag or hover active
-when the pointer returns.
+leaves the interactive grid, and the runtime clears every tracked gesture and
+empties hover until another pointer event arrives. A release outside the grid
+therefore cannot leave a stale drag or hover active when the pointer returns.
 
 Only focus needs wiring at the root:
 
@@ -176,21 +163,20 @@ it, and a captured drag keeps its own. A frame where nothing asks shows
 | ScrollArea's thumb, Dialog's draggable border | `Grab`, then `Grabbing` while dragged |
 | A disabled control | `Default` |
 
-Your own component or a `ctx.paint` closure inside a named scope asks the same
-way; `PaintCtx::pointer_captured` says whether it holds the pointer, for
-`Grabbing`. The kanban and drag demos do this for their cards. Read `Ratcn::pointer_shape()`
-after rendering and hand it to the host, which writes only when it changes:
+Your own component, or a `ctx.paint` closure inside a named scope, asks the
+same way. `PaintCtx::pointer_captured` says whether it holds the pointer, for
+`Grabbing`; the kanban and drag demos do this for their cards. After rendering,
+read `Ratcn::pointer_shape()` and hand it to the host, which writes only when it
+changes:
 
-- **Terminal:** `Session::set_pointer_shape` writes OSC 22. Before its first
-  shape it pushes a bare entry onto the terminal's pointer stack; dropping the
-  session pops it and sends the empty reset, before leaving the alternate
-  screen, so the terminal's own pointer comes back on exit.
+- **Terminal:** `Session::set_pointer_shape` writes OSC 22, and dropping the
+  session hands the terminal its own pointer back on exit.
 - **Browser:** `ratcn::runtime::set_browser_pointer_shape` sets the CSS
   `cursor` of the app's element.
 
-`PointerShape::Default` is, in a terminal, the arrow (written as `default`)
-once a shape has been shown, and before that the terminal's own pointer; in the
-browser, the arrow (`cursor: default`), even over a `DomBackend`'s text.
+`PointerShape::Default` is the arrow (`default`) once a shape has been shown;
+in a terminal, before any shape, it leaves the terminal's own pointer alone. In
+the browser it is the arrow even over a `DomBackend`'s text.
 
 | Terminal | OSC 22 |
 |---|---|
@@ -203,9 +189,9 @@ browser, the arrow (`cursor: default`), even over a `DomBackend`'s text.
 | tmux (mainline), herdr | Not forwarded to the outer terminal, so no shapes inside them |
 
 A host on `ratcn::crossterm` writes OSC 22 itself, with `css_name()` as the
-hook. Write only on change; before the first shape, write a bare push
-(`ESC ] 22 ; >`, never a name after `>`, which Ghostty and foot reject); on
-exit, pop then send the empty reset, not `default`, before leaving the
+hook. Write only on change. Before the first shape, write a bare push
+(`ESC ] 22 ; >`, never a name after `>`, which Ghostty and foot reject). On
+exit, pop and then send the empty reset (not `default`) before leaving the
 alternate screen:
 
 ```rust
@@ -236,7 +222,7 @@ See [Host integration](./host-integration#the-event-loop) for the loop.
 ## In the browser
 
 The browser backend (ratzilla) reports mouse positions directly in **terminal
-cell** coordinates (`col`/`row`) — the same space as crossterm — so no pixel
+cell** coordinates (`col`/`row`), the same space as crossterm, so no pixel
 conversion or app-side mapping is needed. With ratcn's `ratzilla` feature, pass
 the callback event directly to the runtime:
 
@@ -247,12 +233,14 @@ terminal.on_mouse_event({
 }).map_err(|error| io::Error::other(error.to_string()))?;
 ```
 
-ratcn's `TryFrom` conversion accepts ratzilla's raw
-`ButtonDown`/`ButtonUp`/`Moved` stream, plus `Exited` for the pointer leaving
-the grid. It ignores ratzilla's `SingleClick`/`DoubleClick`; the runtime
-synthesizes clicks and drags uniformly for native and browser input.
+The conversion accepts ratzilla's raw `ButtonDown`/`ButtonUp`/`Moved` stream,
+plus `Exited` for the pointer leaving the grid. It ignores ratzilla's
+`SingleClick`/`DoubleClick`, because the runtime synthesizes clicks and drags
+the same way for native and browser input. An app that writes the clipboard
+routes mouse events through the `route` function in
+[Host integration](./host-integration#the-browser-clipboard) instead.
 
 Page focus, key capture, and browser default prevention stay with the host.
-The demos' shared host script shows one working policy — forwarding captured
+The demos' shared host script shows one working policy (forwarding captured
 keys to ratzilla's canvas and normalizing macOS Option chords from
-`KeyboardEvent.code` — and an application can supply its own.
+`KeyboardEvent.code`), and an application can supply its own.

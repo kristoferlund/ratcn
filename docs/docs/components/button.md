@@ -4,12 +4,9 @@ description: "A focusable terminal button for Ratatui apps. Wire on_press to emi
 
 # Button
 
-A button that becomes focusable when `.on_press(...)` supplies the message it
-emits. Tab moves between wired buttons; Enter, Space, or a left click presses
-one. A button without `on_press` ignores activation keys and clicks.
-Use `ButtonWidget` instead when only paint is needed.
-
-`ButtonSize::Small` is the default: a single row, no border.
+A button that emits a message when pressed. `.on_press(...)` supplies the
+message, and makes the button focusable; a button without it paints but
+ignores keys and clicks. The default size is a single row with no border.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 260px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -35,17 +32,17 @@ ratcn.render(frame, save_area, state, &state.theme, |ctx| {
 });
 ```
 
-A button holds no state — its label and disabledness are values you pass at
+A button holds no state. Its label and disabledness are values you pass at
 declaration, so they come straight from app state.
 
 ## Variants
 
-Five variants set visual weight. They only change colors — all are pressed the
-same way. Each has a shorthand builder, or pass one to `.variant(...)`.
+Five variants set visual weight. They only change colors, so all are pressed
+the same way. Each has a shorthand builder, or pass one to `.variant(...)`.
 
 | Variant | Shorthand | Use for |
 | --- | --- | --- |
-| `Default` | — | The main action on a screen. Filled with the primary color. |
+| `Default` | (the default) | The main action on a screen. Filled with the primary color. |
 | `Secondary` | `.secondary()` | A supporting action. Filled, but muted. |
 | `Outline` | `.outline()` | A quiet action that still needs an edge. Border, no fill. |
 | `Ghost` | `.ghost()` | The quietest. No fill or border until focused or hovered. |
@@ -57,11 +54,7 @@ focus or hover indication; use `Ghost` for a quiet small button instead.
 ## Large
 
 `ButtonSize::Large` is three rows: room for a border, or a fill cap above and
-below the label. A large button with fewer than
-three rows does not participate in focus or pointer interaction; any nonzero
-width remains usable and clips the label as needed. If the supplied area is
-taller than the button, only the first one or three rows participate; blank
-excess rows are neither painted nor focus or click targets.
+below the label.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 260px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -84,15 +77,13 @@ Button::new("Delete")
     .on_press(|| Msg::Delete)
 ```
 
-Use `.height()` or `ButtonSize::Large.height()` for layout constraints rather
-than hard-coding a number, and `.width()` to size a button to its own label.
+Use `ButtonSize::Large.height()` for layout constraints rather than
+hard-coding a number, and `.width()` to size a button to its own label.
 
 ## Disabled
 
 A disabled button is greyed out, skipped by Tab, and ignores events. Pass the
-value from state — current state is in scope during declaration. An ignored
-click can bubble to a containing component, but it does not click through to an
-overlapping sibling behind the button.
+value from state, which is in scope during declaration.
 
 ```rust
 Button::new("Save")
@@ -125,9 +116,9 @@ that render on any terminal.
 ## Paint-only widget
 
 `ButtonWidget` paints a button without focus or events. It is an ordinary
-Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime. It has the
-same variant and size builders, and you supply the interaction states —
-`.focused(...)`, `.hovered(...)`, and `.disabled(...)`:
+Ratatui widget, so it works in a plain Ratatui app with no `Ratcn` runtime. It
+has the same variant and size builders, and you supply the interaction states
+with `.focused(...)`, `.hovered(...)`, and `.disabled(...)`:
 
 ```rust
 use ratcn::{ButtonSize, ButtonWidget};
@@ -143,6 +134,25 @@ frame.render_widget(
 );
 ```
 
+## Keyboard and mouse
+
+| Input | Does |
+|---|---|
+| `Tab` `Shift+Tab` | Move focus to the next / previous control |
+| `Enter` `Space` | Press the focused button |
+| Left click | Press the button |
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
+
+## Limits
+
+- A `Large` button given fewer than three rows paints nothing and takes no
+  focus or clicks. Too little width only clips the label.
+- In an area taller than the button, only its own one or three rows paint and
+  take clicks.
+- A click on a disabled button can bubble to a containing component, but never
+  reaches an overlapping sibling behind it.
+
 ## Full API
 
 Every method, with parameter and edge-case detail:
@@ -151,8 +161,6 @@ Every method, with parameter and edge-case detail:
 [`ButtonVariant`](https://docs.rs/ratcn/latest/ratcn/enum.ButtonVariant.html),
 [`ButtonSize`](https://docs.rs/ratcn/latest/ratcn/enum.ButtonSize.html),
 [`ButtonStyle`](https://docs.rs/ratcn/latest/ratcn/struct.ButtonStyle.html).
-
-Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## See also
 

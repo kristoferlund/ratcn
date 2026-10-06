@@ -1,5 +1,5 @@
 ---
-description: "Every ratcn demo, what it shows, and how to run it — from single-component examples to three full applications you can read end to end."
+description: "Every ratcn demo, what it shows, and how to run it, from single-component examples to three full applications you can read end to end."
 ---
 
 # Demos
@@ -42,29 +42,20 @@ WebAssembly.
 cargo run -p showcase
 ```
 
-Three views bring the site into your terminal: the landing page, a scrolling
-Getting started guide, and a catalog with the selected demo running beside its
-navigation list. Showcase embeds the demo crates rather than reimplementing them.
+The showcase brings the site into your terminal in three views: the landing
+page, a scrolling Getting started guide, and a catalog that runs the selected
+demo beside its navigation list. It embeds the demo crates rather than
+reimplementing them.
 
 ### Reading the source
 
 - Start with a small demo such as [`select/src/lib.rs`](https://github.com/kristoferlund/ratcn/blob/main/demos/select/src/lib.rs) for state, messages, and component declarations.
-- [`demos/shared/src/lib.rs`](https://github.com/kristoferlund/ratcn/blob/main/demos/shared/src/lib.rs) defines the single `Demo::draw(&mut Buffer, area, theme)` contract and the shared native/browser host. The host supplies the frame's buffer and area, routes events, and schedules redraws and wakeups.
-- [`showcase/src/main.rs`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/src/main.rs) owns view navigation, scroll offsets, chrome focus, and input ownership. [`catalog.rs`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/src/catalog.rs) adapts demos for hosting; instances are constructed lazily and keep their own state and runtime.
-- The Getting started view renders [`getting_started.md`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/getting_started.md) with `tui-markdown` inside a ScrollArea. Edit the document, not a collection of Rust widgets; code highlighting is disabled.
+- [`demos/shared/src/lib.rs`](https://github.com/kristoferlund/ratcn/blob/main/demos/shared/src/lib.rs) defines the `Demo::draw(&mut Buffer, area, theme)` contract every demo implements, and the native and browser host they share. The host supplies the frame's buffer and area, routes events, and schedules redraws and wakeups.
+- [`showcase/src/main.rs`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/src/main.rs) shows one app hosting many: it owns view navigation, scrolling, and which part of the screen gets input. [`catalog.rs`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/src/catalog.rs) builds each demo the first time it is shown, and every demo keeps its own state and runtime.
+- The Getting started view renders [`getting_started.md`](https://github.com/kristoferlund/ratcn/blob/main/crates/showcase/getting_started.md) with `tui-markdown` inside a `ScrollArea`.
 
 Catalog demos draw directly into their pane. Interactive demos pass that area to
-`Ratcn::render_into`; paint-only demos use ordinary widgets. Pointer coordinates
-remain screen-absolute. Only the scrolling landing preview uses an
-offscreen buffer, copies visible rows, and translates pointer coordinates.
-The host owns allocation and clearing; the buffer contract carries no cursor
-metadata and does not sandbox arbitrary base paint.
-
-Showcase routes input to the active demo, saves and restores chrome focus, and
-cancels pointer interaction when a demo loses its input session or painted area.
-Its small focus-reveal helper keeps the separately painted landing preview aligned:
-[`ScrollArea` focus reveal](./components/scroll-area#focus) does not emit its
-effective offset to the app.
+`Ratcn::render_into`, and paint-only demos use ordinary widgets.
 
 ## Full applications
 
@@ -85,7 +76,7 @@ Each of these shows one technique end to end.
 |---|---|
 | `kanban` | Drag and drop between columns, with cards keeping their identity as they move. See [Dragging](./concepts/dragging). |
 | `drag` | The smallest possible drag: one block, moved anywhere inside the frame. |
-| `panels` | Two focusable panels, each grouping its own children — scopes and Tab boundaries. See [Structuring a larger app](./concepts/composition). |
+| `panels` | Two focusable panels, each grouping its own children: scopes and Tab boundaries. See [Structuring a larger app](./concepts/composition). |
 | `effects` | Fetching data without blocking the UI, and feeding the result back in as a message. See [State and messages](./concepts/state-and-messages#effects-and-result-messages). |
 
 ## Components
@@ -95,20 +86,20 @@ the previews embedded on the [component pages](./components/button).
 
 | Component | Demos |
 |---|---|
-| [Button](./components/button) | `button-small`, `button-large` — the five variants at each size |
+| [Button](./components/button) | `button-small`, `button-large`: the five variants at each size |
 | [Input](./components/input) | `input` (a sign-up form: a validated email, a masked password, Enter to submit), `input-adornments` (prefixes and suffixes) |
-| [TextArea](./components/textarea) | `textarea` — a wrapping notes field with a live count and a Save button |
+| [TextArea](./components/textarea) | `textarea`: a wrapping notes field with a live count and a Save button |
 | [List](./components/list) | `list` (cursor and selection kept separate), `list-multi` (checkbox multi-selection), `list-people` (two-line custom rows) |
-| [ScrollArea](./components/scroll-area) | `scroll-area` — ten buttons in a viewport three of them tall |
-| [Select](./components/select) | `select` — the dropdown panel |
+| [ScrollArea](./components/scroll-area) | `scroll-area`: ten buttons in a viewport three of them tall |
+| [Select](./components/select) | `select`: the dropdown panel |
 | [Tabs](./components/tabs) | `tabs-basic` (manual activation), `tabs-automatic` (focus selects), `tabs-disabled` (skipped by traversal), `tabs-large` |
-| [Dialog](./components/dialog) | `dialog` — a modal layer with actions, draggable by its border |
-| [Toast](./components/toast) | `toast` — transient notifications your app owns |
-| [Tooltip](./components/tooltip) | `tooltip` — hover or Tab to a button and its bubble floats above |
-| [Checkbox](./components/checkbox) | `checkbox` — one component as checkbox, ASCII checklist, and switch |
-| [Cycle](./components/cycle) | `cycle` — settings rows with the value cycling in place |
-| [Progress](./components/progress) | `progress` — a bare bar, a downloading label-and-percentage pair, and a finished one |
-| [BarChart](./components/barchart) | `barchart`, `barchart-horizontal` — a paint-only widget, no runtime needed |
+| [Dialog](./components/dialog) | `dialog`: a modal layer with actions, draggable by its border |
+| [Toast](./components/toast) | `toast`: transient notifications your app owns |
+| [Tooltip](./components/tooltip) | `tooltip`: hover or Tab to a button and its bubble floats above |
+| [Checkbox](./components/checkbox) | `checkbox`: one component as checkbox, ASCII checklist, and switch |
+| [Cycle](./components/cycle) | `cycle`: settings rows with the value cycling in place |
+| [Progress](./components/progress) | `progress`: a bare bar, a downloading label-and-percentage pair, and a finished one |
+| [BarChart](./components/barchart) | `barchart`, `barchart-horizontal`: a paint-only widget, no runtime needed |
 
 ## Running them in the browser
 
