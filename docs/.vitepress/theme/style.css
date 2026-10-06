@@ -393,3 +393,15 @@
     padding-top: 72px;
   }
 }
+
+/* Diagrams drawn inline in the docs: centred, never wider than the column. */
+.ratcn-diagram {
+  margin: 24px auto;
+  max-width: 640px;
+}
+
+.ratcn-diagram svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}

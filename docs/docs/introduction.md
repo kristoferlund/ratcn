@@ -13,6 +13,39 @@ you already have. Add the ratcn engine and the components come alive: it handles
 focus, keyboard and mouse input, hover, and layers, and tells your app what the
 user did.
 
+<figure class="ratcn-diagram">
+<svg viewBox="0 0 640 230" role="img" aria-labelledby="ratcn-uifn-title" xmlns="http://www.w3.org/2000/svg">
+<title id="ratcn-uifn-title">ui = f(state): your app state is rendered into the UI, user input becomes a message, and update applies the message to the state.</title>
+<style>
+.d-box{fill:var(--vp-c-bg-soft);stroke:var(--vp-c-divider);stroke-width:1.5}
+.d-key{fill:var(--vp-c-brand-soft);stroke:var(--vp-c-brand-1);stroke-width:1.5}
+.d-name{fill:var(--vp-c-text-1);font:600 16px var(--vp-font-family-base)}
+.d-sub{fill:var(--vp-c-text-2);font:13px var(--vp-font-family-base)}
+.d-verb{fill:var(--vp-c-text-2);font:13px var(--vp-font-family-mono)}
+.d-line{fill:none;stroke:var(--vp-c-text-3);stroke-width:1.5}
+.d-head{fill:var(--vp-c-text-3)}
+.d-formula{fill:var(--vp-c-brand-1);font:600 20px var(--vp-font-family-mono)}
+</style>
+<defs><marker id="ratcn-uifn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="d-head" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<text class="d-formula" x="320" y="30" text-anchor="middle">ui = f(state)</text>
+<rect class="d-key" x="30" y="62" width="150" height="64" rx="10"/>
+<text class="d-name" x="105" y="91" text-anchor="middle">State</text>
+<text class="d-sub" x="105" y="111" text-anchor="middle">owned by your app</text>
+<rect class="d-box" x="245" y="62" width="150" height="64" rx="10"/>
+<text class="d-name" x="320" y="91" text-anchor="middle">UI</text>
+<text class="d-sub" x="320" y="111" text-anchor="middle">what is on screen</text>
+<rect class="d-box" x="460" y="62" width="150" height="64" rx="10"/>
+<text class="d-name" x="535" y="91" text-anchor="middle">Message</text>
+<text class="d-sub" x="535" y="111" text-anchor="middle">what the user did</text>
+<path class="d-line" d="M182 94 H241" marker-end="url(#ratcn-uifn-arrow)"/>
+<text class="d-verb" x="212" y="84" text-anchor="middle">render</text>
+<path class="d-line" d="M397 94 H456" marker-end="url(#ratcn-uifn-arrow)"/>
+<text class="d-verb" x="427" y="84" text-anchor="middle">input</text>
+<path class="d-line" d="M535 128 V176 Q535 186 525 186 H115 Q105 186 105 176 V132" marker-end="url(#ratcn-uifn-arrow)"/>
+<text class="d-verb" x="320" y="208" text-anchor="middle">update</text>
+</svg>
+</figure>
+
 Your app stays in charge. The state lives in your app, and the screen is a
 function of it: each frame describes the UI from that state, and components
 report what happened as messages for your app to apply. The components are yours
