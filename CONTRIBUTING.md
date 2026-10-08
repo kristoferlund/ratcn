@@ -4,23 +4,76 @@ Thanks for taking an interest. This file covers what you need to know before
 opening a pull request.
 
 ratcn is below 1.0, so breaking changes are acceptable when they make the
-library better. If you are planning something substantial, [open an issue][issues]
-first so we can agree on the shape before you write it.
+library better. They still need agreement before implementation.
 
 [issues]: https://github.com/kristoferlund/ratcn/issues
 
+## An issue is required before implementation
+
+**You must [open an issue][issues] before starting implementation and before
+submitting a pull request**, unless your change qualifies for the small-change
+exception below. If a relevant issue already exists, join it rather than
+creating a duplicate.
+
+For non-trivial changes, wait for a maintainer to agree on the scope and approach
+before coding. This includes:
+
+- New components, features, CLI commands, options, or demos.
+- Changes to public APIs, behavior, defaults, or state ownership.
+- Refactors, dependency changes, or raising the minimum Rust version.
+- Build, CI, release, packaging, or docs-site infrastructure changes.
+
+Describe the problem and who it affects, the proposed solution and compatibility
+implications, and how you plan to verify it. For bugs, include reproduction
+steps, the ratcn version, backend, and platform.
+
+Opening an issue is not approval to implement it. Agreement on an approach does
+not guarantee that a pull request will be merged.
+
+### Small-change exception
+
+You may submit a pull request without first opening an issue for:
+
+- A small, clearly scoped bug fix that restores intended behavior without
+  changing interfaces, defaults, or configuration.
+- A typo, broken link, or minor documentation correction.
+
+Explain in the pull request why the exception applies. A short diff is not
+automatically a small change: features, refactors, dependency updates, and build
+or packaging changes still require an issue.
+
+If you are unsure, open an issue first. If the work grows beyond the exception,
+stop and discuss it in an issue before continuing. Non-exempt pull requests that
+bypass this process may be closed without review.
+
+## Keep pull requests focused
+
+- Address one agreed problem per pull request.
+- Link the issue and explain what changed, why, and what is out of scope.
+- Avoid unrelated cleanup, formatting, or refactoring.
+- Follow existing code structure and conventions.
+- Describe API, dependency, backend, and compatibility changes explicitly.
+- Never include credentials or private data in fixtures, logs, or screenshots.
+
 ## Before you open a PR
 
-Run the same checks CI runs:
+For code changes, run these checks from the repository root. They match the
+test and lint commands in CI:
 
 ```sh
-cargo fmt --all
-cargo test -p ratcn --all-features
-cargo test --workspace
-cargo clippy -p ratcn --all-features --all-targets -- -D warnings
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy --workspace --all-targets --target wasm32-unknown-unknown -- -D warnings
+cargo fmt --all -- --check
+cargo test -p ratcn --locked
+cargo test -p ratcn --all-features --locked
+cargo fetch --locked
+cargo test --workspace --exclude ratcn --locked
+cargo check -p copy-fixture --examples --locked
+cargo clippy -p ratcn --all-features --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --exclude cargo-ratcn --all-targets --target wasm32-unknown-unknown --locked -- -D warnings
 ```
+
+`cargo fetch` supplies all-platform dependencies for the CLI's offline tests.
+The wasm check excludes `cargo-ratcn`, which is a host-only Cargo subcommand.
 
 `rust-toolchain.toml` pins the toolchain, so `rustup` will fetch the right
 version on your first build. That pin exists because clippy's lints change
@@ -33,8 +86,8 @@ copied into someone else's project, so it has to compile as an external crate
 against `ratcn`'s public API alone. `crates/copy-fixture` makes that copy in its
 build script — `crate::` rewritten to `ratcn::`, the test module dropped — and
 compiles each component as its own example target, so a reach at a private item
-or at a sibling component fails there. `cargo test --workspace` above builds
-those targets, as does `cargo check -p copy-fixture --examples` on its own.
+or at a sibling component fails there. The explicit
+`cargo check -p copy-fixture --examples --locked` above verifies those targets.
 Nothing is generated into the repository and there is nothing to run by hand;
 edit a component and the next build re-copies it. Adding a component means
 adding `crates/copy-fixture/examples/<component>.rs`, two lines copied from its
@@ -45,7 +98,32 @@ that flag clippy skips all of it.
 
 **The MSRV is not the pinned toolchain.** The pin is for consistent lints; the
 minimum supported version is lower (see below). To check against it, override
-the pin explicitly: `cargo +1.88.0 test -p ratcn --features crossterm`.
+the pin explicitly:
+`cargo +1.88.0 test -p ratcn --features crossterm,termina --locked`.
+
+### Verify the affected behavior
+
+- Add or update automated tests for code changes. Where practical, a bug fix
+  should include a regression test that fails without the fix.
+- Manually exercise affected components or CLI workflows. For interaction
+  changes, check keyboard and mouse input, focus, disabled states, and relevant
+  edge cases in a demo; screenshots or a short recording can help reviewers.
+- Report the platform, backend, and feature flags tested. A terminal build does
+  not verify browser behavior, and compilation alone does not verify interaction.
+- For new or changed components, verify the copy-fixture check. A component must
+  work against the public API without private items or sibling components.
+- For docs or demo changes, run `pnpm install --frozen-lockfile` and
+  `pnpm run docs:build`. The build needs Trunk `0.21.14` and the pinned toolchain's
+  `wasm32-unknown-unknown` target. Verify the affected demo in the browser too.
+- For packaging changes, verify the affected crate with `cargo package`.
+
+Report commands, results, and manual verification in the pull request. Identify
+failed, skipped, or unavailable checks and explain why. Do not describe untested
+behavior as verified or mark skipped checks as complete.
+
+Documentation-only changes do not require Rust tests or lints. Review rendered
+Markdown, links, and changed commands or technical claims; docs-site and demo
+changes still need the site build above.
 
 ## What CI checks
 
@@ -67,9 +145,8 @@ the pin explicitly: `cargo +1.88.0 test -p ratcn --features crossterm`.
 dependency. If your change needs something newer, say so in the PR — raising
 the MSRV is a decision, not a detail.
 
-**Dependencies are kept to a minimum.** The library has three: `ratatui` and
-two small unicode crates that ratatui already requires. A PR that adds a
-dependency needs to argue for it.
+**Dependencies are kept to a minimum.** A PR that adds a dependency needs to
+explain why existing dependencies or a simpler implementation are not enough.
 
 **The app owns its state.** Components read state and return messages; they
 never write it. If a change needs a component to hold durable state, that is
@@ -99,7 +176,7 @@ nothing to guard on. Only `Event::Mouse` and `Event::Key` are handled anywhere.
 
 **A demo registers itself.** Any directory under `demos/` is a workspace member,
 and one with a `Trunk.toml` is built for the docs site. Serve a single demo with
-`npm run demo:dev -- <name>` — the name is required, and a wrong one lists the
+`pnpm run demo:dev <name>` — the name is required, and a wrong one lists the
 demos that exist.
 
 The `demos/*` glob is why every directory there must be a crate: a directory
@@ -118,14 +195,16 @@ Aim for plain language. Someone a year into Rust should be able to read any page
 without a glossary.
 
 ```sh
-npm ci
-npm run docs:dev
+pnpm install --frozen-lockfile
+pnpm run docs:dev
 ```
 
 ## Releases
 
-User-visible changes go in [`CHANGELOG.md`](CHANGELOG.md). Security issues have
-their own path — see [`SECURITY.md`](SECURITY.md).
+User-visible changes go under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
+Update rustdoc, relevant docs pages, and CLI help when behavior changes. Version
+bumps, release tags, and publishing are handled by maintainers. Security issues
+have their own path — see [`SECURITY.md`](SECURITY.md).
 
 An entry runs one to four lines and covers a change a user can see; internal
 refactors and test work stay out. `**Breaking:**` entries come first within
@@ -138,3 +217,6 @@ part (a rename, a formatting sweep) and a substantive part, splitting them into
 separate commits makes both easier to read.
 
 Describe *why* in the PR body. The diff already shows what.
+
+Complete the pull request template. Required CI checks must pass before merge,
+and outstanding verification gaps must be resolved with a maintainer.

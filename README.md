@@ -142,6 +142,23 @@ The pinned toolchain installs the `wasm32-unknown-unknown` target used by the de
 Publishing this source does not deploy the hosted site; deployment remains a
 separate release step, so the currently hosted content may lag the repository.
 
+## Contributing
+
+Contributions are welcome, but **an issue is required before starting
+implementation and before submitting a pull request**, except for small,
+clearly scoped bug fixes and minor documentation corrections.
+
+For new components, features, behavior or API changes, refactors, dependencies,
+and build or packaging changes, open an issue—or join an existing one—and wait
+for a maintainer to agree on the scope and approach before coding. Opening an
+issue alone does not mean the proposed change is accepted.
+
+Pull requests must link the issue and scope agreement, or explain why the
+small-change exception applies. Non-exempt pull requests that bypass this
+process may be closed without review.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and verification rules.
+
 ## License
 
 MIT
