@@ -21,6 +21,10 @@ termina = { version = "0.3.3", optional = true }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 
+[target.'cfg(unix)'.dependencies]
+# termina 0.3.3 can resolve rustix 1.1.2–1.1.4, whose select timeout fails on macOS.
+rustix = { version = "1.1.5", optional = true, default-features = false }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
@@ -54,7 +58,7 @@ features = ["crossterm", "termina"]
 default = []
 crossterm = ["ratatui/crossterm"]
 ratzilla = ["dep:ratzilla", "dep:wasm-bindgen-futures", "dep:web-sys"]
-termina = ["dep:termina", "dep:ratatui-termina"]
+termina = ["dep:termina", "dep:ratatui-termina", "dep:rustix"]
 
 [lints.rust]
 ambiguous_negative_literals = "warn"
