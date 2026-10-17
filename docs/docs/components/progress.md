@@ -62,6 +62,28 @@ primary, `track` the inset well the other control surfaces use, `label` the
 muted foreground, and `value` the ordinary foreground. `.style(...)` takes a
 `ProgressStyle` with exact colors for the same four roles instead.
 
+## Progress in the terminal
+
+Many terminals can also show progress in their own chrome: a bar along the
+window, the tab, or the Windows taskbar. There is one indicator per tab, so the
+app sets it, not the widget. In an app on a `Session`, hand it your progress
+after each frame:
+
+```rust
+use ratcn::terminal::TerminalProgress;
+
+let percent = (state.uploaded / state.total * 100.0).round() as u8;
+session.set_progress(TerminalProgress::Normal(percent))?;
+```
+
+It writes only when the indicator changes, and the session clears it on exit.
+`TerminalProgress` also has `Error`, `Paused`, `Indeterminate`, and `Hidden`.
+iTerm2, kitty, Windows Terminal, and Ghostty 1.2+ show it, over SSH too; the
+browser has no equivalent, and herdr does not pass it on to the terminal
+outside. A terminal that reads plain OSC 9 as a desktop notification, and
+does not know this form of it, shows a notification on every change instead.
+The progress demo shows its middle row in the indicator when run in a terminal.
+
 ## Limits
 
 - The bar is always one row of track. Given a single row, it keeps the row and

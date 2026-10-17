@@ -10,6 +10,9 @@ demo-shared.workspace = true
 ratatui.workspace = true
 ratcn.workspace = true
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ratcn = { workspace = true, features = ["termina"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ratcn = { workspace = true, features = ["ratzilla"] }
 ratzilla.workspace = true
