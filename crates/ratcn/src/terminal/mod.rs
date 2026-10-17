@@ -390,7 +390,8 @@ impl Session {
     /// | iTerm2, kitty | Supported |
     /// | Windows Terminal | Supported, in the tab and the taskbar |
     /// | [ConEmu](https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC) | Supported; it originated there |
-    /// | Ghostty | Supported from 1.2 |
+    /// | Ghostty | Supported from 1.2, over SSH too |
+    /// | herdr | Not forwarded to the outer terminal, so no indicator inside it |
     ///
     /// A terminal that reads plain OSC 9 as a desktop notification, and does
     /// not know 9;4, would show one reading `4;1;42` on every change.

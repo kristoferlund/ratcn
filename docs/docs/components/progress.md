@@ -78,10 +78,11 @@ session.set_progress(TerminalProgress::Normal(percent))?;
 
 It writes only when the indicator changes, and the session clears it on exit.
 `TerminalProgress` also has `Error`, `Paused`, `Indeterminate`, and `Hidden`.
-iTerm2, kitty, Windows Terminal, and Ghostty 1.2+ show it; the browser has no
-equivalent. A terminal that reads plain OSC 9 as a desktop notification, and
+iTerm2, kitty, Windows Terminal, and Ghostty 1.2+ show it, over SSH too; the
+browser has no equivalent, and herdr does not pass it on to the terminal
+outside. A terminal that reads plain OSC 9 as a desktop notification, and
 does not know this form of it, shows a notification on every change instead.
-The progress demo shows its middle row there when run in a terminal.
+The progress demo shows its middle row in the indicator when run in a terminal.
 
 ## Limits
 
