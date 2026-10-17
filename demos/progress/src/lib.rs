@@ -2,7 +2,8 @@
 //!
 //! A bare bar; the shadcn-style pairing of a label and a live percentage over
 //! a bar still on its way; and a finished one. The middle row runs off the
-//! clock, which is also why this demo keeps waking up to redraw.
+//! clock, which is also why this demo keeps waking up to redraw. In a terminal
+//! that draws progress in its own chrome, the middle row is shown there too.
 
 use std::time::Duration;
 
@@ -12,6 +13,8 @@ use ratatui::{
     style::Style,
     widgets::Widget,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use ratcn::terminal::TerminalProgress;
 use ratcn::{ProgressWidget, Theme};
 
 const DEMO_WIDTH: u16 = 34;
@@ -38,10 +41,7 @@ impl demo_shared::Demo for Progress {
         );
         buffer.set_style(demo, Style::default().bg(theme.surface));
 
-        // The clock decides how far along the download is, so any frame is a
-        // truthful one however late it arrives.
-        let elapsed = demo_shared::monotonic_time().as_secs_f64();
-        let downloading = (elapsed % LOOP_SECS) / LOOP_SECS;
+        let downloading = downloading();
 
         let inner = demo.inner(CONTENT_PADDING);
         let [bare, active, finished] = Layout::vertical([
@@ -64,4 +64,17 @@ impl demo_shared::Demo for Progress {
             .themed(theme)
             .render(finished, buffer);
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn terminal_progress(&self) -> TerminalProgress {
+        // Rounded the way the row's own percentage is.
+        TerminalProgress::Normal((downloading() * 100.0).round() as u8)
+    }
+}
+
+/// How far along the download is, from 0 to 1. The clock decides, so any
+/// frame is a truthful one however late it arrives.
+fn downloading() -> f64 {
+    let elapsed = demo_shared::monotonic_time().as_secs_f64();
+    (elapsed % LOOP_SECS) / LOOP_SECS
 }

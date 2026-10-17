@@ -7,6 +7,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `terminal::Session::set_progress` shows a `TerminalProgress` in the
+  terminal's own chrome (OSC 9;4). It writes only on change and clears on exit.
+
 ## [0.0.6] - 2026-10-06
 
 ### Breaking

@@ -138,6 +138,32 @@ pub struct Session {
     /// Whether a shape went onto the terminal's pointer stack, which exit owes
     /// a pop. Shared with the panic hook, like `live`.
     pointer_pushed: Arc<AtomicBool>,
+    /// The progress indicator last written, [`TerminalProgress::Hidden`] until
+    /// one is.
+    progress: TerminalProgress,
+    /// Whether an indicator is up, which exit owes a clear. Shared with the
+    /// panic hook, like `live`.
+    progress_shown: Arc<AtomicBool>,
+}
+
+/// The progress indicator a terminal draws in its own chrome — a bar along the
+/// window, the tab, the Windows taskbar — set with [`Session::set_progress`].
+///
+/// There is one per tab, so it belongs to the app, like the window title.
+/// Percentages above 100 are written as 100.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalProgress {
+    /// No indicator.
+    #[default]
+    Hidden,
+    /// Under way, at this percentage.
+    Normal(u8),
+    /// Failed, red, at this percentage or at whatever it last showed.
+    Error(Option<u8>),
+    /// Under way, with no idea how far.
+    Indeterminate,
+    /// Paused, yellow, at this percentage.
+    Paused(u8),
 }
 
 /// What an app wants of its [`Session`]. Each builder switches on the terminal
@@ -231,9 +257,11 @@ impl Session {
         // while the session is being unwound.
         let live = Arc::new(AtomicBool::new(false));
         let pointer_pushed = Arc::new(AtomicBool::new(false));
+        let progress_shown = Arc::new(AtomicBool::new(false));
         output.set_panic_hook(panic_restore(
             Arc::clone(&live),
             Arc::clone(&pointer_pushed),
+            Arc::clone(&progress_shown),
             modes.clone(),
         ));
 
@@ -249,6 +277,8 @@ impl Session {
             live,
             pointer: PointerShape::Default,
             pointer_pushed,
+            progress: TerminalProgress::Hidden,
+            progress_shown,
         };
         session.enable()
     }
@@ -347,6 +377,36 @@ impl Session {
         )
     }
 
+    /// Show `progress` in the terminal's own chrome, with the OSC 9;4 escape
+    /// sequence.
+    ///
+    /// Hand it the app's progress every frame: it writes only when the
+    /// indicator changed. It goes through the terminal, so it works over SSH
+    /// too. The indicator outlives the app unless cleared, so the session
+    /// clears it on the way out — a drop or a panic, once.
+    ///
+    /// | Terminal | OSC 9;4 |
+    /// |---|---|
+    /// | iTerm2, kitty | Supported |
+    /// | Windows Terminal | Supported, in the tab and the taskbar |
+    /// | [ConEmu](https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC) | Supported; it originated there |
+    /// | Ghostty | Supported from 1.2 |
+    ///
+    /// A terminal that reads plain OSC 9 as a desktop notification, and does
+    /// not know 9;4, would show one reading `4;1;42` on every change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the terminal will not take the write.
+    pub fn set_progress(&mut self, progress: TerminalProgress) -> io::Result<()> {
+        write_progress(
+            self.terminal.backend_mut(),
+            &mut self.progress,
+            &self.progress_shown,
+            progress,
+        )
+    }
+
     /// Switch the modes on. A failure part-way through still restores, because
     /// the session already owns them: resetting a mode that never went on is
     /// what a terminal does with any mode it does not know.
@@ -361,6 +421,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.live.store(false, Ordering::Relaxed);
         let _ = restore_pointer(self.terminal.backend_mut(), &self.pointer_pushed);
+        let _ = restore_progress(self.terminal.backend_mut(), &self.progress_shown);
         let _ = restore_modes(self.terminal.backend_mut(), &self.modes);
     }
 }
@@ -514,6 +575,43 @@ fn restore_pointer(out: &mut impl io::Write, pushed: &AtomicBool) -> io::Result<
     out.flush()
 }
 
+/// OSC 9;4, `ESC ] 9 ; 4 ; <state> [; <percent>] ST`, when `progress` is not
+/// what `shown` already is.
+fn write_progress(
+    out: &mut impl io::Write,
+    shown: &mut TerminalProgress,
+    up: &AtomicBool,
+    progress: TerminalProgress,
+) -> io::Result<()> {
+    use TerminalProgress as P;
+
+    if progress == *shown {
+        return Ok(());
+    }
+    match progress {
+        P::Hidden => write!(out, "\x1b]9;4;0\x1b\\")?,
+        P::Normal(percent) => write!(out, "\x1b]9;4;1;{}\x1b\\", percent.min(100))?,
+        P::Error(None) => write!(out, "\x1b]9;4;2\x1b\\")?,
+        P::Error(Some(percent)) => write!(out, "\x1b]9;4;2;{}\x1b\\", percent.min(100))?,
+        P::Indeterminate => write!(out, "\x1b]9;4;3\x1b\\")?,
+        P::Paused(percent) => write!(out, "\x1b]9;4;4;{}\x1b\\", percent.min(100))?,
+    }
+    up.store(progress != P::Hidden, Ordering::Relaxed);
+    *shown = progress;
+    out.flush()
+}
+
+/// Clear the indicator, once, if one is up. Clearing `up` is what keeps a
+/// panic, restored by the hook and then again by the unwinding drop, from
+/// clearing twice.
+fn restore_progress(out: &mut impl io::Write, up: &AtomicBool) -> io::Result<()> {
+    if !up.swap(false, Ordering::Relaxed) {
+        return Ok(());
+    }
+    write!(out, "\x1b]9;4;0\x1b\\")?;
+    out.flush()
+}
+
 fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
     for &code in modes {
         let mode = DecPrivateMode::Code(code);
@@ -522,17 +620,19 @@ fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Resu
     out.flush()
 }
 
-/// The panic hook's share of restoring: the pointer and the modes, while
-/// `live` says a session still has them on, and nothing once it has ended —
-/// or never got that far.
+/// The panic hook's share of restoring: the pointer, the progress indicator,
+/// and the modes, while `live` says a session still has them on, and nothing
+/// once it has ended — or never got that far.
 fn panic_restore<W: io::Write>(
     live: Arc<AtomicBool>,
     pointer_pushed: Arc<AtomicBool>,
+    progress_shown: Arc<AtomicBool>,
     modes: Vec<DecPrivateModeCode>,
 ) -> impl Fn(&mut W) + Send + Sync + 'static {
     move |out| {
         if live.load(Ordering::Relaxed) {
             let _ = restore_pointer(out, &pointer_pushed);
+            let _ = restore_progress(out, &progress_shown);
             let _ = restore_modes(out, &modes);
         }
     }
@@ -558,10 +658,10 @@ mod tests {
 
     use super::{
         Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Ordering, PointerShape,
-        SessionEvent, SessionOptions, TerminalColors, Watch, modes, panic_restore, pump,
-        restore_modes, restore_pointer,
+        SessionEvent, SessionOptions, TerminalColors, TerminalProgress, Watch, modes,
+        panic_restore, pump, restore_modes, restore_pointer, restore_progress,
         watch::{DEBOUNCE, IDLE},
-        write_clipboard, write_pointer_shape,
+        write_clipboard, write_pointer_shape, write_progress,
     };
     use crate::terminal::fake::FakeTerminal;
     use ratatui::style::Color;
@@ -678,6 +778,7 @@ mod tests {
         let hook = panic_restore::<Vec<u8>>(
             Arc::clone(&live),
             Arc::clone(&pushed),
+            Arc::new(AtomicBool::new(false)),
             modes(SessionOptions::new().mouse(), false),
         );
 
@@ -694,6 +795,81 @@ mod tests {
         assert!(
             written.starts_with("\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b[?1006l"),
             "pop and reset come before any mode, the alternate screen included: {written:?}"
+        );
+    }
+
+    /// The bytes each state writes: the percentage clamped to 100, and none
+    /// at all for the states that carry no amount.
+    #[test]
+    fn each_progress_state_is_written_as_osc_9_4() {
+        use TerminalProgress as P;
+
+        for (progress, bytes) in [
+            (P::Normal(42), "\x1b]9;4;1;42\x1b\\"),
+            (P::Normal(250), "\x1b]9;4;1;100\x1b\\"),
+            (P::Error(Some(250)), "\x1b]9;4;2;100\x1b\\"),
+            (P::Error(None), "\x1b]9;4;2\x1b\\"),
+            (P::Indeterminate, "\x1b]9;4;3\x1b\\"),
+            (P::Paused(250), "\x1b]9;4;4;100\x1b\\"),
+        ] {
+            let mut terminal = FakeTerminal::scripted("");
+            let mut shown = P::Hidden;
+            let up = AtomicBool::new(false);
+
+            write_progress(&mut terminal, &mut shown, &up, progress)
+                .expect("a fake terminal takes writes");
+
+            assert_eq!(String::from_utf8_lossy(&terminal.written), bytes);
+        }
+    }
+
+    /// An app hands over its progress every frame, so a frame that repeats the
+    /// last one writes nothing — an old OSC 9 notifier would otherwise pop a
+    /// notification per frame. Hiding it is a write like any other, and leaves
+    /// exit nothing to clear.
+    #[test]
+    fn progress_is_written_only_on_change() {
+        let mut terminal = FakeTerminal::scripted("");
+        let mut shown = TerminalProgress::Hidden;
+        let up = AtomicBool::new(false);
+        let mut write = |progress| {
+            write_progress(&mut terminal, &mut shown, &up, progress)
+                .expect("a fake terminal takes writes");
+        };
+
+        write(TerminalProgress::Hidden);
+        write(TerminalProgress::Normal(5));
+        assert!(
+            up.load(Ordering::Relaxed),
+            "an indicator that is up is owed a clear on exit"
+        );
+        write(TerminalProgress::Normal(5));
+        write(TerminalProgress::Hidden);
+
+        assert_eq!(
+            String::from_utf8_lossy(&terminal.written),
+            "\x1b]9;4;1;5\x1b\\\x1b]9;4;0\x1b\\"
+        );
+        assert!(
+            !up.load(Ordering::Relaxed),
+            "a hidden indicator owes no clear"
+        );
+    }
+
+    /// The indicator outlives the app, so exit clears one that is up — and a
+    /// session that never showed one writes nothing.
+    #[test]
+    fn restoring_clears_progress_only_while_it_is_up() {
+        let mut terminal = FakeTerminal::scripted("");
+        restore_progress(&mut terminal, &AtomicBool::new(false)).expect("writable");
+        assert!(terminal.written.is_empty(), "{:?}", terminal.written);
+
+        let up = AtomicBool::new(true);
+        restore_progress(&mut terminal, &up).expect("writable");
+        restore_progress(&mut terminal, &up).expect("writable");
+        assert_eq!(
+            terminal.written, b"\x1b]9;4;0\x1b\\",
+            "a panic restores and then the drop does: the clear goes out once"
         );
     }
 
@@ -891,17 +1067,19 @@ mod tests {
     fn the_panic_hook_restores_only_while_its_session_is_live() {
         let live = Arc::new(AtomicBool::new(true));
         let pushed = Arc::new(AtomicBool::new(true));
+        let progress_shown = Arc::new(AtomicBool::new(true));
         let hook = panic_restore::<Vec<u8>>(
             Arc::clone(&live),
             pushed,
+            progress_shown,
             modes(SessionOptions::new(), false),
         );
 
         let mut during = Vec::new();
         hook(&mut during);
         assert!(
-            during.starts_with(b"\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b[?1049l"),
-            "a live session's pointer and modes are restored: {during:?}"
+            during.starts_with(b"\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b]9;4;0\x1b\\\x1b[?1049l"),
+            "a live session's pointer, progress, and modes are restored: {during:?}"
         );
 
         live.store(false, Ordering::Relaxed);

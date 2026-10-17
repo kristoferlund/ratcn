@@ -22,7 +22,7 @@ use std::{io, time::Duration};
 use ratatui::style::Color;
 use ratatui::{Terminal, backend::Backend, buffer::Buffer, layout::Rect};
 #[cfg(not(target_arch = "wasm32"))]
-use ratcn::terminal::{Session, SessionEvent, SessionOptions, termina};
+use ratcn::terminal::{Session, SessionEvent, SessionOptions, TerminalProgress, termina};
 use ratcn::{
     Theme,
     runtime::{Event, PointerShape},
@@ -99,6 +99,13 @@ pub trait Demo {
     fn pointer_shape(&self) -> PointerShape {
         PointerShape::Default
     }
+
+    /// What the terminal's own progress indicator shows, read after every
+    /// frame. A browser has no such indicator.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn terminal_progress(&self) -> TerminalProgress {
+        TerminalProgress::Hidden
+    }
 }
 
 /// Run `demo` until it quits (natively) or forever (in the browser).
@@ -151,6 +158,9 @@ trait Host {
 
     /// Show `shape` as the mouse pointer.
     fn set_pointer_shape(&mut self, shape: PointerShape) -> io::Result<()>;
+
+    /// Show `progress` in the terminal's own chrome.
+    fn set_progress(&mut self, progress: TerminalProgress) -> io::Result<()>;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -176,6 +186,10 @@ impl Host for Session {
     fn set_pointer_shape(&mut self, shape: PointerShape) -> io::Result<()> {
         Session::set_pointer_shape(self, shape)
     }
+
+    fn set_progress(&mut self, progress: TerminalProgress) -> io::Result<()> {
+        Session::set_progress(self, progress)
+    }
 }
 
 /// Draw, wait, route, repeat, until the quit key.
@@ -188,6 +202,7 @@ fn drive<D: Demo, H: Host>(demo: &mut D, host: &mut H) -> io::Result<()> {
             let theme = host.theme(D::THEME);
             stale = draw_frame(demo, host.terminal(), &theme)?;
             host.set_pointer_shape(demo.pointer_shape())?;
+            host.set_progress(demo.terminal_progress())?;
         }
 
         // The wait is as long as the demo will allow. A deadline sooner than one
@@ -627,7 +642,7 @@ mod tests {
 
     use super::{
         ANIMATION_FRAME, Backend, Buffer, Demo, Duration, Event, Host, PointerShape, Rect,
-        SessionEvent, SessionOptions, Terminal, draw_frame, drive, io,
+        SessionEvent, SessionOptions, Terminal, TerminalProgress, draw_frame, drive, io,
     };
 
     /// A [`TestBackend`] that reports a native host's error type, and that can
@@ -828,6 +843,10 @@ mod tests {
 
         fn set_pointer_shape(&mut self, shape: PointerShape) -> io::Result<()> {
             self.pointers.push(shape);
+            Ok(())
+        }
+
+        fn set_progress(&mut self, _progress: TerminalProgress) -> io::Result<()> {
             Ok(())
         }
     }
