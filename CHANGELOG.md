@@ -12,6 +12,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `terminal::Session::set_progress` shows a `TerminalProgress` in the
   terminal's own chrome (OSC 9;4). It writes only on change and clears on exit.
 
+### Fixed
+
+- Adaptive terminal sessions no longer fail to open immediately on macOS due to
+  a rustix timeout rounding bug.
+
 ## [0.0.6] - 2026-10-06
 
 ### Breaking
