@@ -7,6 +7,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `terminal::SessionBackend` is a type of its own rather than an alias for
+  `TerminaBackend<PlatformTerminal>`. It is still the backend
+  `Session::terminal_mut` draws through.
+
 ### Added
 
 - `terminal::Session::set_progress` shows a `TerminalProgress` in the
@@ -14,6 +20,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A `terminal::Session` on a terminal without 24-bit color draws with the
+  nearest of the 256 or 16 colors it has, instead of rgb it misreads:
+  Terminal.app before macOS 26 dimmed the text and painted stray backgrounds.
+  `COLORTERM`, or a `TERM` known to have 24-bit color, keeps rgb.
 - Adaptive terminal sessions no longer fail to open immediately on macOS due to
   a rustix timeout rounding bug.
 

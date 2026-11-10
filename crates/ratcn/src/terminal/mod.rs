@@ -62,6 +62,7 @@
 //! # }
 //! ```
 
+mod depth;
 #[cfg(test)]
 mod fake;
 mod query;
@@ -89,14 +90,14 @@ use termina::{
 use crate::{Theme, runtime::PointerShape};
 use watch::Watch;
 
+use depth::ColorDepth;
 use query::{TerminalColors, query};
 /// The terminal library this module is built on, re-exported so an integrator
 /// names the types inside [`SessionEvent::Input`] through ratcn, at the version
 /// ratcn builds against.
 pub use termina;
 
-/// The backend a [`Session`] draws through.
-pub type SessionBackend = TerminaBackend<PlatformTerminal>;
+pub use depth::SessionBackend;
 
 /// What came out of a [`Session`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,7 +270,10 @@ impl Session {
         // off here, so a failure has nothing to restore.
         let events = output.event_reader();
         let session = Self {
-            terminal: Terminal::new(TerminaBackend::new(output))?,
+            terminal: Terminal::new(SessionBackend::new(
+                TerminaBackend::new(output),
+                ColorDepth::from_env(),
+            ))?,
             events,
             watch,
             theme,
