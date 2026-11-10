@@ -4,6 +4,11 @@
 //! ignore: Terminal.app before macOS 26 reads `48;2;10;10;10` as separate
 //! attributes, so the `2` dims the text and a channel of 42 paints a green
 //! background. Such a terminal is drawn with the nearest colors it has.
+//!
+//! Nothing in the protocol states the depth, so it is judged the way
+//! established libraries do: the environment as termenv and charmbracelet's
+//! colorprofile read it, then, where that does not already say 24-bit,
+//! Neovim's probe of the terminal itself (see `query`), which can only raise it.
 
 use std::io;
 
@@ -20,7 +25,7 @@ use crate::color::resolve_rgb;
 
 /// The colors a terminal can show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ColorDepth {
+pub(super) enum ColorDepth {
     TrueColor,
     /// The xterm 256-color palette: 16 themed colors, a 6×6×6 cube and a gray
     /// ramp. Only the cube and the ramp have known channels.
@@ -30,30 +35,44 @@ pub(crate) enum ColorDepth {
 }
 
 impl ColorDepth {
-    /// What the environment says. `COLORTERM` is the convention for 24-bit
-    /// color, but it is lost over SSH, so the terminals that always have it
-    /// are also known by `TERM`. Anything else is held to what `TERM` claims.
-    pub(crate) fn from_env() -> Self {
+    /// What the environment says, by termenv's rules with colorprofile's
+    /// additions (`foot`, `*direct`, tmux and screen at 256).
+    pub(super) fn from_env() -> Self {
         if cfg!(windows) {
-            // Every console since Windows 10 shows 24-bit color, and sets
-            // neither variable.
+            // Every console since Windows 10 shows 24-bit color and sets
+            // neither variable, as colorprofile's Windows check finds.
             return Self::TrueColor;
         }
+        let var = |name| std::env::var(name).ok();
         Self::detect(
-            std::env::var("COLORTERM").ok().as_deref(),
-            std::env::var("TERM").ok().as_deref(),
+            var("COLORTERM").as_deref(),
+            var("TERM").as_deref(),
+            var("TERM_PROGRAM").as_deref(),
         )
     }
 
-    fn detect(colorterm: Option<&str>, term: Option<&str>) -> Self {
-        if matches!(colorterm, Some("truecolor" | "24bit")) {
-            return Self::TrueColor;
+    fn detect(colorterm: Option<&str>, term: Option<&str>, term_program: Option<&str>) -> Self {
+        let term = term.unwrap_or_default();
+        let colorterm = colorterm.unwrap_or_default().to_ascii_lowercase();
+        if colorterm == "truecolor" || colorterm == "24bit" {
+            // GNU screen passes on 256 colors at most; tmux, which may run
+            // under a screen TERM, says so in TERM_PROGRAM.
+            return if term.starts_with("screen") && term_program != Some("tmux") {
+                Self::Ansi256
+            } else {
+                Self::TrueColor
+            };
         }
-        match term.unwrap_or_default() {
+        match term {
             "alacritty" | "contour" | "foot" | "rio" | "wezterm" | "xterm-ghostty"
             | "xterm-kitty" => Self::TrueColor,
-            term if term.ends_with("-direct") => Self::TrueColor,
-            term if term.contains("256color") => Self::Ansi256,
+            term if term.ends_with("direct") => Self::TrueColor,
+            term if term.contains("256color")
+                || term.starts_with("tmux")
+                || term.starts_with("screen") =>
+            {
+                Self::Ansi256
+            }
             _ => Self::Ansi16,
         }
     }
@@ -154,7 +173,7 @@ pub struct SessionBackend {
 }
 
 impl SessionBackend {
-    pub(crate) const fn new(inner: TerminaBackend<PlatformTerminal>, depth: ColorDepth) -> Self {
+    pub(super) const fn new(inner: TerminaBackend<PlatformTerminal>, depth: ColorDepth) -> Self {
         Self { inner, depth }
     }
 }
@@ -233,24 +252,35 @@ mod tests {
     use ratatui::{buffer::Cell, style::Color};
 
     #[test]
-    fn only_a_terminal_known_to_have_24_bit_color_gets_rgb() {
-        let detect = ColorDepth::detect;
-        assert_eq!(
-            detect(Some("truecolor"), Some("xterm-256color")),
-            ColorDepth::TrueColor
-        );
-        assert_eq!(detect(Some("24bit"), None), ColorDepth::TrueColor);
+    fn the_environment_is_read_as_termenv_and_colorprofile_read_it() {
+        use ColorDepth::{Ansi16, Ansi256, TrueColor};
+        let detect = |colorterm, term| ColorDepth::detect(colorterm, term, None);
+        assert_eq!(detect(Some("truecolor"), Some("xterm-256color")), TrueColor);
+        assert_eq!(detect(Some("24bit"), None), TrueColor);
+        assert_eq!(detect(Some("TrueColor"), Some("xterm")), TrueColor);
         // Over SSH COLORTERM is gone, but these terminals always have it.
-        assert_eq!(detect(None, Some("xterm-ghostty")), ColorDepth::TrueColor);
-        assert_eq!(detect(None, Some("xterm-kitty")), ColorDepth::TrueColor);
-        assert_eq!(detect(None, Some("alacritty")), ColorDepth::TrueColor);
-        assert_eq!(detect(None, Some("xterm-direct")), ColorDepth::TrueColor);
+        for term in [
+            "xterm-ghostty",
+            "xterm-kitty",
+            "alacritty",
+            "foot",
+            "xterm-direct",
+        ] {
+            assert_eq!(detect(None, Some(term)), TrueColor, "{term}");
+        }
+        // GNU screen caps 24-bit at 256; tmux under a screen TERM does not.
+        assert_eq!(detect(Some("truecolor"), Some("screen-256color")), Ansi256);
+        assert_eq!(
+            ColorDepth::detect(Some("truecolor"), Some("screen-256color"), Some("tmux")),
+            TrueColor
+        );
         // Terminal.app before macOS 26 claims xterm-256color and no more.
-        assert_eq!(detect(None, Some("xterm-256color")), ColorDepth::Ansi256);
-        assert_eq!(detect(None, Some("tmux-256color")), ColorDepth::Ansi256);
-        assert_eq!(detect(None, Some("xterm")), ColorDepth::Ansi16);
-        assert_eq!(detect(None, Some("linux")), ColorDepth::Ansi16);
-        assert_eq!(detect(None, None), ColorDepth::Ansi16);
+        assert_eq!(detect(None, Some("xterm-256color")), Ansi256);
+        assert_eq!(detect(None, Some("tmux")), Ansi256);
+        assert_eq!(detect(None, Some("screen")), Ansi256);
+        assert_eq!(detect(None, Some("xterm")), Ansi16);
+        assert_eq!(detect(None, Some("linux")), Ansi16);
+        assert_eq!(detect(None, None), Ansi16);
     }
 
     #[test]
