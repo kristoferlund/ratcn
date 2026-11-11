@@ -228,6 +228,10 @@ pub struct Frame {
     pub snow: f64,
     /// A color for everything outside the scene, in place of the paper.
     pub surround: Option<Rgb>,
+    /// The clock that keeps going while the film waits to be continued. What
+    /// only breathes — snow, a scarf, a halo — moves by this one, so a held
+    /// frame is not a still one. Set by whoever renders the frame.
+    pub wall: f64,
 }
 
 impl Frame {
@@ -244,6 +248,7 @@ impl Frame {
             glitch: 0.0,
             snow: 0.0,
             surround: None,
+            wall: 0.0,
         };
         frame.clear();
         frame

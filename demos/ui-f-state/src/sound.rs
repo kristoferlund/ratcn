@@ -517,15 +517,41 @@ fn render() -> Vec<u8> {
         mix.right[index] += 0.26 * mix.left[index - delay];
     }
 
-    let mut pcm = Vec::with_capacity(samples * 4);
-    for index in 0..samples {
-        for sample in [mix.left[index], mix.right[index]] {
-            // A soft ceiling rather than a hard one.
-            let level = (f64::from(sample) * 1.15).tanh();
-            pcm.extend_from_slice(&((level * 30_000.0) as i16).to_le_bytes());
+    mix.pcm()
+}
+
+/// How long the film can wait with something to listen to.
+const BED: f64 = 90.0;
+
+/// What plays while the film waits to be continued: the drone and the wind,
+/// and nothing that keeps time.
+fn render_bed() -> Vec<u8> {
+    let samples = (BED * RATE) as usize;
+    let mut mix = Mix {
+        left: vec![0.0; samples],
+        right: vec![0.0; samples],
+    };
+    let swell = |t: f64| (t / 0.6).min(1.0) * ((BED - t) / 6.0).min(1.0);
+    mix.drone(0.0, BED, |t| 0.045 * swell(t));
+    mix.wind(0.0, BED, |t| 0.07 * swell(t));
+    mix.pcm()
+}
+
+impl Mix {
+    /// The mix as interleaved 16-bit stereo, little-endian.
+    fn pcm(&self) -> Vec<u8> {
+        let mix = self;
+        let samples = mix.left.len();
+        let mut pcm = Vec::with_capacity(samples * 4);
+        for index in 0..samples {
+            for sample in [mix.left[index], mix.right[index]] {
+                // A soft ceiling rather than a hard one.
+                let level = (f64::from(sample) * 1.15).tanh();
+                pcm.extend_from_slice(&((level * 30_000.0) as i16).to_le_bytes());
+            }
         }
+        pcm
     }
-    pcm
 }
 
 /// A 16-bit stereo WAV header for `bytes` of PCM.
@@ -568,15 +594,17 @@ const SETTLE: Duration = Duration::from_millis(180);
 /// position every frame and makes the player agree, restarting it when the
 /// film was paused, resumed, or moved.
 pub struct Sound {
-    /// The synthesizer, until it has delivered.
-    rendering: Option<Receiver<Vec<u8>>>,
-    pcm: Vec<u8>,
+    /// The synthesizer, until it has delivered the film's music and the bed.
+    rendering: Option<Receiver<[Vec<u8>; 2]>>,
+    /// The film's music, and what plays while it waits.
+    pcm: [Vec<u8>; 2],
     muted: bool,
     player: Option<Child>,
     /// Which of [`PLAYERS`] to use. Past the end means none of them ran.
     choice: usize,
-    /// When the player was started, and where in the film it started from.
-    started: Option<(Duration, f64)>,
+    /// When the player was started, which of the two it is playing, and
+    /// where in it it started from.
+    started: Option<(Duration, usize, f64)>,
     path: PathBuf,
 }
 
@@ -586,13 +614,13 @@ impl Sound {
         let rendering = enabled.then(|| {
             let (sender, receiver) = channel();
             thread::spawn(move || {
-                let _ = sender.send(render());
+                let _ = sender.send([render(), render_bed()]);
             });
             receiver
         });
         Self {
             rendering,
-            pcm: Vec::new(),
+            pcm: [Vec::new(), Vec::new()],
             muted: !enabled,
             player: None,
             choice: 0,
@@ -607,23 +635,28 @@ impl Sound {
 
     pub fn toggle_mute(&mut self) {
         self.muted = !self.muted;
-        if !self.muted && self.rendering.is_none() && self.pcm.is_empty() {
+        if !self.muted && self.rendering.is_none() && self.pcm[0].is_empty() {
             *self = Self::new(true);
         }
     }
 
     /// Make the player agree with a film that is at `film`, and `playing` or
-    /// not. `now` is the clock the film runs on.
-    pub fn follow(&mut self, film: f64, playing: bool, now: Duration) {
+    /// not. `waiting` is how long the film has been waiting to be continued,
+    /// if it is. `now` is the clock the film runs on.
+    pub fn follow(&mut self, film: f64, playing: bool, waiting: Option<f64>, now: Duration) {
         if let Some(receiver) = &self.rendering
             && let Ok(pcm) = receiver.try_recv()
         {
             self.pcm = pcm;
             self.rendering = None;
         }
-        let wanted = playing && !self.muted && !self.pcm.is_empty() && film < LENGTH;
-        let on_time = self.started.is_some_and(|(at, from)| {
-            (from + now.saturating_sub(at).as_secs_f64() - film).abs() < DRIFT
+        // Which recording, and where in it.
+        let (track, position) = waiting.map_or((0, film), |spent| (1, spent));
+        let length = self.pcm[track].len() as f64 / (RATE * 4.0);
+        let wanted = playing && !self.muted && position < length;
+        let on_time = self.started.is_some_and(|(at, playing, from)| {
+            playing == track
+                && (from + now.saturating_sub(at).as_secs_f64() - position).abs() < DRIFT
         });
         if wanted && on_time {
             return;
@@ -633,17 +666,20 @@ impl Sound {
             self.started = None;
             return;
         }
+        // Scrubbing settles before the player is restarted; changing between
+        // the film and the bed does not wait.
         if self
             .started
-            .is_some_and(|(at, _)| now.saturating_sub(at) < SETTLE)
+            .is_some_and(|(at, playing, _)| playing == track && now.saturating_sub(at) < SETTLE)
         {
             return;
         }
         self.stop();
-        self.started = Some((now, film));
+        self.started = Some((now, track, position));
         // Whole frames only: four bytes each.
-        let offset = ((film.max(0.0) * RATE) as usize * 4).min(self.pcm.len());
-        let rest = &self.pcm[offset..];
+        let pcm = &self.pcm[track];
+        let offset = ((position.max(0.0) * RATE) as usize * 4).min(pcm.len());
+        let rest = &pcm[offset..];
         let mut wav = wav_header(rest.len());
         wav.extend_from_slice(rest);
         if fs::write(&self.path, wav).is_err() {

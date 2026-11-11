@@ -93,7 +93,7 @@ pub fn scene(frame: &mut Frame, t: f64, theme: &Theme) {
             let scan = base - size - 4.0 + (size + 8.0) * ease_in_out(span(u, 0.2, 1.4));
             pose.cut = scan;
             let head = (middle, base - size * 0.66);
-            let turn = t * 0.08;
+            let turn = frame.wall * 0.08;
             frame.dots.circle(head, size * 0.36, mix(GREEN, BLACK, 0.5));
             frame
                 .dots
@@ -151,7 +151,7 @@ pub fn scene(frame: &mut Frame, t: f64, theme: &Theme) {
                         .dashed((from, y), (from + run * 90.0, y), GREY, 5, 4, streak * 3);
                 }
             }
-            figures::rat(&mut frame.dots, pose, ink, accent, t);
+            figures::rat(&mut frame.dots, pose, ink, accent, frame.wall);
 
             // The panel is painted on left to right, the brush edge leading.
             let painted = ease_in_out(span(u, 1.7, 3.0));
@@ -211,7 +211,7 @@ pub fn scene(frame: &mut Frame, t: f64, theme: &Theme) {
                     },
                     ink,
                     accent,
-                    t,
+                    frame.wall,
                 );
                 let cut = 1.0 - span(u, slash, slash + 0.3);
                 if cut > 0.0 {

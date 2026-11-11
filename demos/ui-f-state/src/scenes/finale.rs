@@ -50,7 +50,7 @@ pub fn scene(frame: &mut Frame, t: f64, pressed: Option<f64>) {
         lerp(ground_y + radius * 0.2, ground_y * 0.5, risen),
     );
     figures::moon(&mut frame.dots, moon, radius, mix(WHITE, BLACK, 0.45));
-    let turn = t * 0.03;
+    let turn = frame.wall * 0.03;
     frame.dots.arc(moon, radius + 6.0, turn, turn + 0.22, GREY);
     frame
         .dots
@@ -85,8 +85,8 @@ pub fn scene(frame: &mut Frame, t: f64, pressed: Option<f64>) {
         pose.cut = ground_y - size + (size + 2.0) * ease_in_out(span(u, start, start + 1.0));
         match index {
             0 => figures::monk(&mut frame.dots, pose, WHITE, GREEN),
-            1 if !live => figures::rat(&mut frame.dots, pose, WHITE, TEAL, t),
-            2 => figures::ninja(&mut frame.dots, pose, WHITE, AMBER, t),
+            1 if !live => figures::rat(&mut frame.dots, pose, WHITE, TEAL, frame.wall),
+            2 => figures::ninja(&mut frame.dots, pose, WHITE, AMBER, frame.wall),
             _ => {}
         }
         if u >= start + 1.0 && !(live && index == 1) {
@@ -100,9 +100,14 @@ pub fn scene(frame: &mut Frame, t: f64, pressed: Option<f64>) {
             f64::from(places[0] + 5) * 2.0,
             f64::from(places[2] - 6) * 2.0,
         );
-        frame
-            .dots
-            .dashed((left, y), (right, y), DIM, 2, 4, -(t * 24.0) as i32);
+        frame.dots.dashed(
+            (left, y),
+            (right, y),
+            DIM,
+            2,
+            4,
+            -(frame.wall * 24.0) as i32,
+        );
     }
 
     // The viewer pressed the live button: the message runs to the monk and a

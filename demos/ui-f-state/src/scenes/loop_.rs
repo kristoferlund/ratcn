@@ -22,6 +22,7 @@ const RENDER_AT: f64 = 0.52;
 pub fn scene(frame: &mut Frame, t: f64, theme: &Theme) {
     let u = t - score::LOOP;
     let w = frame.w;
+    let wall = frame.wall;
     // Laid out for thirty-odd rows, and centered in anything taller.
     let tall = frame.h.min(33);
     let oy = (frame.h - tall) / 2;
@@ -143,7 +144,7 @@ pub fn scene(frame: &mut Frame, t: f64, theme: &Theme) {
                     },
                     mix(DIM, BLACK, f64::from(ghost) * 0.25),
                     DIM,
-                    t,
+                    wall,
                 );
             }
         }
@@ -155,7 +156,7 @@ pub fn scene(frame: &mut Frame, t: f64, theme: &Theme) {
             },
             WHITE,
             AMBER,
-            t,
+            wall,
         );
         if carrying {
             hud::tag(
@@ -253,7 +254,7 @@ pub fn scene(frame: &mut Frame, t: f64, theme: &Theme) {
             Pose::new(f64::from(rat_x) * 2.0, floor - hop, figure),
             WHITE,
             TEAL,
-            t,
+            wall,
         );
         hud::tag_centered(frame, rat_x, oy + 12, "RENDER", TEAL);
     }

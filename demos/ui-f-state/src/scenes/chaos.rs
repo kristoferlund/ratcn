@@ -71,6 +71,7 @@ fn belief(index: usize, u: f64) -> &'static str {
 
 pub fn scene(frame: &mut Frame, t: f64) {
     let u = t - score::CHAOS;
+    let wall = frame.wall;
     let (w, h) = (frame.w, frame.h);
     let place = |index: usize| {
         let (_, fx, fy) = WIDGETS[index];
@@ -92,8 +93,8 @@ pub fn scene(frame: &mut Frame, t: f64) {
         let end = (lerp(from.0, to.0, drawn), lerp(from.1, to.1, drawn));
         frame
             .dots
-            .dashed(from, end, WHITE, 2, 2, -(t * 20.0) as i32);
-        let along = ((u - start) * 0.9).fract();
+            .dashed(from, end, WHITE, 2, 2, -(wall * 20.0) as i32);
+        let along = (wall * 0.9 + wire as f64 * 0.37).fract();
         let pulse = (lerp(from.0, to.0, along), lerp(from.1, to.1, along));
         frame.dots.disc(pulse, 1.6, 1.0, AMBER);
     }
@@ -101,7 +102,11 @@ pub fn scene(frame: &mut Frame, t: f64) {
     let tangle = (span(u, 5.5, 9.8).powi(2) * 48.0) as u64;
     for strand in 0..tangle {
         let from = place((hash(strand) % 5) as usize);
-        let jitter = if strand % 3 == 0 { (t * 9.0) as u64 } else { 0 };
+        let jitter = if strand % 3 == 0 {
+            (wall * 9.0) as u64
+        } else {
+            0
+        };
         let to = (
             rnd(strand, 11 + jitter) * frame.dots.w(),
             rnd(strand, 12 + jitter) * frame.dots.h(),
@@ -147,7 +152,7 @@ pub fn scene(frame: &mut Frame, t: f64) {
         hud::tag(frame, x + 5, y + 2, "MUTATED IN PLACE", AMBER);
     }
     for (slot, (at, index, text)) in ALARMS.iter().enumerate() {
-        if u >= *at && ((u - at) > 0.3 || (t * 16.0) as i32 % 2 == 0) {
+        if u >= *at && ((u - at) > 0.3 || (wall * 16.0) as i32 % 2 == 0) {
             let (x, y) = place(*index);
             hud::tag(frame, x + 5, y + 2 + (slot as i32 / 4), text, RED);
         }
@@ -166,7 +171,7 @@ pub fn scene(frame: &mut Frame, t: f64) {
     // ゴゴゴ: the sound of something about to give.
     for rumble in 0..((u - 7.4) * 2.5).max(0.0) as u64 {
         let x = 8 + (rnd(rumble, 31) * f64::from(w - 20)) as i32;
-        let y = 2 + (rnd(rumble, 32) * f64::from(h - 6)) as i32 + ((t * 10.0) as i32 % 2);
+        let y = 2 + (rnd(rumble, 32) * f64::from(h - 6)) as i32 + ((wall * 10.0) as i32 % 2);
         frame.text(x, y, "ゴゴゴ", bold(WHITE));
     }
 
@@ -194,17 +199,17 @@ pub fn scene(frame: &mut Frame, t: f64) {
     frame.fade = 1.0 - span(u, 0.0, 0.4);
     let quake = span(u, 6.5, 10.0) * 1.7;
     frame.shake = (
-        (quake * (t * 41.0).sin()).round() as i32,
-        (quake * 0.6 * (t * 33.0).cos()).round() as i32,
+        (quake * (wall * 41.0).sin()).round() as i32,
+        (quake * 0.6 * (wall * 33.0).cos()).round() as i32,
     );
     frame.glitch = span(u, 7.5, 10.0).powi(2) * 0.22;
-    frame.invert = u > 9.4 && (t * 14.0) as i32 % 2 == 0;
+    frame.invert = u > 9.4 && (wall * 14.0) as i32 % 2 == 0;
     let brace = span(u, 8.8, 10.0);
     if brace > 0.0 {
         hud::speed_lines(
             frame,
             (frame.dots.w() / 2.0, frame.dots.h() / 2.0),
-            t,
+            wall,
             brace,
             WHITE,
         );

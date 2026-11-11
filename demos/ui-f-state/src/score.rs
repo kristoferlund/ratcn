@@ -30,6 +30,24 @@ pub const FINALE_DROP: f64 = 77.5;
 /// The film is over, and the screen is handed to the viewer.
 pub const END: f64 = 85.0;
 
+/// Where the film waits to be continued: the last moment of each section,
+/// with everything on screen and nothing yet fading. The loop waits twice,
+/// once after its first, slow turn and once at its end; the old way waits
+/// just short of the frames that flicker, which are not ones to sit in.
+pub const HOLDS: [f64; 11] = [
+    BOOM - 0.7,
+    MONK - 0.35,
+    RAT - 0.3,
+    NINJA - 0.3,
+    LOOP - 0.3,
+    TURNS[1] - 0.05,
+    POWERS - 0.3,
+    POWERS + POWER - 0.3,
+    POWERS + 2.0 * POWER - 0.3,
+    POWERS + 3.0 * POWER - 0.3,
+    FINALE - 0.3,
+];
+
 /// When each turn of the loop starts. The last entry is where the last ends.
 pub const TURNS: [f64; 10] = [
     41.25, 45.0, 47.5, 50.0, 51.25, 52.5, 53.125, 53.75, 54.375, 55.0,

@@ -268,7 +268,7 @@ pub fn layers(t: f64, w: i32, h: i32) -> Option<Layers> {
         ),
         hint: (1.0..3.2).contains(&u),
         toast: (u >= 2.0).then_some(u - 2.0),
-        modal: (3.2..4.75).contains(&u),
+        modal: (3.2..4.5).contains(&u),
     })
 }
 
