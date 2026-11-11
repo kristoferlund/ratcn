@@ -11,8 +11,13 @@
 //! which is where tearing shows most — and closes at the flush that ends it.
 //! The cursor calls open nothing: inside a draw they follow the cells, and
 //! ratatui's `Terminal` shows the cursor again as it drops, after the session
-//! has given the terminal back, where an opened frame would never close. A
-//! terminal without the mode ignores both.
+//! has given the terminal back, where an opened frame would never close.
+//!
+//! A frame can still open outside a draw — `Terminal::clear` on its own, or a
+//! draw whose render fails after a resize cleared the screen — and nothing in
+//! ratatui closes it. The session closes it before it waits for input, so the
+//! terminal never holds the screen while the app is idle. A terminal without
+//! the mode ignores both.
 
 use std::io::{self, Write};
 
@@ -35,6 +40,10 @@ pub(super) const END_FRAME: &str = "\x1b[?2026l";
 /// The backend a [`Session`](super::Session) draws through: the terminal's
 /// own, with every color brought within what the terminal shows, and every
 /// frame shown at once.
+///
+/// It does not implement ratatui's `scrolling-regions` feature, so an app
+/// that turns that feature on does not build against a session; ratzilla's
+/// backends have the same gap.
 #[derive(Debug)]
 pub struct SessionBackend<T: Terminal = PlatformTerminal> {
     inner: TerminaBackend<T>,
@@ -50,6 +59,15 @@ impl<T: Terminal> SessionBackend<T> {
             depth,
             framing: false,
         }
+    }
+
+    /// Close a frame that opened outside a completed draw, so the terminal
+    /// shows what it holds.
+    pub(super) fn end_frame(&mut self) -> io::Result<()> {
+        if self.framing {
+            Backend::flush(self)?;
+        }
+        Ok(())
     }
 
     /// Open the frame, once, before its first write.
@@ -142,7 +160,7 @@ impl<T: Terminal> Backend for SessionBackend<T> {
 mod tests {
     use super::{BEGIN_FRAME, ColorDepth, END_FRAME, SessionBackend};
     use crate::terminal::fake::FakeTerminal;
-    use ratatui::{Terminal, layout::Rect, style::Color, widgets::Paragraph};
+    use ratatui::{Terminal, style::Color, widgets::Paragraph};
     use ratatui_termina::TerminaBackend;
 
     fn terminal(depth: ColorDepth) -> Terminal<SessionBackend<FakeTerminal>> {
@@ -200,17 +218,52 @@ mod tests {
     fn a_resize_clears_inside_the_frame() {
         let mut terminal = terminal(ColorDepth::TrueColor);
         terminal
-            .resize(Rect::new(0, 0, 40, 10))
+            .draw(|frame| frame.render_widget(Paragraph::new("hi"), frame.area()))
             .expect("a fake terminal takes writes");
+        written(&mut terminal);
+
+        terminal
+            .backend_mut()
+            .inner
+            .terminal_mut()
+            .size
+            .set((40, 10));
         terminal
             .draw(|frame| frame.render_widget(Paragraph::new("hi"), frame.area()))
             .expect("a fake terminal takes writes");
         let frame = written(&mut terminal);
 
         assert!(frame.starts_with(BEGIN_FRAME), "{frame:?}");
-        assert!(frame.contains("\x1b[2J"), "the clear went out: {frame:?}");
+        assert!(frame.contains("\x1b[2J"), "the resize cleared: {frame:?}");
         assert_eq!(frame.matches(BEGIN_FRAME).count(), 1, "{frame:?}");
         assert!(frame.ends_with(END_FRAME), "{frame:?}");
+    }
+
+    /// A draw whose render fails after the resize cleared returns before the
+    /// flush that would close the frame; the session closes it before it
+    /// waits, and closing writes nothing when no frame is open.
+    #[test]
+    fn a_frame_left_open_by_a_failed_draw_is_closed_before_the_wait() {
+        let mut terminal = terminal(ColorDepth::TrueColor);
+        terminal
+            .backend_mut()
+            .inner
+            .terminal_mut()
+            .size
+            .set((40, 10));
+        terminal
+            .try_draw(|_| Err(std::io::Error::other("the render failed")))
+            .expect_err("the render failed");
+        let open = written(&mut terminal);
+        assert!(
+            open.starts_with(BEGIN_FRAME) && !open.contains(END_FRAME),
+            "{open:?}"
+        );
+
+        terminal.backend_mut().end_frame().expect("writable");
+        assert_eq!(written(&mut terminal), END_FRAME);
+        terminal.backend_mut().end_frame().expect("writable");
+        assert_eq!(written(&mut terminal), "");
     }
 
     /// The colors are brought within the terminal's depth on the same path.

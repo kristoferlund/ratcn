@@ -266,7 +266,7 @@ impl Session {
             &mut output,
             Ask {
                 colors: options.adaptive,
-                rgb: env_depth != ColorDepth::TrueColor,
+                rgb: env_depth != ColorDepth::TrueColor && ColorDepth::probed(),
             },
         )?;
         let depth = if answer.rgb {
@@ -359,6 +359,7 @@ impl Session {
     /// Returns an I/O error if the terminal cannot be read or a re-query
     /// cannot be written.
     pub fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<SessionEvent>> {
+        self.terminal.backend_mut().end_frame()?;
         pump(
             &self.events,
             self.terminal.backend_mut(),

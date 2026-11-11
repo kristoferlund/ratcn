@@ -51,7 +51,19 @@ mode:
 Whatever the options, each frame drawn through `session.terminal_mut()` goes
 out as one synchronized update (mode 2026): the terminal shows it only once it
 has arrived whole, so a large redraw or a resize does not tear. Terminals
-without the mode ignore it.
+without the mode ignore it. A frame left open by a draw that failed, or by
+`clear` on its own, is closed when the app next waits in `session.next`.
+
+On a terminal without 24-bit color, every frame is drawn with the nearest
+colors it has: the 256-color palette, or the 16 named colors, where each theme
+color keeps its hue (a destructive red stays red). The session judges this from
+`COLORTERM` and `TERM`, as most terminal libraries do, and where they do not say
+24-bit it asks the terminal while opening, which costs one round trip. Over
+SSH, which drops `COLORTERM`, a 24-bit terminal that does not answer gets 256
+colors; set `COLORTERM=truecolor` to keep them all.
+
+The session's backend does not implement Ratatui's `scrolling-regions`
+feature, so an app that turns it on does not build against a session.
 
 ### Opening with a preset theme
 
