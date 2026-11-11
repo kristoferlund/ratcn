@@ -7,6 +7,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-11
+
+The first release in the 0.1 series. From here on, a patch release (0.1.x) is
+never breaking; breaking changes wait for 0.2.
+
 ### Breaking
 
 - `terminal::SessionBackend` is a type of its own rather than an alias for
@@ -302,7 +307,8 @@ See the [full version comparison][0.0.2] for all API removals and smaller change
 
 First public release.
 
-[Unreleased]: https://github.com/kristoferlund/ratcn/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/kristoferlund/ratcn/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kristoferlund/ratcn/compare/v0.0.6...v0.1.0
 [0.0.6]: https://github.com/kristoferlund/ratcn/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/kristoferlund/ratcn/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/kristoferlund/ratcn/compare/v0.0.3...v0.0.4
