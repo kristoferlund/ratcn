@@ -25,8 +25,7 @@ use ratcn::{
     Button, ButtonSize, Dialog, Theme, Toast, ToastEntry, ToasterWidget, Tooltip, TooltipSide,
     color::resolve_rgb,
     runtime::{
-        DeclareCtx, Event, EventResult, FocusState, KeyCode, ModalState, MouseButton, MouseEvent,
-        MouseKind, PointerShape, Ratcn,
+        DeclareCtx, Event, EventResult, FocusState, KeyCode, ModalState, PointerShape, Ratcn,
     },
 };
 
@@ -39,9 +38,11 @@ mod scenes;
 mod score;
 #[cfg(not(target_arch = "wasm32"))]
 mod sound;
+mod transport;
 
 use canvas::{Frame, ink, mix};
-use hud::{BLACK, DIM, GREY, Panel, WHITE, fg};
+use hud::{BLACK, Panel, WHITE, fg};
+use transport::Transport;
 
 /// The largest scene the film is laid out for. A bigger terminal gets the
 /// scene in its middle and the snow everywhere.
@@ -50,9 +51,6 @@ const STAGE: (u16, u16) = (132, 42);
 const SMALLEST: (u16, u16) = (80, 24);
 /// The film runs at thirty frames a second: a terminal is not a monitor.
 const FRAME: Duration = Duration::from_millis(33);
-/// How far an arrow key moves the film.
-const SKIP: f64 = 5.0;
-
 mod ids {
     pub const COUNTER: &str = "counter";
     pub const BUTTON: &str = "button";
@@ -108,6 +106,11 @@ enum Msg {
     Focus(FocusState),
     Increment,
     Replay,
+    /// Pause the film, or set it running again.
+    Toggle,
+    /// Move the film to this many seconds in.
+    Seek(f64),
+    TransportFocus(FocusState),
     /// A scripted dialog's buttons: nothing presses them.
     Nothing,
 }
@@ -119,8 +122,11 @@ pub struct App {
     sky: Frame,
     live: Live,
     ratcn: Ratcn<Live, Msg>,
-    /// Where the last frame put the timeline: its row, first column, width.
-    timeline: (u16, u16, u16),
+    /// The transport along the bottom row, and the engine it is declared
+    /// through. It has an engine of its own so that it stays in reach while
+    /// the film's scripted dialog holds the scene's.
+    transport: Transport,
+    controls: Ratcn<Transport, Msg>,
     #[cfg(not(target_arch = "wasm32"))]
     sound: sound::Sound,
 }
@@ -144,7 +150,11 @@ impl App {
             ratcn: Ratcn::new()
                 .focus(|live: &Live| &live.focus, Msg::Focus)
                 .modals(|live: &Live| &live.modals),
-            timeline: (0, 0, 0),
+            transport: Transport::new(),
+            controls: Ratcn::new().focus(
+                |transport: &Transport| &transport.focus,
+                Msg::TransportFocus,
+            ),
             #[cfg(not(target_arch = "wasm32"))]
             sound: sound::Sound::new(sound),
         }
@@ -158,6 +168,17 @@ impl App {
             running_since: None,
         };
         app
+    }
+
+    /// Bring the transport's state up to the film: it is drawn from, and its
+    /// keys are read against, where the film is now.
+    fn sync_transport(&mut self, now: Duration) {
+        self.transport.position = self.clock.at(now);
+        self.transport.running = self.clock.running_since.is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.transport.sound = !self.sound.muted();
+        }
     }
 
     fn update(&mut self, msg: Msg, now: Duration) {
@@ -175,81 +196,11 @@ impl App {
                 self.live.count = 0;
                 self.live.pressed_at = None;
             }
+            Msg::Toggle => self.clock.toggle(now),
+            Msg::Seek(position) => self.clock.seek(position, now),
+            Msg::TransportFocus(focus) => self.transport.focus = focus,
             Msg::Nothing => {}
         }
-    }
-
-    /// The timeline: where the film is, and how to move it.
-    fn draw_timeline(&mut self, buffer: &mut Buffer, area: Rect, t: f64) {
-        let row = area.bottom() - 1;
-        buffer.set_style(
-            Rect::new(area.x, row, area.width, 1),
-            Style::default().bg(ink(BLACK)),
-        );
-        let shown = t.min(score::END);
-        let icon = if self.clock.running_since.is_some() {
-            "▶"
-        } else {
-            "‖"
-        };
-        let clock = format!(
-            " {icon} {:02}:{:02} / {:02}:{:02} ",
-            shown as u32 / 60,
-            shown as u32 % 60,
-            score::END as u32 / 60,
-            score::END as u32 % 60
-        );
-        buffer.set_string(area.x, row, &clock, fg(WHITE));
-        #[cfg(not(target_arch = "wasm32"))]
-        let sound = if self.sound.muted() { "off" } else { "on" };
-        #[cfg(target_arch = "wasm32")]
-        let sound = "off";
-        let keys = format!(" SPACE pause  ←→ scrub  R replay  M sound {sound}  ^C quit ");
-        // The keys are shown while they are news, and whenever the film is not
-        // running; the rest of the time the bar has the room.
-        let idle = self.clock.running_since.is_none() || !(8.0..score::END).contains(&t);
-        let keys_width = if idle && area.width >= 110 {
-            keys.chars().count() as u16
-        } else {
-            0
-        };
-        if keys_width > 0 {
-            buffer.set_string(area.right() - keys_width, row, &keys, fg(DIM));
-        }
-        let chapter = scenes::CHAPTERS
-            .iter()
-            .rev()
-            .find(|(start, _)| t >= *start)
-            .map_or("", |(_, name)| name);
-        let chapter_width = 24.min(area.width / 5);
-        let first = area.x + clock.chars().count() as u16;
-        let width = area
-            .width
-            .saturating_sub(first - area.x + keys_width + chapter_width + 2);
-        self.timeline = (row, first, width);
-        let head = (shown / score::END * f64::from(width.saturating_sub(1))) as u16;
-        for column in 0..width {
-            let at = f64::from(column) / f64::from(width.max(2) - 1) * score::END;
-            let starts_chapter = scenes::CHAPTERS.iter().any(|(start, _)| {
-                (at - start).abs() < score::END / f64::from(width.max(1)) / 2.0 && *start > 0.0
-            });
-            let (glyph, color) = match column {
-                column if column == head => ("●", WHITE),
-                column if column < head => ("━", GREY),
-                _ if starts_chapter => ("┿", GREY),
-                _ => ("─", DIM),
-            };
-            buffer.set_string(first + column, row, glyph, fg(color));
-        }
-        buffer.set_string(
-            first + width + 1,
-            row,
-            chapter
-                .chars()
-                .take(usize::from(chapter_width))
-                .collect::<String>(),
-            fg(GREY),
-        );
     }
 }
 
@@ -318,53 +269,50 @@ impl demo_shared::Demo for App {
         let now = demo_shared::monotonic_time();
         let t = self.clock.at(now);
 
-        // The timeline takes a press or a drag anywhere along it.
-        let (row, first, width) = self.timeline;
-        if let Event::Mouse(MouseEvent {
-            kind: MouseKind::Down(MouseButton::Left) | MouseKind::Drag(MouseButton::Left),
-            column,
-            row: at,
-            ..
-        }) = event
-            && at == row
-            && width > 1
-            && column >= first
-        {
-            let along = f64::from((column - first).min(width - 1)) / f64::from(width - 1);
-            self.clock.seek(along * score::END, now);
-            return true;
+        // Once the film is over the counter is live. It gets the keys first;
+        // the pointer goes to the transport first, which may be holding a drag
+        // that has wandered off its row.
+        let live = t >= score::END;
+        let keys = matches!(event, Event::Key(_));
+        self.sync_transport(now);
+        let mut result = EventResult::Ignored;
+        if live && keys {
+            result = self.ratcn.handle_event(event.clone(), &self.live);
         }
-
-        // Once the film is over the counter is live, and gets every event
-        // first.
-        if t >= score::END {
-            match self.ratcn.handle_event(event.clone(), &self.live) {
-                EventResult::Emit(msg) => {
-                    self.update(msg, now);
-                    return true;
-                }
-                EventResult::Consumed => return true,
-                EventResult::Ignored => {}
+        if matches!(result, EventResult::Ignored) {
+            result = self.controls.handle_event(event.clone(), &self.transport);
+        }
+        if matches!(result, EventResult::Ignored) && live && !keys {
+            result = self.ratcn.handle_event(event.clone(), &self.live);
+        }
+        match result {
+            EventResult::Emit(msg) => {
+                self.update(msg, now);
+                return true;
             }
+            EventResult::Consumed => return true,
+            EventResult::Ignored => {}
         }
 
-        let Event::Key(key) = event else {
-            return false;
-        };
-        match key.code {
-            KeyCode::Char(' ') => self.clock.toggle(now),
-            KeyCode::Left => self.clock.seek(t.min(score::END) - SKIP, now),
-            KeyCode::Right => self.clock.seek((t + SKIP).min(score::END), now),
-            KeyCode::Char('r' | 'R') | KeyCode::Home => self.update(Msg::Replay, now),
+        // What nothing claimed is a hotkey.
+        match event {
+            Event::Key(key) if matches!(key.code, KeyCode::Char('r' | 'R')) => {
+                self.update(Msg::Replay, now);
+            }
             #[cfg(not(target_arch = "wasm32"))]
-            KeyCode::Char('m' | 'M') => self.sound.toggle_mute(),
+            Event::Key(key) if matches!(key.code, KeyCode::Char('m' | 'M')) => {
+                self.sound.toggle_mute();
+            }
             _ => return false,
         }
         true
     }
 
     fn pointer_shape(&self) -> PointerShape {
-        self.ratcn.pointer_shape()
+        match self.controls.pointer_shape() {
+            PointerShape::Default => self.ratcn.pointer_shape(),
+            shape => shape,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -486,13 +434,20 @@ impl demo_shared::Demo for App {
                     .bg(ink(mix(WHITE, BLACK, 0.1))),
             );
         }
-        self.draw_timeline(buffer, area, t);
+        self.sync_transport(now);
+        let row = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+        buffer.set_style(row, Style::default().bg(ink(BLACK)));
+        self.controls
+            .render_into(buffer, row, &self.transport, theme, |ctx| {
+                transport::declare(ctx, row);
+            });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use demo_shared::Demo as _;
+    use ratcn::runtime::{Modifiers, MouseButton, MouseEvent, MouseKind};
 
     use super::*;
 
@@ -548,6 +503,47 @@ mod tests {
             "update has run, and the frame showing it has not been painted yet"
         );
         assert_eq!(score::shown_count(score::POWERS), hud::FULL);
+    }
+
+    fn mouse(kind: MouseKind, column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: Modifiers::NONE,
+        })
+    }
+
+    /// The transport is components, not a hit test in the event handler: a
+    /// press on the scrubber reaches the film as a message, and a drag that
+    /// leaves the row is still the scrubber's.
+    #[test]
+    fn the_scrubber_moves_the_film_through_update() {
+        let area = Rect::new(0, 0, 120, 36);
+        let mut app = App::still(10.0);
+        let mut buffer = Buffer::empty(area);
+        app.draw(&mut buffer, area, &Theme::default_dark());
+        let now = demo_shared::monotonic_time;
+
+        let end = (0..area.width)
+            .rev()
+            .find(|column| ["─", "┿"].contains(&buffer[(*column, 35)].symbol()))
+            .expect("the scrubber is on the bottom row");
+        assert!(app.handle_event(mouse(MouseKind::Down(MouseButton::Left), end, 35)));
+        assert!(
+            (app.clock.at(now()) - score::END).abs() < 0.01,
+            "a press on the end of the bar is the film's last moment"
+        );
+        assert!(app.handle_event(mouse(MouseKind::Drag(MouseButton::Left), 0, 20)));
+        assert!(
+            app.clock.at(now()) < 0.01,
+            "the drag left the row and still moved the film"
+        );
+
+        assert!(app.handle_event(Event::Key(KeyCode::Right.into())));
+        assert!((app.clock.at(now()) - 5.0).abs() < 0.01);
+        assert!(app.handle_event(Event::Key(KeyCode::Char(' ').into())));
+        assert!(app.clock.running_since.is_some(), "Space set it running");
     }
 
     /// The live counter at the end is a real one: the button's message is the
