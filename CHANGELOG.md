@@ -7,6 +7,12 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The `ui-f-state` demo: a short film about `ui = f(state)` with a synthesized
+  soundtrack, ending in a live counter. Terminal only:
+  `cargo run --release -p ui-f-state`.
+
 ## [0.1.0] - 2026-11-11
 
 The first release in the 0.1 series. From here on, a patch release (0.1.x) is

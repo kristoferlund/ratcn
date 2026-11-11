@@ -58,6 +58,13 @@ board, and explore full demo apps. These are working Ratatui interfaces, not
 recordings. Try the controls with your keyboard and mouse, then
 [explore the demos and their source](https://ratcn.com/docs/demos).
 
+One demo is not in the showcase, because it has a soundtrack: a short film
+about the idea ratcn is built on. Clone the repository and run it locally:
+
+```sh
+cargo run --release -p ui-f-state
+```
+
 ## Widgets, the engine, or both
 
 Each component comes in up to two parts, and each part works on its own:
