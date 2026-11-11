@@ -1579,6 +1579,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "program-status"
+version = "0.0.6"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "shared",
+]
+
+[[package]]
 name = "progress"
 version = "0.0.6"
 dependencies = [

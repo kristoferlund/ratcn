@@ -174,6 +174,45 @@ title stack, and puts it back on exit. Terminals without the stack keep the
 app's title until something else sets one, usually the shell's next prompt.
 The tabs-basic demo shows the committed tab in the title.
 
+### Program status
+
+`session.set_program_status` tells the terminal what the app is doing, with the
+OSC 7501 [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status):
+idle, working (with optional progress), blocked on the user, done, or failed,
+with a message. The terminal decides how to show it: a tab glyph, a session
+list, a notification.
+
+```rust
+use ratcn::terminal::{ProgramState, ProgramStatus};
+
+let status = ProgramStatus::new(ProgramState::Working { progress: Some(40) })
+    .app("deploy")
+    .message("Pushing image");
+session.set_program_status(&status)?;
+```
+
+Hand it the app's status after each frame; a report the terminal already shows
+is not written again. Tasks of their own get records of their own with
+`.id("build/test")`, and `clear_program_status` removes one.
+
+The terminal owns the records, and they outlive the app: on exit it drops
+working and blocked ones, and keeps done and error until the user has seen
+them. So report `Done` or `Error` before quitting, and `Idle` when the user
+cancels. A report the terminal would drop silently, such as a message with a
+line break or over its length limit, returns `InvalidInput` instead.
+
+| Terminal | Program status |
+|---|---|
+| Rex | The reference implementation |
+| kitty | From 0.50.0, in the tab bar |
+| Ghostty | Parsed, not shown yet |
+| tmux | Not forwarded |
+
+Terminals that do not know it ignore it. It complements
+[the terminal's progress indicator](../components/progress#progress-in-the-terminal),
+which more terminals show today; an app can send both. The `program-status`
+demo does.
+
 ## Apps on a crossterm backend
 
 A host that runs on crossterm and owns its own terminal lifecycle uses

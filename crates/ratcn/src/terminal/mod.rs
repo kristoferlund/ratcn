@@ -67,6 +67,7 @@ mod depth;
 #[cfg(test)]
 mod fake;
 mod query;
+mod status;
 mod watch;
 
 use std::{
@@ -99,6 +100,7 @@ use query::{Ask, TerminalColors, query};
 pub use termina;
 
 pub use backend::SessionBackend;
+pub use status::{BlockedKind, ProgramState, ProgramStatus};
 
 /// What came out of a [`Session`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +153,9 @@ pub struct Session {
     /// Whether the user's title went onto the terminal's title stack, which
     /// exit owes a pop. Shared with the panic hook, like `live`.
     title_pushed: Arc<AtomicBool>,
+    /// The program status last written to each record, so an unchanged one
+    /// is not written again.
+    program_status: status::Sent,
 }
 
 /// The progress indicator a terminal draws in its own chrome — a bar along the
@@ -310,6 +315,7 @@ impl Session {
             progress_shown,
             title: None,
             title_pushed,
+            program_status: status::Sent::new(),
         };
         session.enable()
     }
@@ -460,6 +466,70 @@ impl Session {
             &self.title_pushed,
             title,
         )
+    }
+
+    /// Tell the terminal what the app is doing — working, blocked on the user,
+    /// done, failed — with the OSC 7501 Program Status Protocol.
+    ///
+    /// ```no_run
+    /// # use ratcn::terminal::{ProgramState, ProgramStatus, Session, SessionOptions};
+    /// # fn main() -> std::io::Result<()> {
+    /// # let mut session = Session::open(SessionOptions::new())?;
+    /// session.set_program_status(
+    ///     &ProgramStatus::new(ProgramState::Working { progress: Some(40) })
+    ///         .app("deploy")
+    ///         .message("Pushing image"),
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The terminal decides how to show it: a tab glyph, a session list, a
+    /// notification. Hand it the app's status every frame: a report its
+    /// record already shows is not written again. Give tasks of their own an
+    /// [`id`](ProgramStatus::id) for records of their own.
+    ///
+    /// The terminal owns the records, and they outlive the app. When it exits
+    /// the terminal drops `Working` and `Blocked`, and keeps `Done` and
+    /// `Error` until the user has seen them, so the session clears nothing on
+    /// exit. Report `Done` or `Error` before quitting, and `Idle` when the
+    /// user cancels.
+    ///
+    /// | Terminal | OSC 7501 |
+    /// |---|---|
+    /// | [Rex](https://www.superlogical.com/rex/docs/build/program-status) | The reference implementation |
+    /// | kitty | From 0.50.0, in the tab bar's `tab.program_status` |
+    /// | Ghostty | Parsed, but the app does not show it yet |
+    /// | tmux | Not forwarded; ratcn does not wrap it for passthrough, since the outer terminal cannot tell panes apart |
+    ///
+    /// Terminals that do not know it ignore it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`], writing nothing, for a report
+    /// the terminal would drop without a word: an `id` or `app` outside the
+    /// protocol's characters or lengths, or a title or message over its limit
+    /// or holding a control character, a line break included. Returns another
+    /// I/O error if the terminal will not take the write.
+    pub fn set_program_status(&mut self, status: &ProgramStatus) -> io::Result<()> {
+        status::write_status(
+            self.terminal.backend_mut(),
+            &mut self.program_status,
+            status,
+        )
+    }
+
+    /// Remove the program status record `id` and every task beneath it, or,
+    /// with [`None`], every record — other programs' finished ones in this
+    /// tab included, so prefer reporting a state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] for an `id` the terminal would
+    /// not take, and another I/O error if the terminal will not take the
+    /// write.
+    pub fn clear_program_status(&mut self, id: Option<&str>) -> io::Result<()> {
+        status::write_clear(self.terminal.backend_mut(), &mut self.program_status, id)
     }
 
     /// Switch the modes on. A failure part-way through still restores, because

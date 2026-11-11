@@ -24,6 +24,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `terminal::Session` sends every frame as one synchronized update (mode
   2026), so the terminal shows it only once it is whole: large redraws and
   resizes no longer tear. Terminals without the mode ignore it.
+- `terminal::Session::set_program_status` reports what the app is doing (idle,
+  working, blocked, done, error) with the OSC 7501 Program Status Protocol,
+  revision 0.4, writing each record only on change; `clear_program_status`
+  removes records. Reports a terminal would drop return `InvalidInput`. The
+  `program-status` demo shows each state.
 
 ### Fixed
 
