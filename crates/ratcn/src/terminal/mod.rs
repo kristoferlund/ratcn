@@ -145,6 +145,11 @@ pub struct Session {
     /// Whether an indicator is up, which exit owes a clear. Shared with the
     /// panic hook, like `live`.
     progress_shown: Arc<AtomicBool>,
+    /// The window title last written, [`None`] until one is.
+    title: Option<String>,
+    /// Whether the user's title went onto the terminal's title stack, which
+    /// exit owes a pop. Shared with the panic hook, like `live`.
+    title_pushed: Arc<AtomicBool>,
 }
 
 /// The progress indicator a terminal draws in its own chrome — a bar along the
@@ -277,10 +282,14 @@ impl Session {
         let live = Arc::new(AtomicBool::new(false));
         let pointer_pushed = Arc::new(AtomicBool::new(false));
         let progress_shown = Arc::new(AtomicBool::new(false));
+        let title_pushed = Arc::new(AtomicBool::new(false));
         output.set_panic_hook(panic_restore(
             Arc::clone(&live),
-            Arc::clone(&pointer_pushed),
-            Arc::clone(&progress_shown),
+            Owed {
+                pointer: Arc::clone(&pointer_pushed),
+                progress: Arc::clone(&progress_shown),
+                title: Arc::clone(&title_pushed),
+            },
             modes.clone(),
         ));
 
@@ -298,6 +307,8 @@ impl Session {
             pointer_pushed,
             progress: TerminalProgress::Hidden,
             progress_shown,
+            title: None,
+            title_pushed,
         };
         session.enable()
     }
@@ -427,6 +438,29 @@ impl Session {
         )
     }
 
+    /// Show `title` as the terminal's window and tab title, with the OSC 2
+    /// escape sequence.
+    ///
+    /// Hand it the app's title every frame: it writes only when the title
+    /// changed. Control characters are left out, since one would end the
+    /// sequence early. Before the first title it pushes the user's own onto
+    /// xterm's title stack (`CSI 22 ; 2 t`), and on the way out — a drop or a
+    /// panic, once — it pops it back (`CSI 23 ; 2 t`). A terminal without the
+    /// stack keeps the app's title until something else sets one, usually the
+    /// shell's next prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the terminal will not take the write.
+    pub fn set_title(&mut self, title: &str) -> io::Result<()> {
+        write_title(
+            self.terminal.backend_mut(),
+            &mut self.title,
+            &self.title_pushed,
+            title,
+        )
+    }
+
     /// Switch the modes on. A failure part-way through still restores, because
     /// the session already owns them: resetting a mode that never went on is
     /// what a terminal does with any mode it does not know.
@@ -442,6 +476,7 @@ impl Drop for Session {
         self.live.store(false, Ordering::Relaxed);
         let _ = restore_pointer(self.terminal.backend_mut(), &self.pointer_pushed);
         let _ = restore_progress(self.terminal.backend_mut(), &self.progress_shown);
+        let _ = restore_title(self.terminal.backend_mut(), &self.title_pushed);
         let _ = restore_modes(self.terminal.backend_mut(), &self.modes);
     }
 }
@@ -632,6 +667,38 @@ fn restore_progress(out: &mut impl io::Write, up: &AtomicBool) -> io::Result<()>
     out.flush()
 }
 
+/// OSC 2, `ESC ] 2 ; <title> ST`, when `title`, without its control
+/// characters, is not what `shown` already is. The first write is preceded by
+/// a push of the user's title, so the exit's pop has it to give back.
+fn write_title(
+    out: &mut impl io::Write,
+    shown: &mut Option<String>,
+    pushed: &AtomicBool,
+    title: &str,
+) -> io::Result<()> {
+    let title: String = title.chars().filter(|c| !c.is_control()).collect();
+    if shown.as_deref() == Some(title.as_str()) {
+        return Ok(());
+    }
+    if !pushed.swap(true, Ordering::Relaxed) {
+        write!(out, "\x1b[22;2t")?;
+    }
+    write!(out, "\x1b]2;{title}\x1b\\")?;
+    *shown = Some(title);
+    out.flush()
+}
+
+/// Give the user's title back, once, if it was ever pushed. Clearing `pushed`
+/// is what keeps a panic, restored by the hook and then again by the unwinding
+/// drop, from popping a second entry.
+fn restore_title(out: &mut impl io::Write, pushed: &AtomicBool) -> io::Result<()> {
+    if !pushed.swap(false, Ordering::Relaxed) {
+        return Ok(());
+    }
+    write!(out, "\x1b[23;2t")?;
+    out.flush()
+}
+
 fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
     for &code in modes {
         let mode = DecPrivateMode::Code(code);
@@ -640,19 +707,27 @@ fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Resu
     out.flush()
 }
 
+/// What exit may owe the terminal besides its modes, each flag shared between
+/// the session and its panic hook.
+struct Owed {
+    pointer: Arc<AtomicBool>,
+    progress: Arc<AtomicBool>,
+    title: Arc<AtomicBool>,
+}
+
 /// The panic hook's share of restoring: the pointer, the progress indicator,
-/// and the modes, while `live` says a session still has them on, and nothing
-/// once it has ended — or never got that far.
+/// the title, and the modes, while `live` says a session still has them on,
+/// and nothing once it has ended — or never got that far.
 fn panic_restore<W: io::Write>(
     live: Arc<AtomicBool>,
-    pointer_pushed: Arc<AtomicBool>,
-    progress_shown: Arc<AtomicBool>,
+    owed: Owed,
     modes: Vec<DecPrivateModeCode>,
 ) -> impl Fn(&mut W) + Send + Sync + 'static {
     move |out| {
         if live.load(Ordering::Relaxed) {
-            let _ = restore_pointer(out, &pointer_pushed);
-            let _ = restore_progress(out, &progress_shown);
+            let _ = restore_pointer(out, &owed.pointer);
+            let _ = restore_progress(out, &owed.progress);
+            let _ = restore_title(out, &owed.title);
             let _ = restore_modes(out, &modes);
         }
     }
@@ -677,11 +752,11 @@ mod tests {
     use std::io;
 
     use super::{
-        Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Ordering, PointerShape,
+        Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Ordering, Owed, PointerShape,
         SessionEvent, SessionOptions, TerminalColors, TerminalProgress, Watch, modes,
-        panic_restore, pump, restore_modes, restore_pointer, restore_progress,
+        panic_restore, pump, restore_modes, restore_pointer, restore_progress, restore_title,
         watch::{DEBOUNCE, IDLE},
-        write_clipboard, write_pointer_shape, write_progress,
+        write_clipboard, write_pointer_shape, write_progress, write_title,
     };
     use crate::terminal::fake::FakeTerminal;
     use ratatui::style::Color;
@@ -797,8 +872,11 @@ mod tests {
         let pushed = Arc::new(AtomicBool::new(true));
         let hook = panic_restore::<Vec<u8>>(
             Arc::clone(&live),
-            Arc::clone(&pushed),
-            Arc::new(AtomicBool::new(false)),
+            Owed {
+                pointer: Arc::clone(&pushed),
+                progress: Arc::new(AtomicBool::new(false)),
+                title: Arc::new(AtomicBool::new(false)),
+            },
             modes(SessionOptions::new().mouse(), false),
         );
 
@@ -891,6 +969,61 @@ mod tests {
             terminal.written, b"\x1b]9;4;0\x1b\\",
             "a panic restores and then the drop does: the clear goes out once"
         );
+    }
+
+    /// The user's title is pushed once, before the first title; after that a
+    /// title is written only when it changed, so an app can hand it over every
+    /// frame.
+    #[test]
+    fn the_title_is_pushed_once_then_set_only_on_change() {
+        let mut terminal = FakeTerminal::scripted("");
+        let mut shown = None;
+        let pushed = AtomicBool::new(false);
+        let mut write = |title| {
+            write_title(&mut terminal, &mut shown, &pushed, title)
+                .expect("a fake terminal takes writes");
+        };
+
+        write("notes.md");
+        write("notes.md");
+        write("todo.md");
+
+        assert_eq!(
+            String::from_utf8_lossy(&terminal.written),
+            "\x1b[22;2t\x1b]2;notes.md\x1b\\\x1b]2;todo.md\x1b\\"
+        );
+    }
+
+    /// A filename can hold an ESC or a BEL, either of which would end the
+    /// sequence early and spill the rest onto the screen as text.
+    #[test]
+    fn control_characters_never_reach_the_title() {
+        let mut terminal = FakeTerminal::scripted("");
+        let mut shown = None;
+        write_title(
+            &mut terminal,
+            &mut shown,
+            &AtomicBool::new(true),
+            "a\x1b]0;b\x07c\nd",
+        )
+        .expect("a fake terminal takes writes");
+
+        assert_eq!(terminal.written, b"\x1b]2;a]0;bcd\x1b\\");
+        assert_eq!(shown.as_deref(), Some("a]0;bcd"));
+    }
+
+    /// Exit pops the user's title back once, across the panic hook and the
+    /// drop, and a session that never set a title writes nothing.
+    #[test]
+    fn restoring_pops_the_title_once_and_only_after_a_push() {
+        let mut terminal = FakeTerminal::scripted("");
+        restore_title(&mut terminal, &AtomicBool::new(false)).expect("writable");
+        assert!(terminal.written.is_empty(), "{:?}", terminal.written);
+
+        let pushed = AtomicBool::new(true);
+        restore_title(&mut terminal, &pushed).expect("writable");
+        restore_title(&mut terminal, &pushed).expect("writable");
+        assert_eq!(terminal.written, b"\x1b[23;2t");
     }
 
     #[test]
@@ -1086,20 +1219,22 @@ mod tests {
     #[test]
     fn the_panic_hook_restores_only_while_its_session_is_live() {
         let live = Arc::new(AtomicBool::new(true));
-        let pushed = Arc::new(AtomicBool::new(true));
-        let progress_shown = Arc::new(AtomicBool::new(true));
         let hook = panic_restore::<Vec<u8>>(
             Arc::clone(&live),
-            pushed,
-            progress_shown,
+            Owed {
+                pointer: Arc::new(AtomicBool::new(true)),
+                progress: Arc::new(AtomicBool::new(true)),
+                title: Arc::new(AtomicBool::new(true)),
+            },
             modes(SessionOptions::new(), false),
         );
 
         let mut during = Vec::new();
         hook(&mut during);
         assert!(
-            during.starts_with(b"\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b]9;4;0\x1b\\\x1b[?1049l"),
-            "a live session's pointer, progress, and modes are restored: {during:?}"
+            during
+                .starts_with(b"\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b]9;4;0\x1b\\\x1b[23;2t\x1b[?1049l"),
+            "a live session's pointer, progress, title, and modes are restored: {during:?}"
         );
 
         live.store(false, Ordering::Relaxed);

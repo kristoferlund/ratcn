@@ -106,7 +106,8 @@ user's choice, or animate the transition.
 Dropping the `Session` switches every mode it turned on back off, in the reverse
 of the order it turned them on, and shows the cursor again. That happens on
 every path out: a `break`, a `?`, and an unwinding panic, which the session
-installs a hook for.
+installs a hook for. It also gives back what the app changed outside the grid:
+the pointer shape, the progress indicator, and the window title.
 
 ## The event loop
 
@@ -151,6 +152,22 @@ A `termina::Event` goes straight to `Ratcn::handle_event`, through a `TryFrom`
 conversion the runtime provides. Resize, terminal focus, and key releases come
 back as `EventResult::Ignored` for the host to act on. For global shortcuts, see
 [App shortcuts](./rendering-and-events#app-shortcuts).
+
+### The window title
+
+`session.set_title` sets the terminal's window and tab title. Hand it the app's
+title after each frame, like the pointer shape; it writes only when the title
+changes:
+
+```rust
+session.set_title(&format!("notes — {}", app.state.file_name))?;
+```
+
+Control characters are left out, so a file name cannot break the sequence.
+Before the first title, the session saves the user's own on the terminal's
+title stack, and puts it back on exit. Terminals without the stack keep the
+app's title until something else sets one, usually the shell's next prompt.
+The tabs-basic demo shows the committed tab in the title.
 
 ## Apps on a crossterm backend
 
