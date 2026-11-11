@@ -15,6 +15,7 @@ ratcn = { workspace = true, features = ["termina"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ratcn = { workspace = true, features = ["ratzilla"] }
+ratzilla.workspace = true
 
 # `App::new` is the demo's entry point; a `Default` forwarding to it would be a
 # second, surprising one.

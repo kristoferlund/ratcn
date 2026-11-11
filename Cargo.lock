@@ -1584,6 +1584,7 @@ version = "0.0.6"
 dependencies = [
  "ratatui",
  "ratcn",
+ "ratzilla",
  "shared",
 ]
 
@@ -2083,6 +2084,7 @@ dependencies = [
  "list-multi",
  "list-people",
  "panels",
+ "program-status",
  "progress",
  "ratatui",
  "ratcn",

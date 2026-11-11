@@ -4,8 +4,7 @@
 //! on, then finishes. Each step is reported to the terminal: its own progress
 //! indicator (OSC 9;4) and its program status (OSC 7501), which a terminal
 //! such as Rex or kitty shows as idle, working, blocked on the user, and done.
-//!
-//! Terminal-only: a browser has neither.
+//! In a browser the job runs the same, with nothing to report it to.
 
 use std::time::Duration;
 

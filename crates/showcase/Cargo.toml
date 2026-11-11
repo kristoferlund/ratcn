@@ -30,6 +30,7 @@ list = { path = "../../demos/list" }
 list-multi = { path = "../../demos/list-multi" }
 list-people = { path = "../../demos/list-people" }
 panels = { path = "../../demos/panels" }
+program-status = { path = "../../demos/program-status" }
 progress = { path = "../../demos/progress" }
 scroll-area = { path = "../../demos/scroll-area" }
 select = { path = "../../demos/select" }
