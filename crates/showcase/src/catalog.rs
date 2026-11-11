@@ -4,6 +4,8 @@
 use std::time::Duration;
 
 use ratatui::{buffer::Buffer, layout::Rect};
+#[cfg(not(target_arch = "wasm32"))]
+use ratcn::terminal::{ProgramStatus, TerminalProgress};
 use ratcn::{
     Theme,
     runtime::{Event, PointerShape},
@@ -15,8 +17,8 @@ use ratcn::{
 /// theme a demo paints with, and whether it follows the terminal instead — are
 /// associated consts, and a const is not dispatchable. This is the same
 /// contract with those turned into a method.
-/// The five [`demo_shared::Demo`] methods keep that trait's contracts; only
-/// `theme` is new.
+/// The [`demo_shared::Demo`] methods keep that trait's contracts; only `theme`
+/// is new.
 pub trait Embedded {
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme);
 
@@ -27,6 +29,12 @@ pub trait Embedded {
     fn take_clipboard(&mut self) -> Option<String>;
 
     fn pointer_shape(&self) -> PointerShape;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn terminal_progress(&self) -> TerminalProgress;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn program_status(&self) -> Option<ProgramStatus>;
 
     /// The theme this demo paints with, given what the terminal resolves to.
     fn theme(&self, terminal: &Theme) -> Theme;
@@ -51,6 +59,16 @@ impl<D: demo_shared::Demo> Embedded for D {
 
     fn pointer_shape(&self) -> PointerShape {
         demo_shared::Demo::pointer_shape(self)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn terminal_progress(&self) -> TerminalProgress {
+        demo_shared::Demo::terminal_progress(self)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn program_status(&self) -> Option<ProgramStatus> {
+        demo_shared::Demo::program_status(self)
     }
 
     /// The answer `demo_shared::run` gives a demo on its own: it opens an
@@ -146,6 +164,10 @@ pub static ENTRIES: &[Entry] = &[
     Entry {
         name: "panels",
         open: || Box::new(panels::App::new()),
+    },
+    Entry {
+        name: "program-status",
+        open: || Box::new(program_status::App::new()),
     },
     Entry {
         name: "progress",

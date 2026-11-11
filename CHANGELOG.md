@@ -13,6 +13,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TerminaBackend<PlatformTerminal>`, generic over the termina terminal with
   `PlatformTerminal` as the default. It is still the backend
   `Session::terminal_mut` draws through.
+  It does not implement Ratatui's `scrolling-regions` feature, so an app that
+  turns that feature on no longer builds against a session.
 
 ### Added
 
@@ -23,12 +25,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   xterm's title stack.
 - A `terminal::Session` sends every frame as one synchronized update (mode
   2026), so the terminal shows it only once it is whole: large redraws and
-  resizes no longer tear. Terminals without the mode ignore it.
+  resizes no longer tear. Terminals without the mode ignore it. A frame left
+  open by a failed draw or a bare `clear` is closed before `Session::next`
+  waits.
 - `terminal::Session::set_program_status` reports what the app is doing (idle,
   working, blocked, done, error) with the OSC 7501 Program Status Protocol,
   revision 0.4, writing each record only on change; `clear_program_status`
-  removes records. Reports a terminal would drop return `InvalidInput`. The
-  `program-status` demo shows each state.
+  removes a task's record. On exit the session takes back records still
+  working or blocked. The `program-status` demo shows each state.
 
 ### Fixed
 
@@ -36,7 +40,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nearest of the 256 or 16 colors it has, instead of rgb it misreads:
   Terminal.app before macOS 26 dimmed the text and painted stray backgrounds.
   The depth is read from the environment as termenv does, and confirmed with
-  Neovim's DECRQSS probe where the environment does not say 24-bit.
+  Neovim's DECRQSS probe where the environment does not say 24-bit (not on
+  the Linux console). On 16 colors each color keeps its hue rather than
+  falling to the nearest gray. Set `COLORTERM=truecolor` to force 24-bit.
   That probe goes out for every session, adaptive or not, so such a session
   opens one round trip later, or up to a second on a terminal that answers
   nothing.

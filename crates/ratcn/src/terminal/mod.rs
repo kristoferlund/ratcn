@@ -73,7 +73,7 @@ mod watch;
 use std::{
     io,
     sync::{
-        Arc,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -153,9 +153,10 @@ pub struct Session {
     /// Whether the user's title went onto the terminal's title stack, which
     /// exit owes a pop. Shared with the panic hook, like `live`.
     title_pushed: Arc<AtomicBool>,
-    /// The program status last written to each record, so an unchanged one
-    /// is not written again.
-    program_status: status::Sent,
+    /// What each program status record shows, which exit owes a take-back
+    /// for the ones still in progress. Shared with the panic hook, like
+    /// `live`.
+    program_status: Arc<Mutex<status::Records>>,
 }
 
 /// The progress indicator a terminal draws in its own chrome — a bar along the
@@ -265,7 +266,7 @@ impl Session {
             &mut output,
             Ask {
                 colors: options.adaptive,
-                rgb: env_depth != ColorDepth::TrueColor,
+                rgb: env_depth != ColorDepth::TrueColor && ColorDepth::probed(),
             },
         )?;
         let depth = if answer.rgb {
@@ -289,12 +290,14 @@ impl Session {
         let pointer_pushed = Arc::new(AtomicBool::new(false));
         let progress_shown = Arc::new(AtomicBool::new(false));
         let title_pushed = Arc::new(AtomicBool::new(false));
+        let program_status = Arc::default();
         output.set_panic_hook(panic_restore(
             Arc::clone(&live),
             Owed {
                 pointer: Arc::clone(&pointer_pushed),
                 progress: Arc::clone(&progress_shown),
                 title: Arc::clone(&title_pushed),
+                program_status: Arc::clone(&program_status),
             },
             modes.clone(),
         ));
@@ -315,7 +318,7 @@ impl Session {
             progress_shown,
             title: None,
             title_pushed,
-            program_status: status::Sent::new(),
+            program_status,
         };
         session.enable()
     }
@@ -356,6 +359,7 @@ impl Session {
     /// Returns an I/O error if the terminal cannot be read or a re-query
     /// cannot be written.
     pub fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<SessionEvent>> {
+        self.terminal.backend_mut().end_frame()?;
         pump(
             &self.events,
             self.terminal.backend_mut(),
@@ -489,11 +493,13 @@ impl Session {
     /// record already shows is not written again. Give tasks of their own an
     /// [`id`](ProgramStatus::id) for records of their own.
     ///
-    /// The terminal owns the records, and they outlive the app. When it exits
-    /// the terminal drops `Working` and `Blocked`, and keeps `Done` and
-    /// `Error` until the user has seen them, so the session clears nothing on
-    /// exit. Report `Done` or `Error` before quitting, and `Idle` when the
-    /// user cancels.
+    /// The terminal keeps the records after the app has gone: it drops
+    /// `Working` and `Blocked` only when the shell exits or prompts again,
+    /// and keeps `Done` and `Error` until the user has seen them. So on the
+    /// way out — a drop or a panic, once — the session takes back what is
+    /// still in progress: it clears each task's record and reports the
+    /// program's own as `Idle`. Report `Done` or `Error` before quitting to
+    /// leave a result behind, and `Idle` when the user cancels.
     ///
     /// | Terminal | OSC 7501 |
     /// |---|---|
@@ -506,30 +512,34 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`], writing nothing, for a report
-    /// the terminal would drop without a word: an `id` or `app` outside the
-    /// protocol's characters or lengths, or a title or message over its limit
-    /// or holding a control character, a line break included. Returns another
-    /// I/O error if the terminal will not take the write.
+    /// Returns [`io::ErrorKind::InvalidInput`], writing nothing, for an `id`
+    /// or `app` the terminal would drop without a word: outside the
+    /// protocol's characters or lengths. A title or message never fails; it
+    /// is made to fit. Returns another I/O error if the terminal will not
+    /// take the write.
     pub fn set_program_status(&mut self, status: &ProgramStatus) -> io::Result<()> {
-        status::write_status(
-            self.terminal.backend_mut(),
-            &mut self.program_status,
-            status,
-        )
+        let mut records = self
+            .program_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        status::write_status(self.terminal.backend_mut(), &mut records, status)
     }
 
-    /// Remove the program status record `id` and every task beneath it, or,
-    /// with [`None`], every record — other programs' finished ones in this
-    /// tab included, so prefer reporting a state.
+    /// Remove the program status record `id` and every task beneath it. The
+    /// program's own record has no clear of its own; report a state for it
+    /// instead.
     ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::InvalidInput`] for an `id` the terminal would
     /// not take, and another I/O error if the terminal will not take the
     /// write.
-    pub fn clear_program_status(&mut self, id: Option<&str>) -> io::Result<()> {
-        status::write_clear(self.terminal.backend_mut(), &mut self.program_status, id)
+    pub fn clear_program_status(&mut self, id: &str) -> io::Result<()> {
+        let mut records = self
+            .program_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        status::write_clear(self.terminal.backend_mut(), &mut records, id)
     }
 
     /// Switch the modes on. A failure part-way through still restores, because
@@ -548,6 +558,11 @@ impl Drop for Session {
         let _ = restore_pointer(self.terminal.backend_mut(), &self.pointer_pushed);
         let _ = restore_progress(self.terminal.backend_mut(), &self.progress_shown);
         let _ = restore_title(self.terminal.backend_mut(), &self.title_pushed);
+        let mut records = self
+            .program_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _ = status::restore_records(self.terminal.backend_mut(), &mut records);
         let _ = restore_modes(self.terminal.backend_mut(), &self.modes);
     }
 }
@@ -778,16 +793,17 @@ fn set_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Resu
     out.flush()
 }
 
-/// What exit may owe the terminal besides its modes, each flag shared between
-/// the session and its panic hook.
+/// What exit may owe the terminal besides its modes, each shared between the
+/// session and its panic hook.
 struct Owed {
     pointer: Arc<AtomicBool>,
     progress: Arc<AtomicBool>,
     title: Arc<AtomicBool>,
+    program_status: Arc<Mutex<status::Records>>,
 }
 
 /// The panic hook's share of restoring: the pointer, the progress indicator,
-/// the title, and the modes, while `live` says a session still has them on,
+/// the title, the program status, and the modes, while `live` says a session still has them on,
 /// and nothing once it has ended — or never got that far.
 fn panic_restore<W: io::Write>(
     live: Arc<AtomicBool>,
@@ -799,6 +815,12 @@ fn panic_restore<W: io::Write>(
             let _ = restore_pointer(out, &owed.pointer);
             let _ = restore_progress(out, &owed.progress);
             let _ = restore_title(out, &owed.title);
+            // A panic inside a status write holds the lock on this thread,
+            // and waiting for it would hang; that write is the one cut short,
+            // and the drop restores the records once unwinding releases it.
+            if let Ok(mut records) = owed.program_status.try_lock() {
+                let _ = status::restore_records(out, &mut records);
+            }
             let _ = restore_modes(out, &modes);
         }
     }
@@ -827,13 +849,15 @@ mod tests {
     use std::io;
 
     use super::{
-        Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Ordering, Owed, PointerShape,
-        SessionEvent, SessionOptions, TerminalColors, TerminalProgress, Watch, modes,
-        panic_restore, pump, restore_modes, restore_pointer, restore_progress, restore_title,
+        Arc, AtomicBool, DecPrivateModeCode as M, Duration, Instant, Mutex, Ordering, Owed,
+        PointerShape, ProgramState, ProgramStatus, SessionEvent, SessionOptions, TerminalColors,
+        TerminalProgress, Watch, modes, panic_restore, pump, restore_modes, restore_pointer,
+        restore_progress, restore_title,
         watch::{DEBOUNCE, IDLE},
         write_clipboard, write_pointer_shape, write_progress, write_title,
     };
     use crate::terminal::fake::FakeTerminal;
+    use crate::terminal::status::Records;
     use ratatui::style::Color;
 
     const NOTIFIED: &str = "\x1b[?997;2n";
@@ -951,6 +975,7 @@ mod tests {
                 pointer: Arc::clone(&pushed),
                 progress: Arc::new(AtomicBool::new(false)),
                 title: Arc::new(AtomicBool::new(false)),
+                program_status: Arc::default(),
             },
             modes(SessionOptions::new().mouse(), false),
         );
@@ -1301,6 +1326,10 @@ mod tests {
                 pointer: Arc::new(AtomicBool::new(true)),
                 progress: Arc::new(AtomicBool::new(true)),
                 title: Arc::new(AtomicBool::new(true)),
+                program_status: Arc::new(Mutex::new(Records::from([(
+                    String::new(),
+                    ProgramStatus::new(ProgramState::Working { progress: None }),
+                )]))),
             },
             modes(SessionOptions::new(), false),
         );
@@ -1309,8 +1338,9 @@ mod tests {
         hook(&mut during);
         assert!(
             during
-                .starts_with(b"\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b]9;4;0\x1b\\\x1b[23;2t\x1b[?1049l"),
-            "a live session's pointer, progress, title, and modes are restored: {during:?}"
+                .starts_with(b"\x1b]22;<\x1b\\\x1b]22;\x1b\\\x1b]9;4;0\x1b\\\x1b[23;2t\x1b]7501;state=idle\x1b\\\x1b[?1049l"),
+            "a live session's pointer, progress, title, program status, and modes are restored: \
+                 {during:?}"
         );
 
         live.store(false, Ordering::Relaxed);

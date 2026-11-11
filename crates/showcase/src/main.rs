@@ -13,6 +13,8 @@ mod getting_started;
 mod page;
 mod page_geometry;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::cell::Cell;
 use std::{io, time::Duration};
 
 use ratatui::{
@@ -30,6 +32,8 @@ use ratcn::{
 };
 
 use catalog::Embedded;
+#[cfg(not(target_arch = "wasm32"))]
+use ratcn::terminal::{ProgramState, ProgramStatus, TerminalProgress};
 
 /// Which page is showing.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -134,6 +138,10 @@ struct App {
     body: Option<Rect>,
     /// Raw motion may become a drag only after reaching the child runtime.
     primary_down: bool,
+    /// Whether a demo has reported a program status, which leaving it owes an
+    /// idle report.
+    #[cfg(not(target_arch = "wasm32"))]
+    status_reported: Cell<bool>,
 }
 
 impl App {
@@ -151,6 +159,8 @@ impl App {
             embed: None,
             body: None,
             primary_down: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            status_reported: Cell::new(false),
         }
     }
 
@@ -533,6 +543,29 @@ impl demo_shared::Demo for App {
         self.shown_mut().and_then(Embedded::take_clipboard)
     }
 
+    /// The progress of the demo on screen, in the terminal's own chrome.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn terminal_progress(&self) -> TerminalProgress {
+        self.shown()
+            .map_or(TerminalProgress::Hidden, Embedded::terminal_progress)
+    }
+
+    /// The program status of the demo on screen, which reaches the visitor's
+    /// terminal over SSH too. A demo off screen is not running, so once one
+    /// has reported, leaving it reports idle rather than leave its last state
+    /// showing until the visitor disconnects.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn program_status(&self) -> Option<ProgramStatus> {
+        let status = self.shown().and_then(Embedded::program_status);
+        if status.is_some() {
+            self.status_reported.set(true);
+            return status;
+        }
+        self.status_reported
+            .get()
+            .then(|| ProgramStatus::new(ProgramState::Idle))
+    }
+
     /// The pointer of whichever runtime the pointer is talking to: the demo
     /// once entered, since it then has every event, and the chrome before.
     fn pointer_shape(&self) -> PointerShape {
@@ -611,6 +644,43 @@ mod tests {
         fn pointer_shape(&self) -> PointerShape {
             PointerShape::Text
         }
+    }
+
+    /// A demo that reports a program status, as `program-status` does.
+    #[cfg(not(target_arch = "wasm32"))]
+    struct Reporting;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl demo_shared::Demo for Reporting {
+        fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
+
+        fn program_status(&self) -> Option<ProgramStatus> {
+            Some(ProgramStatus::new(ProgramState::Done))
+        }
+    }
+
+    /// The visitor's terminal hears nothing until a demo reports, then hears
+    /// the demo on screen; a demo off screen is not running, so leaving it
+    /// reports idle instead of leaving its last state showing.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn program_status_follows_the_demo_on_screen() {
+        let mut app = App::new();
+        app.state.view = View::GettingStarted;
+        assert_eq!(demo_shared::Demo::program_status(&app), None);
+
+        app.landing = Box::new(Reporting);
+        app.state.view = View::Landing;
+        assert_eq!(
+            demo_shared::Demo::program_status(&app),
+            Some(ProgramStatus::new(ProgramState::Done))
+        );
+
+        app.state.view = View::GettingStarted;
+        assert_eq!(
+            demo_shared::Demo::program_status(&app),
+            Some(ProgramStatus::new(ProgramState::Idle))
+        );
     }
 
     /// An app with a probe in place of the demo it shows.

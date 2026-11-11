@@ -3,7 +3,12 @@
 //! `termina::Terminal` is an ordinary public trait, so the whole exchange — and
 //! everything built on it — can be driven with no terminal anywhere.
 
-use std::{cell::RefCell, collections::VecDeque, io, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    io,
+    time::Duration,
+};
 
 use termina::{Event, Parser, Terminal};
 
@@ -38,6 +43,8 @@ pub(super) struct FakeTerminal {
     steps: RefCell<VecDeque<Event>>,
     /// The timeout each `poll` was given, in order.
     pub(super) polls: RefCell<Vec<Option<Duration>>>,
+    /// The columns and rows it reports; change it to resize.
+    pub(super) size: Cell<(u16, u16)>,
 }
 
 impl FakeTerminal {
@@ -53,6 +60,7 @@ impl FakeTerminal {
             written: Vec::new(),
             steps: RefCell::new(steps),
             polls: RefCell::new(Vec::new()),
+            size: Cell::new((80, 24)),
         }
     }
 
@@ -87,9 +95,10 @@ impl Terminal for FakeTerminal {
     }
 
     fn get_dimensions(&self) -> io::Result<termina::WindowSize> {
+        let (cols, rows) = self.size.get();
         Ok(termina::WindowSize {
-            cols: 80,
-            rows: 24,
+            cols,
+            rows,
             pixel_width: None,
             pixel_height: None,
         })

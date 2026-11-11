@@ -4,8 +4,7 @@
 //! on, then finishes. Each step is reported to the terminal: its own progress
 //! indicator (OSC 9;4) and its program status (OSC 7501), which a terminal
 //! such as Rex or kitty shows as idle, working, blocked on the user, and done.
-//!
-//! Terminal-only: a browser has neither.
+//! In a browser the job runs the same, with nothing to report it to.
 
 use std::time::Duration;
 
@@ -176,7 +175,7 @@ impl demo_shared::Demo for App {
                 progress: Some(self.percent()),
             },
             Phase::Asking => ProgramState::Blocked {
-                kind: Some(BlockedKind::Question),
+                kind: Some(BlockedKind::Permission),
                 progress: Some(self.percent()),
             },
             Phase::Done => ProgramState::Done,

@@ -5,8 +5,11 @@
 //! or failed, with a message and optional progress. The terminal decides how
 //! to show it: a tab glyph, a session list, a notification.
 //!
-//! A terminal drops a report it cannot take without saying so, so every rule
-//! it would drop one for is checked here first and fails loud.
+//! A terminal drops a report it cannot take without saying so. The free text
+//! is made to fit — control characters become spaces and an overlong title or
+//! message is cut short — since it is often not the app's own (an error, a
+//! file name). The record id and the program name are the app's own
+//! identifiers, so one the terminal would drop fails loud instead.
 
 use std::{collections::HashMap, io};
 
@@ -27,7 +30,10 @@ const MESSAGE_MAX: usize = 2048;
 const RECORDS_MAX: usize = 256;
 
 /// What a program is doing, as [`ProgramStatus`] reports it.
+///
+/// The protocol grows by adding states, so this may gain variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProgramState {
     /// Running, and waiting on nothing. Also what to report when the user
     /// cancels.
@@ -52,11 +58,14 @@ pub enum ProgramState {
 }
 
 /// What a [`ProgramState::Blocked`] program is waiting for.
+///
+/// The protocol grows by adding kinds, so this may gain variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BlockedKind {
     /// Approval to go ahead.
     Permission,
-    /// An answer.
+    /// An answer the user types.
     Question,
     /// Credentials.
     Auth,
@@ -105,62 +114,94 @@ impl ProgramStatus {
         self
     }
 
-    /// A short title, one line, at most 192 bytes.
+    /// A short title. It is shown on one line, with control characters as
+    /// spaces, and cut at 192 bytes.
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
-    /// What is happening, one line, at most 2048 bytes.
+    /// What is happening. It is shown on one line, with control characters as
+    /// spaces, and cut at 2048 bytes.
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
         self
     }
 }
 
-/// The reports written so far, by record id (`""` for the program's own), so
-/// an unchanged one is not written again.
-pub(super) type Sent = HashMap<String, String>;
+/// What each record shows, by record id (`""` for the program's own), as the
+/// session last reported it: so an unchanged report is not written again, and
+/// exit knows which records are still in progress.
+pub(super) type Records = HashMap<String, ProgramStatus>;
 
 /// Write `status` as OSC 7501, unless its record already shows it.
 pub(super) fn write_status(
     out: &mut impl io::Write,
-    sent: &mut Sent,
+    records: &mut Records,
     status: &ProgramStatus,
 ) -> io::Result<()> {
-    let body = encode(status)?;
-    let key = status.id.clone().unwrap_or_default();
-    if sent.get(&key) == Some(&body) {
+    let key = status.id.as_deref().unwrap_or_default();
+    if records.get(key) == Some(status) {
         return Ok(());
     }
-    write!(out, "\x1b]7501;{body}\x1b\\")?;
-    if sent.len() >= RECORDS_MAX && !sent.contains_key(&key) {
-        sent.clear();
+    write!(out, "\x1b]7501;{}\x1b\\", encode(status)?)?;
+    if records.len() >= RECORDS_MAX && !records.contains_key(key) {
+        records.clear();
     }
-    sent.insert(key, body);
+    records.insert(key.to_owned(), status.clone());
     out.flush()
 }
 
-/// Remove the record `id` and every task beneath it, or every record when
-/// `id` is [`None`].
+/// Remove the record `id` and every task beneath it.
 pub(super) fn write_clear(
     out: &mut impl io::Write,
-    sent: &mut Sent,
-    id: Option<&str>,
+    records: &mut Records,
+    id: &str,
 ) -> io::Result<()> {
-    if let Some(id) = id {
-        check_id(id)?;
-        write!(out, "\x1b]7501;state=clear:id={id}\x1b\\")?;
-        let beneath = format!("{id}/");
-        sent.retain(|key, _| key != id && !key.starts_with(&beneath));
-    } else {
-        write!(out, "\x1b]7501;state=clear\x1b\\")?;
-        sent.clear();
+    check_id(id)?;
+    write!(out, "\x1b]7501;state=clear:id={id}\x1b\\")?;
+    out.flush()?;
+    let beneath = format!("{id}/");
+    records.retain(|key, _| key != id && !key.starts_with(&beneath));
+    Ok(())
+}
+
+/// Take back, once, the records still in progress as the app goes: the
+/// terminal would otherwise show them until the shell exits, since a program
+/// run from a shell ending is not something it sees. A task's record is
+/// cleared, and the program's own reported idle, since clearing it would
+/// take every other program's records with it. Done and error records stay
+/// for the user to find.
+pub(super) fn restore_records(out: &mut impl io::Write, records: &mut Records) -> io::Result<()> {
+    let mut owed: Vec<(String, ProgramStatus)> = records
+        .drain()
+        .filter(|(_, status)| {
+            matches!(
+                status.state,
+                ProgramState::Working { .. } | ProgramState::Blocked { .. }
+            )
+        })
+        .collect();
+    if owed.is_empty() {
+        return Ok(());
+    }
+    owed.sort_by(|(one, _), (other, _)| one.cmp(other));
+    for (id, status) in owed {
+        if id.is_empty() {
+            let idle = ProgramStatus {
+                app: status.app,
+                ..ProgramStatus::new(ProgramState::Idle)
+            };
+            write!(out, "\x1b]7501;{}\x1b\\", encode(&idle)?)?;
+        } else {
+            write!(out, "\x1b]7501;state=clear:id={id}\x1b\\")?;
+        }
     }
     out.flush()
 }
 
-/// The report's `key=value` pairs, in the order the spec's examples use.
+/// The report's `key=value` pairs, in the order the protocol's reference
+/// implementations write them.
 fn encode(status: &ProgramStatus) -> io::Result<String> {
     let (state, kind, progress) = match status.state {
         ProgramState::Idle => ("idle", None, None),
@@ -200,15 +241,7 @@ fn encode(status: &ProgramStatus) -> io::Result<String> {
         let Some(text) = text.as_deref().filter(|text| !text.is_empty()) else {
             continue;
         };
-        if text.len() > max {
-            return Err(invalid(format!("{key} is over {max} bytes")));
-        }
-        if text.chars().any(char::is_control) {
-            return Err(invalid(format!(
-                "{key} {text:?} holds a control character, a line break included"
-            )));
-        }
-        pairs.push(format!("{key}={}", base64(text.as_bytes())));
+        pairs.push(format!("{key}={}", base64(one_line(text, max).as_bytes())));
     }
     Ok(pairs.join(":"))
 }
@@ -230,6 +263,19 @@ fn check_id(id: &str) -> io::Result<()> {
              A–Z a–z 0–9 _ . + -, {ID_MAX} bytes in all"
         )))
     }
+}
+
+/// `text` as the terminal takes it: every control character, a line break
+/// included, as a space, and cut on a character boundary at `max` bytes.
+fn one_line(text: &str, max: usize) -> String {
+    let mut line = String::with_capacity(text.len().min(max));
+    for c in text.chars().map(|c| if c.is_control() { ' ' } else { c }) {
+        if line.len() + c.len_utf8() > max {
+            break;
+        }
+        line.push(c);
+    }
+    line
 }
 
 const fn is_name_byte(byte: u8) -> bool {
@@ -265,26 +311,24 @@ mod tests {
     use std::io;
 
     use super::{
-        BlockedKind, ProgramState, ProgramStatus, RECORDS_MAX, Sent, base64, write_clear,
-        write_status,
+        BlockedKind, ProgramState, ProgramStatus, RECORDS_MAX, Records, base64, restore_records,
+        write_clear, write_status,
     };
 
     fn written(status: &ProgramStatus) -> io::Result<String> {
         let mut out = Vec::new();
-        write_status(&mut out, &mut Sent::new(), status)?;
+        write_status(&mut out, &mut Records::new(), status)?;
         Ok(String::from_utf8(out).expect("a report is ASCII"))
     }
 
-    fn rejected(status: &ProgramStatus) -> io::ErrorKind {
-        written(status)
-            .expect_err("the terminal would drop it")
-            .kind()
+    fn working(progress: Option<u8>) -> ProgramStatus {
+        ProgramStatus::new(ProgramState::Working { progress })
     }
 
-    /// The spec's own examples, byte for byte: what a terminal is tested
-    /// against is what the session writes.
+    /// The spec's examples, with the keys in the order the reference
+    /// implementations write them (the spec's own examples vary it).
     #[test]
-    fn the_spec_examples_are_written_byte_for_byte() {
+    fn the_spec_examples_are_written_in_the_reference_key_order() {
         let blocked = ProgramStatus::new(ProgramState::Blocked {
             kind: Some(BlockedKind::Permission),
             progress: None,
@@ -297,12 +341,12 @@ mod tests {
              msg=QXBwbHkgMyB0byBhZGQsIDEgdG8gY2hhbmdlLCAwIHRvIGRlc3Ryb3k/\x1b\\"
         );
 
-        let working = ProgramStatus::new(ProgramState::Working { progress: Some(40) })
+        let task = working(Some(40))
             .id("us-east")
             .title("US East")
             .message("Pushing image");
         assert_eq!(
-            written(&working).expect("valid"),
+            written(&task).expect("valid"),
             "\x1b]7501;state=working:id=us-east:progress=40:title=VVMgRWFzdA==:\
              msg=UHVzaGluZyBpbWFnZQ==\x1b\\"
         );
@@ -355,12 +399,51 @@ mod tests {
         );
     }
 
-    /// Everything a terminal would drop silently fails here instead, before
-    /// anything is written.
+    /// The text is often not the app's own: an error, a file name. A terminal
+    /// would drop the whole report over one line break or one byte too many,
+    /// so the text is made to fit rather than refused — at the moment an app
+    /// reports an error, refusing would lose the report.
     #[test]
-    fn what_a_terminal_would_drop_is_refused_before_it_is_written() {
+    fn text_is_made_to_fit_on_one_line_within_its_limit() {
+        let error = ProgramStatus::new(ProgramState::Error)
+            .title("t\u{85}")
+            .message("failed:\n\tcaused by: x\x1b");
+        assert_eq!(
+            written(&error).expect("text never fails"),
+            format!(
+                "\x1b]7501;state=error:title={}:msg={}\x1b\\",
+                base64(b"t "),
+                base64(b"failed:  caused by: x ")
+            )
+        );
+
+        // Cut on a character boundary: 191 bytes and a 2-byte character.
+        let long = ProgramStatus::new(ProgramState::Done)
+            .title(format!("{}é", "t".repeat(191)))
+            .message("m".repeat(3000));
+        assert_eq!(
+            written(&long).expect("text never fails"),
+            format!(
+                "\x1b]7501;state=done:title={}:msg={}\x1b\\",
+                base64("t".repeat(191).as_bytes()),
+                base64("m".repeat(2048).as_bytes())
+            )
+        );
+    }
+
+    /// The record id and program name are the app's own identifiers. One the
+    /// terminal would drop is a bug in the app, so it fails, with nothing
+    /// written.
+    #[test]
+    fn an_id_or_app_the_terminal_would_drop_is_refused_unwritten() {
         let done = || ProgramStatus::new(ProgramState::Done);
-        let invalid = io::ErrorKind::InvalidInput;
+        let refused = |status: ProgramStatus| {
+            let mut out = Vec::new();
+            let error = write_status(&mut out, &mut Records::new(), &status)
+                .expect_err("the terminal would drop it");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{status:?}");
+            assert!(out.is_empty(), "nothing is written: {out:?}");
+        };
 
         for id in [
             "",
@@ -372,16 +455,11 @@ mod tests {
             "1/2/3/4/5/6/7/8/9",
             &vec!["y".repeat(32); 4].join("/"),
         ] {
-            assert_eq!(rejected(&done().id(id)), invalid, "id {id:?}");
+            refused(done().id(id));
         }
         for app in ["", "has space", &"a".repeat(33)] {
-            assert_eq!(rejected(&done().app(app)), invalid, "app {app:?}");
+            refused(done().app(app));
         }
-        assert_eq!(rejected(&done().title("two\nlines")), invalid);
-        assert_eq!(rejected(&done().message("tab\there")), invalid);
-        assert_eq!(rejected(&done().message("c1 \u{85}")), invalid);
-        assert_eq!(rejected(&done().title("t".repeat(193))), invalid);
-        assert_eq!(rejected(&done().message("m".repeat(2049))), invalid);
 
         let longest_id = [
             "y".repeat(32),
@@ -391,12 +469,7 @@ mod tests {
         ]
         .join("/");
         assert_eq!(longest_id.len(), 128);
-        let at_limits = done()
-            .id(longest_id)
-            .app("a".repeat(32))
-            .title("t".repeat(192))
-            .message("m".repeat(2048));
-        written(&at_limits).expect("at the limits, a report is valid");
+        written(&done().id(longest_id).app("a".repeat(32))).expect("at the limits, valid");
     }
 
     /// An app can hand over its status every frame: a record already showing
@@ -404,8 +477,7 @@ mod tests {
     #[test]
     fn a_report_is_written_only_when_its_record_changes() {
         let mut out = Vec::new();
-        let mut sent = Sent::new();
-        let working = |progress| ProgramStatus::new(ProgramState::Working { progress });
+        let mut records = Records::new();
 
         for status in [
             working(Some(10)),
@@ -414,7 +486,7 @@ mod tests {
             working(Some(20)),
             working(Some(10)).id("task"),
         ] {
-            write_status(&mut out, &mut sent, &status).expect("valid");
+            write_status(&mut out, &mut records, &status).expect("valid");
         }
 
         assert_eq!(
@@ -426,45 +498,72 @@ mod tests {
     }
 
     /// Clearing a record takes the tasks beneath it too, so their next report
-    /// is written again; clearing with no id takes every record.
+    /// is written again.
     #[test]
     fn clearing_forgets_the_record_and_everything_beneath_it() {
         let mut out = Vec::new();
-        let mut sent = Sent::new();
-        let done = |id: &str| ProgramStatus::new(ProgramState::Done).id(id);
+        let mut records = Records::new();
         for id in ["build", "build/test", "builder"] {
-            write_status(&mut out, &mut sent, &done(id)).expect("valid");
+            write_status(&mut out, &mut records, &working(None).id(id)).expect("valid");
         }
 
         out.clear();
-        write_clear(&mut out, &mut sent, Some("build")).expect("valid");
+        write_clear(&mut out, &mut records, "build").expect("valid");
         assert_eq!(out, b"\x1b]7501;state=clear:id=build\x1b\\");
-        let mut left: Vec<_> = sent.keys().cloned().collect();
-        left.sort();
-        assert_eq!(left, ["builder"], "a sibling that shares a prefix stays");
+        assert_eq!(
+            records.keys().collect::<Vec<_>>(),
+            ["builder"],
+            "a sibling that shares a prefix stays"
+        );
+
+        let error = write_clear(&mut out, &mut records, "not valid").expect_err("dropped");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// The terminal drops a working or blocked record only when the shell
+    /// exits or prompts again, so an app quitting mid-job takes its own back:
+    /// tasks cleared, the program reported idle under its name. Finished
+    /// records stay for the user to find, and a second restore writes nothing.
+    #[test]
+    fn exit_takes_back_only_what_is_still_in_progress() {
+        let mut out = Vec::new();
+        let mut records = Records::new();
+        for status in [
+            working(Some(5)).app("deploy"),
+            ProgramStatus::new(ProgramState::Blocked {
+                kind: None,
+                progress: None,
+            })
+            .id("eu-west"),
+            working(None).id("us-east"),
+            ProgramStatus::new(ProgramState::Done).id("ap-south"),
+        ] {
+            write_status(&mut out, &mut records, &status).expect("valid");
+        }
 
         out.clear();
-        write_clear(&mut out, &mut sent, None).expect("valid");
-        assert_eq!(out, b"\x1b]7501;state=clear\x1b\\");
-        assert!(sent.is_empty());
-
+        restore_records(&mut out, &mut records).expect("writable");
         assert_eq!(
-            write_clear(&mut out, &mut sent, Some("not valid"))
-                .expect_err("dropped by the terminal")
-                .kind(),
-            io::ErrorKind::InvalidInput
+            String::from_utf8(out).expect("ASCII"),
+            "\x1b]7501;state=idle:app=deploy\x1b\\\
+             \x1b]7501;state=clear:id=eu-west\x1b\\\
+             \x1b]7501;state=clear:id=us-east\x1b\\"
         );
+
+        let mut again = Vec::new();
+        restore_records(&mut again, &mut records).expect("writable");
+        assert!(again.is_empty(), "{again:?}");
     }
 
     /// What the session remembers is bounded by what a terminal keeps.
     #[test]
     fn the_memory_of_reports_stays_within_the_records_a_terminal_keeps() {
-        let mut sent = Sent::new();
+        let mut records = Records::new();
         for task in 0..=RECORDS_MAX {
             let status = ProgramStatus::new(ProgramState::Idle).id(format!("t{task}"));
-            write_status(&mut io::sink(), &mut sent, &status).expect("valid");
+            write_status(&mut io::sink(), &mut records, &status).expect("valid");
         }
-        assert!(sent.len() <= RECORDS_MAX, "{}", sent.len());
+        assert!(records.len() <= RECORDS_MAX, "{}", records.len());
     }
 
     #[test]

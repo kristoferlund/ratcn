@@ -51,7 +51,19 @@ mode:
 Whatever the options, each frame drawn through `session.terminal_mut()` goes
 out as one synchronized update (mode 2026): the terminal shows it only once it
 has arrived whole, so a large redraw or a resize does not tear. Terminals
-without the mode ignore it.
+without the mode ignore it. A frame left open by a draw that failed, or by
+`clear` on its own, is closed when the app next waits in `session.next`.
+
+On a terminal without 24-bit color, every frame is drawn with the nearest
+colors it has: the 256-color palette, or the 16 named colors, where each theme
+color keeps its hue (a destructive red stays red). The session judges this from
+`COLORTERM` and `TERM`, as most terminal libraries do, and where they do not say
+24-bit it asks the terminal while opening, which costs one round trip. Over
+SSH, which drops `COLORTERM`, a 24-bit terminal that does not answer gets 256
+colors; set `COLORTERM=truecolor` to keep them all.
+
+The session's backend does not implement Ratatui's `scrolling-regions`
+feature, so an app that turns it on does not build against a session.
 
 ### Opening with a preset theme
 
@@ -193,13 +205,17 @@ session.set_program_status(&status)?;
 
 Hand it the app's status after each frame; a report the terminal already shows
 is not written again. Tasks of their own get records of their own with
-`.id("build/test")`, and `clear_program_status` removes one.
+`.id("build/test")`, and `clear_program_status("build/test")` removes one.
 
-The terminal owns the records, and they outlive the app: on exit it drops
-working and blocked ones, and keeps done and error until the user has seen
-them. So report `Done` or `Error` before quitting, and `Idle` when the user
-cancels. A report the terminal would drop silently, such as a message with a
-line break or over its length limit, returns `InvalidInput` instead.
+The terminal keeps the records after the app has gone: working and blocked
+ones until the shell exits or prompts again, done and error until the user has
+seen them. So on exit the session takes back what is still in progress, and an
+app that wants to leave a result behind reports `Done` or `Error` before
+quitting. Report `Idle` when the user cancels.
+
+A title or message is made to fit: control characters become spaces, and text
+past the protocol's limit is cut. An `id` or `app` the terminal would drop
+returns `InvalidInput`.
 
 | Terminal | Program status |
 |---|---|
