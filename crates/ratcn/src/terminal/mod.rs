@@ -222,6 +222,11 @@ impl Session {
     /// signal, and when input resumes after a pause; [`theme`](Self::theme)
     /// answers with what it said.
     ///
+    /// Whatever the options, a terminal whose environment does not say it
+    /// shows 24-bit color is asked whether it does, in the same exchange. That
+    /// costs a round trip while the session opens, or up to a second from a
+    /// terminal that answers nothing.
+    ///
     /// # Errors
     ///
     /// Returns an I/O error if the terminal cannot be opened, cannot be put

@@ -25,6 +25,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Terminal.app before macOS 26 dimmed the text and painted stray backgrounds.
   The depth is read from the environment as termenv does, and confirmed with
   Neovim's DECRQSS probe where the environment does not say 24-bit.
+  That probe goes out for every session, adaptive or not, so such a session
+  opens one round trip later, or up to a second on a terminal that answers
+  nothing.
 - Adaptive terminal sessions no longer fail to open immediately on macOS due to
   a rustix timeout rounding bug.
 

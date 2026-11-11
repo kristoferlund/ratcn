@@ -202,6 +202,10 @@ impl Replies {
 
 /// Whether a DECRQSS reply is the probe's background and nothing else, as
 /// Neovim reads it: that one attribute, after a reset at most.
+///
+/// Only the colon form reaches here: termina 0.3.3 splits a reply on `;`, so
+/// one written `48;2;1;2;3` is malformed to it and dropped, and that terminal
+/// keeps the environment's depth.
 fn holds_probe(sgrs: &[Sgr]) -> bool {
     let (r, g, b) = PROBED;
     let probe = Sgr::Background(RgbColor::new(r, g, b).into());
