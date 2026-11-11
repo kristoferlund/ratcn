@@ -106,6 +106,13 @@ pub trait Demo {
     fn terminal_progress(&self) -> TerminalProgress {
         TerminalProgress::Hidden
     }
+
+    /// The terminal's window title, read after every frame. [`None`] leaves
+    /// the user's own title in place.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn terminal_title(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Run `demo` until it quits (natively) or forever (in the browser).
@@ -161,6 +168,9 @@ trait Host {
 
     /// Show `progress` in the terminal's own chrome.
     fn set_progress(&mut self, progress: TerminalProgress) -> io::Result<()>;
+
+    /// Show `title` as the terminal's window title.
+    fn set_title(&mut self, title: &str) -> io::Result<()>;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -190,6 +200,10 @@ impl Host for Session {
     fn set_progress(&mut self, progress: TerminalProgress) -> io::Result<()> {
         Session::set_progress(self, progress)
     }
+
+    fn set_title(&mut self, title: &str) -> io::Result<()> {
+        Session::set_title(self, title)
+    }
 }
 
 /// Draw, wait, route, repeat, until the quit key.
@@ -203,6 +217,9 @@ fn drive<D: Demo, H: Host>(demo: &mut D, host: &mut H) -> io::Result<()> {
             stale = draw_frame(demo, host.terminal(), &theme)?;
             host.set_pointer_shape(demo.pointer_shape())?;
             host.set_progress(demo.terminal_progress())?;
+            if let Some(title) = demo.terminal_title() {
+                host.set_title(title)?;
+            }
         }
 
         // The wait is as long as the demo will allow. A deadline sooner than one
@@ -847,6 +864,10 @@ mod tests {
         }
 
         fn set_progress(&mut self, _progress: TerminalProgress) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn set_title(&mut self, _title: &str) -> io::Result<()> {
             Ok(())
         }
     }

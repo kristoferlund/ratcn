@@ -2,7 +2,8 @@
 //!
 //! Arrow keys move the tab cursor without changing the page; Enter, Space, or
 //! a click commits the focused tab. Selecting also moves the cursor to the
-//! acted-on tab, so a direct click needs no preceding move.
+//! acted-on tab, so a direct click needs no preceding move. In a terminal,
+//! the committed tab is also the window title.
 
 use ratatui::{
     buffer::Buffer,
@@ -32,6 +33,15 @@ enum Screen {
 }
 
 impl Screen {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Overview => "Tabs — Overview",
+            Self::Analytics => "Tabs — Analytics",
+            Self::Reports => "Tabs — Reports",
+        }
+    }
+
     const fn content(self) -> &'static str {
         match self {
             Self::Overview => {
@@ -105,6 +115,11 @@ impl demo_shared::Demo for App {
 
     fn pointer_shape(&self) -> PointerShape {
         self.ratcn.pointer_shape()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn terminal_title(&self) -> Option<&str> {
+        Some(self.state.selected.title())
     }
 
     fn draw(&mut self, buffer: &mut Buffer, area: Rect, theme: &Theme) {

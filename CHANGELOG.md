@@ -17,6 +17,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `terminal::Session::set_progress` shows a `TerminalProgress` in the
   terminal's own chrome (OSC 9;4). It writes only on change and clears on exit.
+- `terminal::Session::set_title` sets the terminal's window title (OSC 2). It
+  writes only on change, and gives the user's own title back on exit through
+  xterm's title stack.
 
 ### Fixed
 
