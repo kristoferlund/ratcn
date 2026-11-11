@@ -22,7 +22,8 @@ use ratatui::{
 #[cfg(not(target_arch = "wasm32"))]
 use ratcn::terminal::TerminalProgress;
 use ratcn::{
-    Button, ButtonSize, Dialog, Theme, Toast, ToastEntry, ToasterWidget, Tooltip, TooltipSide,
+    Button, ButtonSize, Dialog, Theme, Toast, ToastEntry, ToasterState, ToasterWidget, Tooltip,
+    TooltipSide,
     color::resolve_rgb,
     runtime::{
         DeclareCtx, Event, EventResult, FocusState, KeyCode, ModalState, PointerShape, Ratcn,
@@ -115,6 +116,8 @@ struct Live {
     hint: bool,
     /// The film clock at the viewer's last press.
     pressed_at: Option<f64>,
+    /// One toast per press, saying what the press did.
+    toasts: ToasterState<'static>,
 }
 
 #[derive(Clone)]
@@ -203,12 +206,18 @@ impl App {
             Msg::Increment => {
                 self.live.count = (self.live.count + 1) % (hud::FULL + 1);
                 self.live.pressed_at = Some(self.clock.at(now));
+                self.live.toasts.push(
+                    Toast::info("Msg::Increment")
+                        .with_description(format!("update: count = {}", self.live.count)),
+                    now,
+                );
             }
             Msg::Replay => {
                 self.clock.position = 0.0;
                 self.clock.running_since = Some(now);
                 self.live.count = 0;
                 self.live.pressed_at = None;
+                self.live.toasts = ToasterState::new();
             }
             Msg::Toggle => self.clock.toggle(now),
             Msg::Seek(position) => self.clock.seek(position, now),
@@ -236,7 +245,9 @@ fn declare(ctx: &mut DeclareCtx<'_, Live, Msg>, panel: Rect, replay: Option<Rect
         ids::COUNTER,
         Tooltip::new("Emits Msg::Increment")
             .side(TooltipSide::Right)
-            .open_when(|live: &Live, hovered| live.hint || hovered)
+            // Open when the script says so. The live button answers a press
+            // with a toast instead.
+            .open_when(|live: &Live, _hovered| live.hint)
             .trigger(|ctx| {
                 let area = ctx.area();
                 ctx.component(
@@ -438,6 +449,10 @@ impl demo_shared::Demo for App {
                 .render_into(buffer, stage, &self.live, theme, |ctx| {
                     declare(ctx, panel, Some(replay), stage);
                 });
+            self.live.toasts.prune_expired(now);
+            ToasterWidget::new(&self.live.toasts, now)
+                .themed(theme)
+                .render(stage, buffer);
         }
 
         // A paused film says so.
@@ -598,5 +613,11 @@ mod tests {
 
         assert!(app.handle_event(Event::Key(KeyCode::Enter.into())));
         assert_eq!(app.live.count, 1);
+        app.draw(&mut buffer, area, &Theme::default_dark());
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(
+            text.contains("Msg::Increment"),
+            "the press is answered with a toast naming the message"
+        );
     }
 }
