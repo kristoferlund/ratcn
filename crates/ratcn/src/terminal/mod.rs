@@ -62,6 +62,7 @@
 //! # }
 //! ```
 
+mod backend;
 mod depth;
 #[cfg(test)]
 mod fake;
@@ -97,7 +98,7 @@ use query::{Ask, TerminalColors, query};
 /// ratcn builds against.
 pub use termina;
 
-pub use depth::SessionBackend;
+pub use backend::SessionBackend;
 
 /// What came out of a [`Session`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -733,15 +734,19 @@ fn panic_restore<W: io::Write>(
     }
 }
 
-/// Switch the modes back off, newest first, and show the cursor.
+/// Switch the modes back off, newest first, end any frame, and show the
+/// cursor.
 ///
-/// A frame interrupted between hiding the cursor and showing it again leaves it
-/// hidden, and a hidden cursor is invisible in the shell the user comes back to.
+/// A frame interrupted part-way — a panic, or an error out of the draw —
+/// leaves synchronized output on and the cursor hidden. The terminal would
+/// hold the screen until its own timeout, and a hidden cursor is invisible in
+/// the shell the user comes back to.
 fn restore_modes(out: &mut impl io::Write, modes: &[DecPrivateModeCode]) -> io::Result<()> {
     for &code in modes.iter().rev() {
         let mode = DecPrivateMode::Code(code);
         write!(out, "{}", Csi::Mode(Mode::ResetDecPrivateMode(mode)))?;
     }
+    write!(out, "{}", backend::END_FRAME)?;
     let cursor = DecPrivateMode::Code(DecPrivateModeCode::ShowCursor);
     write!(out, "{}", Csi::Mode(Mode::SetDecPrivateMode(cursor)))?;
     out.flush()
@@ -1207,8 +1212,9 @@ mod tests {
              put back: {written:?}"
         );
         assert!(
-            written.ends_with("\x1b[?25h"),
-            "and the cursor is visible again at the end: {written:?}"
+            written.ends_with("\x1b[?2026l\x1b[?25h"),
+            "a frame cut off mid-way is shown, and the cursor is visible again \
+             at the end: {written:?}"
         );
     }
 

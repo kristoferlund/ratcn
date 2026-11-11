@@ -10,16 +10,7 @@
 //! colorprofile read it, then, where that does not already say 24-bit,
 //! Neovim's probe of the terminal itself (see `query`), which can only raise it.
 
-use std::io;
-
-use ratatui::{
-    backend::{Backend, ClearType, WindowSize},
-    buffer::Cell,
-    layout::{Position, Size},
-    style::Color,
-};
-use ratatui_termina::TerminaBackend;
-use termina::PlatformTerminal;
+use ratatui::{buffer::Cell, style::Color};
 
 use crate::color::resolve_rgb;
 
@@ -90,7 +81,7 @@ impl ColorDepth {
         }
     }
 
-    fn reduce_cell(self, cell: &Cell) -> Cell {
+    pub(super) fn reduce_cell(self, cell: &Cell) -> Cell {
         let mut cell = cell.clone();
         cell.fg = self.reduce(cell.fg);
         cell.bg = self.reduce(cell.bg);
@@ -162,88 +153,6 @@ fn nearest_16(r: u8, g: u8, b: u8) -> Color {
 fn distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> u32 {
     let d = |x: u8, y: u8| u32::from(x.abs_diff(y)).pow(2);
     d(a.0, b.0) + d(a.1, b.1) + d(a.2, b.2)
-}
-
-/// The backend a [`Session`](super::Session) draws through: the terminal's
-/// own, with every color brought within what the terminal shows.
-#[derive(Debug)]
-pub struct SessionBackend {
-    inner: TerminaBackend<PlatformTerminal>,
-    depth: ColorDepth,
-}
-
-impl SessionBackend {
-    pub(super) const fn new(inner: TerminaBackend<PlatformTerminal>, depth: ColorDepth) -> Self {
-        Self { inner, depth }
-    }
-}
-
-impl io::Write for SessionBackend {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        io::Write::flush(&mut self.inner)
-    }
-}
-
-impl Backend for SessionBackend {
-    type Error = io::Error;
-
-    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
-    where
-        I: Iterator<Item = (u16, u16, &'a Cell)>,
-    {
-        if self.depth == ColorDepth::TrueColor {
-            return self.inner.draw(content);
-        }
-        let reduced: Vec<(u16, u16, Cell)> = content
-            .map(|(x, y, cell)| (x, y, self.depth.reduce_cell(cell)))
-            .collect();
-        self.inner
-            .draw(reduced.iter().map(|(x, y, cell)| (*x, *y, cell)))
-    }
-
-    fn append_lines(&mut self, n: u16) -> io::Result<()> {
-        self.inner.append_lines(n)
-    }
-
-    fn hide_cursor(&mut self) -> io::Result<()> {
-        self.inner.hide_cursor()
-    }
-
-    fn show_cursor(&mut self) -> io::Result<()> {
-        self.inner.show_cursor()
-    }
-
-    fn get_cursor_position(&mut self) -> io::Result<Position> {
-        self.inner.get_cursor_position()
-    }
-
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
-        self.inner.set_cursor_position(position)
-    }
-
-    fn clear(&mut self) -> io::Result<()> {
-        self.inner.clear()
-    }
-
-    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
-        self.inner.clear_region(clear_type)
-    }
-
-    fn size(&self) -> io::Result<Size> {
-        self.inner.size()
-    }
-
-    fn window_size(&mut self) -> io::Result<WindowSize> {
-        self.inner.window_size()
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Backend::flush(&mut self.inner)
-    }
 }
 
 #[cfg(test)]
