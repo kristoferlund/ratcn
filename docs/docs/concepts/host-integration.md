@@ -48,6 +48,11 @@ mode:
 - `.adaptive()` follows the terminal's colors; see
   [Opening adaptively](#opening-adaptively).
 
+Whatever the options, each frame drawn through `session.terminal_mut()` goes
+out as one synchronized update (mode 2026): the terminal shows it only once it
+has arrived whole, so a large redraw or a resize does not tear. Terminals
+without the mode ignore it.
+
 ### Opening with a preset theme
 
 Choose a preset and paint every frame with it:

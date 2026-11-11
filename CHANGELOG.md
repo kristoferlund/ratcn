@@ -10,7 +10,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Breaking
 
 - `terminal::SessionBackend` is a type of its own rather than an alias for
-  `TerminaBackend<PlatformTerminal>`. It is still the backend
+  `TerminaBackend<PlatformTerminal>`, generic over the termina terminal with
+  `PlatformTerminal` as the default. It is still the backend
   `Session::terminal_mut` draws through.
 
 ### Added
@@ -20,6 +21,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `terminal::Session::set_title` sets the terminal's window title (OSC 2). It
   writes only on change, and gives the user's own title back on exit through
   xterm's title stack.
+- A `terminal::Session` sends every frame as one synchronized update (mode
+  2026), so the terminal shows it only once it is whole: large redraws and
+  resizes no longer tear. Terminals without the mode ignore it.
 
 ### Fixed
 

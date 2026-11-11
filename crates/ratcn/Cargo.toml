@@ -45,6 +45,9 @@ web-sys = { version = "0.3", optional = true, features = [
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.5.1"
+# The backend tests read back what a frame wrote, through the terminal
+# `TerminaBackend` keeps behind this feature.
+ratatui-termina = { workspace = true, features = ["unstable-backend-writer"] }
 
 [[bench]]
 name = "frame"
