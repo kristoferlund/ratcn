@@ -78,6 +78,7 @@ Each of these shows one technique end to end.
 | `drag` | The smallest possible drag: one block, moved anywhere inside the frame. |
 | `panels` | Two focusable panels, each grouping its own children: scopes and Tab boundaries. See [Structuring a larger app](./concepts/composition). |
 | `effects` | Fetching data without blocking the UI, and feeding the result back in as a message. See [State and messages](./concepts/state-and-messages#effects-and-result-messages). |
+| `program-status` | Telling the terminal what the app is doing: one button runs a made-up job that stops halfway to ask, reported as the terminal's own progress and [program status](./concepts/host-integration#program-status). Terminal only: `cargo run -p program-status`. |
 
 ## Components
 

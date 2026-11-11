@@ -22,7 +22,9 @@ use std::{io, time::Duration};
 use ratatui::style::Color;
 use ratatui::{Terminal, backend::Backend, buffer::Buffer, layout::Rect};
 #[cfg(not(target_arch = "wasm32"))]
-use ratcn::terminal::{Session, SessionEvent, SessionOptions, TerminalProgress, termina};
+use ratcn::terminal::{
+    ProgramStatus, Session, SessionEvent, SessionOptions, TerminalProgress, termina,
+};
 use ratcn::{
     Theme,
     runtime::{Event, PointerShape},
@@ -113,6 +115,13 @@ pub trait Demo {
     fn terminal_title(&self) -> Option<&str> {
         None
     }
+
+    /// What the demo tells the terminal it is doing (OSC 7501), read after
+    /// every frame. [`None`] reports nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn program_status(&self) -> Option<ProgramStatus> {
+        None
+    }
 }
 
 /// Run `demo` until it quits (natively) or forever (in the browser).
@@ -171,6 +180,9 @@ trait Host {
 
     /// Show `title` as the terminal's window title.
     fn set_title(&mut self, title: &str) -> io::Result<()>;
+
+    /// Tell the terminal what the program is doing.
+    fn set_program_status(&mut self, status: &ProgramStatus) -> io::Result<()>;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -204,6 +216,10 @@ impl Host for Session {
     fn set_title(&mut self, title: &str) -> io::Result<()> {
         Session::set_title(self, title)
     }
+
+    fn set_program_status(&mut self, status: &ProgramStatus) -> io::Result<()> {
+        Session::set_program_status(self, status)
+    }
 }
 
 /// Draw, wait, route, repeat, until the quit key.
@@ -219,6 +235,9 @@ fn drive<D: Demo, H: Host>(demo: &mut D, host: &mut H) -> io::Result<()> {
             host.set_progress(demo.terminal_progress())?;
             if let Some(title) = demo.terminal_title() {
                 host.set_title(title)?;
+            }
+            if let Some(status) = demo.program_status() {
+                host.set_program_status(&status)?;
             }
         }
 
@@ -658,8 +677,8 @@ mod tests {
     };
 
     use super::{
-        ANIMATION_FRAME, Backend, Buffer, Demo, Duration, Event, Host, PointerShape, Rect,
-        SessionEvent, SessionOptions, Terminal, TerminalProgress, draw_frame, drive, io,
+        ANIMATION_FRAME, Backend, Buffer, Demo, Duration, Event, Host, PointerShape, ProgramStatus,
+        Rect, SessionEvent, SessionOptions, Terminal, TerminalProgress, draw_frame, drive, io,
     };
 
     /// A [`TestBackend`] that reports a native host's error type, and that can
@@ -868,6 +887,10 @@ mod tests {
         }
 
         fn set_title(&mut self, _title: &str) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn set_program_status(&mut self, _status: &ProgramStatus) -> io::Result<()> {
             Ok(())
         }
     }
