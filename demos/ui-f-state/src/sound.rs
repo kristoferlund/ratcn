@@ -83,6 +83,13 @@ impl Noise {
 struct Mix {
     left: Vec<f32>,
     right: Vec<f32>,
+    /// Seconds the film stands still at the end of each section. Voices are
+    /// placed by film time, and land this much later for every pause before
+    /// them: the music is written for the film as it is actually shown.
+    pause: f64,
+    /// Seconds added to where the next voices land, for what is played
+    /// during a pause, when the film's own clock is not moving.
+    lag: f64,
 }
 
 impl Mix {
@@ -110,7 +117,7 @@ impl Mix {
         pan: impl Fn(f64) -> f64,
         mut voice: impl FnMut(f64) -> (f64, f64),
     ) {
-        let start = (at * RATE) as usize;
+        let start = ((score::play_at(at, self.pause) + self.lag) * RATE) as usize;
         for index in 0..(seconds * RATE) as usize {
             let Some(left) = self.left.get_mut(start + index) else {
                 break;
@@ -121,6 +128,13 @@ impl Mix {
             *left += (l * (1.0 - pan).min(1.0)) as f32;
             self.right[start + index] += (r * (1.0 + pan).min(1.0)) as f32;
         }
+    }
+
+    /// Where the film is, a given time after a voice placed at `at` began.
+    fn film_clock(&self, at: f64) -> impl Fn(f64) -> f64 + use<> {
+        let pause = self.pause;
+        let began = score::play_at(at, pause);
+        move |since| score::film_at(began + since, pause)
     }
 
     /// A taiko: a sine falling in pitch, with the stick's crack on the front.
@@ -182,11 +196,12 @@ impl Mix {
     /// The floor under everything: two saws a hair apart, heavily filtered.
     fn drone(&mut self, at: f64, seconds: f64, gain: impl Fn(f64) -> f64) {
         let mut filtered = 0.0;
+        let film = self.film_clock(at);
         self.play(at, seconds, 0.0, |t| {
             let saw = |pitch: f64| (t * pitch).fract() * 2.0 - 1.0;
             let raw = saw(D2) + saw(D2 * 1.006) + 1.5 * (TAU * D2 / 2.0 * t).sin();
             filtered += 0.03 * (raw - filtered);
-            filtered * gain(at + t)
+            filtered * gain(film(t))
         });
     }
 
@@ -195,6 +210,7 @@ impl Mix {
         let mut noise = Noise(0xBADC_0FFE);
         let mut low = [0.0; 2];
         let mut floor = [0.0; 2];
+        let film = self.film_clock(at);
         self.sweep(
             at,
             seconds,
@@ -204,7 +220,7 @@ impl Mix {
                     let gust = 0.035 + 0.025 * (t * (0.31 + side as f64 * 0.07)).sin();
                     low[side] += gust * (noise.next() - low[side]);
                     floor[side] += 0.004 * (low[side] - floor[side]);
-                    (low[side] - floor[side]) * gain(at + t) * (1.0 + 0.4 * (t * 0.5).sin())
+                    (low[side] - floor[side]) * gain(film(t)) * (1.0 + 0.4 * (t * 0.5).sin())
                 };
                 (channel(0), channel(1))
             },
@@ -280,12 +296,55 @@ impl Mix {
     }
 }
 
-/// The whole soundtrack, as interleaved 16-bit stereo, little-endian.
-fn render() -> Vec<u8> {
-    let samples = (LENGTH * RATE) as usize;
+/// What is played while the film stands still at the end of section `index`,
+/// at `hold`: the last notes are left to ring, a chord is held under them,
+/// and a few plucked notes walk up, in time, to the next section's downbeat.
+/// The first pause is the one before the explosion, and only winds tighter.
+fn fill(mix: &mut Mix, index: usize, hold: f64) {
+    let pause = mix.pause;
+    // The bar line the film was about to reach.
+    let lead = (hold / score::BAR).ceil() * score::BAR - hold;
+    let downbeat = pause + lead;
+    if index == 0 {
+        let mut at = 0.0;
+        // The film has its own roll for the last stretch after the pause.
+        while at < pause {
+            mix.lag = at;
+            mix.taiko(hold, 0.55 + 0.35 * at / downbeat);
+            at += BEAT / 4.0;
+        }
+        mix.lag = 0.0;
+        mix.whoosh(hold, downbeat, 0.4, (300.0, 5_000.0), (0.0, 0.0));
+        return;
+    }
+    let chords: [&[f64]; 3] = [&[D3, A3, F4], &[BB2, F3, D4], &[D3, A3, D4, A4]];
+    mix.lag = 0.0;
+    mix.pad(hold, downbeat + 0.8, chords[index % 3], 0.04);
+    let walks = [[A3, D4, F4], [D4, F4, A4], [F4, A4, D5]];
+    for (note, beats) in [2.0, 1.0, 0.5].into_iter().enumerate() {
+        let at = downbeat - beats * BEAT;
+        if at >= 0.0 {
+            mix.lag = at;
+            mix.koto(hold, walks[index % 3][note], 0.26, note as f64 * 0.3 - 0.3);
+        }
+    }
+    if downbeat >= BEAT {
+        mix.lag = downbeat - BEAT / 2.0;
+        mix.taiko(hold, 0.35);
+    }
+    mix.lag = 0.0;
+}
+
+/// The whole soundtrack, as interleaved 16-bit stereo, little-endian, for a
+/// film that stands still for `pause` seconds at the end of each section.
+fn render(pause: f64) -> Vec<u8> {
+    let paused = pause * score::HOLDS.len() as f64;
+    let samples = ((LENGTH + paused) * RATE) as usize;
     let mut mix = Mix {
         left: vec![0.0; samples],
         right: vec![0.0; samples],
+        pause,
+        lag: 0.0,
     };
     let bar = |bar: f64| bar * score::BAR;
 
@@ -312,7 +371,7 @@ fn render() -> Vec<u8> {
     });
     mix.click(7.0, 0.5);
 
-    mix.drone(4.3, LENGTH - 4.3, |t| {
+    mix.drone(4.3, LENGTH - 4.3 + paused, |t| {
         let swell = ((t - 4.3) / 4.0).min(1.0);
         let level = if t < score::BOOM {
             0.035 + 0.05 * ((t - score::CHAOS) / 10.0).max(0.0)
@@ -321,7 +380,7 @@ fn render() -> Vec<u8> {
         };
         swell * level * ((LENGTH - t) / 4.0).min(1.0)
     });
-    mix.wind(score::CHAOS, LENGTH - score::CHAOS, |t| {
+    mix.wind(score::CHAOS, LENGTH - score::CHAOS + paused, |t| {
         let level = if t > score::FINALE { 0.09 } else { 0.05 };
         level * ((t - score::CHAOS) / 2.0).min(1.0) * ((LENGTH - t) / 5.0).min(1.0)
     });
@@ -510,6 +569,12 @@ fn render() -> Vec<u8> {
         mix.koto(score::FINALE_DROP + beat * BEAT, pitch, 0.3, 0.0);
     }
 
+    if pause >= 0.5 {
+        for (index, hold) in score::HOLDS.into_iter().enumerate() {
+            fill(&mut mix, index, hold);
+        }
+    }
+
     // A half-beat echo, bounced from side to side: the room.
     let delay = (BEAT / 2.0 * RATE) as usize;
     for index in delay..samples {
@@ -517,41 +582,15 @@ fn render() -> Vec<u8> {
         mix.right[index] += 0.26 * mix.left[index - delay];
     }
 
-    mix.pcm()
-}
-
-/// How long the film can wait with something to listen to.
-const BED: f64 = 90.0;
-
-/// What plays while the film waits to be continued: the drone and the wind,
-/// and nothing that keeps time.
-fn render_bed() -> Vec<u8> {
-    let samples = (BED * RATE) as usize;
-    let mut mix = Mix {
-        left: vec![0.0; samples],
-        right: vec![0.0; samples],
-    };
-    let swell = |t: f64| (t / 0.6).min(1.0) * ((BED - t) / 6.0).min(1.0);
-    mix.drone(0.0, BED, |t| 0.045 * swell(t));
-    mix.wind(0.0, BED, |t| 0.07 * swell(t));
-    mix.pcm()
-}
-
-impl Mix {
-    /// The mix as interleaved 16-bit stereo, little-endian.
-    fn pcm(&self) -> Vec<u8> {
-        let mix = self;
-        let samples = mix.left.len();
-        let mut pcm = Vec::with_capacity(samples * 4);
-        for index in 0..samples {
-            for sample in [mix.left[index], mix.right[index]] {
-                // A soft ceiling rather than a hard one.
-                let level = (f64::from(sample) * 1.15).tanh();
-                pcm.extend_from_slice(&((level * 30_000.0) as i16).to_le_bytes());
-            }
+    let mut pcm = Vec::with_capacity(samples * 4);
+    for index in 0..samples {
+        for sample in [mix.left[index], mix.right[index]] {
+            // A soft ceiling rather than a hard one.
+            let level = (f64::from(sample) * 1.15).tanh();
+            pcm.extend_from_slice(&((level * 30_000.0) as i16).to_le_bytes());
         }
-        pcm
     }
+    pcm
 }
 
 /// A 16-bit stereo WAV header for `bytes` of PCM.
@@ -594,37 +633,39 @@ const SETTLE: Duration = Duration::from_millis(180);
 /// position every frame and makes the player agree, restarting it when the
 /// film was paused, resumed, or moved.
 pub struct Sound {
-    /// The synthesizer, until it has delivered the film's music and the bed.
-    rendering: Option<Receiver<[Vec<u8>; 2]>>,
-    /// The film's music, and what plays while it waits.
-    pcm: [Vec<u8>; 2],
+    /// The synthesizer, until it has delivered.
+    rendering: Option<Receiver<Vec<u8>>>,
+    pcm: Vec<u8>,
     muted: bool,
     player: Option<Child>,
     /// Which of [`PLAYERS`] to use. Past the end means none of them ran.
     choice: usize,
-    /// When the player was started, which of the two it is playing, and
-    /// where in it it started from.
-    started: Option<(Duration, usize, f64)>,
+    /// When the player was started, and where in the film it started from.
+    started: Option<(Duration, f64)>,
+    /// What the soundtrack was synthesized for.
+    pause: f64,
     path: PathBuf,
 }
 
 impl Sound {
-    /// Start synthesizing in the background. The film does not wait for it.
-    pub fn new(enabled: bool) -> Self {
+    /// Start synthesizing in the background, for a film that pauses for
+    /// `pause` seconds between sections. The film does not wait for it.
+    pub fn new(enabled: bool, pause: f64) -> Self {
         let rendering = enabled.then(|| {
             let (sender, receiver) = channel();
             thread::spawn(move || {
-                let _ = sender.send([render(), render_bed()]);
+                let _ = sender.send(render(pause));
             });
             receiver
         });
         Self {
             rendering,
-            pcm: [Vec::new(), Vec::new()],
+            pcm: Vec::new(),
             muted: !enabled,
             player: None,
             choice: 0,
             started: None,
+            pause,
             path: std::env::temp_dir().join(format!("ui-f-state-{}.wav", std::process::id())),
         }
     }
@@ -635,28 +676,24 @@ impl Sound {
 
     pub fn toggle_mute(&mut self) {
         self.muted = !self.muted;
-        if !self.muted && self.rendering.is_none() && self.pcm[0].is_empty() {
-            *self = Self::new(true);
+        if !self.muted && self.rendering.is_none() && self.pcm.is_empty() {
+            *self = Self::new(true, self.pause);
         }
     }
 
-    /// Make the player agree with a film that is at `film`, and `playing` or
-    /// not. `waiting` is how long the film has been waiting to be continued,
-    /// if it is. `now` is the clock the film runs on.
-    pub fn follow(&mut self, film: f64, playing: bool, waiting: Option<f64>, now: Duration) {
+    /// Make the player agree with a film whose clock, pauses included, reads
+    /// `film`, and which is `playing` or not. `now` is the host's clock.
+    pub fn follow(&mut self, film: f64, playing: bool, now: Duration) {
         if let Some(receiver) = &self.rendering
             && let Ok(pcm) = receiver.try_recv()
         {
             self.pcm = pcm;
             self.rendering = None;
         }
-        // Which recording, and where in it.
-        let (track, position) = waiting.map_or((0, film), |spent| (1, spent));
-        let length = self.pcm[track].len() as f64 / (RATE * 4.0);
-        let wanted = playing && !self.muted && position < length;
-        let on_time = self.started.is_some_and(|(at, playing, from)| {
-            playing == track
-                && (from + now.saturating_sub(at).as_secs_f64() - position).abs() < DRIFT
+        let length = self.pcm.len() as f64 / (RATE * 4.0);
+        let wanted = playing && !self.muted && film < length;
+        let on_time = self.started.is_some_and(|(at, from)| {
+            (from + now.saturating_sub(at).as_secs_f64() - film).abs() < DRIFT
         });
         if wanted && on_time {
             return;
@@ -666,20 +703,17 @@ impl Sound {
             self.started = None;
             return;
         }
-        // Scrubbing settles before the player is restarted; changing between
-        // the film and the bed does not wait.
         if self
             .started
-            .is_some_and(|(at, playing, _)| playing == track && now.saturating_sub(at) < SETTLE)
+            .is_some_and(|(at, _)| now.saturating_sub(at) < SETTLE)
         {
             return;
         }
         self.stop();
-        self.started = Some((now, track, position));
+        self.started = Some((now, film));
         // Whole frames only: four bytes each.
-        let pcm = &self.pcm[track];
-        let offset = ((position.max(0.0) * RATE) as usize * 4).min(pcm.len());
-        let rest = &pcm[offset..];
+        let offset = ((film.max(0.0) * RATE) as usize * 4).min(self.pcm.len());
+        let rest = &self.pcm[offset..];
         let mut wav = wav_header(rest.len());
         wav.extend_from_slice(rest);
         if fs::write(&self.path, wav).is_err() {
@@ -724,7 +758,7 @@ mod tests {
     /// is distorted, and one that never leaves the floor is not there.
     #[test]
     fn the_soundtrack_is_audible_and_not_clipped() {
-        let pcm = render();
+        let pcm = render(crate::PAUSE);
         let samples: Vec<f64> = pcm
             .chunks_exact(2)
             .map(|bytes| f64::from(i16::from_le_bytes([bytes[0], bytes[1]])) / 32_768.0)

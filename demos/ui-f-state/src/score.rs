@@ -30,10 +30,11 @@ pub const FINALE_DROP: f64 = 77.5;
 /// The film is over, and the screen is handed to the viewer.
 pub const END: f64 = 85.0;
 
-/// Where the film waits to be continued: the last moment of each section,
-/// with everything on screen and nothing yet fading. The loop waits twice,
-/// once after its first, slow turn and once at its end; the old way waits
-/// just short of the frames that flicker, which are not ones to sit in.
+/// Where the film pauses: the last moment of each section, with everything
+/// on screen and nothing yet fading, so there is time to read it. The loop
+/// pauses twice, once after its first, slow turn and once at its end; the old
+/// way pauses just short of the frames that flicker, which are not ones to
+/// sit in.
 pub const HOLDS: [f64; 11] = [
     BOOM - 0.7,
     MONK - 0.35,
@@ -112,4 +113,26 @@ pub fn playhead(local: f64) -> f64 {
             let amount = ((local - pair[0].0) / (pair[1].0 - pair[0].0)).clamp(0.0, 1.0);
             pair[0].1 + (pair[1].1 - pair[0].1) * amount
         })
+}
+
+/// When the film reaches `film`, on a clock that also counts `pause` seconds
+/// spent at each of the [`HOLDS`] before it.
+pub fn play_at(film: f64, pause: f64) -> f64 {
+    film + pause * HOLDS.iter().filter(|hold| **hold < film).count() as f64
+}
+
+/// Where the film is when that clock reads `play`: the inverse of
+/// [`play_at`], standing still for the length of each pause.
+pub fn film_at(play: f64, pause: f64) -> f64 {
+    let mut paused = 0.0;
+    for hold in HOLDS {
+        if play <= hold + paused {
+            break;
+        }
+        if play < hold + paused + pause {
+            return hold;
+        }
+        paused += pause;
+    }
+    play - paused
 }

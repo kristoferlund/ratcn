@@ -79,7 +79,7 @@ Each of these shows one technique end to end.
 | `panels` | Two focusable panels, each grouping its own children: scopes and Tab boundaries. See [Structuring a larger app](./concepts/composition). |
 | `effects` | Fetching data without blocking the UI, and feeding the result back in as a message. See [State and messages](./concepts/state-and-messages#effects-and-result-messages). |
 | `program-status` | Telling the terminal what the app is doing: one button runs a made-up job that stops halfway to ask, reported as the terminal's own progress and [program status](./concepts/host-integration#program-status) when run in a terminal (`cargo run -p program-status`). |
-| `ui-f-state` | A short film about the idea ratcn is built on, with a synthesized soundtrack. Its only state is the film clock, so every frame is a function of that one number, and the timeline scrubs it. When it ends, the counter it has been drawing becomes a live one. It waits at the end of each section for you to continue. Terminal only: `cargo run --release -p ui-f-state` (`--mute` for silence, `--autoplay` to play straight through). |
+| `ui-f-state` | A short film about the idea ratcn is built on, with a synthesized soundtrack. Its only state is the film clock, so every frame is a function of that one number, and the timeline scrubs it. When it ends, the counter it has been drawing becomes a live one. It stands still for two seconds at the end of each section, to be read. Terminal only: `cargo run --release -p ui-f-state` (`--mute` for silence, `--pause <seconds>` to change the pause, `--pause 0` to play straight through). |
 
 ## Components
 
