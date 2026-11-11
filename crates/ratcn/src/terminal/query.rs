@@ -1,4 +1,5 @@
-//! The startup query: asking the terminal what colors it is painting with.
+//! The startup query: asking the terminal what colors it is painting with,
+//! and whether it shows 24-bit color.
 //!
 //! One batched exchange, fenced, before the app has read an event. See the
 //! [module documentation](super) for where it sits in a session.
@@ -13,7 +14,8 @@ use ratatui::style::Color;
 use termina::{
     Event, Terminal,
     escape::{
-        csi::{self, Csi},
+        csi::{self, Csi, Sgr},
+        dcs::{Dcs, DcsResponse},
         osc::{ColorOrQuery, DynamicColorNumber, Osc},
     },
     style::RgbColor,
@@ -23,6 +25,15 @@ use termina::{
 /// terminator. The startup batch is these followed by [`FENCE`]; a re-query
 /// is these alone.
 pub(super) const COLOR_QUERIES: &str = "\x1b]10;?\x07\x1b]11;?\x07";
+
+/// Neovim's probe for 24-bit color: set an rgb background, ask for the
+/// current SGR with DECRQSS, and reset. A terminal that holds the color reports
+/// it back; one that does not reports something else or nothing. The leading
+/// reset keeps the reply to the one attribute.
+const RGB_PROBE: &str = "\x1b[0m\x1b[48;2;1;2;3m\x1bP$qm\x1b\\\x1b[0m";
+
+/// The background [`RGB_PROBE`] sets, as a reply reports it.
+const PROBED: (u8, u8, u8) = (1, 2, 3);
 
 /// `CSI c` — primary device attributes — written after the color queries.
 /// Every terminal answers it, so its reply says the colors are not coming.
@@ -48,10 +59,26 @@ impl TerminalColors {
     }
 }
 
-/// Ask `terminal` for its background and foreground, and wait out the answer.
-///
-/// Yields [`Some`] once the terminal has supplied both colors, and [`None`]
-/// otherwise. Callers paint with a preset in that case.
+/// What the startup exchange asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Ask {
+    /// The background and foreground, for an adaptive theme.
+    pub(super) colors: bool,
+    /// Whether the terminal shows 24-bit color, with [`RGB_PROBE`].
+    pub(super) rgb: bool,
+}
+
+/// What the terminal answered.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Answer {
+    /// Both colors, once the terminal supplied them. Callers paint with a
+    /// preset otherwise.
+    pub(super) colors: Option<TerminalColors>,
+    /// Whether the terminal reported the probe's rgb background back.
+    pub(super) rgb: bool,
+}
+
+/// Ask `terminal` what `ask` names, and wait out the answer.
 ///
 /// Call it with the terminal in raw mode, before anything has read an event
 /// from it.
@@ -64,22 +91,28 @@ impl TerminalColors {
 /// # Errors
 ///
 /// Returns an I/O error if the query cannot be written, or if reading the
-/// terminal fails. A terminal that stays silent yields [`None`].
-pub(super) fn query<T: Terminal>(terminal: &mut T) -> io::Result<Option<TerminalColors>> {
+/// terminal fails. A terminal that stays silent answers nothing.
+pub(super) fn query<T: Terminal>(terminal: &mut T, ask: Ask) -> io::Result<Answer> {
     exchange(
         terminal,
         asked(env::var("TERM").ok().as_deref(), io::stdout().is_terminal()),
+        ask,
     )
 }
 
 /// The exchange itself. `asked` is the gate's verdict, passed in because
 /// whether stdout is a terminal is not something a test can arrange.
-fn exchange<T: Terminal>(terminal: &mut T, asked: bool) -> io::Result<Option<TerminalColors>> {
-    if !asked {
-        return Ok(None);
+fn exchange<T: Terminal>(terminal: &mut T, asked: bool, ask: Ask) -> io::Result<Answer> {
+    if !asked || !(ask.colors || ask.rgb) {
+        return Ok(Answer::default());
     }
 
-    terminal.write_all(COLOR_QUERIES.as_bytes())?;
+    if ask.colors {
+        terminal.write_all(COLOR_QUERIES.as_bytes())?;
+    }
+    if ask.rgb {
+        terminal.write_all(RGB_PROBE.as_bytes())?;
+    }
     terminal.write_all(FENCE.as_bytes())?;
     terminal.flush()?;
 
@@ -96,7 +129,10 @@ fn exchange<T: Terminal>(terminal: &mut T, asked: bool) -> io::Result<Option<Ter
         }
     }
 
-    Ok(replies.resolve())
+    Ok(Answer {
+        colors: replies.resolve(),
+        rgb: replies.rgb,
+    })
 }
 
 /// Whether this terminal is asked at all. See [`query`]'s gates.
@@ -113,6 +149,7 @@ fn asked(term: Option<&str>, stdout_is_tty: bool) -> bool {
 pub(super) struct Replies {
     background: Option<Color>,
     foreground: Option<Color>,
+    rgb: bool,
 }
 
 impl Replies {
@@ -138,6 +175,13 @@ impl Replies {
             // fence and cost the backstop's second — a stall, not a wrong
             // answer, since the replies collected so far still stand.
             Event::Csi(Csi::Device(csi::Device::DeviceAttributes(()))) => true,
+            Event::Dcs(Dcs::Response {
+                is_request_valid: true,
+                value: DcsResponse::GraphicRendition(sgrs),
+            }) => {
+                self.rgb |= holds_probe(sgrs);
+                false
+            }
             _ => false,
         }
     }
@@ -154,6 +198,18 @@ impl Replies {
             foreground: self.foreground?,
         })
     }
+}
+
+/// Whether a DECRQSS reply is the probe's background and nothing else, as
+/// Neovim reads it: that one attribute, after a reset at most.
+///
+/// Only the colon form reaches here: termina 0.3.3 splits a reply on `;`, so
+/// one written `48;2;1;2;3` is malformed to it and dropped, and that terminal
+/// keeps the environment's depth.
+fn holds_probe(sgrs: &[Sgr]) -> bool {
+    let (r, g, b) = PROBED;
+    let probe = Sgr::Background(RgbColor::new(r, g, b).into());
+    matches!(sgrs, [only] | [Sgr::Reset, only] if *only == probe)
 }
 
 /// The color out of a dynamic-color reply, if the reply carried one.
@@ -174,8 +230,14 @@ fn reported(colors: &[ColorOrQuery]) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::{
-        COLOR_QUERIES, ColorOrQuery, Csi, Duration, DynamicColorNumber, Event, FENCE, Osc, Replies,
-        TerminalColors, asked, csi, exchange,
+        Ask, COLOR_QUERIES, ColorOrQuery, Csi, Duration, DynamicColorNumber, Event, FENCE, Osc,
+        RGB_PROBE, Replies, TerminalColors, asked, csi, exchange,
+    };
+
+    /// The adaptive theme's question alone.
+    const COLORS: Ask = Ask {
+        colors: true,
+        rgb: false,
     };
     use crate::terminal::fake::FakeTerminal;
     use ratatui::style::Color;
@@ -191,7 +253,9 @@ mod tests {
     fn a_terminal_that_is_not_to_be_asked_is_never_written_to() {
         let mut fake = FakeTerminal::scripted(ANSWERED);
 
-        let colors = exchange(&mut fake, false).expect("refusing to ask cannot fail");
+        let colors = exchange(&mut fake, false, COLORS)
+            .expect("refusing to ask cannot fail")
+            .colors;
 
         assert_eq!(colors, None);
         assert!(
@@ -209,7 +273,9 @@ mod tests {
     fn the_exchange_writes_the_whole_batch_and_reads_the_answer_back() {
         let mut fake = FakeTerminal::scripted(ANSWERED);
 
-        let colors = exchange(&mut fake, true).expect("the terminal answers");
+        let colors = exchange(&mut fake, true, COLORS)
+            .expect("the terminal answers")
+            .colors;
 
         assert_eq!(
             String::from_utf8_lossy(&fake.written),
@@ -229,7 +295,9 @@ mod tests {
     fn a_silent_terminal_is_waited_on_for_one_second_and_no_longer() {
         let mut fake = FakeTerminal::scripted("");
 
-        let colors = exchange(&mut fake, true).expect("silence is not an error");
+        let colors = exchange(&mut fake, true, COLORS)
+            .expect("silence is not an error")
+            .colors;
 
         assert_eq!(colors, None);
         let polls = fake.polls.borrow();
@@ -255,7 +323,9 @@ mod tests {
         // neither an answer nor an event the app ever sees.
         let mut fake = FakeTerminal::scripted(&format!("q{ANSWERED}"));
 
-        let colors = exchange(&mut fake, true).expect("the terminal answers");
+        let colors = exchange(&mut fake, true, COLORS)
+            .expect("the terminal answers")
+            .colors;
 
         assert!(colors.is_some(), "the replies were found behind the typing");
         assert_eq!(
@@ -272,7 +342,9 @@ mod tests {
         // a reply at all.
         let mut fake = FakeTerminal::scripted("qz");
 
-        let colors = exchange(&mut fake, true).expect("typing is not an error");
+        let colors = exchange(&mut fake, true, COLORS)
+            .expect("typing is not an error")
+            .colors;
 
         assert_eq!(colors, None);
         assert_eq!(
@@ -530,6 +602,75 @@ mod tests {
 
         assert_eq!(stray, Replies::default());
         assert_eq!(stray.resolve(), None);
+    }
+
+    /// A DECRQSS reply, `DCS 1 $ r <sgr> m ST`.
+    fn decrqss(sgr: &str) -> String {
+        format!("\x1bP1$r{sgr}m\x1b\\")
+    }
+
+    #[test]
+    fn the_probe_goes_out_ahead_of_the_fence_only_when_asked() {
+        let ask = |colors, rgb| {
+            let mut fake = FakeTerminal::scripted("");
+            exchange(&mut fake, true, Ask { colors, rgb }).expect("silence is not an error");
+            String::from_utf8_lossy(&fake.written).into_owned()
+        };
+        assert_eq!(
+            ask(true, true),
+            format!("{COLOR_QUERIES}{RGB_PROBE}{FENCE}")
+        );
+        assert_eq!(ask(false, true), format!("{RGB_PROBE}{FENCE}"));
+        assert_eq!(ask(true, false), format!("{COLOR_QUERIES}{FENCE}"));
+        assert_eq!(ask(false, false), "", "nothing to ask writes nothing");
+    }
+
+    #[test]
+    fn the_probe_resets_what_it_set() {
+        // It runs on the shell the user can still see, so the background it
+        // sets must not outlive it.
+        assert!(RGB_PROBE.starts_with("\x1b[0m\x1b[48;2;1;2;3m"));
+        assert!(RGB_PROBE.ends_with("\x1b[0m"));
+    }
+
+    #[test]
+    fn a_terminal_that_reports_the_probes_color_back_has_24_bit_color() {
+        // Both shapes Neovim accepts: the attribute alone, or after a reset,
+        // with or without xterm's empty color-space slot.
+        for sgr in ["48:2:1:2:3", "0;48:2:1:2:3", "48:2::1:2:3"] {
+            assert!(colors(&decrqss(sgr)).rgb, "{sgr}");
+        }
+    }
+
+    #[test]
+    fn anything_but_the_probes_color_leaves_the_depth_to_the_environment() {
+        // A 256-color terminal that approximated it, another color, a reply
+        // with more than the one attribute, an invalid request, and silence.
+        for script in [
+            decrqss("48:5:16"),
+            decrqss("48:2:1:2:4"),
+            decrqss("1;48:2:1:2:3"),
+            "\x1bP0$r48:2:1:2:3m\x1b\\".to_owned(),
+            String::new(),
+        ] {
+            assert!(!colors(&script).rgb, "{script:?}");
+        }
+    }
+
+    #[test]
+    fn the_probes_answer_comes_back_through_the_exchange() {
+        let mut fake = FakeTerminal::scripted(&format!("{}\x1b[?62;1;6c", decrqss("48:2:1:2:3")));
+        let answer = exchange(
+            &mut fake,
+            true,
+            Ask {
+                colors: false,
+                rgb: true,
+            },
+        )
+        .expect("the terminal answers");
+        assert!(answer.rgb);
+        assert_eq!(answer.colors, None);
     }
 
     #[test]

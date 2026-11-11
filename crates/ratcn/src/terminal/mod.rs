@@ -62,6 +62,7 @@
 //! # }
 //! ```
 
+mod depth;
 #[cfg(test)]
 mod fake;
 mod query;
@@ -89,14 +90,14 @@ use termina::{
 use crate::{Theme, runtime::PointerShape};
 use watch::Watch;
 
-use query::{TerminalColors, query};
+use depth::ColorDepth;
+use query::{Ask, TerminalColors, query};
 /// The terminal library this module is built on, re-exported so an integrator
 /// names the types inside [`SessionEvent::Input`] through ratcn, at the version
 /// ratcn builds against.
 pub use termina;
 
-/// The backend a [`Session`] draws through.
-pub type SessionBackend = TerminaBackend<PlatformTerminal>;
+pub use depth::SessionBackend;
 
 /// What came out of a [`Session`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +222,11 @@ impl Session {
     /// signal, and when input resumes after a pause; [`theme`](Self::theme)
     /// answers with what it said.
     ///
+    /// Whatever the options, a terminal whose environment does not say it
+    /// shows 24-bit color is asked whether it does, in the same exchange. That
+    /// costs a round trip while the session opens, or up to a second from a
+    /// terminal that answers nothing.
+    ///
     /// # Errors
     ///
     /// Returns an I/O error if the terminal cannot be opened, cannot be put
@@ -240,16 +246,29 @@ impl Session {
         // stream that is not the user typing. It runs before the alternate
         // screen, so a slow terminal is answered against the shell the user can
         // still see.
-        let answer = if options.adaptive {
-            query(&mut output)?
+        //
+        // The probe for 24-bit color goes out only where the environment does
+        // not already say so; a terminal's own answer can only raise it.
+        let env_depth = ColorDepth::from_env();
+        let answer = query(
+            &mut output,
+            Ask {
+                colors: options.adaptive,
+                rgb: env_depth != ColorDepth::TrueColor,
+            },
+        )?;
+        let depth = if answer.rgb {
+            ColorDepth::TrueColor
         } else {
-            None
+            env_depth
         };
         // A terminal that answered is followed; one that would not say, or was
         // never asked, is not, so the watch exists exactly where mode 2031 is
         // switched on. Now is the quiet the first event is measured against.
-        let watch = answer.map(|colors| Watch::new(colors, Instant::now()));
-        let theme = answer.map(TerminalColors::theme);
+        let watch = answer
+            .colors
+            .map(|colors| Watch::new(colors, Instant::now()));
+        let theme = answer.colors.map(TerminalColors::theme);
 
         let modes = modes(options, watch.is_some());
         // Termina restores raw mode after this hook runs, so the hook owes only
@@ -269,7 +288,7 @@ impl Session {
         // off here, so a failure has nothing to restore.
         let events = output.event_reader();
         let session = Self {
-            terminal: Terminal::new(TerminaBackend::new(output))?,
+            terminal: Terminal::new(SessionBackend::new(TerminaBackend::new(output), depth))?,
             events,
             watch,
             theme,
