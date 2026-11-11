@@ -193,13 +193,17 @@ session.set_program_status(&status)?;
 
 Hand it the app's status after each frame; a report the terminal already shows
 is not written again. Tasks of their own get records of their own with
-`.id("build/test")`, and `clear_program_status` removes one.
+`.id("build/test")`, and `clear_program_status("build/test")` removes one.
 
-The terminal owns the records, and they outlive the app: on exit it drops
-working and blocked ones, and keeps done and error until the user has seen
-them. So report `Done` or `Error` before quitting, and `Idle` when the user
-cancels. A report the terminal would drop silently, such as a message with a
-line break or over its length limit, returns `InvalidInput` instead.
+The terminal keeps the records after the app has gone: working and blocked
+ones until the shell exits or prompts again, done and error until the user has
+seen them. So on exit the session takes back what is still in progress, and an
+app that wants to leave a result behind reports `Done` or `Error` before
+quitting. Report `Idle` when the user cancels.
+
+A title or message is made to fit: control characters become spaces, and text
+past the protocol's limit is cut. An `id` or `app` the terminal would drop
+returns `InvalidInput`.
 
 | Terminal | Program status |
 |---|---|

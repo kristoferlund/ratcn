@@ -647,8 +647,10 @@ mod tests {
     }
 
     /// A demo that reports a program status, as `program-status` does.
+    #[cfg(not(target_arch = "wasm32"))]
     struct Reporting;
 
+    #[cfg(not(target_arch = "wasm32"))]
     impl demo_shared::Demo for Reporting {
         fn draw(&mut self, _buffer: &mut Buffer, _area: Rect, _theme: &Theme) {}
 
@@ -660,6 +662,7 @@ mod tests {
     /// The visitor's terminal hears nothing until a demo reports, then hears
     /// the demo on screen; a demo off screen is not running, so leaving it
     /// reports idle instead of leaving its last state showing.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn program_status_follows_the_demo_on_screen() {
         let mut app = App::new();

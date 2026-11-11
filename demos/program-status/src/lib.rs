@@ -175,7 +175,7 @@ impl demo_shared::Demo for App {
                 progress: Some(self.percent()),
             },
             Phase::Asking => ProgramState::Blocked {
-                kind: Some(BlockedKind::Question),
+                kind: Some(BlockedKind::Permission),
                 progress: Some(self.percent()),
             },
             Phase::Done => ProgramState::Done,

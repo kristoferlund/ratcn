@@ -109,8 +109,8 @@ pub trait Demo {
         TerminalProgress::Hidden
     }
 
-    /// The terminal's window title, read after every frame. [`None`] leaves
-    /// the user's own title in place.
+    /// The terminal's window title, read after every frame. [`None`] writes
+    /// nothing, leaving whatever title was last set.
     #[cfg(not(target_arch = "wasm32"))]
     fn terminal_title(&self) -> Option<&str> {
         None
