@@ -5,7 +5,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod frame {
-    use std::hint::black_box;
+    use std::{hint::black_box, sync::Arc};
 
     use criterion::{BenchmarkId, Criterion, criterion_group};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
@@ -169,7 +169,7 @@ mod frame {
     fn render_list_1000(c: &mut Criterion) {
         let (mut ratcn, _, state, theme) = surface();
         let mut terminal = Terminal::new(TestBackend::new(WIDTH, LIST_HEIGHT)).expect("terminal");
-        let items: Vec<ListItem<usize>> = (0..LIST_LEN)
+        let items: Arc<[ListItem<usize>]> = (0..LIST_LEN)
             .map(|index| ListItem::new(index, format!("Item {index}")))
             .collect();
 
@@ -181,7 +181,7 @@ mod frame {
                         ratcn.render(frame, area, &state, &theme, |ctx| {
                             ctx.component(
                                 "list",
-                                List::new(items.clone())
+                                List::from_shared(Arc::clone(&items))
                                     .item_focus(|state: &State| state.cursor, Msg::Cursor),
                                 area,
                             );

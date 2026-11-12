@@ -7,6 +7,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `List::from_shared` declares a list over an `Arc<[ListItem<T>]>` the app
+  already holds, so a long list is no longer copied on every frame.
+
 ## [0.1.0] - 2026-11-11
 
 The first release in the 0.1 series. From here on, a patch release (0.1.x) is

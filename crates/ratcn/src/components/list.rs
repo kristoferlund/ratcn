@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use ratatui::{
     buffer::Buffer,
@@ -505,7 +505,7 @@ type StyleFn = Box<dyn Fn(&Theme) -> ListStyle>;
 /// .selection(|s: &AppState| s.selected_task, Msg::TaskSelected);
 /// ```
 pub struct List<T, S, M> {
-    items: Vec<ListItem<T>>,
+    items: Arc<[ListItem<T>]>,
     focused_item: Option<FocusBinding<S, T, M>>,
     selected: Option<SelectionBinding<S, T, M>>,
     selected_many: Option<MultiSelectionBinding<S, T, M>>,
@@ -544,8 +544,28 @@ impl<T, S, M> List<T, S, M> {
     /// `[ListItem::new(id, label), ...]` for anything keyed by a real value.
     #[must_use]
     pub fn new(items: impl IntoIterator<Item = impl Into<ListItem<T>>>) -> Self {
+        Self::from_shared(items.into_iter().map(Into::into).collect())
+    }
+
+    /// A list over items the app already holds, with no bindings yet.
+    ///
+    /// A list is declared again every frame, and [`new`](Self::new) builds its
+    /// items again every time. Keep a long list in app state as an
+    /// `Arc<[ListItem<T>]>` and hand a clone of the pointer here instead: the
+    /// declaration then costs the same whatever the list's length.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use ratcn::{List, ListItem};
+    ///
+    /// # struct AppState { tasks: Arc<[ListItem<u64>]> }
+    /// # let state = AppState { tasks: Arc::from([ListItem::new(7, "Write spec")]) };
+    /// let _list: List<u64, AppState, ()> = List::from_shared(Arc::clone(&state.tasks));
+    /// ```
+    #[must_use]
+    pub fn from_shared(items: Arc<[ListItem<T>]>) -> Self {
         Self {
-            items: items.into_iter().map(Into::into).collect(),
+            items,
             focused_item: None,
             selected: None,
             selected_many: None,
@@ -1470,6 +1490,15 @@ mod tests {
         let list = List::<String, State, Msg>::new(["Inbox", "Archive"]);
         assert_eq!(list.items[0].value(), "Inbox");
         assert_eq!(list.items[0].label(), "Inbox");
+    }
+
+    // A shared list exists so a long one costs nothing to declare each frame:
+    // the component must hold the app's allocation, not a copy of it.
+    #[test]
+    fn from_shared_holds_the_apps_items_without_copying_them() {
+        let items: Arc<[ListItem<Task>]> = Arc::from([item(Task::A, "Alpha")]);
+        let list = List::<Task, State, Msg>::from_shared(Arc::clone(&items));
+        assert!(Arc::ptr_eq(&list.items, &items));
     }
 
     #[test]
