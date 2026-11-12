@@ -187,10 +187,16 @@ time. For a long list, keep the items in app state as an
 pointer and copies nothing:
 
 ```rust
+use std::sync::Arc;
+
 struct AppState {
     tasks: Arc<[ListItem<TaskId>]>,
 }
 
+// Once, when the items change:
+state.tasks = tasks.iter().map(|task| ListItem::new(task.id, &task.name)).collect();
+
+// Every frame:
 List::from_shared(Arc::clone(&state.tasks))
 ```
 

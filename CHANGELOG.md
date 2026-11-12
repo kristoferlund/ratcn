@@ -10,7 +10,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `List::from_shared` declares a list over an `Arc<[ListItem<T>]>` the app
-  already holds, so a long list is no longer copied on every frame.
+  already holds, so a long list can be declared without copying its items
+  every frame.
 
 ## [0.1.0] - 2026-11-11
 

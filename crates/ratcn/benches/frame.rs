@@ -169,11 +169,37 @@ mod frame {
     fn render_list_1000(c: &mut Criterion) {
         let (mut ratcn, _, state, theme) = surface();
         let mut terminal = Terminal::new(TestBackend::new(WIDTH, LIST_HEIGHT)).expect("terminal");
-        let items: Arc<[ListItem<usize>]> = (0..LIST_LEN)
+        let items: Vec<ListItem<usize>> = (0..LIST_LEN)
             .map(|index| ListItem::new(index, format!("Item {index}")))
             .collect();
 
         c.bench_function("render_list_1000", |b| {
+            b.iter(|| {
+                terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        ratcn.render(frame, area, &state, &theme, |ctx| {
+                            ctx.component(
+                                "list",
+                                List::new(items.clone())
+                                    .item_focus(|state: &State| state.cursor, Msg::Cursor),
+                                area,
+                            );
+                        });
+                    })
+                    .expect("draw");
+            });
+        });
+    }
+
+    fn render_list_1000_shared(c: &mut Criterion) {
+        let (mut ratcn, _, state, theme) = surface();
+        let mut terminal = Terminal::new(TestBackend::new(WIDTH, LIST_HEIGHT)).expect("terminal");
+        let items: Arc<[ListItem<usize>]> = (0..LIST_LEN)
+            .map(|index| ListItem::new(index, format!("Item {index}")))
+            .collect();
+
+        c.bench_function("render_list_1000_shared", |b| {
             b.iter(|| {
                 terminal
                     .draw(|frame| {
@@ -222,6 +248,7 @@ mod frame {
         wrapping_scaling,
         route_click,
         render_list_1000,
+        render_list_1000_shared,
         render_dialog_wrapped
     );
 }

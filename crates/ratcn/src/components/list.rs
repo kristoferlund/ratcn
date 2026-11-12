@@ -551,8 +551,8 @@ impl<T, S, M> List<T, S, M> {
     ///
     /// A list is declared again every frame, and [`new`](Self::new) builds its
     /// items again every time. Keep a long list in app state as an
-    /// `Arc<[ListItem<T>]>` and hand a clone of the pointer here instead: the
-    /// declaration then costs the same whatever the list's length.
+    /// `Arc<[ListItem<T>]>` and hand a clone of the pointer here instead:
+    /// constructing the list then neither copies nor allocates the items.
     ///
     /// ```
     /// use std::sync::Arc;
