@@ -247,9 +247,9 @@ terminal.on_mouse_event({
 The conversion accepts Ratzilla's raw `ButtonDown`/`ButtonUp`/`Moved` stream,
 plus `Exited` for the pointer leaving the grid. It ignores Ratzilla's
 `SingleClick`/`DoubleClick`, because the runtime synthesizes clicks and drags
-the same way for native and browser input. Ratzilla reports no wheel, so a
-browser app scrolls with the wheel only when its host adds a listener; see
-[Host integration](./host-integration#in-the-browser). An app that writes the clipboard
+the same way for native and browser input. Ratzilla reports no wheel;
+`BrowserInput` adds it, given Ratzilla's mouse events through its
+`mouse_handler`. See [Host integration](./host-integration#routing-events). An app that writes the clipboard
 routes mouse events through the `route` function in
 [Host integration](./host-integration#the-browser-clipboard) instead.
 
