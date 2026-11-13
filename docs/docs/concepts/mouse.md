@@ -247,11 +247,14 @@ terminal.on_mouse_event({
 The conversion accepts Ratzilla's raw `ButtonDown`/`ButtonUp`/`Moved` stream,
 plus `Exited` for the pointer leaving the grid. It ignores Ratzilla's
 `SingleClick`/`DoubleClick`, because the runtime synthesizes clicks and drags
-the same way for native and browser input. An app that writes the clipboard
+the same way for native and browser input. Ratzilla reports no wheel, so a
+browser app scrolls with the wheel only when its host adds a listener; see
+[Host integration](./host-integration#in-the-browser). An app that writes the clipboard
 routes mouse events through the `route` function in
 [Host integration](./host-integration#the-browser-clipboard) instead.
 
 Page focus, key capture, and browser default prevention stay with the host.
 The demos' shared host script shows one working policy (forwarding captured
-keys to Ratzilla's canvas and normalizing macOS Option chords from
-`KeyboardEvent.code`), and an application can supply its own.
+keys to Ratzilla's canvas, typing Option and AltGr compositions as text, and
+matching the page's own Alt hotkeys by `KeyboardEvent.code`), and an
+application can supply its own.
