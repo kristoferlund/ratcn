@@ -769,3 +769,108 @@ fn the_press_that_closes_a_popup_drags_nothing_before_its_release_focuses() {
         EventResult::Emit(FormMsg::Focus(focus)) if focus == FocusState::intent(["name"])
     ));
 }
+
+/// A focusable pane that acts on any click, drag, or release of its own,
+/// with a blank top row and, optionally, a focusable Button below it.
+struct ClickPane {
+    with_child: bool,
+}
+
+impl Component<FocusTestState, DismissMsg> for ClickPane {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, DismissMsg>) {
+        if self.with_child {
+            let area = ctx.area();
+            ctx.component(
+                "c",
+                Button::new("C").on_press(|| DismissMsg::Pressed),
+                Rect::new(area.x, area.y + 1, area.width, 1),
+            );
+        }
+    }
+
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        _state: &FocusTestState,
+        _ctx: &mut EventCtx<'_>,
+    ) -> EventResult<DismissMsg> {
+        match event {
+            Event::Mouse(mouse)
+                if matches!(
+                    mouse.kind,
+                    MouseKind::Click(_) | MouseKind::Drag(_) | MouseKind::Up(_)
+                ) =>
+            {
+                EventResult::Emit(DismissMsg::Pressed)
+            }
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
+    }
+}
+
+#[test]
+fn a_popup_closing_press_on_a_pane_reaches_nothing_when_its_focus_target_goes() {
+    // The press on the pane's blank row defers focus to its child `c`, not
+    // to the pane. Its motion and release reach nothing: the release moves
+    // focus to `c`, and when `c` is gone at the release — or was gone for a
+    // frame and came back, so it is not what was pressed — it focuses
+    // nothing either. It must never fall back to clicking the pane: the
+    // press that closes a popup does not activate.
+    let state = FocusTestState {
+        focus: FocusState::intent(["panel", "inside"]),
+    };
+    let render = |driver: &mut Driver<FocusTestState, DismissMsg>, open: bool, child: bool| {
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "pane",
+                ClickPane { with_child: child },
+                Rect::new(6, 0, 4, 2),
+            );
+            if open {
+                ctx.popup(
+                    "panel",
+                    Rect::new(0, 0, 5, 2),
+                    PopupOptions::default().on_dismiss(|| DismissMsg::Dismissed),
+                    |ctx| {
+                        ctx.component(
+                            "inside",
+                            Button::new("In").on_press(|| DismissMsg::Pressed),
+                            Rect::new(0, 0, 5, 1),
+                        );
+                    },
+                );
+            }
+        });
+    };
+
+    let focus_c = EventResult::Emit(DismissMsg::Focus(FocusState::intent(["pane", "c"])));
+    for (frames, release) in [
+        (&[true][..], focus_c),
+        (&[false], EventResult::Consumed),
+        (&[false, true], EventResult::Consumed),
+    ] {
+        let mut driver = dismiss_driver();
+        render(&mut driver, true, true);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state),
+            EventResult::Emit(DismissMsg::Dismissed)
+        );
+        for &child in frames {
+            render(&mut driver, false, child);
+        }
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 8, 0), &state),
+            EventResult::Consumed,
+            "{frames:?}: the drag reaches nothing"
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 7, 0), &state),
+            release,
+            "{frames:?}: the release reaches nothing"
+        );
+    }
+}

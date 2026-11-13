@@ -61,12 +61,12 @@ control beneath. A press outside, with any button, routes to whatever is
 visibly there and also emits the popup's `on_dismiss` message, unless the
 control it lands on answers the press with a message of its own. In an app
 with a focus binding, the press that closes a popup moves focus but does not
-activate: its motion drags nothing, its release focuses the control it landed
-on in place of clicking it, and the next click activates. The release only
-focuses even if the app keeps the popup open. A press that leaves the grid, or
-whose target vanishes before the release, moves no focus. A control that
-already holds focus is clicked as usual. Focus is never stolen:
-move it in with your own message, in the same update that opens the popup.
+activate: its motion and release reach nothing, the release only moves focus
+to the control the press landed on, and the next click activates. The release
+only focuses even if the app keeps the popup open. A press that leaves the
+grid, or whose target vanishes before the release, moves no focus. A control
+that already holds focus is clicked as usual. Focus is never stolen: move it in
+with your own message, in the same update that opens the popup.
 Keys bubble *through* the popup root to the component that declared it. See
 [Select](../components/select).
 

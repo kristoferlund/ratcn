@@ -2496,41 +2496,28 @@ impl<State, Msg> Ratcn<State, Msg> {
         } else {
             EventResult::Ignored
         };
-        let release_focus = match raw.kind {
-            MouseKind::Up(button) => self.release_focus(button),
-            _ => None,
-        };
-        if let Some(focus) = release_focus {
-            // The release of a press that closed a popup moves focus in place
-            // of everything else it would have produced. The release still
-            // reaches components, so what they track ends with it, but no
-            // click is synthesized and what they answer is not the message.
-            for mouse in events {
-                if !matches!(mouse.kind, MouseKind::Click(_)) {
-                    self.deliver_mouse(mouse, hit.as_deref(), state);
+        for mouse in events {
+            let next = self.deliver_mouse(mouse, hit.as_deref(), state);
+            match next {
+                // A message ends the batch: any normalized event synthesized
+                // after this one is dropped. The pairs that matter do not
+                // collide — a press ignores and its `Click` emits — but a
+                // component that emits on `Up` would swallow that `Click`.
+                EventResult::Emit(_) => {
+                    result = next;
+                    break;
                 }
-            }
-            let current = self.surface.resolve_focus(self.stored_focus(state));
-            result = self.focus_transition_result(focus, &current);
-        } else {
-            for mouse in events {
-                let next = self.deliver_mouse(mouse, hit.as_deref(), state);
-                match next {
-                    // A message ends the batch: any normalized event
-                    // synthesized after this one is dropped. The pairs that
-                    // matter do not collide — a press ignores and its `Click`
-                    // emits — but a component that emits on `Up` would
-                    // swallow that `Click`.
-                    EventResult::Emit(_) => {
-                        result = next;
-                        break;
-                    }
-                    EventResult::Consumed => result = next,
-                    EventResult::Ignored => {}
-                }
+                EventResult::Consumed => result = next,
+                EventResult::Ignored => {}
             }
         }
         if let MouseKind::Up(button) = raw.kind {
+            // The release of a press that closed a popup reached nothing; it
+            // moves focus, if the target still takes it.
+            if let Some(focus) = self.release_focus(button) {
+                let current = self.surface.resolve_focus(self.stored_focus(state));
+                result = self.focus_transition_result(focus, &current);
+            }
             self.gestures.end(button);
             // The last release unfreezes hover. Where the pointer has left
             // what the gesture froze it on, hover moves now, as it would for
@@ -2577,8 +2564,8 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// Dismissal is observed, not consumed: the press already routed to
     /// whatever it hit. A component that answered the press with a message of
     /// its own wins over the hook. The runtime's focus fallback does not: the
-    /// press that closes a popup moves focus on its release, in place of the
-    /// click, and does not activate; a control that already holds focus is
+    /// press that closes a popup reaches nothing after the press, and its
+    /// release only moves focus; a control that already holds focus is
     /// clicked as usual — see [`focus_on_press`](Self::focus_on_press).
     fn deliver_mouse(
         &mut self,
@@ -2587,14 +2574,6 @@ impl<State, Msg> Ratcn<State, Msg> {
         state: &State,
     ) -> EventResult<Msg> {
         if self.gestures.swallows(mouse.kind) {
-            return EventResult::Consumed;
-        }
-        // A press that closed a popup only dismisses and, on its release,
-        // focuses: its motion reaches nothing, or a drag would act on a
-        // control that does not hold focus yet.
-        if let MouseKind::Drag(button) = mouse.kind
-            && self.gestures.release_focus(button).is_some()
-        {
             return EventResult::Consumed;
         }
         let routed = self.route_mouse(mouse, hit, state);
@@ -2828,9 +2807,10 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// rescued as if the scope held none.
     ///
     /// A press that dismisses a popup carries the dismissal, so its focus
-    /// change waits for the release, which moves focus instead of clicking:
-    /// the press that closes a popup focuses what it landed on but does not
-    /// activate it. A control that already holds focus is clicked as usual.
+    /// change waits for the release: its gesture becomes one whose motion and
+    /// release reach nothing, and the release only moves focus. The press
+    /// that closes a popup focuses what it landed on but does not activate
+    /// it. A control that already holds focus is clicked as usual.
     fn focus_on_press(
         &mut self,
         chain: &[usize],
