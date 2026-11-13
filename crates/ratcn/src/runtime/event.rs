@@ -724,9 +724,12 @@ mod browser_clipboard {
     ///   [`mouse_handler`](Self::mouse_handler): before scrolling, the
     ///   listener sends the grid a `mousemove` where the wheel turned, and
     ///   Ratzilla reports the cell through it. A turn's first event is a
-    ///   whole step, so the app decides at once whether the turn is its; a
-    ///   turn the app takes does not also scroll the page. A turn ends when
-    ///   the wheel rests for a quarter second. <kbd>Ctrl</kbd>+wheel is left
+    ///   whole step, so its answer decides at once whose the turn is. A turn
+    ///   whose first step the app takes is the app's, and does not also
+    ///   scroll the page, until a step of it is ignored. A turn whose first
+    ///   step the app ignores is the page's to the end, even once the page
+    ///   has carried a list under the pointer. A turn ends when the wheel
+    ///   rests for a quarter second. <kbd>Ctrl</kbd>+wheel is left
     ///   to the browser, which zooms.
     ///
     /// Install one per app, given its element as for [`BrowserClipboard`].
@@ -860,9 +863,9 @@ mod browser_clipboard {
             if let Ok(moved) =
                 web_sys::MouseEvent::new_with_mouse_event_init_dict("mousemove", &init)
             {
-                wheel.borrow_mut().probe(true);
+                let was = wheel.borrow_mut().probe(true);
                 let _ = target.dispatch_event(&moved);
-                wheel.borrow_mut().probe(false);
+                wheel.borrow_mut().probe(was);
             }
         }
         let Some((column, row)) = wheel.borrow().cell() else {
@@ -1032,9 +1035,8 @@ mod ratzilla_conv {
     const TURN_GAP_MS: f64 = 250.0;
 
     /// The browser wheel's state between events: where the pointer is, when
-    /// the wheel last moved, the travel short of a notch, whether the app
-    /// took the last step of the turn, and whether the wheel is asking
-    /// Ratzilla for the pointer's cell.
+    /// the wheel last moved, the travel short of a notch, whose the turn is,
+    /// and whether the wheel is asking Ratzilla for the pointer's cell.
     #[derive(Debug, Default)]
     #[cfg_attr(
         not(target_arch = "wasm32"),
@@ -1044,9 +1046,21 @@ mod ratzilla_conv {
         cell: Option<(u16, u16)>,
         last: f64,
         pending: f64,
-        /// `None` until the turn's first step has been routed.
-        taken: Option<bool>,
+        owner: Owner,
         probing: bool,
+    }
+
+    /// Whose a wheel turn is, as its first step decided.
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    enum Owner {
+        /// No step of the turn has been routed yet.
+        #[default]
+        Undecided,
+        /// The app took the first step; `taking` is whether it took the last.
+        App { taking: bool },
+        /// The app ignored the first step, so the page scrolls the whole
+        /// turn, and no more steps are routed.
+        Page,
     }
 
     #[cfg_attr(
@@ -1073,9 +1087,10 @@ mod ratzilla_conv {
             !self.probing
         }
 
-        /// Mark the wheel's own `mousemove` while it is dispatched.
-        pub(super) const fn probe(&mut self, probing: bool) {
-            self.probing = probing;
+        /// Mark the wheel's own `mousemove` while it is dispatched, and hand
+        /// back the mark it replaces, to restore after.
+        pub(super) const fn probe(&mut self, probing: bool) -> bool {
+            std::mem::replace(&mut self.probing, probing)
         }
 
         pub(super) const fn cell(&self) -> Option<(u16, u16)> {
@@ -1090,19 +1105,23 @@ mod ratzilla_conv {
         /// app decides at once whether the turn is its: a browser may stop a
         /// trackpad's events being cancelable once their first one went to
         /// the page. The step's overshoot is forgiven rather than owed, or
-        /// the first slice back the other way would step straight back.
+        /// the first slice back the other way would step straight back. A
+        /// turn the page owns makes no steps: its events are the page's.
         pub(super) fn turn(&mut self, notches: f64, now: f64) -> i32 {
             if notches == 0.0 {
                 return 0;
             }
             if now - self.last >= TURN_GAP_MS {
                 self.pending = 0.0;
-                self.taken = None;
+                self.owner = Owner::Undecided;
             }
             self.last = now;
+            if self.owner == Owner::Page {
+                return 0;
+            }
             let travel = self.pending + notches;
             let mut steps = travel.trunc();
-            if steps == 0.0 && self.taken.is_none() {
+            if steps == 0.0 && self.owner == Owner::Undecided {
                 steps = notches.signum();
                 self.pending = 0.0;
             } else {
@@ -1116,15 +1135,19 @@ mod ratzilla_conv {
             steps
         }
 
-        /// Whether the app took the step just routed.
+        /// Whether the app took the step just routed. The first step's
+        /// answer decides whose the turn is.
         pub(super) const fn took(&mut self, taken: bool) {
-            self.taken = Some(taken);
+            self.owner = match (self.owner, taken) {
+                (Owner::Undecided, false) => Owner::Page,
+                (_, taking) => Owner::App { taking },
+            };
         }
 
         /// Whether the app is taking this turn: the last step of it was the
         /// app's, so travel short of a step is the app's too, not the page's.
         pub(super) fn taking(&self) -> bool {
-            self.taken == Some(true)
+            self.owner == Owner::App { taking: true }
         }
     }
 
@@ -1787,8 +1810,9 @@ mod ratzilla_tests {
             modifiers: Modifiers::NONE,
         };
         assert!(wheel.observe(&moved(4)), "a real move goes on to the app");
-        wheel.probe(true);
+        assert!(!wheel.probe(true));
         assert!(!wheel.observe(&moved(7)), "the wheel's own stops here");
+        assert!(wheel.probe(true), "a probe inside it hands the mark back");
         wheel.probe(false);
         assert_eq!(wheel.cell(), Some((3, 7)), "keeping its cell");
         assert!(wheel.observe(&moved(8)), "and moves after it go on again");
@@ -1805,11 +1829,27 @@ mod ratzilla_tests {
         wheel.point(Some((3, 4)));
         assert_eq!(wheel.turn(-0.25, 10.0), -1, "the first slice is a step");
         wheel.took(false);
-        let rest = turn(&mut wheel, 10.0, 10.0, &[-0.25; 4]);
-        assert_eq!(rest, [0, 0, 0, -1], "ignored, the turn goes by notches");
-        wheel.took(false);
-
         assert_eq!(wheel.turn(-0.25, 500.0), -1, "a flick after a rest");
+    }
+
+    /// A turn that starts over blank grid is the page's: the page scrolls,
+    /// and its events may no longer be cancelable. Should the page carry a
+    /// list under the pointer, routing the rest of the turn to it would
+    /// scroll the list and the page together. The list gets the next turn.
+    #[test]
+    fn a_turn_the_page_owns_stays_the_pages() {
+        let mut wheel = Wheel::default();
+        wheel.point(Some((3, 4)));
+        assert_eq!(wheel.turn(0.25, 10.0), 1, "the first slice is a step");
+        wheel.took(false);
+        wheel.point(Some((3, 9)));
+        let rest = turn(&mut wheel, 10.0, 10.0, &[0.25; 19]);
+        assert_eq!(rest, [0; 19], "nothing more is routed, over any cell");
+        assert!(!wheel.taking());
+
+        assert_eq!(wheel.turn(0.25, 500.0), 1, "after a rest, a new turn");
+        wheel.took(true);
+        assert!(wheel.taking(), "which the list takes");
     }
 
     /// A trackpad held still jitters back and forth by a hair. Within a turn
