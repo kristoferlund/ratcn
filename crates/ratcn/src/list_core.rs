@@ -13,11 +13,11 @@
 //! The module splits along that line. [`assert_unique_values`] applies to any
 //! component keyed by item value, whatever its own item type and however it is
 //! laid out — [`Tabs`](crate::Tabs) uses it for a row of tabs, and so is
-//! [`ListItem`] itself, which a tab is. [`PressedItem`] needs only items too,
-//! so a click on a tab is held to the tab it pressed the same way. Everything else here —
-//! [`RowViewport`], [`WheelHold`], [`windowed_rows`], [`row_intent`] — assumes
-//! items stacked in a scrolling column of uniform-height rows. [`key_intent`]
-//! sits between: it takes the [`Axis`] the items run along.
+//! [`ListItem`] itself, which a tab is. [`PressedItem`] needs only items too.
+//! Everything else here — [`RowViewport`], [`WheelHold`], [`windowed_rows`],
+//! [`row_intent`] — assumes items stacked in a scrolling column of
+//! uniform-height rows. [`key_intent`] sits between: it takes the [`Axis`] the
+//! items run along.
 //!
 //! Nothing here paints or emits. [`row_intent`] and [`key_intent`] decide what
 //! a gesture or a key means, but not what to say about it: components own

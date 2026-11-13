@@ -13,7 +13,7 @@ use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, label_sty
 use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
 use crate::geometry::fixed_height;
 use crate::linear_nav::{self, Axis};
-use crate::list_core::{self, KeyIntent, PressedItem};
+use crate::list_core::{self, KeyIntent};
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MeasuredComponent, MouseButton,
     MouseKind, PaintCtx, PointerShape, ScopeOptions, Step,
@@ -848,8 +848,7 @@ where
             // it cannot act on an item once the row answers again.
             if matches!(event, Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left))
             {
-                PressedItem::press(ctx, &self.items, None);
-                *ctx.transient() = PressedMarker::Elsewhere;
+                *ctx.transient() = TabPress::<T>::Elsewhere;
             }
             return EventResult::Ignored;
         }
@@ -860,10 +859,13 @@ where
                 // focus this row when its disabled content was clicked.
                 MouseKind::Down(MouseButton::Left) => {
                     let tab = self.tab_at(mouse.column, mouse.row);
-                    PressedItem::press(ctx, &self.items, tab);
-                    *ctx.transient() = self
-                        .marker_at(mouse.column, mouse.row)
-                        .map_or(PressedMarker::Elsewhere, PressedMarker::On);
+                    *ctx.transient() = match (tab, self.marker_at(mouse.column, mouse.row)) {
+                        (Some(index), _) if !self.disabled_at(index) => {
+                            TabPress::Tab(self.items[index].value().clone())
+                        }
+                        (None, Some(step)) => TabPress::Marker(step),
+                        _ => TabPress::Elsewhere,
+                    };
                     match tab {
                         Some(index) if self.disabled_at(index) => EventResult::Consumed,
                         _ => EventResult::Ignored,
@@ -876,10 +878,16 @@ where
                 // is the selection and hovering would switch the panel's
                 // content on the way past.
                 MouseKind::Click(MouseButton::Left) => {
+                    // The gesture ends here, so its press record is cleared.
+                    let press = std::mem::take(ctx.transient::<TabPress<T>>());
                     if let Some(index) = self.tab_at(mouse.column, mouse.row) {
                         // A click selects only the tab its press landed on,
                         // even if a redraw has since moved another one under it.
-                        let pressed_here = PressedItem::releases_on(ctx, &self.items, Some(index));
+                        let pressed_here = match press {
+                            TabPress::Unrecorded => true,
+                            TabPress::Tab(value) => value == *self.items[index].value(),
+                            TabPress::Marker(_) | TabPress::Elsewhere => false,
+                        };
                         return if self.disabled_at(index) {
                             EventResult::Ignored
                         } else if !pressed_here {
@@ -892,9 +900,9 @@ where
                         return EventResult::Ignored;
                     };
                     // A marker steps only for a press on that same marker.
-                    match std::mem::take(ctx.transient::<PressedMarker>()) {
-                        PressedMarker::Unrecorded => {}
-                        PressedMarker::On(pressed) if pressed == direction => {}
+                    match press {
+                        TabPress::Unrecorded => {}
+                        TabPress::Marker(pressed) if pressed == direction => {}
                         _ => return EventResult::Consumed,
                     }
                     let edge = match direction {
@@ -933,15 +941,19 @@ where
     }
 }
 
-/// What the last primary press over a row landed on, as far as its overflow
-/// markers care: the marker counterpart of [`PressedItem`], so a marker click
-/// steps only for a press on that same marker. An injected `Click` with no
-/// press recorded steps as it is.
+/// What the last primary press over a row landed on, so a click acts only on
+/// the tab or overflow marker it pressed — the row's counterpart of
+/// [`PressedItem`](list_core::PressedItem), which knows nothing of markers.
+/// Every primary press is recorded, even one the row ignores, so only an
+/// injected `Click` finds nothing recorded, and it acts on what is under it.
 #[derive(Debug, Default)]
-enum PressedMarker {
+enum TabPress<T> {
     #[default]
     Unrecorded,
-    On(Step),
+    /// The enabled tab carrying this value.
+    Tab(T),
+    Marker(Step),
+    /// A disabled tab, or neither a tab nor a marker.
     Elsewhere,
 }
 
