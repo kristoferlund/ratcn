@@ -810,6 +810,10 @@ mod browser_clipboard {
         /// event through `on_event`, and remembers the pointer's cell for the
         /// wheel. It is Ratzilla's to keep: it routes for as long as the
         /// backend holds it, guard or not.
+        ///
+        /// To learn the cell under a turning wheel, the listener sends the
+        /// grid a `mousemove` where it turned. This callback keeps that one
+        /// from the app, but a callback wrapping it sees it as a `Moved`.
         pub fn mouse_handler(&self) -> impl FnMut(ratzilla::event::MouseEvent) + 'static {
             let route = Rc::clone(&self.route);
             let wheel = Rc::clone(&self.wheel);
@@ -817,11 +821,9 @@ mod browser_clipboard {
                 let Ok(mouse) = MouseEvent::try_from(mouse) else {
                     return;
                 };
-                wheel.borrow_mut().point(match mouse.kind {
-                    MouseKind::Exited => None,
-                    _ => Some((mouse.column, mouse.row)),
-                });
-                let _ = send(&route, Event::Mouse(mouse));
+                if wheel.borrow_mut().observe(&mouse) {
+                    let _ = send(&route, Event::Mouse(mouse));
+                }
             }
         }
     }
@@ -838,8 +840,12 @@ mod browser_clipboard {
         wheel: &RefCell<Wheel>,
         event: &WheelEvent,
     ) {
+        // The mode first: Firefox reports lines only to a reader who asks
+        // for the mode before the delta, and pixels otherwise.
+        let mode = event.delta_mode();
+        let delta = event.delta_y();
         // Ctrl+wheel zooms, and a horizontal wheel is left to the page.
-        if event.ctrl_key() || event.delta_y() == 0.0 {
+        if event.ctrl_key() || delta == 0.0 {
             return;
         }
         // Ratzilla reports the pointer's cell only as the mouse moves, so a
@@ -854,16 +860,18 @@ mod browser_clipboard {
             if let Ok(moved) =
                 web_sys::MouseEvent::new_with_mouse_event_init_dict("mousemove", &init)
             {
+                wheel.borrow_mut().probe(true);
                 let _ = target.dispatch_event(&moved);
+                wheel.borrow_mut().probe(false);
             }
         }
         let Some((column, row)) = wheel.borrow().cell() else {
             return;
         };
-        let notches = match event.delta_mode() {
-            WheelEvent::DOM_DELTA_PIXEL => event.delta_y() / 100.0,
-            WheelEvent::DOM_DELTA_LINE => event.delta_y() / 3.0,
-            _ => event.delta_y(),
+        let notches = match mode {
+            WheelEvent::DOM_DELTA_PIXEL => delta / 100.0,
+            WheelEvent::DOM_DELTA_LINE => delta / 3.0,
+            _ => delta,
         };
         let steps = wheel.borrow_mut().turn(notches, event.time_stamp());
         let direction = if steps < 0 {
@@ -1024,8 +1032,9 @@ mod ratzilla_conv {
     const TURN_GAP_MS: f64 = 250.0;
 
     /// The browser wheel's state between events: where the pointer is, when
-    /// the wheel last moved, the travel short of a notch, and whether the app
-    /// took the last step of the turn.
+    /// the wheel last moved, the travel short of a notch, whether the app
+    /// took the last step of the turn, and whether the wheel is asking
+    /// Ratzilla for the pointer's cell.
     #[derive(Debug, Default)]
     #[cfg_attr(
         not(target_arch = "wasm32"),
@@ -1037,6 +1046,7 @@ mod ratzilla_conv {
         pending: f64,
         /// `None` until the turn's first step has been routed.
         taken: Option<bool>,
+        probing: bool,
     }
 
     #[cfg_attr(
@@ -1044,15 +1054,28 @@ mod ratzilla_conv {
         allow(dead_code, reason = "BrowserInput is wasm-only; tested natively")
     )]
     impl Wheel {
-        /// The pointer is over `cell`, or off the grid. Over another cell,
-        /// the turn starts afresh.
-        pub(super) fn point(&mut self, cell: Option<(u16, u16)>) {
-            if cell != self.cell {
-                *self = Self {
-                    cell,
-                    ..Self::default()
-                };
-            }
+        /// The pointer is over `cell`, or off the grid. The turn goes on:
+        /// only a rest ends it, and a page scrolling the grid under a still
+        /// pointer changes the cell mid-turn.
+        pub(super) const fn point(&mut self, cell: Option<(u16, u16)>) {
+            self.cell = cell;
+        }
+
+        /// Ratzilla reported `mouse`: keep its cell, and say whether it goes
+        /// on to the app. The `mousemove` the wheel sends to learn the cell
+        /// does not: the pointer did not move, and a move would hover a list
+        /// row into focus, or repeat a drag.
+        pub(super) const fn observe(&mut self, mouse: &MouseEvent) -> bool {
+            self.point(match mouse.kind {
+                MouseKind::Exited => None,
+                _ => Some((mouse.column, mouse.row)),
+            });
+            !self.probing
+        }
+
+        /// Mark the wheel's own `mousemove` while it is dispatched.
+        pub(super) const fn probe(&mut self, probing: bool) {
+            self.probing = probing;
         }
 
         pub(super) const fn cell(&self) -> Option<(u16, u16)> {
@@ -1725,15 +1748,50 @@ mod ratzilla_tests {
         assert_eq!(wheel.turn(0.25, 20.0), 0);
         assert!(wheel.taking(), "a slice between steps is the app's");
 
-        wheel.point(Some((3, 4)));
-        assert!(wheel.taking(), "the same cell keeps the turn");
-        wheel.point(Some((3, 5)));
-        assert!(!wheel.taking(), "another cell starts afresh");
-
-        assert_eq!(wheel.turn(0.25, 30.0), 1);
+        assert_eq!(wheel.turn(0.25, 30.0), 0);
         wheel.took(false);
         assert!(!wheel.taking(), "an ignored step hands the page back");
         assert_eq!(wheel.turn(0.25, 40.0), 0, "and slices after it stay slices");
+    }
+
+    /// A page scrolling the grid under a still pointer moves the wheel's cell
+    /// mid-turn. Restarting the turn there would make every slice after the
+    /// move a whole step: one notch of trackpad travel scrolling many.
+    #[test]
+    fn a_turn_goes_on_over_another_cell() {
+        let mut wheel = Wheel::default();
+        wheel.point(Some((3, 4)));
+        assert_eq!(wheel.turn(0.25, 10.0), 1, "the turn's first slice");
+        wheel.took(true);
+        let mut steps = 0;
+        for row in 5..12 {
+            wheel.point(Some((3, row)));
+            steps += wheel.turn(0.25, 10.0 * f64::from(row));
+        }
+        assert_eq!(steps, 1, "seven slices, one notch and three quarters");
+        assert!(wheel.taking(), "still the app's turn");
+        assert_eq!(wheel.cell(), Some((3, 11)));
+    }
+
+    /// The wheel learns the pointer's cell by sending Ratzilla a `mousemove`.
+    /// Routed on, that move would hover a list row into focus, so the wheel
+    /// would move a list's cursor, which it never does in a terminal; and
+    /// with a button held it would repeat a drag. It keeps only the cell.
+    #[test]
+    fn the_wheels_own_mouse_move_reaches_only_the_wheel() {
+        let mut wheel = Wheel::default();
+        let moved = |row| MouseEvent {
+            kind: MouseKind::Moved,
+            column: 3,
+            row,
+            modifiers: Modifiers::NONE,
+        };
+        assert!(wheel.observe(&moved(4)), "a real move goes on to the app");
+        wheel.probe(true);
+        assert!(!wheel.observe(&moved(7)), "the wheel's own stops here");
+        wheel.probe(false);
+        assert_eq!(wheel.cell(), Some((3, 7)), "keeping its cell");
+        assert!(wheel.observe(&moved(8)), "and moves after it go on again");
     }
 
     /// A turn's first slice decides whose the turn is, at once: left short of
