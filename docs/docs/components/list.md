@@ -173,8 +173,9 @@ If scroll is unbound, ignore the offset.
 
 The wheel scrolls the view and leaves the cursor where it is, so the cursor can
 scroll out of sight. Moving the cursor, or changing the items around it,
-scrolls the cursor back into view. The list always handles the wheel, even at
-the ends of its range, so it never scrolls an enclosing pane.
+scrolls the cursor back into view. When the list cannot scroll any further that
+way, or has nothing to scroll, the wheel bubbles, so a list inside a
+[ScrollArea](./scroll-area) lets the area scroll on.
 
 To scroll something that is not a list (a form, a pane, a tile grid), see
 [ScrollArea](./scroll-area).
