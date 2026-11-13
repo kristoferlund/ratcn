@@ -1618,13 +1618,18 @@ mod tests {
             Event::Paste("x".to_owned()),
             mouse(LEFT_DOWN, 1, 0),
             mouse(MouseKind::Click(MouseButton::Left), 1, 0),
-            mouse(LEFT_DRAG, 2, 0),
         ] {
             assert!(
                 matches!(driver.event(event.clone(), &state), EventResult::Ignored),
                 "{event:?}"
             );
         }
+        // Held motion is never `Ignored` once a surface exists (the runtime's
+        // floor); the field itself answers nothing, so no message comes back.
+        assert!(matches!(
+            driver.event(mouse(LEFT_DRAG, 2, 0), &state),
+            EventResult::Consumed
+        ));
         assert_eq!(
             driver.cell(5, 0).bg,
             InputStyle::from_theme(&Theme::default_dark()).background,
