@@ -45,8 +45,8 @@ impl ScrollAreaStyle {
 ///
 /// Event handling writes it and the next declaration reads it, which is what
 /// lets an unbound area scroll at all and what carries a reveal into the
-/// declaration that follows it. A bound area's own scrolling never writes it:
-/// the app's offset decides.
+/// declaration that follows it. A bound area's own scrolling only releases
+/// it: the app's offset decides.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum ScrollHold {
     /// Nothing is holding the view: the bound offset decides where it sits.
@@ -56,7 +56,8 @@ enum ScrollHold {
     /// taken against, and it is what makes releasing permanent: the
     /// declaration drops the hold for good the moment a bound offset moves
     /// away from `base`, so an app that scrolls its own area keeps it, and
-    /// returning to the offset the hold was taken at cannot revive it.
+    /// returning to the offset the hold was taken at cannot revive it. A
+    /// bound area's own scroll releases it too.
     Held { offset: u16, base: Option<u16> },
 }
 
