@@ -849,6 +849,7 @@ where
             if matches!(event, Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left))
             {
                 PressedItem::press(ctx, &self.items, None);
+                *ctx.transient() = PressedMarker::Elsewhere;
             }
             return EventResult::Ignored;
         }
@@ -860,6 +861,9 @@ where
                 MouseKind::Down(MouseButton::Left) => {
                     let tab = self.tab_at(mouse.column, mouse.row);
                     PressedItem::press(ctx, &self.items, tab);
+                    *ctx.transient() = self
+                        .marker_at(mouse.column, mouse.row)
+                        .map_or(PressedMarker::Elsewhere, PressedMarker::On);
                     match tab {
                         Some(index) if self.disabled_at(index) => EventResult::Consumed,
                         _ => EventResult::Ignored,
@@ -887,6 +891,12 @@ where
                     let Some(direction) = self.marker_at(mouse.column, mouse.row) else {
                         return EventResult::Ignored;
                     };
+                    // A marker steps only for a press on that same marker.
+                    match std::mem::take(ctx.transient::<PressedMarker>()) {
+                        PressedMarker::Unrecorded => {}
+                        PressedMarker::On(pressed) if pressed == direction => {}
+                        _ => return EventResult::Consumed,
+                    }
                     let edge = match direction {
                         Step::Backward => self.hits.tabs.first(),
                         Step::Forward => self.hits.tabs.last(),
@@ -921,6 +931,18 @@ where
                 && linear_nav::has_enabled(self.items.len(), |index| self.disabled_at(index)),
         )
     }
+}
+
+/// What the last primary press over a row landed on, as far as its overflow
+/// markers care: the marker counterpart of [`PressedItem`], so a marker click
+/// steps only for a press on that same marker. An injected `Click` with no
+/// press recorded steps as it is.
+#[derive(Debug, Default)]
+enum PressedMarker {
+    #[default]
+    Unrecorded,
+    On(Step),
+    Elsewhere,
 }
 
 impl<T: Clone + PartialEq + 'static, S, M> MeasuredComponent<S, M> for Tabs<T, S, M> {
@@ -1910,6 +1932,81 @@ mod tests {
         };
         assert_eq!(hover_marker(true), PointerShape::Pointer);
         assert_eq!(hover_marker(false), PointerShape::Default);
+    }
+
+    /// Six tabs in 18 cells under Automatic activation, A and B visible and
+    /// the rest behind a right marker, disabled as asked; and that marker.
+    fn render_overflowing(driver: &mut Driver<State, Msg>, state: &State, disabled: bool) -> Rect {
+        let area = Rect::new(0, 0, 18, TabsSize::Small.height());
+        driver.render(state, |ctx| {
+            let tabs = Tabs::new([
+                Tab::new(Screen::A, "A"),
+                Tab::new(Screen::B, "B"),
+                Tab::new(Screen::C, "C"),
+                Tab::new(Screen::D, "D"),
+                Tab::new(Screen::E, "E"),
+                Tab::new(Screen::F, "F"),
+            ])
+            .selection(|state: &State| Some(state.selected), Msg::Selected)
+            .activation(TabsActivation::Automatic)
+            .disabled(disabled);
+            ctx.component("tabs", tabs, area);
+        });
+        tab_layout(area, &["A", "B", "C", "D", "E", "F"], TabsSize::Small, 0)
+            .right
+            .expect("hidden right tabs get a marker")
+    }
+
+    /// A marker steps only for a press on that marker. A press on a tab
+    /// dragged onto the marker, or one the disabled row ignored before it
+    /// was enabled, must not select the hidden neighbor.
+    #[test]
+    fn a_marker_steps_only_for_a_press_on_that_marker() {
+        let mut driver = Driver::<State, Msg>::new(18, TabsSize::Small.height());
+        let state = State::default();
+        let marker = render_overflowing(&mut driver, &state, false);
+        let a = column(&driver, Screen::A);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), a, 0), &state);
+        driver.event(
+            mouse(MouseKind::Drag(MouseButton::Left), marker.x, marker.y),
+            &state,
+        );
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Up(MouseButton::Left), marker.x, marker.y),
+                &state
+            ),
+            EventResult::Consumed,
+            "pressed on A, released on the marker"
+        );
+
+        render_overflowing(&mut driver, &state, true);
+        driver.event(
+            mouse(MouseKind::Down(MouseButton::Left), marker.x, marker.y),
+            &state,
+        );
+        render_overflowing(&mut driver, &state, false);
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Up(MouseButton::Left), marker.x, marker.y),
+                &state
+            ),
+            EventResult::Consumed,
+            "pressed while the row was disabled"
+        );
+
+        driver.event(
+            mouse(MouseKind::Down(MouseButton::Left), marker.x, marker.y),
+            &state,
+        );
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Up(MouseButton::Left), marker.x, marker.y),
+                &state
+            ),
+            EventResult::Emit(Msg::Selected(Screen::C)),
+            "a press and release on the marker still steps"
+        );
     }
 
     /// Every primary press is recorded, even one a disabled row ignores, so
