@@ -58,7 +58,9 @@ match msg {
 
 The reader runs for every event, so repeated wheel or page events compose
 without a redraw between them, as long as the app applies each message as it
-arrives.
+arrives. A bound area is controlled: the view follows the app's offset, so a
+message the app does not apply leaves the view where it was, and the app can
+clamp or refuse a scroll.
 
 ## Focus
 
