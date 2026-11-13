@@ -59,10 +59,13 @@ A **popup** blocks pointer input over exactly its own footprint. A press inside
 it that nothing handles is consumed at the popup root rather than reaching the
 control beneath. A press outside, with any button, routes to whatever is
 visibly there and also emits the popup's `on_dismiss` message, unless the
-control it lands on answers the press with a message of its own. The press
-that closes a popup moves focus but does not activate: its release focuses the
-control it landed on in place of clicking it, and the next click activates. A
-control that already holds focus is clicked as usual. Focus is never stolen:
+control it lands on answers the press with a message of its own. In an app
+with a focus binding, the press that closes a popup moves focus but does not
+activate: its motion drags nothing, its release focuses the control it landed
+on in place of clicking it, and the next click activates. The release only
+focuses even if the app keeps the popup open. A press that leaves the grid, or
+whose target vanishes before the release, moves no focus. A control that
+already holds focus is clicked as usual. Focus is never stolen:
 move it in with your own message, in the same update that opens the popup.
 Keys bubble *through* the popup root to the component that declared it. See
 [Select](../components/select).

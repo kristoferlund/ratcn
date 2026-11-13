@@ -2589,6 +2589,14 @@ impl<State, Msg> Ratcn<State, Msg> {
         if self.gestures.swallows(mouse.kind) {
             return EventResult::Consumed;
         }
+        // A press that closed a popup only dismisses and, on its release,
+        // focuses: its motion reaches nothing, or a drag would act on a
+        // control that does not hold focus yet.
+        if let MouseKind::Drag(button) = mouse.kind
+            && self.gestures.release_focus(button).is_some()
+        {
+            return EventResult::Consumed;
+        }
         let routed = self.route_mouse(mouse, hit, state);
         match (mouse.kind, &routed) {
             (MouseKind::Down(_), EventResult::Ignored | EventResult::Consumed) => self
