@@ -12,6 +12,7 @@ ratatui.workspace = true
 gloo-timers.workspace = true
 ratcn = { workspace = true, features = ["ratzilla"] }
 ratzilla.workspace = true
+web-sys = { workspace = true, features = ["AddEventListenerOptions", "WheelEvent"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ratcn = { workspace = true, features = ["termina"] }
