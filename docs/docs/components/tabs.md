@@ -192,7 +192,7 @@ exact widget colors.
 |---|---|
 | `←` `→` &nbsp;`h` `l` &nbsp;`Ctrl+P` `Ctrl+N` | Move to the previous / next enabled tab |
 | `Home` `End` | Move to the first / last enabled tab |
-| `Enter` `Space` | Select the focused tab (manual activation) |
+| `Enter` `Space` | Select the focused tab |
 | Click | Select the tab |
 | Hover | Highlight the tab, without switching |
 

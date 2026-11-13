@@ -14,11 +14,11 @@ use crate::color::{
 };
 use crate::linear_nav::{self, Axis};
 use crate::list_core::{
-    self, KeyIntent, ListItem, ListItemState, RowIntent, RowViewport, WheelHold,
+    self, KeyIntent, ListItem, ListItemState, PressedItem, RowIntent, RowViewport, WheelHold,
 };
 use crate::runtime::{
-    Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MouseKind, PaintCtx,
-    PointerShape, ScopeOptions, ScrollDirection,
+    Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MouseButton, MouseKind,
+    PaintCtx, PointerShape, ScopeOptions, ScrollDirection,
 };
 use crate::selection_indicator;
 use crate::text_width::display_width;
@@ -652,8 +652,12 @@ impl<T, S, M> List<T, S, M> {
     /// The wheel is the exception to keeping the cursor visible: it scrolls
     /// the view and leaves the cursor where it is, so the cursor may scroll
     /// out of sight — the behavior a scrollable list has everywhere else. It
-    /// emits the offset one notch away from the painted one, and consumes the
-    /// event without emitting when the app already holds that value. Paint
+    /// emits the offset one notch away from the view, counting notches not yet
+    /// painted, so it builds on offsets it emitted even if the app has not
+    /// applied them. It consumes the event without emitting when the app
+    /// already holds that value. When the view cannot move that way, at an end
+    /// or with nothing to scroll, the wheel bubbles to an enclosing scroll
+    /// container. Paint
     /// resumes scrolling the cursor into view as soon as anything moves — the
     /// cursor, or the items under it; see
     /// [`WheelHold`](crate::list_core::WheelHold) for exactly when the wheeled
@@ -991,6 +995,13 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                     let row = self
                         .viewport
                         .row_at(area, self.items.len(), mouse.column, mouse.row);
+                    // A click acts only on the item its press landed on, even
+                    // if a redraw has since moved another one under it.
+                    if kind == MouseKind::Down(MouseButton::Left) {
+                        PressedItem::press(ctx, &self.items, row);
+                    }
+                    let pressed_here = kind != MouseKind::Click(MouseButton::Left)
+                        || PressedItem::releases_on(ctx, &self.items, row);
                     match list_core::row_intent(
                         kind,
                         &self.items,
@@ -998,6 +1009,9 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
                         self.focused_index(state),
                         self.selected.is_some() || self.selected_many.is_some(),
                     ) {
+                        RowIntent::Focus(_) | RowIntent::Commit(_) if !pressed_here => {
+                            EventResult::Consumed
+                        }
                         RowIntent::BlockPress | RowIntent::Stay => EventResult::Consumed,
                         RowIntent::Focus(index) => self.move_focus(index, state, area),
                         RowIntent::Commit(index) => self.select(index),
@@ -1047,7 +1061,7 @@ mod tests {
     use ratatui::{style::Modifier, text::Line};
 
     use super::*;
-    use crate::runtime::{ChildId, KeyCode, MouseButton, Ratcn};
+    use crate::runtime::{ChildId, KeyCode, Ratcn};
     use crate::test_support::{Driver, key, key_with, mouse};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1660,6 +1674,163 @@ mod tests {
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state),
             EventResult::Emit(RoutedMsg::Selected(Task::A))
+        );
+    }
+
+    fn abcd() -> [ListItem<Task>; 4] {
+        [
+            item(Task::A, "Alpha"),
+            item(Task::B, "Bravo"),
+            item(Task::C, "Charlie"),
+            item(Task::D, "Delta"),
+        ]
+    }
+
+    /// A live list may redraw between a press and its release. The click must
+    /// act on the item that was pressed, not on whatever the redraw moved
+    /// under the pointer — deciding from the release row alone selects Delta.
+    #[test]
+    fn a_click_never_selects_an_item_a_redraw_moved_under_the_press() {
+        let mut driver = Driver::new(20, 4);
+        let state = State::default();
+        render_list(&mut driver, &state, abcd());
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
+        let mut reversed = abcd();
+        reversed.reverse();
+        render_list(&mut driver, &state, reversed);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 0), &state),
+            EventResult::Consumed,
+            "Alpha was pressed; Delta is under the release"
+        );
+    }
+
+    /// A press on a disabled row is dead, so releasing it on an enabled row
+    /// must not select that row either; nor does a release on another row.
+    /// Drift within the pressed row is still a click.
+    #[test]
+    fn a_click_selects_only_the_item_it_pressed() {
+        let mut driver = Driver::new(20, 4);
+        let state = State::default();
+        let mut items = abcd();
+        items[1] = item(Task::B, "Bravo").disabled(true);
+        render_list(&mut driver, &state, items);
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        driver.event(mouse(MouseKind::Moved, 1, 2), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 2), &state),
+            EventResult::Consumed,
+            "pressed on disabled Bravo, released on Charlie"
+        );
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
+        driver.event(mouse(MouseKind::Moved, 1, 3), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 3), &state),
+            EventResult::Consumed,
+            "pressed on Alpha, released on Delta"
+        );
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
+        driver.event(mouse(MouseKind::Moved, 6, 0), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 6, 0), &state),
+            EventResult::Emit(Msg::Selected(Task::A)),
+            "drift within the pressed row still clicks"
+        );
+    }
+
+    /// Item eligibility is the painted frame's, like every other retained
+    /// prop: an item the app disables keeps committing until the redraw that
+    /// shows it disabled, and is dead from then on, for keys and clicks alike.
+    #[test]
+    fn an_item_disabled_after_paint_commits_until_the_redraw() {
+        let mut driver = Driver::new(20, 4);
+        let state = State {
+            focused: Some(Task::B),
+            ..State::default()
+        };
+        render_list(&mut driver, &state, abcd());
+        // The app disables Bravo here; nothing has been redrawn yet.
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state),
+            EventResult::Emit(Msg::Selected(Task::B))
+        );
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Selected(Task::B))
+        );
+
+        let mut items = abcd();
+        items[1] = item(Task::B, "Bravo").disabled(true);
+        render_list(&mut driver, &state, items);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state),
+            EventResult::Ignored
+        );
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Ignored
+        );
+    }
+
+    /// A list that cannot scroll the way the wheel turns lets the notch
+    /// bubble, so a form inside a `ScrollArea` keeps scrolling over a short
+    /// list; one with somewhere to go scrolls itself. Always consuming the
+    /// wheel would stop the area dead over the list.
+    #[test]
+    fn the_wheel_bubbles_only_where_the_list_cannot_scroll() {
+        #[derive(Debug, PartialEq)]
+        enum AreaMsg {
+            Area(u16),
+            Scrolled(usize),
+        }
+        let mut driver = Driver::<(), AreaMsg>::new(20, 4);
+        driver.render(&(), |ctx| {
+            ctx.component(
+                "area",
+                crate::ScrollArea::new(12)
+                    .scroll(|(): &()| 0, AreaMsg::Area)
+                    .content(|ctx| {
+                        ctx.component(
+                            "short",
+                            List::new([item(Task::A, "Alpha"), item(Task::B, "Bravo")])
+                                .scroll(|(): &()| 0, AreaMsg::Scrolled),
+                            Rect::new(0, 0, 18, 2),
+                        );
+                        ctx.component(
+                            "long",
+                            List::new(six_items()).scroll(|(): &()| 0, AreaMsg::Scrolled),
+                            Rect::new(0, 2, 18, 2),
+                        );
+                    }),
+                Rect::new(0, 0, 20, 4),
+            );
+        });
+
+        let wheel = |direction, row| mouse(MouseKind::Scroll(direction), 1, row);
+        assert_eq!(
+            driver.event(wheel(ScrollDirection::Down, 2), &()),
+            EventResult::Emit(AreaMsg::Scrolled(3)),
+            "a long list scrolls itself"
+        );
+        assert_eq!(
+            driver.event(wheel(ScrollDirection::Up, 2), &()),
+            EventResult::Consumed,
+            "back up from the notch not yet painted, to the offset the app holds"
+        );
+        assert_eq!(
+            driver.event(wheel(ScrollDirection::Up, 2), &()),
+            EventResult::Ignored,
+            "at its top the list lets the notch go, and so does the area at its own"
+        );
+        assert_eq!(
+            driver.event(wheel(ScrollDirection::Down, 0), &()),
+            EventResult::Emit(AreaMsg::Area(3)),
+            "a list with nothing to scroll passes the wheel to the area"
         );
     }
 

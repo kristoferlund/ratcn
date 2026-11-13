@@ -102,9 +102,10 @@ Each component page lists its editing keys.
 `Dialog`'s dismiss key is rebindable with
 [`dismiss_key`](../components/dialog), which takes any `KeyChord`. Chord matching
 ignores Shift, so its default also accepts Shift+Esc; Ctrl/Alt must match.
-Select and Tooltip require plain Esc. A read-only Tooltip (`open_when`) leaves
-Esc to its ancestors or the app. Components require their action bindings to
-emit these changes; disabled controls do not activate.
+Select and Tooltip require plain Esc, so inside a Dialog, Shift+Esc passes an
+open Select or Tooltip by and dismisses the Dialog itself. A read-only Tooltip
+(`open_when`) leaves Esc to its ancestors or the app. Components require their
+action bindings to emit these changes; disabled controls do not activate.
 
 The browser previews on this site also release keyboard capture on Esc. That
 is the preview host's behavior, separate from component dismissal.

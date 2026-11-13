@@ -29,7 +29,7 @@ use crate::color::{
 };
 use crate::linear_nav::{self, Axis};
 use crate::list_core::{
-    self, KeyIntent, ListItem, ListItemState, RowIntent, RowViewport, WheelHold,
+    self, KeyIntent, ListItem, ListItemState, PressedItem, RowIntent, RowViewport, WheelHold,
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton,
@@ -583,7 +583,7 @@ fn emit_item<T: Clone, S, M>(
 /// The same placement works when the Select is inside a modal.
 ///
 /// Vocabulary: the panel *closes* on Esc, Tab-out, or a trigger click, and is
-/// *dismissed* by a primary-button press outside it (the popup layer's dismiss
+/// *dismissed* by a press of any button outside it (the popup layer's dismiss
 /// gesture, which emits the close message without consuming the press). All of
 /// these arrive through the [`open`](Self::open) binding as
 /// `on_open_change(false)`.
@@ -600,8 +600,8 @@ fn emit_item<T: Clone, S, M>(
 /// binding combinations remain valid for paint-only or pointer-only use, but do
 /// not make the Select a keyboard focus stop or consume keyboard input.
 ///
-/// Item values must be unique. Enter, Space, or a navigation key opens a closed
-/// Select.
+/// Item values must be unique. Enter, Space, or a vertical step key (Up/Down,
+/// `k`/`j`, Ctrl+P/N) opens a closed Select.
 /// While open, navigation moves item focus, Enter or Space selects, Esc closes,
 /// and the first Tab or `BackTab` closes and consumes that traversal key. A
 /// following Tab can move focus after the app applies the close message. The
@@ -1025,7 +1025,8 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             .disabled(self.disabled)
             .style(style);
         ctx.widget(trigger, area);
-        if !self.disabled && !self.items.is_empty() {
+        // A hand where a click opens or closes the panel.
+        if !self.disabled && self.open.is_some() && self.has_enabled_item() {
             ctx.set_pointer_shape(PointerShape::Pointer);
         }
     }
@@ -1040,7 +1041,9 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
             return EventResult::Ignored;
         }
         match event {
-            Event::Mouse(_) if self.items.is_empty() => EventResult::Ignored,
+            // Like the keys, the pointer never opens a panel nothing can be
+            // chosen from.
+            Event::Mouse(_) if !self.has_enabled_item() => EventResult::Ignored,
             Event::Mouse(mouse) => match mouse.kind {
                 MouseKind::Click(MouseButton::Left) => self.toggle(!self.is_open(state)),
                 _ => EventResult::Ignored,
@@ -1184,6 +1187,13 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         };
         let cursor = self.cursor(state);
         let option = self.option_at(mouse);
+        // A click acts only on the option its press landed on, even if a
+        // redraw has since moved another one under it.
+        if mouse.kind == MouseKind::Down(MouseButton::Left) {
+            PressedItem::press(ctx, &self.items, option);
+        }
+        let pressed_here = mouse.kind != MouseKind::Click(MouseButton::Left)
+            || PressedItem::releases_on(ctx, &self.items, option);
         match mouse.kind {
             // The hold lives on the panel's identity, not on this per-frame
             // instance, so it survives redraws and dies with the popup.
@@ -1203,6 +1213,9 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
                 cursor,
                 self.selected.is_some(),
             ) {
+                RowIntent::Focus(_) | RowIntent::Commit(_) if !pressed_here => {
+                    EventResult::Consumed
+                }
                 RowIntent::BlockPress => EventResult::Consumed,
                 RowIntent::Commit(index) => emit_item(self.selected.as_ref(), &self.items, index),
                 // Motion means nothing without a cursor to move: a panel bound
@@ -1267,7 +1280,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::{FocusState, Modifiers, Ratcn, ScrollDirection};
-    use crate::test_support::{Driver, mouse};
+    use crate::test_support::{Driver, key, mouse};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Fruit {
@@ -1958,6 +1971,185 @@ mod tests {
         }
     }
 
+    /// The pointer agrees with the keys: a click on an all-disabled trigger
+    /// does not open a panel the keyboard could then never close, since the
+    /// Select is not focusable. Guarding only the key path opens it.
+    #[test]
+    fn an_all_disabled_select_does_not_open_on_a_click() {
+        let mut driver = driver(20, 8);
+        let state = State::default();
+        let all_disabled: Vec<ListItem<Fruit>> = items()
+            .into_iter()
+            .map(|item| item.disabled(true))
+            .collect();
+        render_select(&mut driver, &state, Rect::new(0, 0, 20, 1), &all_disabled);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 0), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, 0), &state),
+            EventResult::Ignored
+        );
+    }
+
+    /// A hand over the trigger says a click opens it. Without an `open`
+    /// binding, or with nothing enabled to choose, a click does nothing.
+    #[test]
+    fn the_trigger_shows_a_hand_only_where_a_click_opens_it() {
+        let hovered_shape = |select: fn() -> Select<Fruit, State, Msg>| {
+            let mut driver = driver(20, 8);
+            let state = State::default();
+            let declare = |ctx: &mut DeclareCtx<'_, State, Msg>| {
+                ctx.component("fruit", select(), Rect::new(0, 0, 20, 1));
+            };
+            driver.render(&state, declare);
+            driver.event(mouse(MouseKind::Moved, 3, 0), &state);
+            driver.render(&state, declare);
+            driver.ratcn.pointer_shape()
+        };
+        assert_eq!(hovered_shape(|| select(items())), PointerShape::Pointer);
+        assert_eq!(
+            hovered_shape(|| {
+                Select::new(items()).selection(|state: &State| state.selected, Msg::Selected)
+            }),
+            PointerShape::Default,
+            "no open binding"
+        );
+        assert_eq!(
+            hovered_shape(|| select(
+                items()
+                    .into_iter()
+                    .map(|item| item.disabled(true))
+                    .collect()
+            )),
+            PointerShape::Default,
+            "nothing to choose"
+        );
+    }
+
+    /// A redraw between press and release can move another option under the
+    /// pointer. The click must not commit it: the user pressed the other one.
+    #[test]
+    fn a_click_never_commits_an_option_a_redraw_moved_under_the_press() {
+        let mut driver = driver(20, 12);
+        let state = State {
+            open: true,
+            ..State::default()
+        };
+        let trigger = Rect::new(0, 4, 20, 1);
+        render_select(&mut driver, &state, trigger, &items());
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 4), &state);
+        let mut reversed = items();
+        reversed.reverse();
+        render_select(&mut driver, &state, trigger, &reversed);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, 4), &state),
+            EventResult::Consumed,
+            "Mango was pressed; Durian is under the release"
+        );
+    }
+
+    /// A press on a disabled option is dead, so releasing it on an enabled
+    /// one commits nothing; neither does a release on another option. Drift
+    /// within the pressed option still clicks.
+    #[test]
+    fn a_click_commits_only_the_option_it_pressed() {
+        let mut driver = driver(20, 12);
+        let state = State {
+            open: true,
+            ..State::default()
+        };
+        let mut options = items();
+        options[1] = ListItem::new(Fruit::Papaya, "Papaya").disabled(true);
+        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &options);
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 5), &state);
+        driver.event(mouse(MouseKind::Moved, 3, 6), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, 6), &state),
+            EventResult::Consumed,
+            "pressed on disabled Papaya, released on Lychee"
+        );
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 4), &state);
+        driver.event(mouse(MouseKind::Moved, 3, 7), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, 7), &state),
+            EventResult::Consumed,
+            "pressed on Mango, released on Durian"
+        );
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 4), &state);
+        driver.event(mouse(MouseKind::Moved, 8, 4), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 8, 4), &state),
+            EventResult::Emit(Msg::Selected(Fruit::Mango)),
+            "drift within the pressed option still clicks"
+        );
+    }
+
+    /// Keys read the cursor fresh, so several arrive between frames and each
+    /// builds on the last one the app applied; reading a cursor cached at
+    /// paint would emit Papaya twice.
+    #[test]
+    fn consecutive_keys_compose_without_a_redraw() {
+        let mut driver = driver(20, 12);
+        let mut state = State {
+            open: true,
+            cursor: Some(Fruit::Mango),
+            focus: FocusState::intent(["fruit"]),
+            ..State::default()
+        };
+        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
+        assert_eq!(
+            driver.event(key(KeyCode::Down), &state),
+            EventResult::Emit(Msg::Focused(Fruit::Papaya))
+        );
+        state.cursor = Some(Fruit::Papaya);
+        assert_eq!(
+            driver.event(key(KeyCode::Down), &state),
+            EventResult::Emit(Msg::Focused(Fruit::Lychee))
+        );
+        state.cursor = Some(Fruit::Lychee);
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Selected(Fruit::Lychee))
+        );
+    }
+
+    /// The cursor and the selection are values, not rows: reordering the
+    /// options keeps both on the same fruit, wherever it now sits.
+    #[test]
+    fn reordering_keeps_the_cursor_and_selection_on_their_values() {
+        let mut driver = driver(20, 12);
+        let state = State {
+            open: true,
+            cursor: Some(Fruit::Papaya),
+            selected: Some(Fruit::Lychee),
+            focus: FocusState::intent(["fruit"]),
+        };
+        let mut reversed = items();
+        reversed.reverse();
+        render_select(&mut driver, &state, Rect::new(0, 6, 20, 1), &reversed);
+        // Durian, Lychee, Papaya, Mango: the step after Papaya is now Mango.
+        assert_eq!(
+            driver.event(key(KeyCode::Down), &state),
+            EventResult::Emit(Msg::Focused(Fruit::Mango))
+        );
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Selected(Fruit::Papaya))
+        );
+        let closed = State {
+            open: false,
+            ..state
+        };
+        render_select(&mut driver, &closed, Rect::new(0, 6, 20, 1), &reversed);
+        assert!(
+            driver.row(6).contains("Lychee"),
+            "the trigger shows the selected value: {}",
+            driver.row(6)
+        );
+    }
+
     /// With nothing to commit to, a click still moves the cursor — `List`'s
     /// behavior for the same binding combination.
     #[test]
@@ -2078,6 +2270,36 @@ mod tests {
             driver.event(click, &state),
             EventResult::Consumed,
             "the retained popup reads current open state before handling the second click"
+        );
+    }
+
+    /// The same guarantee through the runtime's own click synthesis: after
+    /// the app closes the panel, the retained popup still covers its
+    /// footprint, the trigger row included, and commits nothing there.
+    #[test]
+    fn closing_selection_cannot_commit_twice_before_redraw_by_raw_press() {
+        let mut driver = driver(20, 12);
+        let mut state = State {
+            open: true,
+            ..State::default()
+        };
+        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
+        let click = |driver: &mut Driver<State, Msg>, state: &State, row| {
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, row), state);
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, row), state)
+        };
+
+        assert_eq!(
+            click(&mut driver, &state, 5),
+            EventResult::Emit(Msg::Selected(Fruit::Papaya))
+        );
+        state.open = false;
+        state.selected = Some(Fruit::Papaya);
+        assert_eq!(click(&mut driver, &state, 5), EventResult::Consumed);
+        assert_eq!(
+            click(&mut driver, &state, 4),
+            EventResult::Consumed,
+            "the trigger row is still under the retained panel"
         );
     }
 

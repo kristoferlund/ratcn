@@ -13,7 +13,8 @@
 //! The module splits along that line. [`assert_unique_values`] applies to any
 //! component keyed by item value, whatever its own item type and however it is
 //! laid out — [`Tabs`](crate::Tabs) uses it for a row of tabs, and so is
-//! [`ListItem`] itself, which a tab is. Everything else here —
+//! [`ListItem`] itself, which a tab is. [`PressedItem`] needs only items too,
+//! so a click on a tab is held to the tab it pressed the same way. Everything else here —
 //! [`RowViewport`], [`WheelHold`], [`windowed_rows`], [`row_intent`] — assumes
 //! items stacked in a scrolling column of uniform-height rows. [`key_intent`]
 //! sits between: it takes the [`Axis`] the items run along.
@@ -397,7 +398,9 @@ pub enum RowIntent {
 /// - Motion onto another row moves the cursor; motion within the cursor's own
 ///   row is [`RowIntent::Stay`]. One cursor, moved by keys and pointer alike.
 /// - A primary click commits its row, or moves the cursor there when there is
-///   nothing to commit to — the same thing hovering already does.
+///   nothing to commit to — the same thing hovering already does. Whether the
+///   press that began the click landed on that same row is the caller's to
+///   check, with [`PressedItem`].
 /// - Everything else bubbles: a press on an enabled row (the runtime's to turn
 ///   into focus), a release, a drag, a non-primary button, a wheel notch (which
 ///   scrolls the view rather than addressing a row, so each control handles it
@@ -424,6 +427,75 @@ pub fn row_intent<T>(
         MouseKind::Click(MouseButton::Left) if commits => RowIntent::Commit(index),
         MouseKind::Moved | MouseKind::Click(MouseButton::Left) => RowIntent::Focus(index),
         _ => RowIntent::Bubble,
+    }
+}
+
+/// The item a primary press landed on, so the click that ends the gesture
+/// acts on that item and no other.
+///
+/// The runtime makes a click when press and release land on the same
+/// *component*; which row is under the release is the component's to check.
+/// The press is kept by value, not by row, for the same reason focus and
+/// selection are: a live list that redraws between press and release may have
+/// moved another item under the pointer, and the user never pressed that one.
+/// A release on a different item, or after a press on a disabled one, acts on
+/// nothing. Drift within the pressed item still clicks.
+///
+/// Like [`WheelHold`], this is gesture bookkeeping kept in the identity-scoped
+/// transient store, through [`EventCtx::transient`]: a press and its click
+/// arrive as separate events, to instances that may be a frame apart.
+///
+/// [`press`](Self::press) records every primary press over the control and
+/// [`releases_on`](Self::releases_on) answers, and forgets, at its click. A
+/// click with no press recorded, which only a synthetic `Click` can be, acts
+/// as it did before presses were recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PressedItem<T>(Press<T>);
+
+/// What the last primary press over a control landed on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Press<T> {
+    /// No press recorded since the last click.
+    Unrecorded,
+    /// The enabled item carrying this value.
+    On(T),
+    /// A disabled item, or no item at all.
+    Elsewhere,
+}
+
+impl<T> Default for PressedItem<T> {
+    fn default() -> Self {
+        Self(Press::Unrecorded)
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> PressedItem<T> {
+    /// Record a primary press over `items`, landing on the item at `index`
+    /// (`None` when it hit no item). A disabled item records as no item.
+    pub fn press(ctx: &mut EventCtx<'_>, items: &[ListItem<T>], index: Option<usize>) {
+        let press = match index.and_then(|index| items.get(index)) {
+            Some(item) if !item.disabled => Press::On(item.value.clone()),
+            _ => Press::Elsewhere,
+        };
+        ctx.transient::<Self>().0 = press;
+    }
+
+    /// Whether a primary click released over the item at `index` may act on
+    /// it: true when the press landed on the item carrying the same value.
+    /// The gesture ends here, so the record is cleared.
+    pub fn releases_on(
+        ctx: &mut EventCtx<'_>,
+        items: &[ListItem<T>],
+        index: Option<usize>,
+    ) -> bool {
+        let released = index
+            .and_then(|index| items.get(index))
+            .map(ListItem::value);
+        match std::mem::replace(&mut ctx.transient::<Self>().0, Press::Unrecorded) {
+            Press::Unrecorded => true,
+            Press::On(pressed) => released == Some(&pressed),
+            Press::Elsewhere => false,
+        }
     }
 }
 
@@ -611,8 +683,11 @@ impl RowViewport {
     /// [`SCROLL_STEP`] items and is held there against `items` as the `cursor`
     /// sits in them (see [`WheelHold::hold`]). Successive notches accumulate,
     /// but hit-testing keeps using the painted offset until the next render.
-    /// Answers the held offset, or `None` for a horizontal notch, which
-    /// a column of rows leaves alone.
+    /// Answers the held offset, or `None` when the notch cannot move the
+    /// view: a horizontal notch, which a column of rows leaves alone, or one
+    /// against the end of the range, or with nothing to scroll. A control
+    /// lets that `None` bubble, so an enclosing scroll container takes the
+    /// wheel where the list has nowhere to go.
     ///
     /// The cursor never moves on the wheel; what the control emits about the
     /// new offset, if anything, is its own decision.
@@ -624,13 +699,15 @@ impl RowViewport {
         area: Rect,
         ctx: &mut EventCtx<'_>,
     ) -> Option<usize> {
+        let current = self.pending_offset.unwrap_or(self.painted_offset);
         let next = linear_nav::wheel_offset(
             items.len(),
             self.visible_items(area),
-            self.pending_offset.unwrap_or(self.painted_offset),
+            current,
             direction,
             SCROLL_STEP,
-        )?;
+        )
+        .filter(|&next| next != current)?;
         ctx.transient::<WheelHold<T>>().hold(next, items, cursor);
         self.pending_offset = Some(next);
         Some(next)
