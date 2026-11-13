@@ -277,9 +277,11 @@ fn drag_helper_stays_captured_across_rebuild_and_ends_outside() {
             .capture_path(MouseButton::Left)
             .is_none()
     );
+    // Motion is never `Ignored`; that it carries no message is what shows
+    // nothing captured it.
     assert_eq!(
         driver.event(mouse(MouseKind::Drag(MouseButton::Left), 19, 3), &state),
-        EventResult::Ignored
+        EventResult::Consumed
     );
 }
 
@@ -311,7 +313,7 @@ fn an_abandoned_drag_does_not_resume_on_a_later_gesture_that_reaches_it_by_hit_t
     driver.event(mouse(MouseKind::Down(MouseButton::Left), 10, 3), &state);
     assert_eq!(
         driver.event(mouse(MouseKind::Moved, 2, 1), &state),
-        EventResult::Ignored,
+        EventResult::Consumed,
         "motion of a gesture that did not start here must not move it"
     );
     // The release moves hover onto the component, which is news to the next
@@ -501,9 +503,11 @@ fn raw_release_returns_its_first_emitted_normalized_event() {
             3,
         ))
     );
+    // Motion is never `Ignored`; that it carries no message is what shows
+    // nothing captured it.
     assert_eq!(
         driver.event(mouse(MouseKind::Drag(MouseButton::Left), 19, 3), &state),
-        EventResult::Ignored
+        EventResult::Consumed
     );
 }
 
@@ -1422,4 +1426,63 @@ fn mouse_before_the_first_render_is_ignored_without_arming_the_tracker() {
         driver.event(mouse(MouseKind::Moved, 0, 0), &state),
         EventResult::Consumed
     );
+}
+
+#[test]
+fn a_secondary_press_on_an_ignoring_focusable_leaf_moves_no_focus() {
+    // Only a primary press focuses: right and middle presses leave focus
+    // where it is even when the leaf ignores them and could take focus.
+    let state = FocusTestState {
+        focus: FocusState::intent([ChildId::Static("first")]),
+    };
+    let mut driver = focus_driver(8, 1);
+    driver.render(&state, |ctx| {
+        ctx.component(
+            ChildId::Static("first"),
+            FocusLeaf::enabled(),
+            Rect::new(0, 0, 3, 1),
+        );
+        ctx.component(
+            ChildId::Static("other"),
+            FocusLeaf::enabled(),
+            Rect::new(4, 0, 3, 1),
+        );
+    });
+
+    for button in [MouseButton::Right, MouseButton::Middle] {
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(button), 5, 0), &state),
+            EventResult::Ignored,
+            "{button:?} press"
+        );
+        driver.event(mouse(MouseKind::Up(button), 5, 0), &state);
+    }
+}
+
+#[test]
+fn held_motion_is_never_ignored() {
+    // Motion under a held button arrives as `Drag`, which an ignoring leaf
+    // ignores like any event. It is still motion: a host that redraws on
+    // anything but `Ignored` needs it, so it comes back `Consumed` — over the
+    // pressed leaf, over empty space, and when the backend reports `Drag`
+    // itself. Hover stays frozen on the pressed leaf throughout.
+    let mut driver = Driver::<(), ()>::new(10, 2);
+    driver.render(&(), |ctx| {
+        ctx.component(ChildId::Static("leaf"), Leaf, Rect::new(0, 0, 4, 1));
+    });
+
+    driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &());
+    for (kind, column, row) in [
+        (MouseKind::Moved, 2, 0),
+        (MouseKind::Moved, 8, 1),
+        (MouseKind::Drag(MouseButton::Left), 3, 0),
+        (MouseKind::Drag(MouseButton::Left), 9, 1),
+    ] {
+        assert_eq!(
+            driver.event(mouse(kind, column, row), &()),
+            EventResult::Consumed,
+            "{kind:?} to ({column}, {row})"
+        );
+        assert_eq!(driver.ratcn.hover_path(), [ChildId::Static("leaf")]);
+    }
 }

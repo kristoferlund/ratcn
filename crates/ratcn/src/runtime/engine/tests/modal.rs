@@ -1066,9 +1066,11 @@ fn modal_transition_cancels_base_capture_through_release() {
         &state,
         &[("drag", "base", Rect::new(0, 0, 5, 2))],
     );
+    // Motion is never `Ignored`; that it carries no message is what shows
+    // the cancelled capture did not come back.
     assert_eq!(
         driver.event(mouse(MouseKind::Drag(MouseButton::Left), 9, 1), &state),
-        EventResult::Ignored
+        EventResult::Consumed
     );
 }
 

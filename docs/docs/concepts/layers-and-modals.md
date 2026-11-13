@@ -57,9 +57,12 @@ of its own: whatever state opened it is what closes it. See
 
 A **popup** blocks pointer input over exactly its own footprint. A press inside
 it that nothing handles is consumed at the popup root rather than reaching the
-control beneath. A press outside routes to whatever is visibly there and also
-emits the popup's `on_dismiss` message. Focus is never stolen: move it in with
-your own message, in the same update that opens the popup. Keys bubble
+control beneath. A press outside, with any button, routes to whatever is
+visibly there and also emits the popup's `on_dismiss` message, unless the
+control it lands on answers the press with a message of its own. The press
+that dismisses a popup does not also move focus; the next press does. The
+release still clicks the control the press landed on. Focus is never stolen:
+move it in with your own message, in the same update that opens the popup. Keys bubble
 *through* the popup root to the component that declared it. See
 [Select](../components/select).
 

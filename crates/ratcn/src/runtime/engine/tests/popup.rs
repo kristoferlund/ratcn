@@ -573,3 +573,67 @@ fn one_physical_click_dismisses_the_popup_and_presses_the_button() {
         ))
     );
 }
+
+#[derive(Debug, Clone, PartialEq)]
+enum DismissMsg {
+    Focus(FocusState),
+    Dismissed,
+    Pressed,
+}
+
+#[test]
+fn an_outside_press_on_an_unfocused_control_dismisses_instead_of_moving_focus() {
+    // In a focus-bound app the runtime's focus fallback used to answer this
+    // press, so the popup stayed open whenever the press landed on a control
+    // that did not hold focus yet. The dismissal wins over that fallback;
+    // the release still clicks the button, and the next press focuses it.
+    let mut driver = Driver::with(
+        Ratcn::new().focus(|state: &FocusTestState| &state.focus, DismissMsg::Focus),
+        10,
+        2,
+    );
+    let state = FocusTestState {
+        focus: FocusState::intent(["panel", "inside"]),
+    };
+    let render = |driver: &mut Driver<FocusTestState, DismissMsg>, popup_open: bool| {
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "button",
+                Button::new("Go").on_press(|| DismissMsg::Pressed),
+                Rect::new(6, 0, 4, 1),
+            );
+            if popup_open {
+                ctx.popup(
+                    "panel",
+                    Rect::new(0, 0, 5, 2),
+                    PopupOptions::default().on_dismiss(|| DismissMsg::Dismissed),
+                    |ctx| {
+                        ctx.component(
+                            "inside",
+                            Button::new("In").on_press(|| DismissMsg::Pressed),
+                            Rect::new(0, 0, 5, 1),
+                        );
+                    },
+                );
+            }
+        });
+    };
+
+    render(&mut driver, true);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state),
+        EventResult::Emit(DismissMsg::Dismissed),
+        "the press dismisses the popup rather than focusing the button"
+    );
+    render(&mut driver, false);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 7, 0), &state),
+        EventResult::Emit(DismissMsg::Pressed),
+        "the dismissal is observed, not consumed: the click still lands"
+    );
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state),
+        EventResult::Emit(DismissMsg::Focus(FocusState::intent(["button"]))),
+        "with the popup closed, the next press moves focus"
+    );
+}
