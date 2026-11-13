@@ -445,10 +445,11 @@ pub fn row_intent<T>(
 /// transient store, through [`EventCtx::transient`]: a press and its click
 /// arrive as separate events, to instances that may be a frame apart.
 ///
-/// [`press`](Self::press) records every primary press over the control and
+/// [`press`](Self::press) records every primary press over the control,
+/// including one the control otherwise ignores (disabled, empty, closed), and
 /// [`releases_on`](Self::releases_on) answers, and forgets, at its click. A
-/// click with no press recorded, which only a synthetic `Click` can be, acts
-/// as it did before presses were recorded.
+/// click with no press recorded, which only an injected `Click` can be, acts
+/// on the item under it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PressedItem<T>(Press<T>);
 
