@@ -7,10 +7,12 @@
 // understands are intercepted before the browser acts on them (Tab must move
 // terminal focus, not leave the iframe) and re-dispatched onto the canvas.
 //
-// Forwarding also normalizes Alt chords by physical key: macOS composes
-// Option+letter into a symbol before the page sees it (Option+D arrives as
-// "∂", Option+1 as "¡"), so matching on the produced character would never
-// fire. The physical key survives only in `event.code`.
+// Forwarding keeps what the key typed. A character composed with Option
+// (macOS) or AltGr (Ctrl+Alt elsewhere), `@` from Option+2 on a Swedish Mac or
+// `€` from AltGr+E, is forwarded without those modifiers, so a text field
+// types it. Only a page's own Alt hotkeys go by physical key, named on the
+// root as `data-alt-hotkeys` (say "1 2 d"): macOS composes Option+D into "∂",
+// so matching on the produced character would never fire.
 //
 // `data-keyboard-active` on the root drives the visible capture state — the
 // hint pill and the thin border marking that the demo holds the keyboard.
@@ -39,30 +41,57 @@ function shouldLetBrowserHandle(event) {
   return false;
 }
 
+// One character, counted as Rust does: `key.length` counts UTF-16 units.
+function isCharacter(key) {
+  return [...key].length === 1;
+}
+
 function shouldCapture(event) {
-  if (event.key.length === 1) return true;
+  if (isCharacter(event.key)) return true;
 
   return CAPTURED_KEYS.has(event.key);
 }
 
-// Letters always normalize: their Option compositions (∂, ƒ, ©) are not
-// realistic text input. Digits stop at 6 — the landing tile hotkeys — because
-// Option+7/8/9 produce | [ ] on Nordic layouts, which are.
-function forwardedKey(event) {
-  if (event.altKey) {
-    const letter = event.code.match(/^Key([A-Z])$/);
-    if (letter) return letter[1].toLowerCase();
-    const digit = event.code.match(/^(?:Digit|Numpad)([1-6])$/);
-    if (digit) return digit[1];
-  }
+// The character a letter or digit key types unmodified. Other keys differ
+// by layout, so they have none here.
+function physicalKey(event) {
+  const letter = event.code.match(/^Key([A-Z])$/);
+  if (letter) return letter[1].toLowerCase();
+  const digit = event.code.match(/^(?:Digit|Numpad)([0-9])$/);
+  if (digit && !event.shiftKey) return digit[1];
+  return null;
+}
 
-  return event.key;
+// Whether Option or AltGr composed the character rather than chording it:
+// Alt+D on Windows sends "d" with Alt held, a chord; Option+D on a Mac types
+// "∂", a character. A key with no known unmodified character counts as
+// composed when it types something non-ASCII, so Alt+[ on a US layout stays
+// the editor's chord.
+function isComposed(event) {
+  if (!event.altKey || !isCharacter(event.key)) return false;
+  const physical = physicalKey(event);
+  if (physical !== null) return event.key.toLowerCase() !== physical;
+  return !/^[\x00-\x7f]$/.test(event.key);
+}
+
+// What to forward: a hotkey by physical key, a composed character as plain
+// text, anything else as it came.
+function forwarded(event, hotkeys) {
+  const physical = physicalKey(event);
+  if (event.altKey && !event.ctrlKey && hotkeys.has(physical)) {
+    return { key: physical, ctrlKey: false, altKey: true };
+  }
+  if (isComposed(event)) {
+    return { key: event.key, ctrlKey: false, altKey: false };
+  }
+  return { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey };
 }
 
 function installKeyboardCapture(root = document.body) {
   if (!root) return;
 
   const forwardedEvents = new WeakSet();
+  const hotkeys = new Set((root.dataset.altHotkeys ?? "").split(/\s+/).filter(Boolean));
 
   root.tabIndex = root.tabIndex >= 0 ? root.tabIndex : 0;
   root.classList.add("ratatui-demo-root");
@@ -116,10 +145,8 @@ function installKeyboardCapture(root = document.body) {
       event.stopImmediatePropagation();
 
       const forwardedEvent = new KeyboardEvent("keydown", {
-        key: forwardedKey(event),
+        ...forwarded(event, hotkeys),
         code: event.code,
-        ctrlKey: event.ctrlKey,
-        altKey: event.altKey,
         shiftKey: event.shiftKey,
         metaKey: event.metaKey,
         repeat: event.repeat,
