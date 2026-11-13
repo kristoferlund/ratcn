@@ -980,6 +980,12 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for List<T, S, M> {
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
         if self.disabled || self.items.is_empty() {
+            // A press ignored here is still recorded, so the click that ends
+            // it cannot act on an item once the list answers again.
+            if matches!(event, Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left))
+            {
+                PressedItem::press(ctx, &self.items, None);
+            }
             return EventResult::Ignored;
         }
         let area = ctx.area();
@@ -1717,7 +1723,7 @@ mod tests {
         render_list(&mut driver, &state, items);
 
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
-        driver.event(mouse(MouseKind::Moved, 1, 2), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), 1, 2), &state);
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 2), &state),
             EventResult::Consumed,
@@ -1725,7 +1731,7 @@ mod tests {
         );
 
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
-        driver.event(mouse(MouseKind::Moved, 1, 3), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), 1, 3), &state);
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 3), &state),
             EventResult::Consumed,
@@ -1733,11 +1739,59 @@ mod tests {
         );
 
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
-        driver.event(mouse(MouseKind::Moved, 6, 0), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), 6, 0), &state);
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 6, 0), &state),
             EventResult::Emit(Msg::Selected(Task::A)),
             "drift within the pressed row still clicks"
+        );
+    }
+
+    /// Every primary press is recorded, even one an empty list ignores, so
+    /// the release cannot select an item that only arrived after the press.
+    #[test]
+    fn a_press_on_an_empty_list_selects_nothing_once_it_fills() {
+        let mut driver = Driver::new(20, 4);
+        let state = State::default();
+        render_list(&mut driver, &state, []);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
+        render_list(&mut driver, &state, abcd());
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 0), &state),
+            EventResult::Consumed
+        );
+    }
+
+    /// A press whose click never came (released outside the list) must not
+    /// stand in for a later press the list ignored: that later release would
+    /// otherwise select the first press's item wherever it now sits.
+    #[test]
+    fn a_stale_press_cannot_select_through_a_later_ignored_press() {
+        let mut driver = Driver::new(20, 5);
+        let state = State::default();
+        let render = |driver: &mut Driver<State, Msg>, items: Vec<ListItem<Task>>| {
+            driver.render(&state, |ctx| {
+                ctx.component(
+                    "list",
+                    List::new(items.clone())
+                        .selection(|state: &State| state.selected, Msg::Selected),
+                    Rect::new(0, 0, 20, 4),
+                );
+            });
+        };
+        render(&mut driver, abcd().to_vec());
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 0), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), 1, 4), &state);
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 4), &state);
+
+        render(&mut driver, Vec::new());
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 2), &state);
+        let [a, b, c, d] = abcd();
+        render(&mut driver, vec![c, d, a, b]);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 2), &state),
+            EventResult::Consumed,
+            "Alpha now sits under a press the empty list ignored"
         );
     }
 

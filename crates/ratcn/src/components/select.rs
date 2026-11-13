@@ -1017,16 +1017,17 @@ impl<T: Clone + PartialEq + 'static, S: 'static, M: 'static> Component<S, M> for
         let style = resolve_style(self.style.as_deref(), ctx.theme, SelectStyle::from_theme);
         let selected = self.selected_index(state);
         let value = selected.map(|index| self.items[index].label());
+        // Hover fill and hand only where a click opens or closes the panel.
+        let toggles = !self.disabled && self.open.is_some() && self.has_enabled_item();
         let trigger = SelectWidget::new(value)
             .placeholder(&self.placeholder)
             .open(self.is_open(state))
             .focused(ctx.focused())
-            .hovered(ctx.hovered())
+            .hovered(ctx.hovered() && toggles)
             .disabled(self.disabled)
             .style(style);
         ctx.widget(trigger, area);
-        // A hand where a click opens or closes the panel.
-        if !self.disabled && self.open.is_some() && self.has_enabled_item() {
+        if toggles {
             ctx.set_pointer_shape(PointerShape::Pointer);
         }
     }
@@ -1180,6 +1181,12 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
         if !(self.open)(state) {
+            // A press ignored here is still recorded, so the click that ends
+            // it cannot act on an item once the panel answers again.
+            if matches!(event, Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left))
+            {
+                PressedItem::press(ctx, &self.items, None);
+            }
             return EventResult::Ignored;
         }
         let Event::Mouse(mouse) = event else {
@@ -1296,6 +1303,7 @@ mod tests {
         Focused(Fruit),
         Selected(Fruit),
         Focus(FocusState),
+        Dismissed,
     }
 
     #[derive(Default)]
@@ -1990,39 +1998,47 @@ mod tests {
         );
     }
 
-    /// A hand over the trigger says a click opens it. Without an `open`
-    /// binding, or with nothing enabled to choose, a click does nothing.
+    /// A hand and a hover fill over the trigger say a click opens it. Without
+    /// an `open` binding, or with nothing enabled to choose, a click does
+    /// nothing, so the trigger stays at rest under the pointer.
     #[test]
-    fn the_trigger_shows_a_hand_only_where_a_click_opens_it() {
-        let hovered_shape = |select: fn() -> Select<Fruit, State, Msg>| {
+    fn the_trigger_answers_hover_only_where_a_click_opens_it() {
+        // The pointer shape over the trigger, and its background before and
+        // while the pointer is over it.
+        let hover = |select: fn() -> Select<Fruit, State, Msg>| {
             let mut driver = driver(20, 8);
             let state = State::default();
             let declare = |ctx: &mut DeclareCtx<'_, State, Msg>| {
                 ctx.component("fruit", select(), Rect::new(0, 0, 20, 1));
             };
             driver.render(&state, declare);
+            let rest = driver.cell(3, 0).bg;
             driver.event(mouse(MouseKind::Moved, 3, 0), &state);
             driver.render(&state, declare);
-            driver.ratcn.pointer_shape()
+            (driver.ratcn.pointer_shape(), rest, driver.cell(3, 0).bg)
         };
-        assert_eq!(hovered_shape(|| select(items())), PointerShape::Pointer);
-        assert_eq!(
-            hovered_shape(|| {
-                Select::new(items()).selection(|state: &State| state.selected, Msg::Selected)
+        let (shape, rest, hovered) = hover(|| select(items()));
+        assert_eq!(shape, PointerShape::Pointer);
+        assert_ne!(hovered, rest, "an openable trigger fills under the pointer");
+        for (name, inert) in [
+            (
+                "no open binding",
+                (|| Select::new(items()).selection(|state: &State| state.selected, Msg::Selected))
+                    as fn() -> Select<Fruit, State, Msg>,
+            ),
+            ("nothing to choose", || {
+                select(
+                    items()
+                        .into_iter()
+                        .map(|item| item.disabled(true))
+                        .collect(),
+                )
             }),
-            PointerShape::Default,
-            "no open binding"
-        );
-        assert_eq!(
-            hovered_shape(|| select(
-                items()
-                    .into_iter()
-                    .map(|item| item.disabled(true))
-                    .collect()
-            )),
-            PointerShape::Default,
-            "nothing to choose"
-        );
+        ] {
+            let (shape, rest, hovered) = hover(inert);
+            assert_eq!(shape, PointerShape::Default, "{name}");
+            assert_eq!(hovered, rest, "{name}: the trigger stays at rest");
+        }
     }
 
     /// A redraw between press and release can move another option under the
@@ -2062,7 +2078,7 @@ mod tests {
         render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &options);
 
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 5), &state);
-        driver.event(mouse(MouseKind::Moved, 3, 6), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), 3, 6), &state);
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, 6), &state),
             EventResult::Consumed,
@@ -2070,7 +2086,7 @@ mod tests {
         );
 
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 4), &state);
-        driver.event(mouse(MouseKind::Moved, 3, 7), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), 3, 7), &state);
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, 7), &state),
             EventResult::Consumed,
@@ -2078,11 +2094,76 @@ mod tests {
         );
 
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 4), &state);
-        driver.event(mouse(MouseKind::Moved, 8, 4), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), 8, 4), &state);
         assert_eq!(
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 8, 4), &state),
             EventResult::Emit(Msg::Selected(Fruit::Mango)),
             "drift within the pressed option still clicks"
+        );
+    }
+
+    /// Every primary press is recorded, even one a closed panel ignores, so a
+    /// release after the app reopens it cannot commit an option nobody
+    /// pressed while it was open.
+    #[test]
+    fn a_press_on_a_closed_panel_commits_nothing_after_it_reopens() {
+        let mut driver = driver(20, 12);
+        let mut state = State {
+            open: true,
+            ..State::default()
+        };
+        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
+        state.open = false;
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 5), &state);
+        state.open = true;
+        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, 5), &state),
+            EventResult::Consumed
+        );
+    }
+
+    /// An open Select closes on plain Esc only, while a Dialog's dismiss chord
+    /// ignores Shift. So inside a Dialog, Shift+Esc passes the open panel by
+    /// and dismisses the Dialog, as keyboard.md says.
+    #[test]
+    fn shift_esc_in_a_dialog_skips_an_open_select_and_dismisses_the_dialog() {
+        let mut driver = driver(20, 12);
+        let state = State {
+            open: true,
+            focus: FocusState::intent(["dialog", "fruit"]),
+            ..State::default()
+        };
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.modal(
+                "dialog",
+                crate::Dialog::new()
+                    .on_dismiss(|| Msg::Dismissed)
+                    .content(1, |ctx| {
+                        ctx.component("fruit", select(items()), ctx.area());
+                    }),
+                area,
+            );
+        });
+        assert_eq!(
+            driver.event(key(KeyCode::Esc), &state),
+            EventResult::Emit(Msg::Open(false)),
+            "plain Esc closes the panel first"
+        );
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        };
+        assert_eq!(
+            driver.event(
+                Event::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    modifiers: shift,
+                }),
+                &state
+            ),
+            EventResult::Emit(Msg::Dismissed)
         );
     }
 
