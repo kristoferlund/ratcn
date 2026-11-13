@@ -156,7 +156,9 @@ Input::new()
 ```
 
 `.disabled(true)` mutes the field, hides the cursor, takes it out of Tab
-traversal, and makes it ignore every event.
+traversal, and makes it ignore every event. Under the pointer it shows
+`NotAllowed` rather than the plain arrow of a disabled button: a field that
+looks typeable says plainly that it is not.
 
 ## Styling
 

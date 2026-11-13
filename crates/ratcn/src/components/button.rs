@@ -701,14 +701,17 @@ impl<S, M> Component<S, M> for Button<M> {
         let style = resolve_style(self.style.as_deref(), ctx.theme, |theme| {
             ButtonStyle::from_theme(theme, self.variant)
         });
+        // Hover feedback and the hand both say "a click here acts", so both
+        // follow the same eligibility as focus.
+        let can_act = !self.disabled && self.on_press.is_some();
         let widget = ButtonWidget::new(&self.label)
             .style(style)
             .size(self.size)
             .focused(ctx.focused())
-            .hovered(ctx.hovered())
+            .hovered(ctx.hovered() && can_act)
             .disabled(self.disabled);
         ctx.widget(widget, area);
-        if !self.disabled && self.on_press.is_some() {
+        if can_act {
             ctx.set_pointer_shape(PointerShape::Pointer);
         }
     }
@@ -764,7 +767,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::{ChildId, FocusState, Modifiers, MouseEvent, Ratcn};
-    use crate::test_support::{Driver, mouse};
+    use crate::test_support::{Driver, key, mouse};
 
     /// The pointer shape after hovering a button with `disabled` set.
     fn hovered_shape(disabled: bool) -> PointerShape {
@@ -784,6 +787,23 @@ mod tests {
     fn a_hovered_button_shows_a_hand_unless_disabled() {
         assert_eq!(hovered_shape(false), PointerShape::Pointer);
         assert_eq!(hovered_shape(true), PointerShape::Default);
+    }
+
+    /// Hover fill, like the hand, says "this presses". A button with no
+    /// `on_press` presses nothing, so the pointer over it changes neither.
+    #[test]
+    fn a_button_without_on_press_under_the_pointer_paints_its_rest() {
+        let mut driver = Driver::<(), ()>::new(12, 1);
+        let declare = |ctx: &mut DeclareCtx<'_, (), ()>| {
+            ctx.component("save", Button::<()>::new("Save"), Rect::new(0, 0, 8, 1));
+        };
+        driver.render(&(), declare);
+        let rest = driver.cell(2, 0).bg;
+        driver.event(mouse(MouseKind::Moved, 2, 0), &());
+        driver.render(&(), declare);
+
+        assert_eq!(driver.cell(2, 0).bg, rest);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
     }
 
     #[test]
@@ -1336,8 +1356,18 @@ mod tests {
             driver.event(mouse(MouseKind::Up(MouseButton::Left)), &state),
             EventResult::Emit(Msg::Pressed)
         );
+        // The keyboard sees the same retained eligibility as the pointer.
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Pressed)
+        );
 
         render(&mut driver, &state);
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Ignored,
+            "focus parked on the now-disabled button must not press it"
+        );
         state.disabled = false;
         state.focus = FocusState::intent([ChildId::Static("other")]);
         assert_eq!(

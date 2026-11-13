@@ -39,8 +39,8 @@ and answers no events.
 
 ## Settings rows
 
-The value paints like a small ghost button: plain text at rest, a quiet fill
-while hovered or focused. A Cycle is exactly as wide as the text it shows, in
+The value sits in a subtle field at rest, which brightens while hovered or
+focused. A Cycle is exactly as wide as the text it shows, in
 both paint and hit target, so the fill hugs the value instead of stretching
 across the row.
 
@@ -73,6 +73,9 @@ Small/Medium/Large, are a Cycle.
 
 `.disabled(true)` mutes the value, takes it out of Tab order, and ignores
 events. Pass the flag from app state, which is in scope while declaring.
+Disabling takes effect at the next render
+([what an event sees](../concepts/rendering-and-events#what-an-event-sees)),
+and a click on a disabled cycle never reaches an overlapping sibling behind it.
 
 ## Styling
 
@@ -110,6 +113,8 @@ Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mou
 ## Limits
 
 - `Home` and `End` do nothing: the options form a ring with no ends.
+- With a single option, every step still emits `on_change(0)`, as every press
+  of a Button emits.
 - A `read` index past the last option shows the last option.
 
 ## Full API
