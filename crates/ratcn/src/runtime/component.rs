@@ -612,9 +612,12 @@ impl<Msg> PopupOptions<Msg> {
     ///
     /// The press that closes a popup moves focus but does not activate: when
     /// it lands on a control that does not hold focus, in an app with a focus
-    /// binding, its release focuses that control in place of clicking it, and
-    /// the next click activates. A control that already holds focus is
-    /// clicked as usual.
+    /// binding, its motion reaches nothing and its release focuses that
+    /// control in place of clicking it, and the next click activates. The
+    /// release only focuses even if the app keeps the popup open. A press
+    /// that leaves the grid ([`Exited`](super::MouseKind::Exited)), or whose
+    /// target vanishes before the release, moves no focus. A control that
+    /// already holds focus is clicked as usual.
     #[must_use]
     pub fn on_dismiss(mut self, message: impl Fn() -> Msg + 'static) -> Self {
         self.on_dismiss = Some(Box::new(message));

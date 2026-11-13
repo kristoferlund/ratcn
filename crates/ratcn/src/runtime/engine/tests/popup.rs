@@ -732,3 +732,40 @@ fn closing_a_select_by_pressing_an_input_sends_typing_to_the_input() {
     };
     assert_eq!(name.value(), " ");
 }
+
+#[test]
+fn the_press_that_closes_a_popup_drags_nothing_before_its_release_focuses() {
+    // The gesture of a popup-closing press only dismisses and focuses. Its
+    // motion used to reach the Input and select text in a field that did
+    // not hold focus.
+    let mut driver = Driver::with(
+        Ratcn::new().focus(|state: &FormState| &state.focus, FormMsg::Focus),
+        12,
+        10,
+    );
+    let mut state = FormState {
+        focus: FocusState::intent(["fruit"]),
+        open: true,
+        name: crate::InputState::new("hello world"),
+    };
+    render_form(&mut driver, &state);
+    assert!(matches!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 8), &state),
+        EventResult::Emit(FormMsg::Open(false))
+    ));
+    state.open = false;
+    render_form(&mut driver, &state);
+    for kind in [MouseKind::Moved, MouseKind::Drag(MouseButton::Left)] {
+        assert!(
+            matches!(
+                driver.event(mouse(kind, 6, 8), &state),
+                EventResult::Consumed
+            ),
+            "{kind:?} selects nothing"
+        );
+    }
+    assert!(matches!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 6, 8), &state),
+        EventResult::Emit(FormMsg::Focus(focus)) if focus == FocusState::intent(["name"])
+    ));
+}
