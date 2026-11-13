@@ -666,6 +666,8 @@ fn successful_path_removal_drops_its_transient_state() {
     );
     render_probe(&mut driver, false);
     render_probe(&mut driver, true);
+    // The removal called the held gesture off; its release ends it.
+    driver.event(mouse(MouseKind::Up(MouseButton::Left), 0, 0), &state);
     assert_eq!(
         driver.event(mouse(MouseKind::Down(MouseButton::Left), 0, 0), &state),
         EventResult::Emit(PointerMsg::Transient(1))
@@ -803,16 +805,16 @@ fn uncaptured_click_does_not_retarget_after_successful_redraw() {
     render(&mut driver, "before", "before");
     driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
     render(&mut driver, "after", "after");
+    // The pressed component is gone, so the gesture is called off: its
+    // release is swallowed, and reaches neither the new component nor a
+    // click.
     assert_eq!(
         driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state),
         EventResult::Consumed
     );
     assert_eq!(
         *events.borrow(),
-        [
-            ("before", MouseKind::Down(MouseButton::Left)),
-            ("after", MouseKind::Up(MouseButton::Left)),
-        ]
+        [("before", MouseKind::Down(MouseButton::Left))]
     );
 
     events.borrow_mut().clear();
@@ -1485,4 +1487,41 @@ fn held_motion_is_never_ignored() {
         );
         assert_eq!(driver.ratcn.hover_path(), [ChildId::Static("leaf")]);
     }
+}
+
+#[test]
+fn a_press_target_that_vanished_for_a_frame_is_not_clicked_on_its_return() {
+    // Same-path replacement in every frame keeps the click. A path that was
+    // gone from a committed frame and came back is a different thing in the
+    // same place (a list redrawn reordered), so its release must not click.
+    let state = PointerState;
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut driver = Driver::new(5, 2);
+    let render = |driver: &mut Driver<PointerState, PointerMsg>, present: bool| {
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            if present {
+                ctx.component(
+                    ChildId::Static("leaf"),
+                    RecordingPointer {
+                        name: "leaf",
+                        events: Rc::clone(&events),
+                        capture: false,
+                    },
+                    area,
+                );
+            }
+        });
+    };
+
+    render(&mut driver, true);
+    driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 1), &state);
+    render(&mut driver, false);
+    render(&mut driver, true);
+    driver.event(mouse(MouseKind::Up(MouseButton::Left), 1, 1), &state);
+    assert_eq!(
+        *events.borrow(),
+        [("leaf", MouseKind::Down(MouseButton::Left))],
+        "no Click, and the called-off release is swallowed"
+    );
 }

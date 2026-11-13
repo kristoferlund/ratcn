@@ -680,19 +680,21 @@ impl<State, Msg> Surface<State, Msg> {
     }
 
     /// The focus a press on `index` lands: focus lands on a leaf, so a
-    /// focusable container hands off to the first focus leaf of its subtree
-    /// that is fully on screen. A press asks for no scrolling, and the first
-    /// leaf of a scrolled pane may sit far above the view; only when no leaf
-    /// is on screen does the press fall back to the first one.
+    /// focusable container hands off to a focus leaf of its subtree. A press
+    /// asks for as little scrolling as it can, and the first leaf of a
+    /// scrolled pane may sit far above the view: the first leaf fully on
+    /// screen wins, then the first partly on screen, and only when no leaf is
+    /// on screen the first one.
     fn press_focus(&self, index: usize) -> Option<FocusState> {
         let subtree = self.subtree(index);
-        subtree
-            .clone()
-            .find(|&leaf| {
-                self.nodes[leaf].focus_leaf
-                    && self.viewport_visibility(leaf) == ViewportVisibility::Full
+        let shown = |visibility: ViewportVisibility| {
+            subtree.clone().find(|&leaf| {
+                self.nodes[leaf].focus_leaf && self.viewport_visibility(leaf) == visibility
             })
-            .or_else(|| self.leaf_in(subtree, Step::Forward))
+        };
+        shown(ViewportVisibility::Full)
+            .or_else(|| shown(ViewportVisibility::Partial))
+            .or_else(|| self.leaf_in(subtree.clone(), Step::Forward))
             .map(|leaf| self.focus_on(leaf))
     }
 
@@ -2191,7 +2193,7 @@ impl<State, Msg> Ratcn<State, Msg> {
             let Self {
                 gestures, surface, ..
             } = self;
-            gestures.cancel_lost_claims(|path| {
+            gestures.cancel_lost(|path| {
                 surface.leaf_of(path).is_some_and(|index| {
                     surface.nodes[index].live
                         && surface.interactive(index)
@@ -2494,19 +2496,38 @@ impl<State, Msg> Ratcn<State, Msg> {
         } else {
             EventResult::Ignored
         };
-        for mouse in events {
-            let next = self.deliver_mouse(mouse, hit.as_deref(), state);
-            match next {
-                // A message ends the batch: any normalized event synthesized
-                // after this one is dropped. The pairs that matter do not
-                // collide — a press ignores and its `Click` emits — but a
-                // component that emits on `Up` would swallow that `Click`.
-                EventResult::Emit(_) => {
-                    result = next;
-                    break;
+        let release_focus = match raw.kind {
+            MouseKind::Up(button) => self.release_focus(button),
+            _ => None,
+        };
+        if let Some(focus) = release_focus {
+            // The release of a press that closed a popup moves focus in place
+            // of everything else it would have produced. The release still
+            // reaches components, so what they track ends with it, but no
+            // click is synthesized and what they answer is not the message.
+            for mouse in events {
+                if !matches!(mouse.kind, MouseKind::Click(_)) {
+                    self.deliver_mouse(mouse, hit.as_deref(), state);
                 }
-                EventResult::Consumed => result = next,
-                EventResult::Ignored => {}
+            }
+            let current = self.surface.resolve_focus(self.stored_focus(state));
+            result = self.focus_transition_result(focus, &current);
+        } else {
+            for mouse in events {
+                let next = self.deliver_mouse(mouse, hit.as_deref(), state);
+                match next {
+                    // A message ends the batch: any normalized event
+                    // synthesized after this one is dropped. The pairs that
+                    // matter do not collide — a press ignores and its `Click`
+                    // emits — but a component that emits on `Up` would
+                    // swallow that `Click`.
+                    EventResult::Emit(_) => {
+                        result = next;
+                        break;
+                    }
+                    EventResult::Consumed => result = next,
+                    EventResult::Ignored => {}
+                }
             }
         }
         if let MouseKind::Up(button) = raw.kind {
@@ -2527,6 +2548,15 @@ impl<State, Msg> Ratcn<State, Msg> {
         result
     }
 
+    /// The focus `button`'s release moves to in place of a click, when its
+    /// press closed a popup, and only while that target still takes focus.
+    fn release_focus(&self, button: MouseButton) -> Option<FocusState> {
+        let leaf = self.surface.leaf_of(self.gestures.release_focus(button)?)?;
+        self.surface
+            .takes_focus(leaf)
+            .then(|| self.surface.focus_on(leaf))
+    }
+
     /// The pointer left the backend's grid: abandon every tracked gesture and
     /// clear hover. Nothing routes, so this always counts as handled.
     fn handle_pointer_exit(&mut self) -> EventResult<Msg> {
@@ -2545,11 +2575,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// a press that landed outside a popup the chance to dismiss it.
     ///
     /// Dismissal is observed, not consumed: the press already routed to
-    /// whatever it hit, and the click its release completes still lands
-    /// there. A component that answered the press with a message of its own
-    /// wins over the hook. The runtime's focus fallback does not: a press
-    /// that dismisses a popup does not also move focus, and the next press
-    /// does — see [`route_mouse`](Self::route_mouse).
+    /// whatever it hit. A component that answered the press with a message of
+    /// its own wins over the hook. The runtime's focus fallback does not: the
+    /// press that closes a popup moves focus on its release, in place of the
+    /// click, and does not activate; a control that already holds focus is
+    /// clicked as usual — see [`focus_on_press`](Self::focus_on_press).
     fn deliver_mouse(
         &mut self,
         mouse: MouseEvent,
@@ -2695,10 +2725,12 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// takes the motion next. What is left goes to the component under the
     /// pointer and bubbles to its ancestors.
     ///
-    /// Only when none of them handled it do the fallbacks run: a press outside
-    /// an open popup dismisses it, a primary press moves focus, and an event confined to a layer is consumed at that
-    /// layer's boundary instead of escaping to what lies beneath. An event that
-    /// survives the whole cascade is unhandled — except a motion, which is
+    /// Only when none of them handled it do the fallbacks run: a primary press
+    /// moves focus, and an event confined to a layer is consumed at that
+    /// layer's boundary instead of escaping to what lies beneath. (A press
+    /// outside an open popup also dismisses it, unless a component answered
+    /// with a message; [`deliver_mouse`](Self::deliver_mouse) sees to that.)
+    /// An event that survives the whole cascade is unhandled — except a motion, which is
     /// always at least [`Consumed`](EventResult::Consumed) once a surface
     /// exists. Motion changes what the next frame should look like whether or
     /// not it changed hover: paint may read the pointer position itself
@@ -2747,12 +2779,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         if motion {
             return EventResult::Consumed;
         }
-        // A press outside an open popup dismisses it instead of moving focus,
-        // and `deliver_mouse` emits that: which of the two a press means must
-        // not depend on whether the control it landed on already held focus.
-        if self.dismissed_popup(hit).is_none()
-            && let Some(focused) = self.focus_on_press(&chain, mouse, state)
-        {
+        if let Some(focused) = self.focus_on_press(&chain, mouse, hit, state) {
             return focused;
         }
         // An event the hit layer's content ignored is consumed at the layer
@@ -2791,10 +2818,16 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// control, and nothing asked to be scrolled into view. Only a focused
     /// leaf that takes focus holds it; a path parked anywhere else is
     /// rescued as if the scope held none.
+    ///
+    /// A press that dismisses a popup carries the dismissal, so its focus
+    /// change waits for the release, which moves focus instead of clicking:
+    /// the press that closes a popup focuses what it landed on but does not
+    /// activate it. A control that already holds focus is clicked as usual.
     fn focus_on_press(
         &mut self,
         chain: &[usize],
         mouse: MouseEvent,
+        hit: Option<&[ChildId]>,
         state: &State,
     ) -> Option<EventResult<Msg>> {
         if mouse.kind != MouseKind::Down(MouseButton::Left) {
@@ -2820,6 +2853,11 @@ impl<State, Msg> Ratcn<State, Msg> {
             return Some(EventResult::Consumed);
         }
         let focus = self.surface.press_focus(target)?;
+        if focus != current && self.focus_binding.is_some() && self.dismissed_popup(hit).is_some() {
+            self.gestures
+                .focus_on_release(MouseButton::Left, focus.path().to_vec());
+            return Some(EventResult::Consumed);
+        }
         Some(self.focus_transition_result(focus, &current))
     }
 

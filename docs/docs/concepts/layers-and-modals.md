@@ -60,10 +60,11 @@ it that nothing handles is consumed at the popup root rather than reaching the
 control beneath. A press outside, with any button, routes to whatever is
 visibly there and also emits the popup's `on_dismiss` message, unless the
 control it lands on answers the press with a message of its own. The press
-that dismisses a popup does not also move focus; the next press does. The
-release still clicks the control the press landed on. Focus is never stolen:
-move it in with your own message, in the same update that opens the popup. Keys bubble
-*through* the popup root to the component that declared it. See
+that closes a popup moves focus but does not activate: its release focuses the
+control it landed on in place of clicking it, and the next click activates. A
+control that already holds focus is clicked as usual. Focus is never stolen:
+move it in with your own message, in the same update that opens the popup.
+Keys bubble *through* the popup root to the component that declared it. See
 [Select](../components/select).
 
 A **modal** is the strongest: it becomes the **active layer**. While it is open

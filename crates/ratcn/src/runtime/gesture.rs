@@ -24,9 +24,9 @@
 //!
 //! A pointer that leaves the grid ends every gesture with
 //! [`forget_all`](Gestures::forget_all). Ground moving under a live gesture —
-//! a modal opening, a claim's component going undeclared — calls it off with
-//! [`cancel`](Gestures::cancel) or
-//! [`cancel_lost_claims`](Gestures::cancel_lost_claims), which keeps the entry
+//! a modal opening, a claim's or a press target's component going undeclared
+//! — calls it off with [`cancel`](Gestures::cancel) or
+//! [`cancel_lost`](Gestures::cancel_lost), which keeps the entry
 //! so its release is still swallowed and still closes it.
 
 use super::{ChildId, MouseButton, MouseEvent, MouseKind};
@@ -89,6 +89,9 @@ enum Routing {
         /// empty space compares equal to itself, so a press and a release
         /// that both hit nothing are still a click.
         press_target: Option<Vec<ChildId>>,
+        /// The focus path the release moves focus to instead of clicking,
+        /// set when the press dismissed a popup in place of moving focus.
+        focus_on_release: Option<Vec<ChildId>>,
     },
     /// The gesture has been called off — its target stopped being declared, or
     /// a modal transition moved the ground under it — but the button is still
@@ -112,6 +115,7 @@ impl Routing {
             Self::Active {
                 capture,
                 press_target,
+                ..
             } => current == capture.as_deref().or(press_target.as_deref()),
             Self::Suppressed => false,
         }
@@ -254,14 +258,43 @@ impl Gestures {
         }
     }
 
-    /// Call off every gesture whose claim `routable` rejects. A claim the
-    /// surface cannot deliver to would otherwise retarget silently to whatever
-    /// occupies its place.
-    pub(super) fn cancel_lost_claims(&mut self, routable: impl Fn(&[ChildId]) -> bool) {
+    /// Record that `button`'s release moves focus to `path` instead of
+    /// following up as usual.
+    pub(super) fn focus_on_release(&mut self, button: MouseButton, path: Vec<ChildId>) {
+        if let Some(Routing::Active {
+            focus_on_release, ..
+        }) = self.get_mut(button).map(|gesture| &mut gesture.routing)
+        {
+            *focus_on_release = Some(path);
+        }
+    }
+
+    /// The focus path `button`'s release moves focus to, if its press asked
+    /// for one and the gesture is still live.
+    pub(super) fn release_focus(&self, button: MouseButton) -> Option<&[ChildId]> {
+        match &self.get(button)?.routing {
+            Routing::Active {
+                focus_on_release, ..
+            } => focus_on_release.as_deref(),
+            Routing::Suppressed => None,
+        }
+    }
+
+    /// Call off every gesture whose claim, or whose press target when nothing
+    /// claimed it, `routable` rejects. Either would otherwise retarget
+    /// silently to whatever occupies its place, even after reappearing: a
+    /// path that was gone for a frame is not the one that was pressed.
+    pub(super) fn cancel_lost(&mut self, routable: impl Fn(&[ChildId]) -> bool) {
         for gesture in &mut self.tracked {
-            if let Some(path) = gesture.routing.capture()
-                && !routable(path)
-            {
+            let target = match &gesture.routing {
+                Routing::Active {
+                    capture,
+                    press_target,
+                    ..
+                } => capture.as_deref().or(press_target.as_deref()),
+                Routing::Suppressed => None,
+            };
+            if target.is_some_and(|path| !routable(path)) {
                 gesture.routing = Routing::Suppressed;
             }
         }
@@ -310,6 +343,7 @@ impl Gestures {
                 || Routing::Active {
                     capture: None,
                     press_target: hit.map(<[ChildId]>::to_vec),
+                    focus_on_release: None,
                 },
                 |index| self.tracked.remove(index).routing,
             );
