@@ -148,12 +148,14 @@ impl<S, M> ScrollArea<S, M> {
     ///
     /// `read` is consulted for every event, so repeated wheel or page events
     /// compose before a redraw, and `on_change` carries each new offset to the
-    /// app's update. The view follows the app: an offset it does not apply is
-    /// never shown. Left unbound, the area keeps the offset itself and emits
+    /// app's update. The view follows the app: apart from a reveal, an offset
+    /// it does not apply is never shown. Left unbound, the area keeps the offset itself and emits
     /// nothing.
     ///
-    /// A reveal moves the view on its own, without a message; the next offset
-    /// the area emits starts from where the reveal left it.
+    /// A reveal moves the view on its own, without a message, and holds it
+    /// until the next scroll: the next offset the area emits starts from where
+    /// the reveal left it, and the view then follows the app's offset again,
+    /// even if the app does not apply that one.
     #[must_use]
     pub fn scroll(
         mut self,
@@ -392,14 +394,18 @@ impl<S, M> ScrollArea<S, M> {
     /// area with nothing to scroll.
     ///
     /// A bound area only asks: it holds nothing, so an offset the app does not
-    /// apply never becomes the view.
+    /// apply never becomes the view. Asking ends a reveal's hold, or an
+    /// offset the app applies as a no-op — Home back to the offset the reveal
+    /// started from — would leave the reveal showing.
     fn scroll_to(&self, offset: u16, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
         match &self.on_change {
-            Some(on_change) => self
-                .moved_to(offset, state, ctx)
-                .map_or(EventResult::Ignored, |offset| {
-                    EventResult::Emit(on_change(offset))
-                }),
+            Some(on_change) => {
+                let Some(offset) = self.moved_to(offset, state, ctx) else {
+                    return EventResult::Ignored;
+                };
+                *ctx.transient::<ScrollHold>() = ScrollHold::Released;
+                EventResult::Emit(on_change(offset))
+            }
             None if self.hold(offset, state, ctx).is_some() => EventResult::Consumed,
             None => EventResult::Ignored,
         }
@@ -824,6 +830,55 @@ mod tests {
             "last",
             "the reveal reached the same frame the focus change did"
         );
+    }
+
+    /// A scroll after a reveal hands the view back to the app. Home asks for
+    /// the app's own offset, which the app applies as a no-op; a reveal hold
+    /// that outlived the ask would keep "last" showing on every Home. A wheel
+    /// the app rejects likewise shows the app's offset, not the reveal's.
+    #[test]
+    fn a_bound_scroll_after_a_reveal_follows_the_app() {
+        for home in [true, false] {
+            let mut driver = driver(8, 3);
+            let mut state = State {
+                focus: FocusState::intent(["scroll", "first"]),
+                ..State::default()
+            };
+            let render = |driver: &mut Driver<State, Msg>, state: &State| {
+                driver.render(state, |ctx| {
+                    ctx.component(
+                        "scroll",
+                        scroll_area(9, |ctx| {
+                            ctx.component(
+                                "first",
+                                Probe::focusable("first"),
+                                Rect::new(0, 0, 7, 1),
+                            );
+                            ctx.component("last", Probe::focusable("last"), Rect::new(0, 6, 7, 1));
+                        }),
+                        Rect::new(0, 0, 8, 3),
+                    );
+                });
+            };
+            render(&mut driver, &state);
+            driver.event(key(KeyCode::Tab), &state);
+            state.focus = FocusState::intent(["scroll", "last"]);
+            render(&mut driver, &state);
+            assert_eq!(&driver.row(2)[..4], "last", "the reveal shows it");
+
+            let (event, asked) = if home {
+                (key(KeyCode::Home), 0)
+            } else {
+                (mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 1), 6)
+            };
+            assert_eq!(
+                driver.event(event, &state),
+                EventResult::Emit(Msg::Area(asked))
+            );
+            // Home is applied (a no-op: the app is at 0); the wheel is rejected.
+            render(&mut driver, &state);
+            assert_eq!(&driver.row(0)[..5], "first", "home: {home}");
+        }
     }
 
     /// A reveal holds the view until the app scrolls its own bound offset, and
