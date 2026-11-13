@@ -679,6 +679,23 @@ impl<State, Msg> Surface<State, Msg> {
             .map(|leaf| self.focus_on(leaf))
     }
 
+    /// The focus a press on `index` lands: focus lands on a leaf, so a
+    /// focusable container hands off to the first focus leaf of its subtree
+    /// that is fully on screen. A press asks for no scrolling, and the first
+    /// leaf of a scrolled pane may sit far above the view; only when no leaf
+    /// is on screen does the press fall back to the first one.
+    fn press_focus(&self, index: usize) -> Option<FocusState> {
+        let subtree = self.subtree(index);
+        subtree
+            .clone()
+            .find(|&leaf| {
+                self.nodes[leaf].focus_leaf
+                    && self.viewport_visibility(leaf) == ViewportVisibility::Full
+            })
+            .or_else(|| self.leaf_in(subtree, Step::Forward))
+            .map(|leaf| self.focus_on(leaf))
+    }
+
     /// The first focus leaf of the whole tree in `direction` — the other
     /// primitive: an edge, with no request behind it. While a layer holds
     /// the screen that is its edge, since nothing outside it takes focus.
@@ -2528,9 +2545,11 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// a press that landed outside a popup the chance to dismiss it.
     ///
     /// Dismissal is observed, not consumed: the press already routed to
-    /// whatever it hit. The hook fires only when routing produced no message of
-    /// its own — a press landing on a focusable control emits a focus change
-    /// instead, and the app closes the popup during that update.
+    /// whatever it hit, and the click its release completes still lands
+    /// there. A component that answered the press with a message of its own
+    /// wins over the hook. The runtime's focus fallback does not: a press
+    /// that dismisses a popup does not also move focus, and the next press
+    /// does — see [`route_mouse`](Self::route_mouse).
     fn deliver_mouse(
         &mut self,
         mouse: MouseEvent,
@@ -2542,9 +2561,10 @@ impl<State, Msg> Ratcn<State, Msg> {
         }
         let routed = self.route_mouse(mouse, hit, state);
         match (mouse.kind, &routed) {
-            (MouseKind::Down(_), EventResult::Ignored | EventResult::Consumed) => {
-                self.popup_dismissal(hit).map_or(routed, EventResult::Emit)
-            }
+            (MouseKind::Down(_), EventResult::Ignored | EventResult::Consumed) => self
+                .dismissed_popup(hit)
+                .and_then(|popup| popup.on_dismiss.as_ref())
+                .map_or(routed, |dismiss| EventResult::Emit(dismiss())),
             _ => routed,
         }
     }
@@ -2675,8 +2695,8 @@ impl<State, Msg> Ratcn<State, Msg> {
     /// takes the motion next. What is left goes to the component under the
     /// pointer and bubbles to its ancestors.
     ///
-    /// Only when none of them handled it do the fallbacks run: a primary press
-    /// moves focus, and an event confined to a layer is consumed at that
+    /// Only when none of them handled it do the fallbacks run: a press outside
+    /// an open popup dismisses it, a primary press moves focus, and an event confined to a layer is consumed at that
     /// layer's boundary instead of escaping to what lies beneath. An event that
     /// survives the whole cascade is unhandled — except a motion, which is
     /// always at least [`Consumed`](EventResult::Consumed) once a surface
@@ -2693,6 +2713,9 @@ impl<State, Msg> Ratcn<State, Msg> {
     ) -> EventResult<Msg> {
         let path = self.pointer_target(mouse, hit);
         let moved = mouse.kind == MouseKind::Moved;
+        // Motion under a held button arrives as `Drag`. It must not move
+        // hover, which the gesture froze, but it is motion all the same.
+        let motion = moved || matches!(mouse.kind, MouseKind::Drag(_));
         // Motion moves hover; so does a press, since a backend may report
         // one with no motion before it.
         if moved || matches!(mouse.kind, MouseKind::Down(_)) {
@@ -2709,7 +2732,7 @@ impl<State, Msg> Ratcn<State, Msg> {
         let Some(path) = path else {
             // Nothing under the pointer. Motion is still this frame's news;
             // anything else lands on nobody.
-            return if moved {
+            return if motion {
                 EventResult::Consumed
             } else {
                 EventResult::Ignored
@@ -2721,10 +2744,15 @@ impl<State, Msg> Ratcn<State, Msg> {
         if !matches!(routed, EventResult::Ignored) {
             return routed;
         }
-        if moved {
+        if motion {
             return EventResult::Consumed;
         }
-        if let Some(focused) = self.focus_on_press(&chain, mouse, state) {
+        // A press outside an open popup dismisses it instead of moving focus,
+        // and `deliver_mouse` emits that: which of the two a press means must
+        // not depend on whether the control it landed on already held focus.
+        if self.dismissed_popup(hit).is_none()
+            && let Some(focused) = self.focus_on_press(&chain, mouse, state)
+        {
             return focused;
         }
         // An event the hit layer's content ignored is consumed at the layer
@@ -2791,28 +2819,25 @@ impl<State, Msg> Ratcn<State, Msg> {
         {
             return Some(EventResult::Consumed);
         }
-        // Focus lands on a leaf, so a focusable container hands off to its
-        // first focusable descendant.
-        let focus = self.surface.descend_focus(target, Step::Forward)?;
+        let focus = self.surface.press_focus(target)?;
         Some(self.focus_transition_result(focus, &current))
     }
 
-    /// The dismiss message of the topmost popup with a dismiss hook that the
-    /// press landed outside of, if any, with `target` naming what it hit.
+    /// The topmost popup with a dismiss hook that the press landed outside
+    /// of, if any, with `target` naming what it hit.
     /// "Outside" is containment, not depth: the press hit nothing, or hit
     /// something that is not inside the popup's subtree. A popup without a
     /// hook has nothing to say and does not shadow one beneath it. Popups an
     /// open modal covers are inert and never dismiss.
-    fn popup_dismissal(&self, target: Option<&[ChildId]>) -> Option<Msg> {
+    fn dismissed_popup(&self, target: Option<&[ChildId]>) -> Option<&Layer<Msg>> {
         // Innermost first, and keep looking: the layer the press landed
         // inside is not dismissed, but one it landed outside of still is.
-        let top = self.surface.top_layer(|layer| {
+        self.surface.top_layer(|layer| {
             layer.on_dismiss.is_some()
                 && self.surface.interactive(layer.root)
                 && self.surface.nodes[layer.root].live
                 && target.is_none_or(|hit| !self.surface.path_is_prefix_of(layer.root, hit))
-        })?;
-        top.on_dismiss.as_ref().map(|dismiss| dismiss())
+        })
     }
 
     /// The focus change a motion onto `path` produces when it crosses a

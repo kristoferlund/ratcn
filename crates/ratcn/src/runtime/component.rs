@@ -598,15 +598,16 @@ impl<Msg> fmt::Debug for PopupOptions<Msg> {
 }
 
 impl<Msg> PopupOptions<Msg> {
-    /// The message emitted when a press lands outside the popup's footprint.
+    /// The message emitted when a press, with any button, lands outside the
+    /// popup's footprint.
     ///
     /// The press itself still routes to whatever it hit — dismissal observes,
     /// it does not consume — so clicking a visible button both closes the
     /// popup (this message, applied on the press) and activates the button
-    /// (its own message, on the click that follows). The hook fires only when
-    /// routing the press produced no message of its own; when the press lands
-    /// on a focusable control, the focus-change message is the dismissal
-    /// signal instead, and the app closes the popup in that update.
+    /// (its own message, on the click that follows). A component that answers
+    /// the press with a message of its own wins, and the app treats that
+    /// message as the dismissal signal. The press that dismisses does not
+    /// also move focus to the control it landed on; the next press does.
     #[must_use]
     pub fn on_dismiss(mut self, message: impl Fn() -> Msg + 'static) -> Self {
         self.on_dismiss = Some(Box::new(message));

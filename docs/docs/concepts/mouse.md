@@ -91,8 +91,9 @@ A component can receive these `MouseKind`s: `Down`, `Up`, `Click`, `Drag`,
 
 - **Primary click** activates by default: a button presses and a list row is
   chosen. Right and middle clicks do not activate or focus the standard
-  built-ins. A primary click also moves focus, so the component is
-  keyboard-ready immediately after. For a List item cursor or manual Tabs
+  built-ins. Modifiers do not change that: a Ctrl-click activates like a plain
+  click, unlike a modified key. A primary click also moves focus, so the
+  component is keyboard-ready immediately after. For a List item cursor or manual Tabs
   cursor, the click's selection message should update that app-owned cursor
   along with the committed value; those cursors are separate from runtime
   component focus.
@@ -101,7 +102,11 @@ A component can receive these `MouseKind`s: `Down`, `Up`, `Click`, `Drag`,
   Capturing the pointer does not consume the event, so capture plus `Ignored`
   still gets this fallback. `Consumed` vetoes it, while `Emit` returns the
   component's message instead. A press inside a scope that already holds focus
-  (its empty space, or a child that takes none) leaves focus where it is.
+  (its empty space, or a child that takes none) leaves focus where it is. A
+  press on a scope that does not hold focus hands it to the scope's first
+  control fully on screen, or to its first control when none is, so pressing
+  the blank part of a scrolled pane does not scroll it back to the top. A press that dismisses a popup moves no focus; see
+  [Layers and modals](./layers-and-modals).
 - **Hover** is the runtime's own path, separate from focus and from your
   state, so there is nothing to bind. `PaintCtx::hovered` and `contains_hover`
   let a component highlight under the pointer **without stealing focus**, so
@@ -110,8 +115,9 @@ A component can receive these `MouseKind`s: `Down`, `Up`, `Click`, `Drag`,
   declaring, for structure that depends on it. Every pointer event, not only
   `Moved`, records where the pointer is, and each committed frame resolves
   hover from that position against the surface it just declared.
-- **Motion is never `Ignored`** once a surface exists. It comes back as at
-  least `Consumed`, whether or not any component handled it, because paint may
+- **Motion is never `Ignored`** once a surface exists, with or without a
+  button held. It comes back as at least `Consumed`, whether or not any
+  component handled it, because paint may
   read the pointer position itself through `PaintCtx::hover_position` (a tabs
   row highlights the tab under the pointer that way). That result is the redraw
   signal for a host that redraws on anything but `Ignored`.
@@ -159,9 +165,9 @@ it, and a captured drag keeps its own. A frame where nothing asks shows
 | Component | Shape |
 |---|---|
 | Button, Checkbox, Cycle, Select and its options, Tabs, List rows | `Pointer` |
-| Input, TextArea | `Text`, or `NotAllowed` when disabled |
+| Input, TextArea | `Text` when bound, `NotAllowed` when disabled |
 | ScrollArea's thumb, Dialog's draggable border | `Grab`, then `Grabbing` while dragged |
-| A disabled control | `Default` |
+| A disabled or unbound control | `Default` |
 
 Your own component, or a `ctx.paint` closure inside a named scope, asks the
 same way. `PaintCtx::pointer_captured` says whether it holds the pointer, for
