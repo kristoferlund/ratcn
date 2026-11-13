@@ -2054,7 +2054,6 @@ dependencies = [
  "ratatui",
  "ratcn",
  "ratzilla",
- "web-sys",
 ]
 
 [[package]]

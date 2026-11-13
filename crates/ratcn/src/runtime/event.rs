@@ -442,12 +442,14 @@ mod browser_clipboard {
 
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
-        ClipboardEvent, Document, Element, HtmlElement, KeyboardEvent, Window,
+        AddEventListenerOptions, ClipboardEvent, Document, Element, HtmlElement, KeyboardEvent,
+        WheelEvent, Window,
         wasm_bindgen::{JsCast, JsValue, prelude::Closure},
     };
 
     use super::super::PointerShape;
-    use super::{Event, Modifiers, ratzilla_conv::non_ascii_key};
+    use super::ratzilla_conv::{Wheel, non_ascii_key};
+    use super::{Event, Modifiers, MouseEvent, MouseKind, ScrollDirection};
 
     /// The browser's clipboard, wired to the runtime for as long as the guard
     /// lives. Ratzilla has no callback for the clipboard, so this listens on
@@ -464,9 +466,6 @@ mod browser_clipboard {
     ///   <kbd>Ctrl+X</kbd>, <kbd>Ctrl+V</kbd>, and <kbd>Shift+Delete</kbd>. A Mac is told by
     ///   `navigator.platform`. <kbd>Cmd+A</kbd> is also kept from selecting
     ///   the page's text.
-    /// - A key that types one non-ASCII character, `ä`, `é`, or `€`, arrives
-    ///   as an [`Event::Key`] for it. Ratzilla 0.3.1 reports such a key as
-    ///   unidentified, so without this a text field could not type it.
     ///
     /// Focus decides whose an event is: it is the app's while focus is on the
     /// app's element or inside it (`:focus-within`), and the page's otherwise.
@@ -483,8 +482,6 @@ mod browser_clipboard {
         on_clipboard: Closure<dyn FnMut(ClipboardEvent)>,
         on_before: Closure<dyn FnMut(web_sys::Event)>,
         on_keydown: Closure<dyn FnMut(KeyboardEvent)>,
-        app: Element,
-        on_key_text: Closure<dyn FnMut(KeyboardEvent)>,
     }
 
     impl std::fmt::Debug for BrowserClipboard {
@@ -519,13 +516,9 @@ mod browser_clipboard {
         /// refuses a listener.
         pub fn install(
             app: &Element,
-            on_event: impl FnMut(Event) -> bool + 'static,
-            take_clipboard: impl FnMut() -> Option<String> + 'static,
+            mut on_event: impl FnMut(Event) -> bool + 'static,
+            mut take_clipboard: impl FnMut() -> Option<String> + 'static,
         ) -> io::Result<Self> {
-            // Shared by the clipboard events and the keys ratzilla drops.
-            let on_event = Rc::new(RefCell::new(on_event));
-            let take_clipboard = Rc::new(RefCell::new(take_clipboard));
-            let on_key_text = key_text(Rc::clone(&on_event), Rc::clone(&take_clipboard));
             let window = web_sys::window().ok_or_else(|| io::Error::other("no window"))?;
             let document = window
                 .document()
@@ -544,21 +537,21 @@ mod browser_clipboard {
                         let Ok(text) = data.get_data("text/plain") else {
                             return;
                         };
-                        if on_event.borrow_mut()(Event::Paste(text)) {
+                        if on_event(Event::Paste(text)) {
                             event.prevent_default();
                         }
                         // A paste's write goes out as any other event's does.
-                        if let Some(text) = take_clipboard.borrow_mut()() {
+                        if let Some(text) = take_clipboard() {
                             Self::write(&text);
                         }
                         return;
                     }
-                    let _ = on_event.borrow_mut()(if event.type_() == "cut" {
+                    let _ = on_event(if event.type_() == "cut" {
                         Event::Cut
                     } else {
                         Event::Copy
                     });
-                    if let Some(text) = take_clipboard.borrow_mut()() {
+                    if let Some(text) = take_clipboard() {
                         let _ = data.set_data("text/plain", &text);
                     } else if selected_within(&app) {
                         // Text of the app's own DOM, which the browser copies.
@@ -619,16 +612,12 @@ mod browser_clipboard {
                     true,
                 )
                 .map_err(|error| io::Error::other(format!("keydown listener: {error:?}")))?;
-            app.add_event_listener_with_callback("keydown", on_key_text.as_ref().unchecked_ref())
-                .map_err(|error| io::Error::other(format!("keydown listener: {error:?}")))?;
             Ok(Self {
                 window,
                 document,
                 on_clipboard,
                 on_before,
                 on_keydown,
-                app: app.clone(),
-                on_key_text,
             })
         }
 
@@ -653,33 +642,6 @@ mod browser_clipboard {
                 let _ = written.await;
             });
         }
-    }
-
-    /// The listener for the keys ratzilla drops, which types them. It listens
-    /// on the app as a key bubbles up, after ratzilla's listener has dropped
-    /// it: past the clipboard chords stopped on the way down, and past a page
-    /// script that forwards keys to the canvas, as the demos' does.
-    fn key_text(
-        on_event: Rc<RefCell<impl FnMut(Event) -> bool + 'static>>,
-        take_clipboard: Rc<RefCell<impl FnMut() -> Option<String> + 'static>>,
-    ) -> Closure<dyn FnMut(KeyboardEvent)> {
-        Closure::new(move |event: KeyboardEvent| {
-            let modifiers = Modifiers {
-                ctrl: event.ctrl_key(),
-                alt: event.alt_key(),
-                shift: event.shift_key(),
-            };
-            let Some(key) = non_ascii_key(&event.key(), modifiers) else {
-                return;
-            };
-            if on_event.borrow_mut()(Event::Key(key)) {
-                event.prevent_default();
-            }
-            // A key's write goes out as any other event's does.
-            if let Some(text) = take_clipboard.borrow_mut()() {
-                BrowserClipboard::write(&text);
-            }
-        })
     }
 
     /// Whether focus is on `app` or inside it, which makes an event the
@@ -739,9 +701,185 @@ mod browser_clipboard {
                 self.on_keydown.as_ref().unchecked_ref(),
                 true,
             );
+        }
+    }
+
+    /// The input Ratzilla does not deliver, wired to the runtime for as long as
+    /// the guard lives:
+    ///
+    /// - A key that types one non-ASCII character, `ä` or `ж`, arrives as an
+    ///   [`Event::Key`] for it, with its modifiers. Ratzilla 0.3.1 reports such
+    ///   a key as unidentified, so without this a text field could not type
+    ///   it. A character composed with <kbd>Option</kbd> on a Mac still
+    ///   arrives with Alt held, which a text field takes as a chord: typing
+    ///   those needs the page to forward them without Alt, as the demos'
+    ///   keyboard script does.
+    /// - The mouse wheel arrives as [`MouseKind::Scroll`] at the cell Ratzilla
+    ///   last reported the pointer over, once a notch (100 pixels, or three
+    ///   lines), however finely a trackpad slices the travel. The cell comes
+    ///   from Ratzilla's mouse events, so route those through
+    ///   [`mouse_handler`](Self::mouse_handler). A wheel the app takes does
+    ///   not also scroll the page, and neither does the rest of a turn it is
+    ///   taking. <kbd>Ctrl</kbd>+wheel is left to the browser, which zooms.
+    ///
+    /// Install one per app, given its element as for [`BrowserClipboard`].
+    #[must_use = "dropping the guard removes its browser listeners"]
+    pub struct BrowserInput {
+        app: Element,
+        route: Rc<RefCell<dyn FnMut(Event) -> bool>>,
+        wheel: Rc<RefCell<Wheel>>,
+        on_key: Closure<dyn FnMut(KeyboardEvent)>,
+        on_wheel: Closure<dyn FnMut(WheelEvent)>,
+    }
+
+    impl std::fmt::Debug for BrowserInput {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("BrowserInput").finish_non_exhaustive()
+        }
+    }
+
+    impl BrowserInput {
+        /// Install the listeners for the app drawn in `app`: the canvas a
+        /// canvas backend draws on, or the element holding it; for a DOM
+        /// backend, the element whose id was given as its `grid_id`.
+        ///
+        /// `on_event` routes one event and reports whether the app took it,
+        /// as for [`BrowserClipboard::install`]. Write what the app put on
+        /// the clipboard from inside it, as after any other event.
+        ///
+        /// # Errors
+        ///
+        /// Returns an I/O error if `app` refuses a listener.
+        pub fn install(
+            app: &Element,
+            on_event: impl FnMut(Event) -> bool + 'static,
+        ) -> io::Result<Self> {
+            let route: Rc<RefCell<dyn FnMut(Event) -> bool>> = Rc::new(RefCell::new(on_event));
+            let wheel = Rc::new(RefCell::new(Wheel::default()));
+            // On the way up from the canvas, after Ratzilla's listener has
+            // dropped the key, and after a page script that forwards keys to
+            // the canvas, as the demos' does, has had its say.
+            let on_key = Closure::new({
+                let route = Rc::clone(&route);
+                move |event: KeyboardEvent| {
+                    let modifiers = Modifiers {
+                        ctrl: event.ctrl_key(),
+                        alt: event.alt_key(),
+                        shift: event.shift_key(),
+                    };
+                    if let Some(key) = non_ascii_key(&event.key(), modifiers)
+                        && send(&route, Event::Key(key))
+                    {
+                        event.prevent_default();
+                    }
+                }
+            });
+            let on_wheel = Closure::new({
+                let route = Rc::clone(&route);
+                let wheel = Rc::clone(&wheel);
+                move |event: WheelEvent| scroll(&route, &wheel, &event)
+            });
+            app.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref())
+                .map_err(|error| io::Error::other(format!("keydown listener: {error:?}")))?;
+            // A passive wheel listener could not keep the page from scrolling.
+            let options = AddEventListenerOptions::new();
+            options.set_passive(false);
+            app.add_event_listener_with_callback_and_add_event_listener_options(
+                "wheel",
+                on_wheel.as_ref().unchecked_ref(),
+                &options,
+            )
+            .map_err(|error| io::Error::other(format!("wheel listener: {error:?}")))?;
+            Ok(Self {
+                app: app.clone(),
+                route,
+                wheel,
+                on_key,
+                on_wheel,
+            })
+        }
+
+        /// A callback for Ratzilla's `on_mouse_event` that routes each mouse
+        /// event through `on_event`, and remembers the pointer's cell for the
+        /// wheel. It is Ratzilla's to keep: it routes for as long as the
+        /// backend holds it, guard or not.
+        pub fn mouse_handler(&self) -> impl FnMut(ratzilla::event::MouseEvent) + 'static {
+            let route = Rc::clone(&self.route);
+            let wheel = Rc::clone(&self.wheel);
+            move |mouse| {
+                let Ok(mouse) = MouseEvent::try_from(mouse) else {
+                    return;
+                };
+                wheel.borrow_mut().point(match mouse.kind {
+                    MouseKind::Exited => None,
+                    _ => Some((mouse.column, mouse.row)),
+                });
+                let _ = send(&route, Event::Mouse(mouse));
+            }
+        }
+    }
+
+    /// Route `event`, unless the route is already busy routing another, which
+    /// only an app dispatching browser events from its handler would cause.
+    fn send(route: &RefCell<dyn FnMut(Event) -> bool>, event: Event) -> bool {
+        route.try_borrow_mut().is_ok_and(|mut route| route(event))
+    }
+
+    /// Turn one wheel event into scroll events at the pointer's cell.
+    fn scroll(
+        route: &RefCell<dyn FnMut(Event) -> bool>,
+        wheel: &RefCell<Wheel>,
+        event: &WheelEvent,
+    ) {
+        if event.ctrl_key() {
+            return;
+        }
+        let Some((column, row)) = wheel.borrow().cell() else {
+            return;
+        };
+        let notches = match event.delta_mode() {
+            WheelEvent::DOM_DELTA_PIXEL => event.delta_y() / 100.0,
+            WheelEvent::DOM_DELTA_LINE => event.delta_y() / 3.0,
+            _ => event.delta_y(),
+        };
+        let steps = wheel.borrow_mut().turn(notches);
+        let direction = if steps < 0 {
+            ScrollDirection::Up
+        } else {
+            ScrollDirection::Down
+        };
+        let mut took_any = false;
+        for _ in 0..steps.unsigned_abs() {
+            let took = send(
+                route,
+                Event::Mouse(MouseEvent {
+                    kind: MouseKind::Scroll(direction),
+                    column,
+                    row,
+                    modifiers: Modifiers {
+                        ctrl: false,
+                        alt: event.alt_key(),
+                        shift: event.shift_key(),
+                    },
+                }),
+            );
+            wheel.borrow_mut().took(took);
+            took_any |= took;
+        }
+        if took_any || wheel.borrow().taking() {
+            event.prevent_default();
+        }
+    }
+
+    impl Drop for BrowserInput {
+        fn drop(&mut self) {
             let _ = self.app.remove_event_listener_with_callback(
                 "keydown",
-                self.on_key_text.as_ref().unchecked_ref(),
+                self.on_key.as_ref().unchecked_ref(),
+            );
+            let _ = self.app.remove_event_listener_with_callback(
+                "wheel",
+                self.on_wheel.as_ref().unchecked_ref(),
             );
         }
     }
@@ -771,7 +909,7 @@ mod browser_clipboard {
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-pub use browser_clipboard::{BrowserClipboard, set_browser_pointer_shape};
+pub use browser_clipboard::{BrowserClipboard, BrowserInput, set_browser_pointer_shape};
 
 #[cfg(feature = "ratzilla")]
 mod ratzilla_conv {
@@ -832,14 +970,14 @@ mod ratzilla_conv {
         }
     }
 
-    /// The key a browser `keydown` named `key` types when ratzilla cannot say:
+    /// The key a browser `keydown` named `key` types when Ratzilla cannot say:
     /// one non-ASCII character, `ä` or `€`. Ratzilla 0.3.1 takes a key name
     /// as a character only when it is one byte long, and reports the rest as
-    /// unidentified. An ASCII character is ratzilla's to convert, so it is
+    /// unidentified. An ASCII character is Ratzilla's to convert, so it is
     /// left alone here, or it would arrive twice.
     #[cfg_attr(
         not(target_arch = "wasm32"),
-        allow(dead_code, reason = "BrowserClipboard is wasm-only; tested natively")
+        allow(dead_code, reason = "BrowserInput is wasm-only; tested natively")
     )]
     pub(super) fn non_ascii_key(key: &str, modifiers: Modifiers) -> Option<KeyEvent> {
         let mut chars = key.chars();
@@ -849,6 +987,77 @@ mod ratzilla_conv {
                 modifiers,
             }),
             _ => None,
+        }
+    }
+
+    /// The scroll events in `pending` plus `delta` notches of wheel travel,
+    /// negative upward, and the travel left over: one event a notch, as a
+    /// terminal reports a wheel, however finely a trackpad slices the travel.
+    /// Turning the other way drops what was left over.
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(dead_code, reason = "BrowserInput is wasm-only; tested natively")
+    )]
+    pub(super) fn wheel_steps(pending: f64, delta: f64) -> (i32, f64) {
+        let pending = if pending * delta < 0.0 { 0.0 } else { pending };
+        let travel = pending + delta;
+        let steps = travel.trunc();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a wheel event's notches are few"
+        )]
+        (steps as i32, travel - steps)
+    }
+
+    /// The browser wheel's state between events: where the pointer is, the
+    /// travel short of a notch, and whether the app took the last step there.
+    #[derive(Debug, Default)]
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(dead_code, reason = "BrowserInput is wasm-only; tested natively")
+    )]
+    pub(super) struct Wheel {
+        cell: Option<(u16, u16)>,
+        pending: f64,
+        taken: bool,
+    }
+
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(dead_code, reason = "BrowserInput is wasm-only; tested natively")
+    )]
+    impl Wheel {
+        /// The pointer is over `cell`, or off the grid. Over another cell,
+        /// the turn starts afresh.
+        pub(super) fn point(&mut self, cell: Option<(u16, u16)>) {
+            if cell != self.cell {
+                *self = Self {
+                    cell,
+                    ..Self::default()
+                };
+            }
+        }
+
+        pub(super) const fn cell(&self) -> Option<(u16, u16)> {
+            self.cell
+        }
+
+        /// Add `notches` of travel, and say how many whole steps it makes.
+        pub(super) fn turn(&mut self, notches: f64) -> i32 {
+            let (steps, pending) = wheel_steps(self.pending, notches);
+            self.pending = pending;
+            steps
+        }
+
+        /// Whether the app took the step just routed.
+        pub(super) const fn took(&mut self, taken: bool) {
+            self.taken = taken;
+        }
+
+        /// Whether the app is taking this turn: the last step here was its,
+        /// so travel short of a step is its too, and not the page's.
+        pub(super) const fn taking(&self) -> bool {
+            self.taken
         }
     }
 
@@ -1305,6 +1514,7 @@ mod crossterm_tests {
 
 #[cfg(all(test, feature = "ratzilla"))]
 mod ratzilla_tests {
+    use super::ratzilla_conv::{Wheel, non_ascii_key, wheel_steps};
     use super::{
         Event, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind, Unsupported,
     };
@@ -1405,7 +1615,7 @@ mod ratzilla_tests {
     }
 
     /// Ratzilla drops every key whose name is longer than one byte, so the
-    /// browser listener converts those itself. Counting bytes, as ratzilla
+    /// browser listener converts those itself. Counting bytes, as Ratzilla
     /// does, would drop `ä` again; taking ASCII too would type it twice.
     #[test]
     fn a_browser_key_typing_one_non_ascii_character_converts() {
@@ -1416,7 +1626,7 @@ mod ratzilla_tests {
         for key in ["ä", "é", "€", "ж", "字", "😀"] {
             let char = key.chars().next().unwrap();
             assert_eq!(
-                super::ratzilla_conv::non_ascii_key(key, alt),
+                non_ascii_key(key, alt),
                 Some(KeyEvent {
                     code: KeyCode::Char(char),
                     modifiers: alt,
@@ -1425,11 +1635,53 @@ mod ratzilla_tests {
             );
         }
         for key in ["a", "@", "{", "Enter", "Dead", "Unidentified", "ä̈", ""] {
-            assert_eq!(
-                super::ratzilla_conv::non_ascii_key(key, Modifiers::NONE),
-                None,
-                "{key:?}"
-            );
+            assert_eq!(non_ascii_key(key, Modifiers::NONE), None, "{key:?}");
         }
+    }
+
+    /// A mouse wheel scrolls once a notch, and a trackpad sends a stream of
+    /// small deltas that must add up to the same rate: scrolling once per
+    /// event, or dropping the remainder, would make a trackpad far too fast
+    /// or never scroll at all.
+    #[test]
+    fn wheel_travel_scrolls_once_a_notch() {
+        assert_eq!(wheel_steps(0.0, 1.0), (1, 0.0), "a notch scrolls once");
+        assert_eq!(wheel_steps(0.0, -2.0), (-2, 0.0), "two notches up, twice");
+
+        let mut pending = 0.0;
+        let mut steps = 0;
+        for _ in 0..25 {
+            let (step, rest) = wheel_steps(pending, 0.125);
+            steps += step;
+            pending = rest;
+        }
+        assert_eq!(steps, 3, "a trackpad's slices of three notches and a bit");
+
+        let (step, rest) = wheel_steps(0.875, -0.25);
+        assert_eq!((step, rest), (0, -0.25), "turning back drops the remainder");
+    }
+
+    /// Most of a trackpad's events are short of a step. While the app takes
+    /// the steps of a turn, the travel between them is the app's too, or the
+    /// page around a demo would scroll along with the field. Once a step is
+    /// ignored, or the pointer moves to another cell, the page gets it back.
+    #[test]
+    fn a_turn_the_app_takes_keeps_the_page_still_between_steps() {
+        let mut wheel = Wheel::default();
+        wheel.point(Some((3, 4)));
+        assert_eq!(wheel.turn(1.0), 1);
+        wheel.took(true);
+        assert_eq!(wheel.turn(0.25), 0);
+        assert!(wheel.taking(), "a slice between steps is the app's");
+
+        wheel.point(Some((3, 4)));
+        assert!(wheel.taking(), "the same cell keeps the turn");
+        wheel.point(Some((3, 5)));
+        assert!(!wheel.taking(), "another cell starts afresh");
+        assert_eq!(wheel.turn(0.75), 0, "and drops the travel left over");
+
+        wheel.took(true);
+        wheel.took(false);
+        assert!(!wheel.taking(), "an ignored step hands the page back");
     }
 }

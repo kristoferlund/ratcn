@@ -38,7 +38,7 @@ pub const ANIMATION_FRAME: Duration = Duration::from_millis(16);
 /// One demo, in the shape a host can drive.
 pub trait Demo {
     /// Whether the demo reads input. Turning it on installs the browser's
-    /// listeners and takes over the terminal's mouse.
+    /// key, mouse, and wheel listeners and takes over the terminal's mouse.
     const INPUT: bool = true;
 
     /// Whether the host delivers the clipboard's events — bracketed paste
@@ -371,17 +371,14 @@ pub fn run_dom<D: Demo + 'static>(demo: D) -> io::Result<()> {
 #[cfg(target_arch = "wasm32")]
 mod web_host {
     use std::{
-        cell::{Cell, OnceCell, RefCell},
+        cell::{Cell, RefCell},
         io,
         rc::Rc,
     };
 
     use gloo_timers::callback::Timeout;
     use ratatui::{Terminal, backend::Backend};
-    use ratcn::runtime::{
-        BrowserClipboard, Event, Modifiers, MouseEvent, MouseKind, ScrollDirection,
-        set_browser_pointer_shape,
-    };
+    use ratcn::runtime::{BrowserClipboard, BrowserInput, Event, set_browser_pointer_shape};
     use ratzilla::{
         WebEventHandler, WebRenderer,
         web_sys::{
@@ -389,9 +386,8 @@ mod web_host {
             wasm_bindgen::{JsCast, prelude::Closure},
         },
     };
-    use web_sys::{AddEventListenerOptions, WheelEvent};
 
-    use super::{ANIMATION_FRAME, Demo, wheel_steps};
+    use super::{ANIMATION_FRAME, Demo};
 
     /// Drives one demo on its own animation frames.
     ///
@@ -415,16 +411,11 @@ mod web_host {
         /// The clipboard listeners, held for their `Drop`: the host owns them
         /// for as long as it drives the demo, and letting go uninstalls them.
         _clipboard: RefCell<Option<BrowserClipboard>>,
+        /// The listeners for the keys and the wheel Ratzilla misses, held
+        /// for the same reason.
+        _input: RefCell<Option<BrowserInput>>,
         /// The window resize listener, held for the same reason.
         _resize: RefCell<Option<Closure<dyn FnMut()>>>,
-        /// The cell ratzilla last reported the pointer over, where the wheel
-        /// scrolls; `None` once it left the grid.
-        pointer_cell: Cell<Option<(u16, u16)>>,
-        /// Wheel travel short of a whole notch.
-        wheel_pending: Cell<f64>,
-        /// The window wheel listener, held for the same reason as the resize
-        /// listener.
-        _wheel: OnceCell<Closure<dyn FnMut(WheelEvent)>>,
     }
 
     /// Wire up the demo and render its first frame.
@@ -451,10 +442,8 @@ mod web_host {
             requested: Cell::new(false),
             timer: RefCell::new(None),
             _clipboard: RefCell::new(None),
+            _input: RefCell::new(None),
             _resize: RefCell::new(None),
-            pointer_cell: Cell::new(None),
-            wheel_pending: Cell::new(0.0),
-            _wheel: OnceCell::new(),
         });
 
         *host.frame.borrow_mut() = Some(Closure::new({
@@ -463,21 +452,25 @@ mod web_host {
         }));
 
         if D::INPUT {
+            let input = BrowserInput::install(&body, {
+                let host = Rc::clone(&host);
+                move |event| host.on_input(event)
+            })?;
             let mut terminal = host.terminal.borrow_mut();
             terminal
                 .on_key_event({
                     let host = Rc::clone(&host);
-                    move |key| host.on_input(key)
+                    move |key| {
+                        host.on_input(key);
+                    }
                 })
                 .map_err(|error| io::Error::other(error.to_string()))?;
-            // Ratzilla reports browser pointer positions in terminal cells.
+            // Ratzilla reports browser pointer positions in terminal cells;
+            // the input listener keeps the last one for the wheel.
             terminal
-                .on_mouse_event({
-                    let host = Rc::clone(&host);
-                    move |mouse| host.on_mouse(mouse)
-                })
+                .on_mouse_event(input.mouse_handler())
                 .map_err(|error| io::Error::other(error.to_string()))?;
-            host.watch_wheel()?;
+            *host._input.borrow_mut() = Some(input);
         }
 
         if D::CLIPBOARD {
@@ -579,91 +572,15 @@ mod web_host {
             }
         }
 
-        /// Route a key or mouse event, and write out whatever it put on the
-        /// clipboard.
-        fn on_input(self: &Rc<Self>, event: impl TryInto<Event>) {
-            self.on_event(event);
+        /// Route a key, mouse, or wheel event, write out whatever it put on
+        /// the clipboard, and report whether the demo took it.
+        fn on_input(self: &Rc<Self>, event: impl TryInto<Event>) -> bool {
+            let handled = self.on_event(event);
             let written = self.demo.borrow_mut().take_clipboard();
             if let Some(text) = written {
                 BrowserClipboard::write(&text);
             }
-        }
-
-        /// Route a mouse event, remembering where the pointer is for the wheel.
-        fn on_mouse(self: &Rc<Self>, mouse: ratzilla::event::MouseEvent) {
-            let Ok(event) = MouseEvent::try_from(mouse) else {
-                return;
-            };
-            self.pointer_cell.set(match event.kind {
-                MouseKind::Exited => None,
-                _ => Some((event.column, event.row)),
-            });
-            self.on_input(Event::Mouse(event));
-        }
-
-        /// Scroll at the pointer's cell as the wheel turns.
-        ///
-        /// Ratzilla has no wheel event, so this listens on the window and puts
-        /// the wheel where ratzilla last reported the pointer. Ctrl+wheel is
-        /// left to the browser, which zooms with it. A wheel the demo took
-        /// does not also scroll the page around it.
-        fn watch_wheel(self: &Rc<Self>) -> io::Result<()> {
-            let window = web_sys::window().ok_or_else(|| io::Error::other("no window"))?;
-            let callback = Closure::<dyn FnMut(WheelEvent)>::new({
-                let host = Rc::clone(self);
-                move |event: WheelEvent| host.on_wheel(&event)
-            });
-            // A window's wheel listener is passive unless told otherwise, and
-            // a passive one cannot keep the page from scrolling.
-            let options = AddEventListenerOptions::new();
-            options.set_passive(false);
-            window
-                .add_event_listener_with_callback_and_add_event_listener_options(
-                    "wheel",
-                    callback.as_ref().unchecked_ref(),
-                    &options,
-                )
-                .map_err(|error| io::Error::other(format!("wheel listener: {error:?}")))?;
-            let _ = self._wheel.set(callback);
-            Ok(())
-        }
-
-        fn on_wheel(self: &Rc<Self>, event: &WheelEvent) {
-            let Some((column, row)) = self.pointer_cell.get() else {
-                return;
-            };
-            if event.ctrl_key() {
-                return;
-            }
-            // A notch of a mouse wheel is about 100 pixels, or 3 lines.
-            let notches = match event.delta_mode() {
-                WheelEvent::DOM_DELTA_PIXEL => event.delta_y() / 100.0,
-                WheelEvent::DOM_DELTA_LINE => event.delta_y() / 3.0,
-                _ => event.delta_y(),
-            };
-            let (steps, pending) = wheel_steps(self.wheel_pending.get(), notches);
-            self.wheel_pending.set(pending);
-            let direction = if steps < 0 {
-                ScrollDirection::Up
-            } else {
-                ScrollDirection::Down
-            };
-            let mut handled = false;
-            for _ in 0..steps.unsigned_abs() {
-                handled |= self.on_event(Event::Mouse(MouseEvent {
-                    kind: MouseKind::Scroll(direction),
-                    column,
-                    row,
-                    modifiers: Modifiers {
-                        ctrl: false,
-                        alt: event.alt_key(),
-                        shift: event.shift_key(),
-                    },
-                }));
-            }
-            if handled {
-                event.prevent_default();
-            }
+            handled
         }
 
         /// Route one browser event, and report whether the demo took it — which
@@ -704,39 +621,16 @@ mod web_host {
         /// Take the resize listener off the window with the host. The clipboard
         /// listener is a guard that removes itself; a bare [`Closure`] cannot.
         fn drop(&mut self) {
-            let Some(window) = web_sys::window() else {
-                return;
-            };
-            if let Some(callback) = self._resize.borrow().as_ref() {
+            if let Some(callback) = self._resize.borrow().as_ref()
+                && let Some(window) = web_sys::window()
+            {
                 let _ = window.remove_event_listener_with_callback(
                     "resize",
                     callback.as_ref().unchecked_ref(),
                 );
             }
-            if let Some(callback) = self._wheel.get() {
-                let _ = window.remove_event_listener_with_callback(
-                    "wheel",
-                    callback.as_ref().unchecked_ref(),
-                );
-            }
         }
     }
-}
-
-/// The scroll events in `pending` plus `delta` notches of wheel travel,
-/// negative upward, and the travel left over: one event a notch, as a terminal
-/// reports a wheel, however finely a trackpad slices the travel. Turning the
-/// other way drops what was left over.
-#[cfg(any(target_arch = "wasm32", test))]
-fn wheel_steps(pending: f64, delta: f64) -> (i32, f64) {
-    let pending = if pending * delta < 0.0 { 0.0 } else { pending };
-    let travel = pending + delta;
-    let steps = travel.trunc();
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "a wheel event's notches are few"
-    )]
-    (steps as i32, travel - steps)
 }
 
 /// A `WebGl2Backend` whose canvas padding matches the demo's background.
@@ -795,7 +689,6 @@ mod tests {
     use super::{
         ANIMATION_FRAME, Backend, Buffer, Demo, Duration, Event, Host, PointerShape, ProgramStatus,
         Rect, SessionEvent, SessionOptions, Terminal, TerminalProgress, draw_frame, drive, io,
-        wheel_steps,
     };
 
     /// A [`TestBackend`] that reports a native host's error type, and that can
@@ -1343,27 +1236,5 @@ mod tests {
             resized_probe.frames, 2,
             "the frame the canvas resized under is followed by the one that fits"
         );
-    }
-
-    /// A mouse wheel scrolls once a notch, and a trackpad sends a stream of
-    /// small deltas that must add up to the same rate: scrolling once per
-    /// event, or dropping the remainder, would make a trackpad far too fast
-    /// or never scroll at all.
-    #[test]
-    fn wheel_travel_scrolls_once_a_notch() {
-        assert_eq!(wheel_steps(0.0, 1.0), (1, 0.0), "a notch scrolls once");
-        assert_eq!(wheel_steps(0.0, -2.0), (-2, 0.0), "two notches up, twice");
-
-        let mut pending = 0.0;
-        let mut steps = 0;
-        for _ in 0..25 {
-            let (step, rest) = wheel_steps(pending, 0.125);
-            steps += step;
-            pending = rest;
-        }
-        assert_eq!(steps, 3, "a trackpad's slices of three notches and a bit");
-
-        let (step, rest) = wheel_steps(0.875, -0.25);
-        assert_eq!((step, rest), (0, -0.25), "turning back drops the remainder");
     }
 }
