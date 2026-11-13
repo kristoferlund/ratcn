@@ -15,7 +15,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `BrowserInput` (wasm, `ratzilla` feature), a guard beside `BrowserClipboard`
   that delivers what Ratzilla misses: non-ASCII keys and the mouse wheel.
 - `list_core::PressedItem`, so a custom item component can hold a click to the
-  item that was pressed, as `List`, `Tabs`, and `Select` now do.
+  item that was pressed, as `List` and `Select` now do.
 
 ### Changed
 
