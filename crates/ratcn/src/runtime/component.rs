@@ -499,7 +499,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// - A press outside the popup emits the
     ///   [`on_dismiss`](PopupOptions::on_dismiss) message, if one is bound —
     ///   dismissal and click-through compose, because the press dismisses and
-    ///   the click that follows it activates.
+    ///   the click that follows it activates. In an app with a focus binding,
+    ///   a press on a control that does not hold focus is the exception: see
+    ///   [`on_dismiss`](PopupOptions::on_dismiss).
     ///
     /// Keys bubble *through* the popup root to the declaring component, so an
     /// Esc nothing in the panel handles reaches whatever opened it.
@@ -606,8 +608,13 @@ impl<Msg> PopupOptions<Msg> {
     /// popup (this message, applied on the press) and activates the button
     /// (its own message, on the click that follows). A component that answers
     /// the press with a message of its own wins, and the app treats that
-    /// message as the dismissal signal. The press that dismisses does not
-    /// also move focus to the control it landed on; the next press does.
+    /// message as the dismissal signal.
+    ///
+    /// The press that closes a popup moves focus but does not activate: when
+    /// it lands on a control that does not hold focus, in an app with a focus
+    /// binding, its release focuses that control in place of clicking it, and
+    /// the next click activates. A control that already holds focus is
+    /// clicked as usual.
     #[must_use]
     pub fn on_dismiss(mut self, message: impl Fn() -> Msg + 'static) -> Self {
         self.on_dismiss = Some(Box::new(message));

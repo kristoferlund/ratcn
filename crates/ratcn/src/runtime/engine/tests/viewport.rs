@@ -1205,3 +1205,42 @@ fn a_press_on_a_scrolled_panes_blank_content_focuses_a_control_on_screen() {
         "the press left the view where it was"
     );
 }
+
+#[test]
+fn a_press_on_a_scrolled_pane_prefers_a_partly_shown_control_to_one_scrolled_away() {
+    // No control is fully on screen, but `tall` is partly. Falling back to
+    // the pane's first control (row 0) would scroll the view to the top.
+    let mut driver = Driver::with(
+        Ratcn::new().focus(|state: &PaneState| &state.focus, PaneMsg::Focus),
+        20,
+        12,
+    );
+    let state = PaneState {
+        focus: FocusState::intent(["out"]),
+        offset: 15,
+    };
+    driver.render(&state, |ctx| {
+        let pane = crate::ScrollArea::new(40)
+            .scroll(|state: &PaneState| state.offset, PaneMsg::Offset)
+            .content(|ctx| {
+                ctx.component(
+                    "b0",
+                    Button::new("b0").on_press(|| PaneMsg::Pressed),
+                    Rect::new(0, 0, 8, 1),
+                );
+                // A Button is one row tall, so a tall control is a scope.
+                ctx.scope(
+                    "tall",
+                    Rect::new(0, 12, 8, 18),
+                    ScopeOptions::default().focusable(true),
+                    |_| {},
+                );
+            });
+        ctx.component("scroll", pane, Rect::new(0, 0, 20, 10));
+    });
+
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 12, 8), &state),
+        EventResult::Emit(PaneMsg::Focus(FocusState::intent(["scroll", "tall"])))
+    );
+}

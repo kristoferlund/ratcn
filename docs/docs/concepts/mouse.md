@@ -109,8 +109,10 @@ A component can receive these `MouseKind`s: `Down`, `Up`, `Click`, `Drag`,
   component's message instead. A press inside a scope that already holds focus
   (its empty space, or a child that takes none) leaves focus where it is. A
   press on a scope that does not hold focus hands it to the scope's first
-  control fully on screen, or to its first control when none is, so pressing
-  the blank part of a scrolled pane does not scroll it back to the top. A press that dismisses a popup moves no focus; see
+  control fully on screen, else the first partly on screen, and only when no
+  control is on screen to its first control, so pressing the blank part of a
+  scrolled pane does not scroll it back to the top. A press that closes a popup
+  moves focus on its release instead of clicking; see
   [Layers and modals](./layers-and-modals).
 - **Hover** is the runtime's own path, separate from focus and from your
   state, so there is nothing to bind. `PaintCtx::hovered` and `contains_hover`
@@ -172,7 +174,7 @@ it, and a captured drag keeps its own. A frame where nothing asks shows
 | Button, Checkbox, Cycle, Select and its options, Tabs, List rows | `Pointer` |
 | Input, TextArea | `Text` when bound, `NotAllowed` when disabled |
 | ScrollArea's thumb, Dialog's draggable border | `Grab`, then `Grabbing` while dragged |
-| A disabled or unbound control | `Default` |
+| Any other disabled or unbound control | `Default` |
 
 Your own component, or a `ctx.paint` closure inside a named scope, asks the
 same way. `PaintCtx::pointer_captured` says whether it holds the pointer, for
