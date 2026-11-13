@@ -318,7 +318,9 @@ let app = Rc::new(RefCell::new(App::new()));
 
 terminal.on_key_event({
     let app = Rc::clone(&app);
-    move |event| app.borrow_mut().handle_event(event)
+    move |event| {
+        app.borrow_mut().handle_event(event);
+    }
 }).map_err(|error| io::Error::other(error.to_string()))?;
 ```
 
@@ -347,7 +349,7 @@ terminal
 std::mem::forget(input);
 ```
 
-The wheel scrolls once a notch, at the pointer's cell. A wheel the app takes
+The wheel scrolls once a notch, at the cell under the pointer when it turns. A wheel the app takes
 does not also scroll the page, and `Ctrl`+wheel stays the browser's zoom.
 Ratzilla keeps a single mouse callback, so wiring another in its place loses
 the wheel: an app that wants to see mouse events itself wraps the handler,
