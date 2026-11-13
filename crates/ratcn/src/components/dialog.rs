@@ -258,7 +258,9 @@ impl<S, M> fmt::Debug for DialogFooter<S, M> {
 /// Opening and closing is the app's. Keep the open dialogs in a
 /// [`ModalState`](crate::runtime::ModalState) and bind it with
 /// [`Ratcn::modals`](crate::runtime::Ratcn::modals); that also handles saving and
-/// restoring the focus the user had before the dialog opened.
+/// restoring the focus the user had before the dialog opened, and closes the
+/// gap before the next redraw in which an unbound dialog the app has already
+/// closed can still be dismissed or activated a second time.
 ///
 /// # Children
 ///
@@ -740,7 +742,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         // the original allocation needed to clamp the app-owned offset.
         let box_area = ctx.area();
         let can_start = self.drag_enabled() && is_border(box_area, mouse.column, mouse.row);
-        match ctx.drag(mouse, DragOptions::new(self.offset).start_if(can_start)) {
+        // Anchor where the box is painted: after a resize the stored offset
+        // can lie past the clamp, and the drag would not move until the
+        // pointer had crossed the difference.
+        let anchor = clamp_offset(self.paint_area, self.layout.base, self.offset);
+        match ctx.drag(mouse, DragOptions::new(anchor).start_if(can_start)) {
             DragPhase::Down | DragPhase::Ended { .. } => EventResult::Consumed,
             DragPhase::Moved { offset, .. } => {
                 self.on_offset_change
@@ -1279,6 +1285,49 @@ mod tests {
         assert_eq!(
             driver.event(mouse(MouseKind::Moved, 7, 3), &state),
             EventResult::Emit(Msg::Moved(CellOffset::new(1, 0)))
+        );
+    }
+
+    /// A resize can clamp the painted box short of the stored offset. The
+    /// drag must start from where the box is painted: anchored at the stored
+    /// offset, the first cells of movement land past the clamp and the box
+    /// does not follow the pointer.
+    #[test]
+    fn a_drag_after_a_resize_starts_from_the_clamped_box() {
+        let mut driver = driver(80, 12);
+        let state = State {
+            offset: CellOffset::new(14, 0),
+            ..State::default()
+        };
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            let area = driver.area();
+            driver.render(state, |ctx| {
+                ctx.modal(
+                    ChildId::Static("dialog"),
+                    Dialog::new()
+                        .title("T")
+                        .outer_width(20)
+                        .outer_height(5)
+                        .offset(state.offset)
+                        .on_offset_change(Msg::Moved),
+                    area,
+                );
+            });
+        };
+        render(&mut driver, &state);
+        driver.terminal.backend_mut().resize(40, 12);
+        render(&mut driver, &state);
+        // Centered at x 10 in 40 columns, so the offset clamps to +10 and the
+        // box's top-left corner paints at (20, 4).
+        assert_eq!(driver.row(4).find('┌'), Some(20));
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 22, 4), &state),
+            EventResult::Consumed
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 21, 4), &state),
+            EventResult::Emit(Msg::Moved(CellOffset::new(9, 0)))
         );
     }
 
