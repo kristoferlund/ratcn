@@ -280,7 +280,7 @@ mouse capture.
 ## In the browser
 
 Enable the `ratzilla` feature for Ratzilla key and mouse conversions, the
-browser clipboard listener, and the browser pointer shape:
+browser input and clipboard listeners, and the browser pointer shape:
 
 ```sh
 cargo add ratcn --features ratzilla
@@ -288,7 +288,8 @@ cargo add ratatui --no-default-features --features layout-cache,std
 cargo add ratzilla
 ```
 
-The browser-only API (`BrowserClipboard`, `set_browser_pointer_shape`) exists
+The browser-only API (`BrowserInput`, `BrowserClipboard`,
+`set_browser_pointer_shape`) exists
 only on `wasm32`. Read its rustdoc with
 `cargo doc -p ratcn --features ratzilla --target wasm32-unknown-unknown`.
 
@@ -324,14 +325,32 @@ terminal.on_key_event({
 Wire mouse callbacks the same way; see [Mouse input](./mouse#in-the-browser).
 An app with text fields routes both through the `route` function in
 [The browser clipboard](#the-browser-clipboard) instead, so a copy reaches the
-clipboard. It also needs `BrowserClipboard` for typing: Ratzilla reports a key
-that types a non-ASCII character (`ä`, `é`, `€`) as unidentified, and the
-listener types those keys itself.
+clipboard.
 
-Ratzilla reports no wheel either. A host that wants it listens for the
-window's `wheel` event and sends an `Event::Mouse` of `MouseKind::Scroll` at
-the cell Ratzilla last reported the pointer over, one per notch of travel, as
-the demos' host in `demos/shared` does.
+Ratzilla misses some input. It reports a key that types a non-ASCII character
+(`ä`, `é`, `€`) as unidentified, so a text field cannot type it, and it reports
+no wheel. `ratcn::runtime::BrowserInput` adds both. Install it with the app's
+element, chosen as for [the browser clipboard](#the-browser-clipboard), and a
+closure that routes an event and returns whether the app took it. Route
+Ratzilla's mouse events through its `mouse_handler`, which keeps the pointer's
+cell for the wheel:
+
+```rust
+let input = BrowserInput::install(&element, {
+    let app = Rc::clone(&app);
+    move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
+})?;
+terminal
+    .on_mouse_event(input.mouse_handler())
+    .map_err(|error| io::Error::other(error.to_string()))?;
+// `main` returns once the app is running; the listeners have to outlive it.
+std::mem::forget(input);
+```
+
+The wheel scrolls once a notch, at the pointer's cell. A wheel the app takes
+does not also scroll the page, and `Ctrl`+wheel stays the browser's zoom. An app
+that writes the clipboard writes it from this closure too, as `route` in
+[the browser clipboard](#the-browser-clipboard) does.
 
 Ratzilla's canvas takes focus but leaves Tab to the browser, which moves focus
 off the canvas: keys, and the clipboard chords with them, then go to the page.
@@ -344,7 +363,9 @@ with Alt (or Ctrl+Alt) held: `@` from Option+2 on a Swedish Mac, `€` from
 AltGr+E. A text field takes Alt with a character as a chord, so the demos'
 script forwards a composed character without those modifiers, and matches
 only the page's own Alt hotkeys by physical key, which macOS would otherwise
-compose into another character.
+compose into another character. Off a Mac, Alt alone is always a chord. Text
+wins over a hotkey: where Option types punctuation, `@` from Option+2 on a
+Swedish Mac, a field types it rather than the hotkey firing.
 
 ### Drawing
 
@@ -431,9 +452,7 @@ and `cut` events and hands them to your first closure as `Event::Paste`,
 event. On a copy or cut, the listener asks your second closure for the text the
 app wrote and puts it on the clipboard (a paste's write goes out too).
 
-The listener also types the keys Ratzilla cannot convert, one non-ASCII
-character each, as `Event::Key`. It stops clipboard chords from reaching
-Ratzilla as keys.
+The listener also stops clipboard chords from reaching Ratzilla as keys.
 `Cmd+C`, `Cmd+X`, and `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`
 elsewhere, become `Event::Copy`, `Event::Cut`, and `Event::Paste`, so an app
 binds those events rather than the keys. Off a Mac, `Shift+Delete` becomes
