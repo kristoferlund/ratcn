@@ -322,8 +322,8 @@ terminal.on_key_event({
 }).map_err(|error| io::Error::other(error.to_string()))?;
 ```
 
-Wire mouse callbacks the same way; see [Mouse input](./mouse#in-the-browser).
-An app with text fields routes both through the `route` function in
+Mouse events go through `BrowserInput`, below. An app with text fields routes
+keys and mouse events through the `route` function in
 [The browser clipboard](#the-browser-clipboard) instead, so a copy reaches the
 clipboard.
 
@@ -348,9 +348,10 @@ std::mem::forget(input);
 ```
 
 The wheel scrolls once a notch, at the pointer's cell. A wheel the app takes
-does not also scroll the page, and `Ctrl`+wheel stays the browser's zoom. An app
-that writes the clipboard writes it from this closure too, as `route` in
-[the browser clipboard](#the-browser-clipboard) does.
+does not also scroll the page, and `Ctrl`+wheel stays the browser's zoom.
+Ratzilla keeps a single mouse callback, so wiring another in its place loses
+the wheel: an app that wants to see mouse events itself wraps the handler,
+calling `input.mouse_handler()`'s closure from its own.
 
 Ratzilla's canvas takes focus but leaves Tab to the browser, which moves focus
 off the canvas: keys, and the clipboard chords with them, then go to the page.
@@ -358,9 +359,9 @@ An app that uses Tab for its own focus traversal stops Tab's default while the
 canvas has focus, as the demos' `demos/shared/ratatui-keyboard-capture.js`
 does.
 
-A character composed with Option on a Mac, or with AltGr elsewhere, arrives
-with Alt (or Ctrl+Alt) held: `@` from Option+2 on a Swedish Mac, `€` from
-AltGr+E. A text field takes Alt with a character as a chord, so the demos'
+A character composed with Option on a Mac arrives with Alt held, `@` from
+Option+2 on a Swedish Mac, and one composed with AltGr on Windows with Ctrl+Alt
+held, `€` from AltGr+E. On Linux AltGr arrives with neither. A text field takes Alt with a character as a chord, so the demos'
 script forwards a composed character without those modifiers, and matches
 only the page's own Alt hotkeys by physical key, which macOS would otherwise
 compose into another character. Off a Mac, Alt alone is always a chord. Text
@@ -505,23 +506,31 @@ cross-origin iframe only with `allow="clipboard-write"`. Anywhere else the
 write is skipped.
 
 Either a key or a click can write, so route both through one function that
-writes afterward:
+writes afterward. Mouse events reach it through
+[`BrowserInput`](#routing-events), whose closure it serves as is:
 
 ```rust
-fn route(app: &RefCell<App>, event: impl TryInto<Event>) {
-    app.borrow_mut().handle_event(event);
+fn route(app: &RefCell<App>, event: impl TryInto<Event>) -> bool {
+    let taken = !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored);
     let written = app.borrow_mut().ratcn.take_clipboard();
     if let Some(text) = written {
         BrowserClipboard::write(&text);
     }
+    taken
 }
 
 terminal.on_key_event({
     let app = Rc::clone(&app);
-    move |event| route(&app, event)
+    move |event| {
+        route(&app, event);
+    }
 }).map_err(|error| io::Error::other(error.to_string()))?;
-terminal.on_mouse_event({
+let input = BrowserInput::install(&element, {
     let app = Rc::clone(&app);
     move |event| route(&app, event)
-}).map_err(|error| io::Error::other(error.to_string()))?;
+})?;
+terminal
+    .on_mouse_event(input.mouse_handler())
+    .map_err(|error| io::Error::other(error.to_string()))?;
+std::mem::forget(input);
 ```

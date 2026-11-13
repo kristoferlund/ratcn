@@ -78,7 +78,8 @@ function isComposed(event) {
 }
 
 // ASCII punctuation, which a field needs typed: `@` from Option+2 and `$`
-// from Option+4 on a Swedish Mac.
+// from Option+4 on a Swedish Mac. Only a Mac composes it with Alt alone; off
+// a Mac, Alt+1 on AZERTY sends "&" and is still the hotkey.
 function isPunctuation(key) {
   return /^[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]$/.test(key);
 }
@@ -87,7 +88,8 @@ function isPunctuation(key) {
 // punctuation; a composed character as plain text; anything else as it came.
 function forwarded(event, hotkeys) {
   const physical = physicalKey(event);
-  if (event.altKey && !event.ctrlKey && hotkeys.has(physical) && !isPunctuation(event.key)) {
+  const typed = MAC && isPunctuation(event.key);
+  if (event.altKey && !event.ctrlKey && hotkeys.has(physical) && !typed) {
     return { key: physical, ctrlKey: false, altKey: true };
   }
   if (isComposed(event)) {
