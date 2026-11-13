@@ -833,7 +833,7 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
             .placeholder(&self.placeholder)
             .wrap_mode(self.wrap_mode)
             .focused(ctx.focused())
-            .hovered(ctx.hovered())
+            .hovered(ctx.hovered() && self.value.is_some())
             .disabled(self.disabled)
             .invalid(self.invalid)
             .style(style);
@@ -842,11 +842,13 @@ impl<S: 'static, M: 'static> Component<S, M> for TextArea<S, M> {
         }
         let editor = ctx.with_buffer(ctx.area(), |area, buf| widget.paint(area, buf));
         self.painted = Some((state.version(), editor));
-        ctx.set_pointer_shape(if self.disabled {
-            PointerShape::NotAllowed
-        } else {
-            PointerShape::Text
-        });
+        // An unbound field takes no text, so it shows no beam; a disabled one
+        // says so with NotAllowed.
+        if self.disabled {
+            ctx.set_pointer_shape(PointerShape::NotAllowed);
+        } else if self.value.is_some() {
+            ctx.set_pointer_shape(PointerShape::Text);
+        }
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
@@ -1516,6 +1518,75 @@ mod tests {
             panic!("the enlarged field takes a paste");
         };
         assert_eq!(pasted.value(), "y");
+    }
+
+    /// An unbound field takes no text, so the pointer over it must not say
+    /// it does: no beam and no hover fill. Rejects a shape and fill gated
+    /// only on `disabled`.
+    #[test]
+    fn an_unbound_field_under_the_pointer_paints_its_rest() {
+        let mut driver = driver();
+        let mut state = state("hello");
+        render_with(&mut driver, &state, TextArea::new);
+        let rest = driver.cell(2, 1).bg;
+        route(&mut driver, &mut state, mouse(MouseKind::Moved, 2, 1));
+        render_with(&mut driver, &state, TextArea::new);
+
+        assert_eq!(driver.cell(2, 1).bg, rest);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
+    }
+
+    /// A text beam says "type here"; a disabled field says it won't take any.
+    #[test]
+    fn a_hovered_field_shows_a_text_beam_or_not_allowed_when_disabled() {
+        for (make, shape) in [
+            (textarea as fn() -> TextArea<State, Msg>, PointerShape::Text),
+            (|| textarea().disabled(true), PointerShape::NotAllowed),
+        ] {
+            let mut driver = driver();
+            let mut state = state("hello");
+            render_with(&mut driver, &state, make);
+            route(&mut driver, &mut state, mouse(MouseKind::Moved, 2, 1));
+            render_with(&mut driver, &state, make);
+            assert_eq!(driver.ratcn.pointer_shape(), shape);
+        }
+    }
+
+    /// The app may refuse an edit or a scroll. The next event must start
+    /// from the state the app kept: typing after a refused key edits the
+    /// kept text, and a refused wheel asks for the same scroll again.
+    /// Rejects editing the painted editor in place.
+    #[test]
+    fn a_refused_change_leaves_the_next_event_on_the_kept_state() {
+        let mut driver = driver();
+        let state = state("abc");
+        render(&mut driver, &state);
+        let EventResult::Emit(Msg::Notes(refused)) = driver.event(key(KeyCode::Char('x')), &state)
+        else {
+            panic!("typing should emit");
+        };
+        assert_eq!(refused.value(), "abcx");
+        let EventResult::Emit(Msg::Notes(next)) = driver.event(key(KeyCode::Char('y')), &state)
+        else {
+            panic!("typing should emit");
+        };
+        assert_eq!(next.value(), "abcy");
+
+        let state = State {
+            focus: FocusState::none(),
+            ..state_at_top(TEN_LINES)
+        };
+        render(&mut driver, &state);
+        let scroll = |driver: &mut Driver<State, Msg>| {
+            let EventResult::Emit(Msg::Notes(scrolled)) =
+                driver.event(mouse(WHEEL_DOWN, 1, 1), &state)
+            else {
+                panic!("the wheel should scroll");
+            };
+            scrolled.editor().scroll_offset()
+        };
+        assert_eq!(scroll(&mut driver), (3, 0));
+        assert_eq!(scroll(&mut driver), (3, 0));
     }
 
     #[test]
