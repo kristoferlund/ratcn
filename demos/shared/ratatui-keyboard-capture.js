@@ -8,11 +8,12 @@
 // terminal focus, not leave the iframe) and re-dispatched onto the canvas.
 //
 // Forwarding keeps what the key typed. A character composed with Option
-// (macOS) or AltGr (Ctrl+Alt elsewhere), `@` from Option+2 on a Swedish Mac or
-// `€` from AltGr+E, is forwarded without those modifiers, so a text field
+// (macOS) or AltGr (Ctrl+Alt on Windows), `@` from Option+2 on a Swedish Mac
+// or `€` from AltGr+E, is forwarded without those modifiers, so a text field
 // types it. Only a page's own Alt hotkeys go by physical key, named on the
 // root as `data-alt-hotkeys` (say "1 2 d"): macOS composes Option+D into "∂",
-// so matching on the produced character would never fire.
+// so matching on the produced character would never fire. Text wins over a
+// hotkey: Option+2 typing `@` stays `@`.
 //
 // `data-keyboard-active` on the root drives the visible capture state — the
 // hint pill and the thin border marking that the demo holds the keyboard.
@@ -32,6 +33,9 @@ const CAPTURED_KEYS = new Set([
   "PageUp",
   "PageDown",
 ]);
+
+// Told the way the clipboard listener in ratcn tells it.
+const MAC = navigator.platform.startsWith("Mac");
 
 function shouldLetBrowserHandle(event) {
   if (event.key === "Tab" && event.ctrlKey) return true;
@@ -62,23 +66,28 @@ function physicalKey(event) {
   return null;
 }
 
-// Whether Option or AltGr composed the character rather than chording it:
-// Alt+D on Windows sends "d" with Alt held, a chord; Option+D on a Mac types
-// "∂", a character. A key with no known unmodified character counts as
-// composed when it types something non-ASCII, so Alt+[ on a US layout stays
-// the editor's chord.
+// Whether Option or AltGr composed the character rather than chording it.
+// Off a Mac, Alt alone is always a chord, whatever the layout types (Alt+B
+// on Dvorak, Alt+F on a Russian layout): AltGr reports as Ctrl+Alt on
+// Windows and as neither on Linux. An ASCII letter or digit is a chord on
+// any layout, Ctrl+Alt+B say.
 function isComposed(event) {
   if (!event.altKey || !isCharacter(event.key)) return false;
-  const physical = physicalKey(event);
-  if (physical !== null) return event.key.toLowerCase() !== physical;
-  return !/^[\x00-\x7f]$/.test(event.key);
+  if (!MAC && !event.ctrlKey) return false;
+  return !/^[A-Za-z0-9]$/.test(event.key);
 }
 
-// What to forward: a hotkey by physical key, a composed character as plain
-// text, anything else as it came.
+// ASCII punctuation, which a field needs typed: `@` from Option+2 and `$`
+// from Option+4 on a Swedish Mac.
+function isPunctuation(key) {
+  return /^[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]$/.test(key);
+}
+
+// What to forward: a hotkey by physical key, unless the key typed
+// punctuation; a composed character as plain text; anything else as it came.
 function forwarded(event, hotkeys) {
   const physical = physicalKey(event);
-  if (event.altKey && !event.ctrlKey && hotkeys.has(physical)) {
+  if (event.altKey && !event.ctrlKey && hotkeys.has(physical) && !isPunctuation(event.key)) {
     return { key: physical, ctrlKey: false, altKey: true };
   }
   if (isComposed(event)) {
