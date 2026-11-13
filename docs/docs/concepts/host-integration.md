@@ -324,13 +324,27 @@ terminal.on_key_event({
 Wire mouse callbacks the same way; see [Mouse input](./mouse#in-the-browser).
 An app with text fields routes both through the `route` function in
 [The browser clipboard](#the-browser-clipboard) instead, so a copy reaches the
-clipboard.
+clipboard. It also needs `BrowserClipboard` for typing: Ratzilla reports a key
+that types a non-ASCII character (`ä`, `é`, `€`) as unidentified, and the
+listener types those keys itself.
+
+Ratzilla reports no wheel either. A host that wants it listens for the
+window's `wheel` event and sends an `Event::Mouse` of `MouseKind::Scroll` at
+the cell Ratzilla last reported the pointer over, one per notch of travel, as
+the demos' host in `demos/shared` does.
 
 Ratzilla's canvas takes focus but leaves Tab to the browser, which moves focus
 off the canvas: keys, and the clipboard chords with them, then go to the page.
 An app that uses Tab for its own focus traversal stops Tab's default while the
 canvas has focus, as the demos' `demos/shared/ratatui-keyboard-capture.js`
 does.
+
+A character composed with Option on a Mac, or with AltGr elsewhere, arrives
+with Alt (or Ctrl+Alt) held: `@` from Option+2 on a Swedish Mac, `€` from
+AltGr+E. A text field takes Alt with a character as a chord, so the demos'
+script forwards a composed character without those modifiers, and matches
+only the page's own Alt hotkeys by physical key, which macOS would otherwise
+compose into another character.
 
 ### Drawing
 
@@ -417,7 +431,9 @@ and `cut` events and hands them to your first closure as `Event::Paste`,
 event. On a copy or cut, the listener asks your second closure for the text the
 app wrote and puts it on the clipboard (a paste's write goes out too).
 
-The listener also stops clipboard chords from reaching Ratzilla as keys.
+The listener also types the keys Ratzilla cannot convert, one non-ASCII
+character each, as `Event::Key`. It stops clipboard chords from reaching
+Ratzilla as keys.
 `Cmd+C`, `Cmd+X`, and `Cmd+V` on a Mac, and `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`
 elsewhere, become `Event::Copy`, `Event::Cut`, and `Event::Paste`, so an app
 binds those events rather than the keys. Off a Mac, `Shift+Delete` becomes
