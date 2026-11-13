@@ -74,8 +74,9 @@ pub(crate) struct Press {
 
 /// Where a gesture's events go.
 ///
-/// The two states are exclusive: a gesture that has been called off keeps no
-/// claim and no target, because nothing may act on either again.
+/// The states are exclusive: a gesture that has been called off, or that
+/// only waits to move focus, keeps no claim and no target, because nothing
+/// may act on either again.
 #[derive(Debug)]
 enum Routing {
     /// A live gesture.
@@ -89,10 +90,10 @@ enum Routing {
         /// empty space compares equal to itself, so a press and a release
         /// that both hit nothing are still a click.
         press_target: Option<Vec<ChildId>>,
-        /// The focus path the release moves focus to instead of clicking,
-        /// set when the press dismissed a popup in place of moving focus.
-        focus_on_release: Option<Vec<ChildId>>,
     },
+    /// The press dismissed a popup in place of moving focus to this path.
+    /// Its motion and release reach nothing; the release only moves focus.
+    FocusOnRelease(Vec<ChildId>),
     /// The gesture has been called off — its target stopped being declared, or
     /// a modal transition moved the ground under it — but the button is still
     /// held. Every event for it is swallowed until the release that ends it.
@@ -104,7 +105,7 @@ impl Routing {
     fn capture(&self) -> Option<&[ChildId]> {
         match self {
             Self::Active { capture, .. } => capture.as_deref(),
-            Self::Suppressed => None,
+            Self::FocusOnRelease(_) | Self::Suppressed => None,
         }
     }
 
@@ -115,9 +116,8 @@ impl Routing {
             Self::Active {
                 capture,
                 press_target,
-                ..
             } => current == capture.as_deref().or(press_target.as_deref()),
-            Self::Suppressed => false,
+            Self::FocusOnRelease(_) | Self::Suppressed => false,
         }
     }
 }
@@ -216,9 +216,11 @@ impl Gestures {
     }
 
     /// Whether this event is being swallowed, because the gesture of the
-    /// button it carries has been called off.
+    /// button it carries has been called off or only waits to move focus.
     pub(super) fn swallows(&self, kind: MouseKind) -> bool {
-        mouse_button(kind).is_some_and(|button| self.suppressed(button))
+        mouse_button(kind)
+            .and_then(|button| self.get(button))
+            .is_some_and(|gesture| !matches!(gesture.routing, Routing::Active { .. }))
     }
 
     /// The path that claimed the gesture this event continues, if this event
@@ -258,30 +260,27 @@ impl Gestures {
         }
     }
 
-    /// Record that `button`'s release moves focus to `path` instead of
-    /// following up as usual.
+    /// Turn `button`'s live gesture into one whose release only moves focus
+    /// to `path`. It drops any claim the press made.
     pub(super) fn focus_on_release(&mut self, button: MouseButton, path: Vec<ChildId>) {
-        if let Some(Routing::Active {
-            focus_on_release, ..
-        }) = self.get_mut(button).map(|gesture| &mut gesture.routing)
+        if let Some(gesture) = self.get_mut(button)
+            && matches!(gesture.routing, Routing::Active { .. })
         {
-            *focus_on_release = Some(path);
+            gesture.routing = Routing::FocusOnRelease(path);
         }
     }
 
-    /// The focus path `button`'s release moves focus to, if its press asked
-    /// for one and the gesture is still live.
+    /// The focus path `button`'s release moves focus to, if its gesture only
+    /// waits for that.
     pub(super) fn release_focus(&self, button: MouseButton) -> Option<&[ChildId]> {
         match &self.get(button)?.routing {
-            Routing::Active {
-                focus_on_release, ..
-            } => focus_on_release.as_deref(),
-            Routing::Suppressed => None,
+            Routing::FocusOnRelease(path) => Some(path),
+            Routing::Active { .. } | Routing::Suppressed => None,
         }
     }
 
-    /// Call off every gesture whose claim, or whose press target when nothing
-    /// claimed it, `routable` rejects. Either would otherwise retarget
+    /// Call off every gesture whose claim, press target when nothing claimed
+    /// it, or pending focus `routable` rejects. Each would otherwise retarget
     /// silently to whatever occupies its place, even after reappearing: a
     /// path that was gone for a frame is not the one that was pressed.
     pub(super) fn cancel_lost(&mut self, routable: impl Fn(&[ChildId]) -> bool) {
@@ -290,8 +289,8 @@ impl Gestures {
                 Routing::Active {
                     capture,
                     press_target,
-                    ..
                 } => capture.as_deref().or(press_target.as_deref()),
+                Routing::FocusOnRelease(path) => Some(path.as_slice()),
                 Routing::Suppressed => None,
             };
             if target.is_some_and(|path| !routable(path)) {
@@ -343,7 +342,6 @@ impl Gestures {
                 || Routing::Active {
                     capture: None,
                     press_target: hit.map(<[ChildId]>::to_vec),
-                    focus_on_release: None,
                 },
                 |index| self.tracked.remove(index).routing,
             );
@@ -371,11 +369,6 @@ impl Gestures {
     fn capture(&self, button: MouseButton) -> Option<&[ChildId]> {
         self.get(button)?.routing.capture()
     }
-
-    fn suppressed(&self, button: MouseButton) -> bool {
-        self.get(button)
-            .is_some_and(|gesture| matches!(gesture.routing, Routing::Suppressed))
-    }
 }
 
 /// What the tests read back.
@@ -390,7 +383,8 @@ impl Gestures {
     }
 
     pub(super) fn is_suppressed(&self, button: MouseButton) -> bool {
-        self.suppressed(button)
+        self.get(button)
+            .is_some_and(|gesture| matches!(gesture.routing, Routing::Suppressed))
     }
 
     pub(super) fn capture_path(&self, button: MouseButton) -> Option<&[ChildId]> {

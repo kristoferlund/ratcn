@@ -612,8 +612,8 @@ impl<Msg> PopupOptions<Msg> {
     ///
     /// The press that closes a popup moves focus but does not activate: when
     /// it lands on a control that does not hold focus, in an app with a focus
-    /// binding, its motion reaches nothing and its release focuses that
-    /// control in place of clicking it, and the next click activates. The
+    /// binding, its motion and release reach nothing, the release only moves
+    /// focus to that control, and the next click activates. The
     /// release only focuses even if the app keeps the popup open. A press
     /// that leaves the grid ([`Exited`](super::MouseKind::Exited)), or whose
     /// target vanishes before the release, moves no focus. A control that
