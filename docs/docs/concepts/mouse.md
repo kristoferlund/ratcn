@@ -72,6 +72,11 @@ ends the click, and returning to it before releasing revives it. If a redraw
 moved or replaced things in between, a newly exposed component at the same cell
 does not inherit the click.
 
+Item controls apply the same rule one level down. A List row, a tab, or a
+Select option commits only when the press and the release land on the same
+item, so a press dragged onto a neighbour, or a row a redraw moved under the
+pointer, commits nothing.
+
 Movement only cancels the click when a component claimed the gesture with
 [`capture_pointer`](./dragging) on the `Down`. Claiming is what declares the
 movement a drag, and that release arrives as `DragEnd` instead. A claimed press
