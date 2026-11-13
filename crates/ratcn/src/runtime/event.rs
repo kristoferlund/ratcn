@@ -443,7 +443,7 @@ mod browser_clipboard {
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
         AddEventListenerOptions, ClipboardEvent, Document, Element, HtmlElement, KeyboardEvent,
-        WheelEvent, Window,
+        MouseEventInit, WheelEvent, Window,
         wasm_bindgen::{JsCast, JsValue, prelude::Closure},
     };
 
@@ -717,13 +717,17 @@ mod browser_clipboard {
     ///   character as a chord: typing Option compositions needs the page, or
     ///   the app's own key capture, to forward them without the modifiers, as
     ///   the demos' keyboard script does.
-    /// - The mouse wheel arrives as [`MouseKind::Scroll`] at the cell Ratzilla
-    ///   last reported the pointer over, once a notch (100 pixels, or three
-    ///   lines), however finely a trackpad slices the travel. The cell comes
-    ///   from Ratzilla's mouse events, so route those through
-    ///   [`mouse_handler`](Self::mouse_handler). A wheel the app takes does
-    ///   not also scroll the page, and neither does the rest of a turn it is
-    ///   taking. <kbd>Ctrl</kbd>+wheel is left to the browser, which zooms.
+    /// - The mouse wheel arrives as [`MouseKind::Scroll`] at the cell under
+    ///   the pointer, once a notch (100 pixels, or three lines), however
+    ///   finely a trackpad slices the travel. Only Ratzilla knows the cell,
+    ///   so route its mouse events through
+    ///   [`mouse_handler`](Self::mouse_handler): before scrolling, the
+    ///   listener sends the grid a `mousemove` where the wheel turned, and
+    ///   Ratzilla reports the cell through it. A turn's first event is a
+    ///   whole step, so the app decides at once whether the turn is its; a
+    ///   turn the app takes does not also scroll the page. A turn ends when
+    ///   the wheel rests for a quarter second. <kbd>Ctrl</kbd>+wheel is left
+    ///   to the browser, which zooms.
     ///
     /// Install one per app, given its element as for [`BrowserClipboard`].
     #[must_use = "dropping the guard removes its browser listeners"]
@@ -834,22 +838,34 @@ mod browser_clipboard {
         wheel: &RefCell<Wheel>,
         event: &WheelEvent,
     ) {
-        if event.ctrl_key() {
+        // Ctrl+wheel zooms, and a horizontal wheel is left to the page.
+        if event.ctrl_key() || event.delta_y() == 0.0 {
             return;
+        }
+        // Ratzilla reports the pointer's cell only as the mouse moves, so a
+        // wheel before any move, or after the page scrolled the grid under a
+        // still pointer, would scroll at no cell or a stale one. A move where
+        // the wheel turned has Ratzilla report the cell under it now.
+        if let Some(target) = event.target() {
+            let init = MouseEventInit::new();
+            init.set_bubbles(true);
+            init.set_client_x(event.client_x());
+            init.set_client_y(event.client_y());
+            if let Ok(moved) =
+                web_sys::MouseEvent::new_with_mouse_event_init_dict("mousemove", &init)
+            {
+                let _ = target.dispatch_event(&moved);
+            }
         }
         let Some((column, row)) = wheel.borrow().cell() else {
             return;
         };
-        // A horizontal wheel, which no conversion here reports.
-        if event.delta_y() == 0.0 {
-            return;
-        }
         let notches = match event.delta_mode() {
             WheelEvent::DOM_DELTA_PIXEL => event.delta_y() / 100.0,
             WheelEvent::DOM_DELTA_LINE => event.delta_y() / 3.0,
             _ => event.delta_y(),
         };
-        let steps = wheel.borrow_mut().turn(notches);
+        let steps = wheel.borrow_mut().turn(notches, event.time_stamp());
         let direction = if steps < 0 {
             ScrollDirection::Up
         } else {
@@ -997,25 +1013,18 @@ mod ratzilla_conv {
         }
     }
 
-    /// The scroll events in `pending` plus `delta` notches of wheel travel,
-    /// negative upward, and the travel left over: one event a notch, as a
-    /// terminal reports a wheel, however finely a trackpad slices the travel.
+    /// How long the wheel rests before its next event starts a new turn,
+    /// in milliseconds. A flick's events, and a trackpad's, follow each other
+    /// a frame or so apart, even through a trackpad's coasting, so a quarter
+    /// second without one means the hand let go.
     #[cfg_attr(
         not(target_arch = "wasm32"),
         allow(dead_code, reason = "BrowserInput is wasm-only; tested natively")
     )]
-    pub(super) fn wheel_steps(pending: f64, delta: f64) -> (i32, f64) {
-        let travel = pending + delta;
-        let steps = travel.trunc();
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "a wheel event's notches are few"
-        )]
-        (steps as i32, travel - steps)
-    }
+    const TURN_GAP_MS: f64 = 250.0;
 
-    /// The browser wheel's state between events: where the pointer is, which
-    /// way the turn goes, the travel short of a notch, and whether the app
+    /// The browser wheel's state between events: where the pointer is, when
+    /// the wheel last moved, the travel short of a notch, and whether the app
     /// took the last step of the turn.
     #[derive(Debug, Default)]
     #[cfg_attr(
@@ -1024,7 +1033,7 @@ mod ratzilla_conv {
     )]
     pub(super) struct Wheel {
         cell: Option<(u16, u16)>,
-        upward: Option<bool>,
+        last: f64,
         pending: f64,
         /// `None` until the turn's first step has been routed.
         taken: Option<bool>,
@@ -1050,29 +1059,37 @@ mod ratzilla_conv {
             self.cell
         }
 
-        /// Add `notches` of travel, and say how many whole steps it makes.
+        /// Add `notches` of travel at `now` (milliseconds), negative upward,
+        /// and say how many whole steps it makes: one a notch, as a terminal
+        /// reports a wheel, however finely a trackpad slices the travel.
         ///
-        /// Turning the other way starts a new turn. A turn's first slice is a
-        /// whole step however small, carrying the overshoot as negative
-        /// travel, so that the app decides at once whether the turn is its:
-        /// a browser may stop a trackpad's events being cancelable once their
-        /// first one went to the page.
-        pub(super) fn turn(&mut self, notches: f64) -> i32 {
+        /// A turn's first slice is a whole step however small, so that the
+        /// app decides at once whether the turn is its: a browser may stop a
+        /// trackpad's events being cancelable once their first one went to
+        /// the page. The step's overshoot is forgiven rather than owed, or
+        /// the first slice back the other way would step straight back.
+        pub(super) fn turn(&mut self, notches: f64, now: f64) -> i32 {
             if notches == 0.0 {
                 return 0;
             }
-            let upward = notches < 0.0;
-            if self.upward != Some(upward) {
-                self.upward = Some(upward);
+            if now - self.last >= TURN_GAP_MS {
                 self.pending = 0.0;
                 self.taken = None;
             }
-            let (mut steps, mut pending) = wheel_steps(self.pending, notches);
-            if steps == 0 && self.taken.is_none() {
-                steps = if upward { -1 } else { 1 };
-                pending -= f64::from(steps);
+            self.last = now;
+            let travel = self.pending + notches;
+            let mut steps = travel.trunc();
+            if steps == 0.0 && self.taken.is_none() {
+                steps = notches.signum();
+                self.pending = 0.0;
+            } else {
+                self.pending = travel - steps;
             }
-            self.pending = pending;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a wheel event's notches are few"
+            )]
+            let steps = steps as i32;
             steps
         }
 
@@ -1541,7 +1558,7 @@ mod crossterm_tests {
 
 #[cfg(all(test, feature = "ratzilla"))]
 mod ratzilla_tests {
-    use super::ratzilla_conv::{Wheel, non_ascii_key, wheel_steps};
+    use super::ratzilla_conv::{Wheel, non_ascii_key};
     use super::{
         Event, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind, Unsupported,
     };
@@ -1666,23 +1683,33 @@ mod ratzilla_tests {
         }
     }
 
+    /// A wheel's events at `ms` apart from `start`, each `notches` long:
+    /// the steps each one makes.
+    fn turn(wheel: &mut Wheel, start: f64, ms: f64, slices: &[f64]) -> Vec<i32> {
+        let mut now = start;
+        slices
+            .iter()
+            .map(|&notches| {
+                now += ms;
+                wheel.turn(notches, now)
+            })
+            .collect()
+    }
+
     /// A mouse wheel scrolls once a notch, and a trackpad sends a stream of
     /// small deltas that must add up to the same rate: scrolling once per
     /// event, or dropping the remainder, would make a trackpad far too fast
     /// or never scroll at all.
     #[test]
     fn wheel_travel_scrolls_once_a_notch() {
-        assert_eq!(wheel_steps(0.0, 1.0), (1, 0.0), "a notch scrolls once");
-        assert_eq!(wheel_steps(0.0, -2.0), (-2, 0.0), "two notches up, twice");
+        let mut wheel = Wheel::default();
+        wheel.point(Some((3, 4)));
+        assert_eq!(turn(&mut wheel, 0.0, 20.0, &[1.0, -2.0]), [1, -2]);
+        wheel.took(true);
 
-        let mut pending = 0.0;
-        let mut steps = 0;
-        for _ in 0..25 {
-            let (step, rest) = wheel_steps(pending, 0.125);
-            steps += step;
-            pending = rest;
-        }
-        assert_eq!(steps, 3, "a trackpad's slices of three notches and a bit");
+        let steps = turn(&mut wheel, 100.0, 10.0, &[0.125; 25]);
+        assert_eq!(steps.iter().sum::<i32>(), 3, "three notches and a bit");
+        assert_eq!(steps.iter().filter(|&&step| step != 0).count(), 3);
     }
 
     /// Most of a trackpad's events are short of a step. While the app takes
@@ -1693,9 +1720,9 @@ mod ratzilla_tests {
     fn a_turn_the_app_takes_keeps_the_page_still_between_steps() {
         let mut wheel = Wheel::default();
         wheel.point(Some((3, 4)));
-        assert_eq!(wheel.turn(1.0), 1);
+        assert_eq!(wheel.turn(1.0, 10.0), 1);
         wheel.took(true);
-        assert_eq!(wheel.turn(0.25), 0);
+        assert_eq!(wheel.turn(0.25, 20.0), 0);
         assert!(wheel.taking(), "a slice between steps is the app's");
 
         wheel.point(Some((3, 4)));
@@ -1703,30 +1730,41 @@ mod ratzilla_tests {
         wheel.point(Some((3, 5)));
         assert!(!wheel.taking(), "another cell starts afresh");
 
-        assert_eq!(wheel.turn(0.25), 1);
-        wheel.took(true);
+        assert_eq!(wheel.turn(0.25, 30.0), 1);
         wheel.took(false);
         assert!(!wheel.taking(), "an ignored step hands the page back");
-        assert_eq!(wheel.turn(0.25), 0, "and slices after it stay slices");
+        assert_eq!(wheel.turn(0.25, 40.0), 0, "and slices after it stay slices");
     }
 
     /// A turn's first slice decides whose the turn is, at once: left short of
     /// a step, the first slices of a trackpad turn would go to the page, and
-    /// a browser may then stop the rest being cancelable. The overshoot is
-    /// paid back, so the turn still scrolls once a notch overall.
+    /// a browser may then stop the rest being cancelable. That holds for a
+    /// second flick on the same cell too, once the wheel has rested, even if
+    /// the app ignored the first.
     #[test]
-    fn a_turn_starts_with_a_whole_step() {
+    fn every_turn_starts_with_a_whole_step() {
         let mut wheel = Wheel::default();
         wheel.point(Some((3, 4)));
-        assert_eq!(wheel.turn(-0.25), -1, "the first slice is a step");
-        wheel.took(true);
-        let later: Vec<i32> = (0..7).map(|_| wheel.turn(-0.25)).collect();
-        assert_eq!(later, [0, 0, 0, 0, 0, 0, -1], "then once a notch");
-        assert!(wheel.taking());
-
-        assert_eq!(wheel.turn(0.25), 1, "turning back starts a new turn");
-        assert!(!wheel.taking(), "which the app has not taken yet");
+        assert_eq!(wheel.turn(-0.25, 10.0), -1, "the first slice is a step");
         wheel.took(false);
-        assert_eq!(wheel.turn(0.25), 0, "ignored, it goes by whole notches");
+        let rest = turn(&mut wheel, 10.0, 10.0, &[-0.25; 4]);
+        assert_eq!(rest, [0, 0, 0, -1], "ignored, the turn goes by notches");
+        wheel.took(false);
+
+        assert_eq!(wheel.turn(-0.25, 500.0), -1, "a flick after a rest");
+    }
+
+    /// A trackpad held still jitters back and forth by a hair. Within a turn
+    /// that must scroll nothing: forcing a step on each reversal, or owing
+    /// the first step's overshoot, would flicker a list up and down.
+    #[test]
+    fn jitter_within_a_turn_scrolls_nothing() {
+        let mut wheel = Wheel::default();
+        wheel.point(Some((3, 4)));
+        assert_eq!(wheel.turn(0.1, 10.0), 1, "the turn's first slice");
+        wheel.took(true);
+        let jitter = turn(&mut wheel, 10.0, 10.0, &[-0.1, 0.1, -0.1, 0.1, -0.1, 0.1]);
+        assert_eq!(jitter, [0; 6]);
+        assert!(wheel.taking(), "and the turn stays the app's");
     }
 }
