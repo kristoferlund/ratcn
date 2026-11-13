@@ -40,11 +40,13 @@ impl ScrollAreaStyle {
     }
 }
 
-/// Where the wheel, a key, a gutter drag, or a reveal left the view.
+/// Where a reveal left the view, or where the wheel, a key, or a gutter drag
+/// left an unbound one.
 ///
 /// Event handling writes it and the next declaration reads it, which is what
 /// lets an unbound area scroll at all and what carries a reveal into the
-/// declaration that follows it.
+/// declaration that follows it. A bound area's own scrolling never writes it:
+/// the app's offset decides.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum ScrollHold {
     /// Nothing is holding the view: the bound offset decides where it sits.
@@ -146,7 +148,8 @@ impl<S, M> ScrollArea<S, M> {
     ///
     /// `read` is consulted for every event, so repeated wheel or page events
     /// compose before a redraw, and `on_change` carries each new offset to the
-    /// app's update. Left unbound, the area keeps the offset itself and emits
+    /// app's update. The view follows the app: an offset it does not apply is
+    /// never shown. Left unbound, the area keeps the offset itself and emits
     /// nothing.
     ///
     /// A reveal moves the view on its own, without a message; the next offset
@@ -231,15 +234,17 @@ impl<S, M> ScrollArea<S, M> {
         self.resolve(ctx.area(), self.bound_offset(state), hold)
     }
 
+    /// `offset` clamped to the content, or `None` when the view is already
+    /// there.
+    fn moved_to(&self, offset: u16, state: &S, ctx: &mut EventCtx<'_>) -> Option<u16> {
+        let offset = offset.min(self.max_offset(ctx.area()));
+        (offset != self.current(state, ctx)).then_some(offset)
+    }
+
     /// Hold the view at `offset` for the coming declaration, and report the
     /// offset taken. `None` when the view is already there.
     fn hold(&self, offset: u16, state: &S, ctx: &mut EventCtx<'_>) -> Option<u16> {
-        let area = ctx.area();
-        let current = self.current(state, ctx);
-        let offset = offset.min(self.max_offset(area));
-        if offset == current {
-            return None;
-        }
+        let offset = self.moved_to(offset, state, ctx)?;
         *ctx.transient::<ScrollHold>() = ScrollHold::Held {
             offset,
             base: self.bound_offset(state),
@@ -348,15 +353,17 @@ impl<S, M> ScrollArea<S, M> {
         let mut jumped = EventResult::Ignored;
         let mut anchor = CellOffset::default();
         if can_start && mouse.kind == MouseKind::Down(MouseButton::Left) {
-            let current = self.current(state, ctx);
-            if !self.thumb_contains(area, current, mouse.row) {
+            // Anchor at the jump target, not at the view after the jump: a
+            // bound area does not move until the app applies the offset.
+            let mut offset = self.current(state, ctx);
+            if !self.thumb_contains(area, offset, mouse.row) {
                 let row = i16::try_from(mouse.row.saturating_sub(area.y)).unwrap_or(i16::MAX);
                 if let Some(target) = self.offset_for_thumb_start(area, row) {
                     jumped = self.scroll_to(target, state, ctx);
+                    offset = target;
                 }
             }
-            let current = self.current(state, ctx);
-            let start = self.thumb_start(area, current).unwrap_or(0);
+            let start = self.thumb_start(area, offset).unwrap_or(0);
             anchor.y = i16::try_from(start).unwrap_or(i16::MAX);
         }
         match ctx.drag(mouse, DragOptions::new(anchor).start_if(can_start)) {
@@ -383,13 +390,18 @@ impl<S, M> ScrollArea<S, M> {
     /// [`EventResult::Ignored`] when the view is already there, which leaves an
     /// app hotkey on Home, End, or a page key working while focus rests in an
     /// area with nothing to scroll.
+    ///
+    /// A bound area only asks: it holds nothing, so an offset the app does not
+    /// apply never becomes the view.
     fn scroll_to(&self, offset: u16, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
-        let Some(offset) = self.hold(offset, state, ctx) else {
-            return EventResult::Ignored;
-        };
         match &self.on_change {
-            Some(on_change) => EventResult::Emit(on_change(offset)),
-            None => EventResult::Consumed,
+            Some(on_change) => self
+                .moved_to(offset, state, ctx)
+                .map_or(EventResult::Ignored, |offset| {
+                    EventResult::Emit(on_change(offset))
+                }),
+            None if self.hold(offset, state, ctx).is_some() => EventResult::Consumed,
+            None => EventResult::Ignored,
         }
     }
 
@@ -1156,6 +1168,89 @@ mod tests {
             driver.event(key(KeyCode::PageDown), &state),
             EventResult::Emit(Msg::Area(9))
         );
+    }
+
+    /// Twelve one-letter rows, `a` to `l`, so row 0 of the view names the
+    /// offset it is painted at.
+    fn letters(ctx: &mut DeclareCtx<'_, State, Msg>) {
+        let area = ctx.area();
+        ctx.paint_widget(
+            Paragraph::new(Text::from("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl")),
+            area,
+        );
+    }
+
+    /// A bound area is controlled, as a bound `List` is: an offset the app
+    /// does not apply must not become the view, nor the base the next event
+    /// scrolls from. An area that held its own emits would show row 3 here
+    /// and ask for 6 next.
+    #[test]
+    fn a_bound_offset_the_app_rejects_never_becomes_the_view() {
+        let mut driver = driver(8, 3);
+        let state = State::default();
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                ctx.component("scroll", scroll_area(12, letters), Rect::new(0, 0, 8, 3));
+            });
+        };
+        render(&mut driver, &state);
+        let wheel = mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 1);
+
+        assert_eq!(
+            driver.event(wheel.clone(), &state),
+            EventResult::Emit(Msg::Area(3))
+        );
+        render(&mut driver, &state);
+        assert_eq!(&driver.row(0)[..1], "a", "the app kept offset 0");
+        assert_eq!(
+            driver.event(wheel.clone(), &state),
+            EventResult::Emit(Msg::Area(3)),
+            "the next wheel scrolls from the app's offset again"
+        );
+    }
+
+    /// A bound gutter drag asks for each thumb row from the jump target it
+    /// anchored at, whether or not the app follows. An app that applies sees
+    /// the thumb track the pointer; one that ignores keeps its view.
+    #[test]
+    fn a_bound_gutter_drag_asks_from_its_jump_whether_or_not_the_app_follows() {
+        for applies in [true, false] {
+            let mut driver = driver(6, 4);
+            let mut state = State::default();
+            let render = |driver: &mut Driver<State, Msg>, state: &State| {
+                driver.render(state, |ctx| {
+                    ctx.component("scroll", scroll_area(12, letters), Rect::new(0, 0, 6, 4));
+                });
+            };
+            render(&mut driver, &state);
+            // A press on track row 3 jumps to 8 and anchors the drag at the
+            // thumb row painted there, so each row up asks for that row's
+            // offset. Row 0 is where an ignoring app's view already sits.
+            let back_to_top = if applies {
+                EventResult::Emit(Msg::Area(0))
+            } else {
+                EventResult::Consumed
+            };
+            for (kind, row, expected) in [
+                (
+                    MouseKind::Down(MouseButton::Left),
+                    3,
+                    EventResult::Emit(Msg::Area(8)),
+                ),
+                (MouseKind::Moved, 2, EventResult::Emit(Msg::Area(6))),
+                (MouseKind::Moved, 0, back_to_top),
+                (MouseKind::Moved, 3, EventResult::Emit(Msg::Area(8))),
+                (MouseKind::Up(MouseButton::Left), 3, EventResult::Consumed),
+            ] {
+                let result = driver.event(mouse(kind, 5, row), &state);
+                assert_eq!(result, expected, "applies: {applies}, row {row}");
+                if let (true, EventResult::Emit(Msg::Area(offset))) = (applies, result) {
+                    state.offset = offset;
+                }
+            }
+            render(&mut driver, &state);
+            assert_eq!(&driver.row(0)[..1], if applies { "i" } else { "a" });
+        }
     }
 
     /// An unbound area owns its offset the same way an unbound `List` owns
