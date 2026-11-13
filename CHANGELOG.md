@@ -19,9 +19,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- The press that closes a popup by landing on a control without focus now
-  emits the popup's `on_dismiss` and focuses that control on release, without
-  activating it. A control that already holds focus is clicked as usual.
+- In an app with a focus binding, the press that closes a popup by landing on
+  a control without focus now emits the popup's `on_dismiss` and focuses that
+  control on release, without activating it. A control that already holds
+  focus is clicked as usual.
 - A bound `ScrollArea` is strictly controlled, like a bound `List`: an offset
   the app does not apply is never shown. A focus reveal still holds the view
   until the next scroll.
