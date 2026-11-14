@@ -324,25 +324,36 @@ terminal.on_key_event({
 }).map_err(|error| io::Error::other(error.to_string()))?;
 ```
 
-Wire mouse callbacks the same way; see [Mouse input](./mouse#in-the-browser).
-An app with text fields routes both through the `route` function in
+Mouse events go through `BrowserInput`, below. An app with text fields routes
+keys and mouse events through the `route` function in
 [The browser clipboard](#the-browser-clipboard) instead, so a copy reaches the
 clipboard.
 
-Ratzilla reports a key that types a non-ASCII character (`ä`, `é`, `€`) as
-unidentified, so a text field cannot type it. `ratcn::runtime::BrowserInput`
-delivers those keys. Install it with the app's element, chosen as for
-[the browser clipboard](#the-browser-clipboard), and a closure that routes an
-event and returns whether the app took it:
+Ratzilla misses some input. It reports a key that types a non-ASCII character
+(`ä`, `é`, `€`) as unidentified, so a text field cannot type it, and it reports
+no wheel. `ratcn::runtime::BrowserInput` adds both. Install it with the app's
+element, chosen as for [the browser clipboard](#the-browser-clipboard), and a
+closure that routes an event and returns whether the app took it. Route
+Ratzilla's mouse events through its `mouse_handler`, which keeps the pointer's
+cell for the wheel:
 
 ```rust
 let input = BrowserInput::install(&element, {
     let app = Rc::clone(&app);
     move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
 })?;
-// `main` returns once the app is running; the listener has to outlive it.
+terminal
+    .on_mouse_event(input.mouse_handler())
+    .map_err(|error| io::Error::other(error.to_string()))?;
+// `main` returns once the app is running; the listeners have to outlive it.
 std::mem::forget(input);
 ```
+
+The wheel scrolls once a notch, at the cell under the pointer when it turns. A wheel the app takes
+does not also scroll the page, and `Ctrl`+wheel stays the browser's zoom.
+Ratzilla keeps a single mouse callback, so wiring another in its place loses
+the wheel: an app that wants to see mouse events itself wraps the handler,
+calling `input.mouse_handler()`'s closure from its own.
 
 Ratzilla's canvas takes focus but leaves Tab to the browser, which moves focus
 off the canvas: keys, and the clipboard chords with them, then go to the page.
@@ -497,8 +508,8 @@ cross-origin iframe only with `allow="clipboard-write"`. Anywhere else the
 write is skipped.
 
 Either a key or a click can write, so route both through one function that
-writes afterward. It serves as [`BrowserInput`](#routing-events)'s closure as
-is:
+writes afterward. Mouse events reach it through
+[`BrowserInput`](#routing-events), whose closure it serves as is:
 
 ```rust
 fn route(app: &RefCell<App>, event: impl TryInto<Event>) -> bool {
@@ -516,15 +527,12 @@ terminal.on_key_event({
         route(&app, event);
     }
 }).map_err(|error| io::Error::other(error.to_string()))?;
-terminal.on_mouse_event({
-    let app = Rc::clone(&app);
-    move |event| {
-        route(&app, event);
-    }
-}).map_err(|error| io::Error::other(error.to_string()))?;
 let input = BrowserInput::install(&element, {
     let app = Rc::clone(&app);
     move |event| route(&app, event)
 })?;
+terminal
+    .on_mouse_event(input.mouse_handler())
+    .map_err(|error| io::Error::other(error.to_string()))?;
 std::mem::forget(input);
 ```
