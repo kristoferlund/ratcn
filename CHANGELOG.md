@@ -12,6 +12,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The `ui-f-state` demo: a short film about `ui = f(state)` with a synthesized
   soundtrack, ending in a live counter. Terminal only:
   `cargo run --release -p ui-f-state`.
+- `List::from_shared` declares a list over an `Arc<[ListItem<T>]>` the app
+  already holds, so a long list can be declared without copying its items
+  every frame.
 
 ## [0.1.0] - 2026-11-11
 
