@@ -180,6 +180,29 @@ way, or has nothing to scroll, the wheel bubbles, so a list inside a
 To scroll something that is not a list (a form, a pane, a tile grid), see
 [ScrollArea](./scroll-area).
 
+## Long lists
+
+A list is declared again every frame, and `List::new` builds its items every
+time. For a long list, keep the items in app state as an
+`Arc<[ListItem<T>]>` and declare with `List::from_shared`, which takes the
+pointer and copies nothing:
+
+```rust
+use std::sync::Arc;
+
+struct AppState {
+    tasks: Arc<[ListItem<TaskId>]>,
+}
+
+// Once, when the items change:
+state.tasks = tasks.iter().map(|task| ListItem::new(task.id, &task.name)).collect();
+
+// Every frame:
+List::from_shared(Arc::clone(&state.tasks))
+```
+
+Rebuild the `Arc` when the items change.
+
 ## Styling
 
 Colors come from the theme. Focus separates the list's backdrop subtly from the

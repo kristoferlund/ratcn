@@ -5,7 +5,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod frame {
-    use std::hint::black_box;
+    use std::{hint::black_box, sync::Arc};
 
     use criterion::{BenchmarkId, Criterion, criterion_group};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
@@ -192,6 +192,32 @@ mod frame {
         });
     }
 
+    fn render_list_1000_shared(c: &mut Criterion) {
+        let (mut ratcn, _, state, theme) = surface();
+        let mut terminal = Terminal::new(TestBackend::new(WIDTH, LIST_HEIGHT)).expect("terminal");
+        let items: Arc<[ListItem<usize>]> = (0..LIST_LEN)
+            .map(|index| ListItem::new(index, format!("Item {index}")))
+            .collect();
+
+        c.bench_function("render_list_1000_shared", |b| {
+            b.iter(|| {
+                terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        ratcn.render(frame, area, &state, &theme, |ctx| {
+                            ctx.component(
+                                "list",
+                                List::from_shared(Arc::clone(&items))
+                                    .item_focus(|state: &State| state.cursor, Msg::Cursor),
+                                area,
+                            );
+                        });
+                    })
+                    .expect("draw");
+            });
+        });
+    }
+
     fn render_dialog_wrapped(c: &mut Criterion) {
         let (mut ratcn, mut terminal, state, theme) = surface();
 
@@ -222,6 +248,7 @@ mod frame {
         wrapping_scaling,
         route_click,
         render_list_1000,
+        render_list_1000_shared,
         render_dialog_wrapped
     );
 }
