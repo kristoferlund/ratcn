@@ -280,7 +280,7 @@ mouse capture.
 ## In the browser
 
 Enable the `ratzilla` feature for Ratzilla key and mouse conversions, the
-browser input and clipboard listeners, and the browser pointer shape:
+browser clipboard listener, and the browser pointer shape:
 
 ```sh
 cargo add ratcn --features ratzilla
@@ -288,8 +288,7 @@ cargo add ratatui --no-default-features --features layout-cache,std
 cargo add ratzilla
 ```
 
-The browser-only API (`BrowserInput`, `BrowserClipboard`,
-`set_browser_pointer_shape`) exists
+The browser-only API (`BrowserClipboard`, `set_browser_pointer_shape`) exists
 only on `wasm32`. Read its rustdoc with
 `cargo doc -p ratcn --features ratzilla --target wasm32-unknown-unknown`.
 
@@ -329,20 +328,8 @@ An app with text fields routes both through the `route` function in
 [The browser clipboard](#the-browser-clipboard) instead, so a copy reaches the
 clipboard.
 
-Ratzilla reports a key that types a non-ASCII character (`ä`, `é`, `€`) as
-unidentified, so a text field cannot type it. `ratcn::runtime::BrowserInput`
-delivers those keys. Install it with the app's element, chosen as for
-[the browser clipboard](#the-browser-clipboard), and a closure that routes an
-event and returns whether the app took it:
-
-```rust
-let input = BrowserInput::install(&element, {
-    let app = Rc::clone(&app);
-    move |event| !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored)
-})?;
-// `main` returns once the app is running; the listener has to outlive it.
-std::mem::forget(input);
-```
+Ratzilla 0.3.1 reports a key that types a non-ASCII character (`ä`, `é`, `€`)
+as unidentified, so a text field cannot type it in the browser.
 
 Ratzilla's canvas takes focus but leaves Tab to the browser, which moves focus
 off the canvas: keys, and the clipboard chords with them, then go to the page.
@@ -497,34 +484,23 @@ cross-origin iframe only with `allow="clipboard-write"`. Anywhere else the
 write is skipped.
 
 Either a key or a click can write, so route both through one function that
-writes afterward. It serves as [`BrowserInput`](#routing-events)'s closure as
-is:
+writes afterward:
 
 ```rust
-fn route(app: &RefCell<App>, event: impl TryInto<Event>) -> bool {
-    let taken = !matches!(app.borrow_mut().handle_event(event), EventResult::Ignored);
+fn route(app: &RefCell<App>, event: impl TryInto<Event>) {
+    app.borrow_mut().handle_event(event);
     let written = app.borrow_mut().ratcn.take_clipboard();
     if let Some(text) = written {
         BrowserClipboard::write(&text);
     }
-    taken
 }
 
 terminal.on_key_event({
     let app = Rc::clone(&app);
-    move |event| {
-        route(&app, event);
-    }
+    move |event| route(&app, event)
 }).map_err(|error| io::Error::other(error.to_string()))?;
 terminal.on_mouse_event({
     let app = Rc::clone(&app);
-    move |event| {
-        route(&app, event);
-    }
-}).map_err(|error| io::Error::other(error.to_string()))?;
-let input = BrowserInput::install(&element, {
-    let app = Rc::clone(&app);
     move |event| route(&app, event)
-})?;
-std::mem::forget(input);
+}).map_err(|error| io::Error::other(error.to_string()))?;
 ```
