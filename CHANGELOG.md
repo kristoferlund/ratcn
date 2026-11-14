@@ -15,6 +15,41 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `List::from_shared` declares a list over an `Arc<[ListItem<T>]>` the app
   already holds, so a long list can be declared without copying its items
   every frame.
+- `BrowserInput` (wasm, `ratzilla` feature), a guard beside `BrowserClipboard`
+  that delivers the non-ASCII keys Ratzilla drops.
+- `list_core::PressedItem`, so a custom item component can hold a click to the
+  item that was pressed, as `List`, `Select` and `Tabs` now do.
+
+### Changed
+
+- In an app with a focus binding, the press that closes a popup by landing on
+  a control without focus now emits the popup's `on_dismiss` and focuses that
+  control on release, without activating it. A control that already holds
+  focus is clicked as usual.
+- A bound `ScrollArea` is strictly controlled, like a bound `List`: an offset
+  the app does not apply is never shown. A focus reveal still holds the view
+  until the next scroll.
+- A `List` lets the wheel bubble where it cannot scroll, so an enclosing
+  `ScrollArea` keeps scrolling over it.
+- After Esc closes a bound `Tooltip`, it stays closed until the pointer leaves
+  the trigger.
+- `Tabs` implements `Component` only for `T: 'static`; `ctx.component` already
+  required that.
+
+### Fixed
+
+- A click on a `List` row, a tab, or a `Select` option acts only when press and
+  release land on the same item. A redraw that moved another item under the
+  pointer no longer commits it.
+- A press whose target vanished from a rendered frame no longer clicks whatever
+  returns at its path.
+- Motion with a button held is never `Ignored`, as the mouse docs promise.
+- Pressing blank space in a scrolled, unfocused `ScrollArea` focuses a control
+  on screen instead of scrolling back to the first one.
+- Controls show hover fill and a hand or text-beam pointer only where a click
+  acts. An all-disabled `Select` no longer opens on a click.
+- Dragging a `Dialog` after a resize clamped it no longer has a dead zone.
+- Browser demos type Option and AltGr characters such as `@` on a Swedish Mac.
 
 ## [0.1.0] - 2026-11-11
 

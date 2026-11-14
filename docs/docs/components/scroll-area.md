@@ -58,7 +58,9 @@ match msg {
 
 The reader runs for every event, so repeated wheel or page events compose
 without a redraw between them, as long as the app applies each message as it
-arrives.
+arrives. A bound area is controlled: apart from a focus reveal (see Focus), the
+view follows the app's offset, so a message the app does not apply leaves the
+view where it was, and the app can clamp or refuse a scroll.
 
 ## Focus
 
@@ -71,8 +73,9 @@ does everywhere else; the area only adds the reveal.
 
 A reveal moves the view without emitting the `.scroll(...)` message, so a
 bound offset can differ from the one the area paints with, and there is no way
-to read the effective offset back. The next offset the area emits starts from
-where the reveal left it. Ordinary descendants need nothing extra, but if you
+to read the effective offset back. The reveal holds the view until the next
+scroll: the offset that scroll emits starts from where the reveal left it, and
+from then on the view follows the app's offset again, applied or not. Ordinary descendants need nothing extra, but if you
 paint related content outside the area, keep its windowing in step yourself.
 
 ## Layout and clipping

@@ -499,7 +499,9 @@ impl<'a, State, Msg> DeclareCtx<'a, State, Msg> {
     /// - A press outside the popup emits the
     ///   [`on_dismiss`](PopupOptions::on_dismiss) message, if one is bound —
     ///   dismissal and click-through compose, because the press dismisses and
-    ///   the click that follows it activates.
+    ///   the click that follows it activates. In an app with a focus binding,
+    ///   a press on a control that does not hold focus is the exception: see
+    ///   [`on_dismiss`](PopupOptions::on_dismiss).
     ///
     /// Keys bubble *through* the popup root to the declaring component, so an
     /// Esc nothing in the panel handles reaches whatever opened it.
@@ -598,15 +600,24 @@ impl<Msg> fmt::Debug for PopupOptions<Msg> {
 }
 
 impl<Msg> PopupOptions<Msg> {
-    /// The message emitted when a press lands outside the popup's footprint.
+    /// The message emitted when a press, with any button, lands outside the
+    /// popup's footprint.
     ///
     /// The press itself still routes to whatever it hit — dismissal observes,
     /// it does not consume — so clicking a visible button both closes the
     /// popup (this message, applied on the press) and activates the button
-    /// (its own message, on the click that follows). The hook fires only when
-    /// routing the press produced no message of its own; when the press lands
-    /// on a focusable control, the focus-change message is the dismissal
-    /// signal instead, and the app closes the popup in that update.
+    /// (its own message, on the click that follows). A component that answers
+    /// the press with a message of its own wins, and the app treats that
+    /// message as the dismissal signal.
+    ///
+    /// The press that closes a popup moves focus but does not activate: when
+    /// it lands on a control that does not hold focus, in an app with a focus
+    /// binding, its motion and release reach nothing, the release only moves
+    /// focus to that control, and the next click activates. The
+    /// release only focuses even if the app keeps the popup open. A press
+    /// that leaves the grid ([`Exited`](super::MouseKind::Exited)), or whose
+    /// target vanishes before the release, moves no focus. A control that
+    /// already holds focus is clicked as usual.
     #[must_use]
     pub fn on_dismiss(mut self, message: impl Fn() -> Msg + 'static) -> Self {
         self.on_dismiss = Some(Box::new(message));

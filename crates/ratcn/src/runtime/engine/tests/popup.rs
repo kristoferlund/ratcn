@@ -573,3 +573,304 @@ fn one_physical_click_dismisses_the_popup_and_presses_the_button() {
         ))
     );
 }
+
+#[derive(Debug, Clone, PartialEq)]
+enum DismissMsg {
+    Focus(FocusState),
+    Dismissed,
+    Pressed,
+}
+
+fn dismiss_driver() -> Driver<FocusTestState, DismissMsg> {
+    Driver::with(
+        Ratcn::new().focus(|state: &FocusTestState| &state.focus, DismissMsg::Focus),
+        10,
+        2,
+    )
+}
+
+/// A Button outside a popup whose inside holds a Button too.
+fn render_button_and_popup(
+    driver: &mut Driver<FocusTestState, DismissMsg>,
+    state: &FocusTestState,
+    popup_open: bool,
+) {
+    driver.render(state, |ctx| {
+        ctx.component(
+            "button",
+            Button::new("Go").on_press(|| DismissMsg::Pressed),
+            Rect::new(6, 0, 4, 1),
+        );
+        if popup_open {
+            ctx.popup(
+                "panel",
+                Rect::new(0, 0, 5, 2),
+                PopupOptions::default().on_dismiss(|| DismissMsg::Dismissed),
+                |ctx| {
+                    ctx.component(
+                        "inside",
+                        Button::new("In").on_press(|| DismissMsg::Pressed),
+                        Rect::new(0, 0, 5, 1),
+                    );
+                },
+            );
+        }
+    });
+}
+
+#[test]
+fn the_press_that_closes_a_popup_focuses_an_unfocused_control_without_activating_it() {
+    // In a focus-bound app the focus fallback used to answer this press, so
+    // the popup stayed open. Dismissing on the press and dropping the focus
+    // move left focus behind in the closed popup. The rule: the press
+    // dismisses, its release moves focus in place of the click, and the next
+    // click activates.
+    let mut driver = dismiss_driver();
+    let mut state = FocusTestState {
+        focus: FocusState::intent(["panel", "inside"]),
+    };
+    render_button_and_popup(&mut driver, &state, true);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state),
+        EventResult::Emit(DismissMsg::Dismissed)
+    );
+    render_button_and_popup(&mut driver, &state, false);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 7, 0), &state),
+        EventResult::Emit(DismissMsg::Focus(FocusState::intent(["button"]))),
+        "the release focuses the button and does not press it"
+    );
+    state.focus = FocusState::intent(["button"]);
+    render_button_and_popup(&mut driver, &state, false);
+    driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 7, 0), &state),
+        EventResult::Emit(DismissMsg::Pressed),
+        "the next click activates"
+    );
+}
+
+#[test]
+fn the_press_that_closes_a_popup_still_clicks_a_control_that_holds_focus() {
+    // Focus has nowhere to move, so nothing replaces the click.
+    let mut driver = dismiss_driver();
+    let state = FocusTestState {
+        focus: FocusState::intent(["button"]),
+    };
+    render_button_and_popup(&mut driver, &state, true);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state),
+        EventResult::Emit(DismissMsg::Dismissed)
+    );
+    render_button_and_popup(&mut driver, &state, false);
+    assert_eq!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 7, 0), &state),
+        EventResult::Emit(DismissMsg::Pressed)
+    );
+}
+
+#[derive(Default)]
+struct FormState {
+    focus: FocusState,
+    open: bool,
+    name: crate::InputState,
+}
+
+#[derive(Debug, Clone)]
+enum FormMsg {
+    Focus(FocusState),
+    Open(bool),
+    Name(crate::InputState),
+}
+
+fn render_form(driver: &mut Driver<FormState, FormMsg>, state: &FormState) {
+    driver.render(state, |ctx| {
+        let fruit = crate::Select::new([
+            crate::ListItem::new(1u8, "Apple"),
+            crate::ListItem::new(2u8, "Pear"),
+        ])
+        .open(|state: &FormState| state.open, FormMsg::Open);
+        ctx.component("fruit", fruit, Rect::new(0, 0, 12, 1));
+        let name = crate::Input::new().value(|state: &FormState| &state.name, FormMsg::Name);
+        ctx.component("name", name, Rect::new(0, 8, 12, 1));
+    });
+}
+
+#[test]
+fn closing_a_select_by_pressing_an_input_sends_typing_to_the_input() {
+    // The reviewer's sequence: with the press dismissing and focus left on
+    // the Select, the next Space reopened it and the typing went there.
+    let mut driver = Driver::with(
+        Ratcn::new().focus(|state: &FormState| &state.focus, FormMsg::Focus),
+        12,
+        10,
+    );
+    let mut state = FormState {
+        focus: FocusState::intent(["fruit"]),
+        open: true,
+        ..FormState::default()
+    };
+    render_form(&mut driver, &state);
+    assert!(matches!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 2, 8), &state),
+        EventResult::Emit(FormMsg::Open(false))
+    ));
+    state.open = false;
+    render_form(&mut driver, &state);
+    let EventResult::Emit(FormMsg::Focus(focus)) =
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 2, 8), &state)
+    else {
+        panic!("the release moves focus");
+    };
+    assert_eq!(focus, FocusState::intent(["name"]));
+    state.focus = focus;
+    render_form(&mut driver, &state);
+    let EventResult::Emit(FormMsg::Name(name)) =
+        driver.event(crate::test_support::key(KeyCode::Char(' ')), &state)
+    else {
+        panic!("typing goes to the Input");
+    };
+    assert_eq!(name.value(), " ");
+}
+
+#[test]
+fn the_press_that_closes_a_popup_drags_nothing_before_its_release_focuses() {
+    // The gesture of a popup-closing press only dismisses and focuses. Its
+    // motion used to reach the Input and select text in a field that did
+    // not hold focus.
+    let mut driver = Driver::with(
+        Ratcn::new().focus(|state: &FormState| &state.focus, FormMsg::Focus),
+        12,
+        10,
+    );
+    let mut state = FormState {
+        focus: FocusState::intent(["fruit"]),
+        open: true,
+        name: crate::InputState::new("hello world"),
+    };
+    render_form(&mut driver, &state);
+    assert!(matches!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 1, 8), &state),
+        EventResult::Emit(FormMsg::Open(false))
+    ));
+    state.open = false;
+    render_form(&mut driver, &state);
+    for kind in [MouseKind::Moved, MouseKind::Drag(MouseButton::Left)] {
+        assert!(
+            matches!(
+                driver.event(mouse(kind, 6, 8), &state),
+                EventResult::Consumed
+            ),
+            "{kind:?} selects nothing"
+        );
+    }
+    assert!(matches!(
+        driver.event(mouse(MouseKind::Up(MouseButton::Left), 6, 8), &state),
+        EventResult::Emit(FormMsg::Focus(focus)) if focus == FocusState::intent(["name"])
+    ));
+}
+
+/// A focusable pane that acts on any click, drag, or release of its own,
+/// with a blank top row and, optionally, a focusable Button below it.
+struct ClickPane {
+    with_child: bool,
+}
+
+impl Component<FocusTestState, DismissMsg> for ClickPane {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, FocusTestState, DismissMsg>) {
+        if self.with_child {
+            let area = ctx.area();
+            ctx.component(
+                "c",
+                Button::new("C").on_press(|| DismissMsg::Pressed),
+                Rect::new(area.x, area.y + 1, area.width, 1),
+            );
+        }
+    }
+
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        _state: &FocusTestState,
+        _ctx: &mut EventCtx<'_>,
+    ) -> EventResult<DismissMsg> {
+        match event {
+            Event::Mouse(mouse)
+                if matches!(
+                    mouse.kind,
+                    MouseKind::Click(_) | MouseKind::Drag(_) | MouseKind::Up(_)
+                ) =>
+            {
+                EventResult::Emit(DismissMsg::Pressed)
+            }
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn scope_options(&self, _state: &FocusTestState) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
+    }
+}
+
+#[test]
+fn a_popup_closing_press_on_a_pane_reaches_nothing_when_its_focus_target_goes() {
+    // The press on the pane's blank row defers focus to its child `c`, not
+    // to the pane. Its motion and release reach nothing: the release moves
+    // focus to `c`, and when `c` is gone at the release — or was gone for a
+    // frame and came back, so it is not what was pressed — it focuses
+    // nothing either. It must never fall back to clicking the pane: the
+    // press that closes a popup does not activate.
+    let state = FocusTestState {
+        focus: FocusState::intent(["panel", "inside"]),
+    };
+    let render = |driver: &mut Driver<FocusTestState, DismissMsg>, open: bool, child: bool| {
+        driver.render(&state, |ctx| {
+            ctx.component(
+                "pane",
+                ClickPane { with_child: child },
+                Rect::new(6, 0, 4, 2),
+            );
+            if open {
+                ctx.popup(
+                    "panel",
+                    Rect::new(0, 0, 5, 2),
+                    PopupOptions::default().on_dismiss(|| DismissMsg::Dismissed),
+                    |ctx| {
+                        ctx.component(
+                            "inside",
+                            Button::new("In").on_press(|| DismissMsg::Pressed),
+                            Rect::new(0, 0, 5, 1),
+                        );
+                    },
+                );
+            }
+        });
+    };
+
+    let focus_c = EventResult::Emit(DismissMsg::Focus(FocusState::intent(["pane", "c"])));
+    for (frames, release) in [
+        (&[true][..], focus_c),
+        (&[false], EventResult::Consumed),
+        (&[false, true], EventResult::Consumed),
+    ] {
+        let mut driver = dismiss_driver();
+        render(&mut driver, true, true);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 7, 0), &state),
+            EventResult::Emit(DismissMsg::Dismissed)
+        );
+        for &child in frames {
+            render(&mut driver, false, child);
+        }
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 8, 0), &state),
+            EventResult::Consumed,
+            "{frames:?}: the drag reaches nothing"
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 7, 0), &state),
+            release,
+            "{frames:?}: the release reaches nothing"
+        );
+    }
+}

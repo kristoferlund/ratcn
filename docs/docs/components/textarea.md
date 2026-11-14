@@ -278,6 +278,9 @@ after each event. See [Host integration](../concepts/host-integration#the-clipbo
 - **No Linux primary selection** (select, then middle-click).
 - **Cmd editing chords do nothing in the browser on a Mac** (`Cmd+←`, `Cmd+→`,
   `Cmd+Backspace` and the like). Use `Home`, `End`, and the `Ctrl` chords.
+- **Two editor chords belong to the browser off a Mac.** `Ctrl+V` pastes
+  rather than paging down, and the browser may keep `Ctrl+W` to close the tab
+  rather than delete a word. Use `Page Down` and `Alt+Backspace`.
 - **A page selection survives a click into the field in the browser.** It
   stays highlighted, but a copy in the field never copies it.
 - **Safari is unverified.**

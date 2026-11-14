@@ -447,7 +447,8 @@ mod browser_clipboard {
     };
 
     use super::super::PointerShape;
-    use super::Event;
+    use super::ratzilla_conv::non_ascii_key;
+    use super::{Event, Modifiers};
 
     /// The browser's clipboard, wired to the runtime for as long as the guard
     /// lives. Ratzilla has no callback for the clipboard, so this listens on
@@ -702,6 +703,82 @@ mod browser_clipboard {
         }
     }
 
+    /// The keys Ratzilla does not deliver, wired to the runtime for as long as
+    /// the guard lives.
+    ///
+    /// A key that types one non-ASCII character, `ä` or `ж`, arrives as an
+    /// [`Event::Key`] for it, with its modifiers. Ratzilla 0.3.1 reports such
+    /// a key as unidentified, so without this a text field could not type it.
+    ///
+    /// A character composed with <kbd>Option</kbd> on a Mac still arrives
+    /// with Alt held, and one composed with `AltGr` on Windows with Ctrl+Alt
+    /// held. A text field types Ctrl+Alt with any character but an ASCII
+    /// letter or digit, but takes Alt with a character as a chord: typing
+    /// Option compositions needs the page, or the app's own key capture, to
+    /// forward them without the modifiers, as the demos' keyboard script does.
+    ///
+    /// Install one per app, given its element as for [`BrowserClipboard`].
+    #[must_use = "dropping the guard removes its browser listener"]
+    pub struct BrowserInput {
+        app: Element,
+        on_key: Closure<dyn FnMut(KeyboardEvent)>,
+    }
+
+    impl std::fmt::Debug for BrowserInput {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("BrowserInput").finish_non_exhaustive()
+        }
+    }
+
+    impl BrowserInput {
+        /// Install the listener for the app drawn in `app`: the canvas a
+        /// canvas backend draws on, or the element holding it; for a DOM
+        /// backend, the element whose id was given as its `grid_id`.
+        ///
+        /// `on_event` routes one event and reports whether the app took it,
+        /// as for [`BrowserClipboard::install`]. Write what the app put on
+        /// the clipboard from inside it, as after any other event.
+        ///
+        /// # Errors
+        ///
+        /// Returns an I/O error if `app` refuses the listener.
+        pub fn install(
+            app: &Element,
+            mut on_event: impl FnMut(Event) -> bool + 'static,
+        ) -> io::Result<Self> {
+            // On the way up from the canvas, after Ratzilla's listener has
+            // dropped the key, and after a page script that forwards keys to
+            // the canvas, as the demos' does, has had its say.
+            let on_key = Closure::new(move |event: KeyboardEvent| {
+                let modifiers = Modifiers {
+                    ctrl: event.ctrl_key(),
+                    alt: event.alt_key(),
+                    shift: event.shift_key(),
+                };
+                if let Some(key) = non_ascii_key(&event.key(), modifiers)
+                    && on_event(Event::Key(key))
+                {
+                    event.prevent_default();
+                }
+            });
+            app.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref())
+                .map_err(|error| io::Error::other(format!("keydown listener: {error:?}")))?;
+            Ok(Self {
+                app: app.clone(),
+                on_key,
+            })
+        }
+    }
+
+    impl Drop for BrowserInput {
+        fn drop(&mut self) {
+            let _ = self.app.remove_event_listener_with_callback(
+                "keydown",
+                self.on_key.as_ref().unchecked_ref(),
+            );
+        }
+    }
+
     /// Show `shape` as the mouse pointer over `app`, the element the app is
     /// drawn in: the canvas a canvas backend draws on, or the element holding
     /// it; for a `DomBackend`, the element whose id was given as its
@@ -727,7 +804,7 @@ mod browser_clipboard {
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "ratzilla"))]
-pub use browser_clipboard::{BrowserClipboard, set_browser_pointer_shape};
+pub use browser_clipboard::{BrowserClipboard, BrowserInput, set_browser_pointer_shape};
 
 #[cfg(feature = "ratzilla")]
 mod ratzilla_conv {
@@ -785,6 +862,26 @@ mod ratzilla_conv {
 
         fn try_from(event: ratzilla::event::KeyEvent) -> Result<Self, Self::Error> {
             KeyEvent::try_from(event).map(Event::Key)
+        }
+    }
+
+    /// The key a browser `keydown` named `key` types when Ratzilla cannot say:
+    /// one non-ASCII character, `ä` or `€`. Ratzilla 0.3.1 takes a key name
+    /// as a character only when it is one byte long, and reports the rest as
+    /// unidentified. An ASCII character is Ratzilla's to convert, so it is
+    /// left alone here, or it would arrive twice.
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(dead_code, reason = "BrowserInput is wasm-only; tested natively")
+    )]
+    pub(super) fn non_ascii_key(key: &str, modifiers: Modifiers) -> Option<KeyEvent> {
+        let mut chars = key.chars();
+        match (chars.next(), chars.next()) {
+            (Some(char), None) if !char.is_ascii() => Some(KeyEvent {
+                code: KeyCode::Char(char),
+                modifiers,
+            }),
+            _ => None,
         }
     }
 
@@ -1241,6 +1338,7 @@ mod crossterm_tests {
 
 #[cfg(all(test, feature = "ratzilla"))]
 mod ratzilla_tests {
+    use super::ratzilla_conv::non_ascii_key;
     use super::{
         Event, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseKind, Unsupported,
     };
@@ -1338,5 +1436,30 @@ mod ratzilla_tests {
         )));
 
         assert_eq!(event, Err(Unsupported));
+    }
+
+    /// Ratzilla drops every key whose name is longer than one byte, so the
+    /// browser listener converts those itself. Counting bytes, as Ratzilla
+    /// does, would drop `ä` again; taking ASCII too would type it twice.
+    #[test]
+    fn a_browser_key_typing_one_non_ascii_character_converts() {
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        };
+        for key in ["ä", "é", "€", "ж", "字", "😀"] {
+            let char = key.chars().next().unwrap();
+            assert_eq!(
+                non_ascii_key(key, alt),
+                Some(KeyEvent {
+                    code: KeyCode::Char(char),
+                    modifiers: alt,
+                }),
+                "{key:?}"
+            );
+        }
+        for key in ["a", "@", "{", "Enter", "Dead", "Unidentified", "ä̈", ""] {
+            assert_eq!(non_ascii_key(key, Modifiers::NONE), None, "{key:?}");
+        }
     }
 }

@@ -920,7 +920,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
         let mut widget = InputWidget::new(state)
             .placeholder(&self.placeholder)
             .focused(ctx.focused())
-            .hovered(ctx.hovered())
+            .hovered(ctx.hovered() && self.value.is_some())
             .disabled(self.disabled)
             .invalid(self.invalid)
             .style(style);
@@ -938,11 +938,13 @@ impl<S: 'static, M: 'static> Component<S, M> for Input<S, M> {
         }
         let editor = ctx.with_buffer(ctx.area(), |area, buf| widget.paint(area, buf));
         self.painted = Some((state.version(), editor));
-        ctx.set_pointer_shape(if self.disabled {
-            PointerShape::NotAllowed
-        } else {
-            PointerShape::Text
-        });
+        // An unbound field takes no text, so it shows no beam; a disabled one
+        // says so with NotAllowed.
+        if self.disabled {
+            ctx.set_pointer_shape(PointerShape::NotAllowed);
+        } else if self.value.is_some() {
+            ctx.set_pointer_shape(PointerShape::Text);
+        }
     }
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
@@ -1157,6 +1159,43 @@ mod tests {
             render_with(&mut driver, &state, make);
             assert_eq!(driver.ratcn.pointer_shape(), shape);
         }
+    }
+
+    /// An unbound field takes no text, so the pointer over it must not say
+    /// it does: no beam and no hover fill. Rejects a shape and fill gated
+    /// only on `disabled`.
+    #[test]
+    fn an_unbound_field_under_the_pointer_paints_its_rest() {
+        let mut driver = driver();
+        let mut state = state("hello");
+        render_with(&mut driver, &state, Input::new);
+        let rest = driver.cell(2, 0).bg;
+        route(&mut driver, &mut state, mouse(MouseKind::Moved, 2, 0));
+        render_with(&mut driver, &state, Input::new);
+
+        assert_eq!(driver.cell(2, 0).bg, rest);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
+    }
+
+    /// The app may refuse an edit, a length limit say. The next key must
+    /// edit the value the app kept, not the refused one. Rejects editing
+    /// the painted editor in place.
+    #[test]
+    fn a_refused_edit_leaves_the_next_key_editing_the_kept_value() {
+        let mut driver = driver();
+        let state = state("abc");
+        render(&mut driver, &state);
+
+        let EventResult::Emit(Msg::Name(refused)) = driver.event(key(KeyCode::Char('x')), &state)
+        else {
+            panic!("typing should emit");
+        };
+        assert_eq!(refused.value(), "abcx");
+        let EventResult::Emit(Msg::Name(next)) = driver.event(key(KeyCode::Char('y')), &state)
+        else {
+            panic!("typing should emit");
+        };
+        assert_eq!(next.value(), "abcy");
     }
 
     /// Route one event and store what it emits, as the app's update would.
@@ -1579,13 +1618,18 @@ mod tests {
             Event::Paste("x".to_owned()),
             mouse(LEFT_DOWN, 1, 0),
             mouse(MouseKind::Click(MouseButton::Left), 1, 0),
-            mouse(LEFT_DRAG, 2, 0),
         ] {
             assert!(
                 matches!(driver.event(event.clone(), &state), EventResult::Ignored),
                 "{event:?}"
             );
         }
+        // Held motion is never `Ignored` once a surface exists (the runtime's
+        // floor); the field itself answers nothing, so no message comes back.
+        assert!(matches!(
+            driver.event(mouse(LEFT_DRAG, 2, 0), &state),
+            EventResult::Consumed
+        ));
         assert_eq!(
             driver.cell(5, 0).bg,
             InputStyle::from_theme(&Theme::default_dark()).background,

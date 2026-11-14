@@ -378,7 +378,7 @@ mod web_host {
 
     use gloo_timers::callback::Timeout;
     use ratatui::{Terminal, backend::Backend};
-    use ratcn::runtime::{BrowserClipboard, Event, set_browser_pointer_shape};
+    use ratcn::runtime::{BrowserClipboard, BrowserInput, Event, set_browser_pointer_shape};
     use ratzilla::{
         WebEventHandler, WebRenderer,
         web_sys::{
@@ -411,6 +411,9 @@ mod web_host {
         /// The clipboard listeners, held for their `Drop`: the host owns them
         /// for as long as it drives the demo, and letting go uninstalls them.
         _clipboard: RefCell<Option<BrowserClipboard>>,
+        /// The listener for the keys Ratzilla misses, held for the same
+        /// reason.
+        _input: RefCell<Option<BrowserInput>>,
         /// The window resize listener, held for the same reason.
         _resize: RefCell<Option<Closure<dyn FnMut()>>>,
     }
@@ -439,6 +442,7 @@ mod web_host {
             requested: Cell::new(false),
             timer: RefCell::new(None),
             _clipboard: RefCell::new(None),
+            _input: RefCell::new(None),
             _resize: RefCell::new(None),
         });
 
@@ -448,20 +452,29 @@ mod web_host {
         }));
 
         if D::INPUT {
+            let input = BrowserInput::install(&body, {
+                let host = Rc::clone(&host);
+                move |event| host.on_input(event)
+            })?;
             let mut terminal = host.terminal.borrow_mut();
             terminal
                 .on_key_event({
                     let host = Rc::clone(&host);
-                    move |key| host.on_input(key)
+                    move |key| {
+                        host.on_input(key);
+                    }
                 })
                 .map_err(|error| io::Error::other(error.to_string()))?;
             // Ratzilla reports browser pointer positions in terminal cells.
             terminal
                 .on_mouse_event({
                     let host = Rc::clone(&host);
-                    move |mouse| host.on_input(mouse)
+                    move |mouse| {
+                        host.on_input(mouse);
+                    }
                 })
                 .map_err(|error| io::Error::other(error.to_string()))?;
+            *host._input.borrow_mut() = Some(input);
         }
 
         if D::CLIPBOARD {
@@ -563,14 +576,15 @@ mod web_host {
             }
         }
 
-        /// Route a key or mouse event, and write out whatever it put on the
-        /// clipboard.
-        fn on_input(self: &Rc<Self>, event: impl TryInto<Event>) {
-            self.on_event(event);
+        /// Route a key or mouse event, write out whatever it put on the
+        /// clipboard, and report whether the demo took it.
+        fn on_input(self: &Rc<Self>, event: impl TryInto<Event>) -> bool {
+            let handled = self.on_event(event);
             let written = self.demo.borrow_mut().take_clipboard();
             if let Some(text) = written {
                 BrowserClipboard::write(&text);
             }
+            handled
         }
 
         /// Route one browser event, and report whether the demo took it — which
