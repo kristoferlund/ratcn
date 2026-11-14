@@ -16,7 +16,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already holds, so a long list can be declared without copying its items
   every frame.
 - `BrowserInput` (wasm, `ratzilla` feature), a guard beside `BrowserClipboard`
-  that delivers what Ratzilla misses: non-ASCII keys and the mouse wheel.
+  that delivers the non-ASCII keys Ratzilla drops.
 - `list_core::PressedItem`, so a custom item component can hold a click to the
   item that was pressed, as `List` and `Select` now do.
 
@@ -49,8 +49,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Controls show hover fill and a hand or text-beam pointer only where a click
   acts. An all-disabled `Select` no longer opens on a click.
 - Dragging a `Dialog` after a resize clamped it no longer has a dead zone.
-- Browser demos type Option and AltGr characters such as `@` on a Swedish Mac,
-  and scroll with the mouse wheel without scrolling the page.
+- Browser demos type Option and AltGr characters such as `@` on a Swedish Mac.
 
 ## [0.1.0] - 2026-11-11
 
