@@ -1,5 +1,5 @@
 ---
-description: "Wiring the ratcn runtime into a host loop: a terminal Session that opens and restores the terminal, the event loop, a crossterm or browser host, and carrying out clipboard writes."
+description: "Wiring the ratcn runtime into a host loop: a terminal Session that opens and restores the terminal and sets the pointer, progress, title, program status, and clipboard; the event loop; a crossterm or browser host."
 ---
 
 # Host integration
@@ -34,7 +34,33 @@ cargo add ratatui --no-default-features --features layout-cache,std
 
 The feature re-exports termina as `ratcn::terminal::termina`, so its types, such
 as the `termina::Event` inside `SessionEvent::Input`, are named through ratcn at
-the version ratcn already builds against.
+the version ratcn already builds against. The session's backend covers
+Ratatui's default features; keep `scrolling-regions` off.
+
+### What a session does
+
+Automatically:
+
+- **[Synchronized output](#synchronized-output):** each frame reaches the
+  screen whole.
+- **[Color depth](#color-depth):** frames use the colors the terminal has.
+- **[Restoring the terminal](#restoring-the-terminal):** everything the
+  session changed goes back on exit, including after a panic.
+
+On request:
+
+| Method | Sets | Details |
+|---|---|---|
+| `set_pointer_shape` | The mouse pointer shape (OSC 22) | [Pointer shape](./mouse#pointer-shape) |
+| `set_progress` | The terminal's progress indicator (OSC 9;4) | [Progress in the terminal](../components/progress#progress-in-the-terminal) |
+| `set_title` | The window and tab title (OSC 2) | [The window title](#the-window-title) |
+| `set_program_status` | What the app is doing (OSC 7501) | [Program status](#program-status) |
+| `set_clipboard` | The system clipboard (OSC 52) | [The terminal clipboard](#the-terminal-clipboard) |
+
+Call the first four after each frame; each writes only when its value changes.
+Call `set_clipboard` when the app copies.
+
+### Options
 
 `SessionOptions::new()` opens the alternate screen, and each builder adds a
 mode:
@@ -48,22 +74,21 @@ mode:
 - `.adaptive()` follows the terminal's colors; see
   [Opening adaptively](#opening-adaptively).
 
-Whatever the options, each frame drawn through `session.terminal_mut()` goes
-out as one synchronized update (mode 2026): the terminal shows it only once it
-has arrived whole, so a large redraw or a resize does not tear. Terminals
-without the mode ignore it. A frame left open by a draw that failed, or by
-`clear` on its own, is closed when the app next waits in `session.next`.
+### Synchronized output
 
-On a terminal without 24-bit color, every frame is drawn with the nearest
-colors it has: the 256-color palette, or the 16 named colors, where each theme
-color keeps its hue (a destructive red stays red). The session judges this from
-`COLORTERM` and `TERM`, as most terminal libraries do, and where they do not say
-24-bit it asks the terminal while opening, which costs one round trip. Over
-SSH, which drops `COLORTERM`, a 24-bit terminal that does not answer gets 256
-colors; set `COLORTERM=truecolor` to keep them all.
+Each frame drawn through `session.terminal_mut()` goes out as one synchronized
+update (mode 2026): the terminal shows it once it has arrived whole, so large
+redraws and resizes stay clean. A frame left open by a failed draw, or by
+`clear` on its own, closes at the next `session.next`.
 
-The session's backend does not implement Ratatui's `scrolling-regions`
-feature, so an app that turns it on does not build against a session.
+### Color depth
+
+Each frame is drawn in the colors the terminal has: 24-bit, the 256-color
+palette, or the 16 named colors. With 16, each theme color keeps its hue, so a
+destructive red stays red. The session reads the depth from `COLORTERM` and
+`TERM`, and when they leave it open, asks the terminal while opening (one round
+trip). Over SSH, which drops `COLORTERM`, a terminal that stays silent gets 256
+colors; set `COLORTERM=truecolor` to use 24-bit.
 
 ### Opening with a preset theme
 
@@ -124,7 +149,8 @@ Dropping the `Session` switches every mode it turned on back off, in the reverse
 of the order it turned them on, and shows the cursor again. That happens on
 every path out: a `break`, a `?`, and an unwinding panic, which the session
 installs a hook for. It also gives back what the app changed outside the grid:
-the pointer shape, the progress indicator, and the window title.
+the pointer shape, the progress indicator, the window title, and the program
+status.
 
 ## The event loop
 
@@ -224,7 +250,7 @@ returns `InvalidInput`.
 | Ghostty | Parsed, not shown yet |
 | tmux | Not forwarded |
 
-Terminals that do not know it ignore it. It complements
+It complements
 [the terminal's progress indicator](../components/progress#progress-in-the-terminal),
 which more terminals show today; an app can send both. The `program-status`
 demo does.
