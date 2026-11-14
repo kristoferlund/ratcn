@@ -899,6 +899,10 @@ mod browser_clipboard {
             );
             wheel.borrow_mut().took(took);
             took_any |= took;
+            // A refused step answers for the rest of this event's travel.
+            if !took {
+                break;
+            }
         }
         if took_any || wheel.borrow().taking() {
             event.prevent_default();
@@ -1139,7 +1143,7 @@ mod ratzilla_conv {
         /// answer decides whose the turn is.
         pub(super) const fn took(&mut self, taken: bool) {
             self.owner = match (self.owner, taken) {
-                (Owner::Undecided, false) => Owner::Page,
+                (Owner::Undecided, false) | (Owner::Page, _) => Owner::Page,
                 (_, taking) => Owner::App { taking },
             };
         }
@@ -1850,6 +1854,15 @@ mod ratzilla_tests {
         assert_eq!(wheel.turn(0.25, 500.0), 1, "after a rest, a new turn");
         wheel.took(true);
         assert!(wheel.taking(), "which the list takes");
+
+        // A fast spin's first event can carry several notches. Its steps are
+        // answered one by one, and a second refusal must not hand the turn
+        // to the app.
+        assert_eq!(wheel.turn(2.0, 1000.0), 2);
+        wheel.took(false);
+        wheel.took(false);
+        let rest = turn(&mut wheel, 1000.0, 10.0, &[0.5; 8]);
+        assert_eq!(rest, [0; 8], "still the page's");
     }
 
     /// A trackpad held still jitters back and forth by a hair. Within a turn
