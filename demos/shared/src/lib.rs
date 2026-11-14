@@ -38,7 +38,7 @@ pub const ANIMATION_FRAME: Duration = Duration::from_millis(16);
 /// One demo, in the shape a host can drive.
 pub trait Demo {
     /// Whether the demo reads input. Turning it on installs the browser's
-    /// listeners and takes over the terminal's mouse.
+    /// key, mouse, and wheel listeners and takes over the terminal's mouse.
     const INPUT: bool = true;
 
     /// Whether the host delivers the clipboard's events — bracketed paste
@@ -411,8 +411,8 @@ mod web_host {
         /// The clipboard listeners, held for their `Drop`: the host owns them
         /// for as long as it drives the demo, and letting go uninstalls them.
         _clipboard: RefCell<Option<BrowserClipboard>>,
-        /// The listener for the keys Ratzilla misses, held for the same
-        /// reason.
+        /// The listeners for the keys and the wheel Ratzilla misses, held
+        /// for the same reason.
         _input: RefCell<Option<BrowserInput>>,
         /// The window resize listener, held for the same reason.
         _resize: RefCell<Option<Closure<dyn FnMut()>>>,
@@ -465,14 +465,10 @@ mod web_host {
                     }
                 })
                 .map_err(|error| io::Error::other(error.to_string()))?;
-            // Ratzilla reports browser pointer positions in terminal cells.
+            // Ratzilla reports browser pointer positions in terminal cells;
+            // the input listener keeps the last one for the wheel.
             terminal
-                .on_mouse_event({
-                    let host = Rc::clone(&host);
-                    move |mouse| {
-                        host.on_input(mouse);
-                    }
-                })
+                .on_mouse_event(input.mouse_handler())
                 .map_err(|error| io::Error::other(error.to_string()))?;
             *host._input.borrow_mut() = Some(input);
         }
@@ -576,8 +572,8 @@ mod web_host {
             }
         }
 
-        /// Route a key or mouse event, write out whatever it put on the
-        /// clipboard, and report whether the demo took it.
+        /// Route a key, mouse, or wheel event, write out whatever it put on
+        /// the clipboard, and report whether the demo took it.
         fn on_input(self: &Rc<Self>, event: impl TryInto<Event>) -> bool {
             let handled = self.on_event(event);
             let written = self.demo.borrow_mut().take_clipboard();

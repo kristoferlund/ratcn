@@ -236,24 +236,25 @@ See [Host integration](./host-integration#the-event-loop) for the loop.
 
 The browser backend (Ratzilla) reports mouse positions directly in **terminal
 cell** coordinates (`col`/`row`), the same space as crossterm, so no pixel
-conversion or app-side mapping is needed. With ratcn's `ratzilla` feature, pass
-the callback event directly to the runtime:
+conversion or app-side mapping is needed. With ratcn's `ratzilla` feature,
+`BrowserInput` routes Ratzilla's mouse events to the runtime through the
+closure it was installed with, and adds the wheel Ratzilla lacks:
 
 ```rust
-terminal.on_mouse_event({
-    let app = Rc::clone(&app);
-    move |mouse_event| {
-        app.borrow_mut().handle_event(mouse_event);
-    }
-}).map_err(|error| io::Error::other(error.to_string()))?;
+terminal
+    .on_mouse_event(input.mouse_handler())
+    .map_err(|error| io::Error::other(error.to_string()))?;
 ```
 
 The conversion accepts Ratzilla's raw `ButtonDown`/`ButtonUp`/`Moved` stream,
 plus `Exited` for the pointer leaving the grid. It ignores Ratzilla's
 `SingleClick`/`DoubleClick`, because the runtime synthesizes clicks and drags
-the same way for native and browser input. Ratzilla reports no wheel. An app
-that writes the clipboard routes mouse events through the `route` function in
-[Host integration](./host-integration#the-browser-clipboard) instead.
+the same way for native and browser input. Ratzilla keeps a single mouse
+callback, so wiring another in place of `mouse_handler` loses the wheel. See
+[Host integration](./host-integration#routing-events) for installing
+`BrowserInput`, and the `route` function in
+[Host integration](./host-integration#the-browser-clipboard) for an app that
+writes the clipboard.
 
 Page focus, key capture, and browser default prevention stay with the host.
 The demos' shared host script shows one working policy (forwarding captured

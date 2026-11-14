@@ -281,6 +281,8 @@ after each event. See [Host integration](../concepts/host-integration#the-clipbo
 - **Two editor chords belong to the browser off a Mac.** `Ctrl+V` pastes
   rather than paging down, and the browser may keep `Ctrl+W` to close the tab
   rather than delete a word. Use `Page Down` and `Alt+Backspace`.
+- **The wheel needs `BrowserInput` in the browser**, since Ratzilla reports
+  none. See [Host integration](../concepts/host-integration#routing-events).
 - **A page selection survives a click into the field in the browser.** It
   stays highlighted, but a copy in the field never copies it.
 - **Safari is unverified.**
