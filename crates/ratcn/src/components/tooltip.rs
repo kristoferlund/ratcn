@@ -39,6 +39,12 @@ const BORDER_ROWS: u16 = 2;
 /// Child id of the hint layer [`Tooltip`] declares.
 const BUBBLE_ID: &str = "bubble";
 
+/// Set when Esc asks to close, and cleared by the first declaration that
+/// finds the pointer outside the trigger. Until then, motion over the trigger
+/// does not ask to reopen the bubble the user just closed.
+#[derive(Debug, Default, Clone, Copy)]
+struct ClosedByEsc(bool);
+
 /// Which side of the trigger the tooltip bubble is placed on.
 ///
 /// This is a preference, not a guarantee: [`Tooltip`] flips to the opposite
@@ -277,7 +283,8 @@ type TriggerFn<S, M> = Box<dyn FnOnce(&mut DeclareCtx<'_, S, M>)>;
 /// keeps a flag the Tooltip should change. It asks for two:
 ///
 /// - `on_open_change(true)` when the pointer moves over the trigger while the
-///   tooltip is closed.
+///   tooltip is closed. After Esc closed it, the pointer has to leave the
+///   trigger first.
 /// - `on_open_change(false)` on an unmodified Esc, while the tooltip is open
 ///   and focus is somewhere inside the trigger — the key bubbles out of the
 ///   focused child to the Tooltip.
@@ -487,6 +494,9 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
         // Read before the trigger declares: the question is about this
         // Tooltip's subtree, which is what is open right now.
         self.pointer_within = ctx.pointer_within_area();
+        if !self.pointer_within {
+            *ctx.transient::<ClosedByEsc>() = ClosedByEsc(false);
+        }
         let open = self.is_open(ctx.state());
         if let Some(trigger) = self.trigger.take() {
             trigger(ctx);
@@ -520,22 +530,22 @@ impl<S: 'static, M: 'static> Component<S, M> for Tooltip<S, M> {
         });
     }
 
-    fn handle_event(
-        &mut self,
-        event: &Event,
-        state: &S,
-        _ctx: &mut EventCtx<'_>,
-    ) -> EventResult<M> {
+    fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
         let open = self.is_open(state);
         match event {
             // Esc bubbles here out of whatever inside the trigger holds focus.
             Event::Key(key) if open && key.code == KeyCode::Esc && !key.modifiers.any() => {
+                *ctx.transient::<ClosedByEsc>() = ClosedByEsc(true);
                 self.request(false)
             }
             // The pointer entering the trigger is the one hover transition a
             // component can see; leaving routes elsewhere and never reaches
             // here, so closing on leave is read from app state instead.
-            Event::Mouse(mouse) if !open && mouse.kind == MouseKind::Moved => self.request(true),
+            Event::Mouse(mouse)
+                if !open && mouse.kind == MouseKind::Moved && !ctx.transient::<ClosedByEsc>().0 =>
+            {
+                self.request(true)
+            }
             _ => EventResult::Ignored,
         }
     }
@@ -848,6 +858,53 @@ mod tests {
         assert_eq!(
             driver.event(Event::Key(KeyEvent::new(KeyCode::Esc)), &closed),
             EventResult::Ignored
+        );
+    }
+
+    /// Esc is the user saying "not now". A pointer still resting on the
+    /// trigger must not undo that on its next twitch; leaving and coming
+    /// back is a fresh ask. Without the guard, the first motion after Esc
+    /// asks to open again.
+    #[test]
+    fn after_escape_the_pointer_must_leave_the_trigger_before_it_reopens() {
+        let mut driver = driver(30, 10);
+        let mut state = State {
+            focus: FocusState::intent(["tip", "save"]),
+            ..State::default()
+        };
+        let trigger = Rect::new(2, 5, 8, 3);
+        let step = |driver: &mut Driver<State, Msg>, event, state: &mut State| {
+            let result = driver.event(event, state);
+            if let EventResult::Emit(Msg::Open(open)) = result {
+                state.open = open;
+            }
+            render_tooltip(driver, state, trigger, TooltipSide::Top);
+            result
+        };
+        render_tooltip(&mut driver, &state, trigger, TooltipSide::Top);
+
+        assert_eq!(
+            step(&mut driver, mouse(MouseKind::Moved, 4, 6), &mut state),
+            EventResult::Emit(Msg::Open(true))
+        );
+        assert_eq!(
+            step(
+                &mut driver,
+                Event::Key(KeyEvent::new(KeyCode::Esc)),
+                &mut state
+            ),
+            EventResult::Emit(Msg::Open(false))
+        );
+        assert_eq!(
+            step(&mut driver, mouse(MouseKind::Moved, 5, 6), &mut state),
+            EventResult::Consumed,
+            "motion within the trigger does not reopen what Esc closed"
+        );
+        step(&mut driver, mouse(MouseKind::Moved, 20, 1), &mut state);
+        assert_eq!(
+            step(&mut driver, mouse(MouseKind::Moved, 4, 6), &mut state),
+            EventResult::Emit(Msg::Open(true)),
+            "coming back after leaving asks again"
         );
     }
 

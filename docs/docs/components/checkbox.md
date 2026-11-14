@@ -70,6 +70,10 @@ Two options are a Checkbox wearing its states as labels; three or more are a
 
 `.disabled(true)` mutes the row, takes it out of Tab order, and ignores events.
 Pass the flag from app state, which is in scope while declaring.
+Disabling takes effect at the next render
+([what an event sees](../concepts/rendering-and-events#what-an-event-sees)),
+and a click on a disabled checkbox never reaches an overlapping sibling behind
+it.
 
 ## Styling
 

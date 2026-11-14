@@ -317,7 +317,9 @@ let app = Rc::new(RefCell::new(App::new()));
 
 terminal.on_key_event({
     let app = Rc::clone(&app);
-    move |event| app.borrow_mut().handle_event(event)
+    move |event| {
+        app.borrow_mut().handle_event(event);
+    }
 }).map_err(|error| io::Error::other(error.to_string()))?;
 ```
 
@@ -326,11 +328,23 @@ An app with text fields routes both through the `route` function in
 [The browser clipboard](#the-browser-clipboard) instead, so a copy reaches the
 clipboard.
 
+Ratzilla 0.3.1 reports a key that types a non-ASCII character (`ä`, `é`, `€`)
+as unidentified, so a text field cannot type it in the browser.
+
 Ratzilla's canvas takes focus but leaves Tab to the browser, which moves focus
 off the canvas: keys, and the clipboard chords with them, then go to the page.
 An app that uses Tab for its own focus traversal stops Tab's default while the
 canvas has focus, as the demos' `demos/shared/ratatui-keyboard-capture.js`
 does.
+
+A character composed with Option on a Mac arrives with Alt held, `@` from
+Option+2 on a Swedish Mac, and one composed with AltGr on Windows with Ctrl+Alt
+held, `€` from AltGr+E. On Linux AltGr arrives with neither. A text field takes Alt with a character as a chord, so the demos'
+script forwards a composed character without those modifiers, and matches
+only the page's own Alt hotkeys by physical key, which macOS would otherwise
+compose into another character. Off a Mac, Alt alone is always a chord. Text
+wins over a hotkey: where Option types punctuation, `@` from Option+2 on a
+Swedish Mac, a field types it rather than the hotkey firing.
 
 ### Drawing
 

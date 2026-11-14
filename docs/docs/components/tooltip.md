@@ -76,7 +76,9 @@ Use `.open(read, on_open_change)` instead when the app keeps a flag of its own
 that the Tooltip should change, such as a first-run hint or a validation
 failure. That form bundles the same reader with a message: the component asks
 for `true` when the pointer moves onto the trigger, and `false` on Esc while
-showing. Neither `.open_when(...)` nor the default emits anything, since there
+showing. After Esc, it asks again only once the pointer has left the trigger,
+so a pointer still resting there does not reopen what the user just closed.
+Neither `.open_when(...)` nor the default emits anything, since there
 is nothing to write.
 
 ## Placement

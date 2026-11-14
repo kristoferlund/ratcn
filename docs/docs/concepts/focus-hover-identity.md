@@ -124,7 +124,8 @@ Two places read it:
   declaration or anything inside it.
 
 A pointer motion always returns at least `Consumed`, whether or not it moved
-hover and whether or not a component handled it. Treat that as your redraw
+hover, whether or not a button is held, and whether or not a component handled
+it. Treat that as your redraw
 signal: the frame on screen may no longer show what the pointer is on, or where
 it is.
 

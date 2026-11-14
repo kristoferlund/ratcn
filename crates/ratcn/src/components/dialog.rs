@@ -258,7 +258,9 @@ impl<S, M> fmt::Debug for DialogFooter<S, M> {
 /// Opening and closing is the app's. Keep the open dialogs in a
 /// [`ModalState`](crate::runtime::ModalState) and bind it with
 /// [`Ratcn::modals`](crate::runtime::Ratcn::modals); that also handles saving and
-/// restoring the focus the user had before the dialog opened.
+/// restoring the focus the user had before the dialog opened, and closes the
+/// gap before the next redraw in which an unbound dialog the app has already
+/// closed can still be dismissed or activated a second time.
 ///
 /// # Children
 ///
@@ -740,7 +742,11 @@ impl<S: 'static, M: 'static> Component<S, M> for Dialog<S, M> {
         // the original allocation needed to clamp the app-owned offset.
         let box_area = ctx.area();
         let can_start = self.drag_enabled() && is_border(box_area, mouse.column, mouse.row);
-        match ctx.drag(mouse, DragOptions::new(self.offset).start_if(can_start)) {
+        // Anchor where the box is painted: after a resize the stored offset
+        // can lie past the clamp, and the drag would not move until the
+        // pointer had crossed the difference.
+        let anchor = clamp_offset(self.paint_area, self.layout.base, self.offset);
+        match ctx.drag(mouse, DragOptions::new(anchor).start_if(can_start)) {
             DragPhase::Down | DragPhase::Ended { .. } => EventResult::Consumed,
             DragPhase::Moved { offset, .. } => {
                 self.on_offset_change
@@ -1282,6 +1288,49 @@ mod tests {
         );
     }
 
+    /// A resize can clamp the painted box short of the stored offset. The
+    /// drag must start from where the box is painted: anchored at the stored
+    /// offset, the first cells of movement land past the clamp and the box
+    /// does not follow the pointer.
+    #[test]
+    fn a_drag_after_a_resize_starts_from_the_clamped_box() {
+        let mut driver = driver(80, 12);
+        let state = State {
+            offset: CellOffset::new(14, 0),
+            ..State::default()
+        };
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            let area = driver.area();
+            driver.render(state, |ctx| {
+                ctx.modal(
+                    ChildId::Static("dialog"),
+                    Dialog::new()
+                        .title("T")
+                        .outer_width(20)
+                        .outer_height(5)
+                        .offset(state.offset)
+                        .on_offset_change(Msg::Moved),
+                    area,
+                );
+            });
+        };
+        render(&mut driver, &state);
+        driver.terminal.backend_mut().resize(40, 12);
+        render(&mut driver, &state);
+        // Centered at x 10 in 40 columns, so the offset clamps to +10 and the
+        // box's top-left corner paints at (20, 4).
+        assert_eq!(driver.row(4).find('┌'), Some(20));
+
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 22, 4), &state),
+            EventResult::Consumed
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Moved, 21, 4), &state),
+            EventResult::Emit(Msg::Moved(CellOffset::new(9, 0)))
+        );
+    }
+
     #[test]
     fn failed_pass_preserves_the_rendered_offset_and_geometry() {
         let mut state = State::default();
@@ -1722,5 +1771,143 @@ mod tests {
                 });
             ctx.modal(ChildId::Static("dialog"), dialog, area);
         });
+    }
+
+    /// Trace 5, with real components: a form field in a modal dialog over a
+    /// base with its own button.
+    mod nested {
+        use super::*;
+        use crate::test_support::key;
+        use crate::{Button, Input, InputState, Tooltip};
+
+        #[derive(Default)]
+        struct Form {
+            focus: FocusState,
+            name: InputState,
+            tip_open: bool,
+        }
+
+        #[derive(Debug, Clone, PartialEq)]
+        enum Ev {
+            Focus(FocusState),
+            Edited,
+            Tip(bool),
+            Dismissed,
+            BasePressed,
+        }
+
+        fn driver() -> Driver<Form, Ev> {
+            Driver::with(
+                Ratcn::new().focus(|form: &Form| &form.focus, Ev::Focus),
+                60,
+                12,
+            )
+        }
+
+        fn render(
+            driver: &mut Driver<Form, Ev>,
+            form: &Form,
+            content: fn(&mut DeclareCtx<'_, Form, Ev>),
+        ) {
+            let area = driver.area();
+            driver.render(form, |ctx| {
+                ctx.component(
+                    "base",
+                    Button::new("Base").on_press(|| Ev::BasePressed),
+                    Rect::new(0, 0, 6, 1),
+                );
+                ctx.modal(
+                    "dialog",
+                    Dialog::new()
+                        .on_dismiss(|| Ev::Dismissed)
+                        .content(3, content),
+                    area,
+                );
+            });
+        }
+
+        /// A focused field takes what it edits and lets the rest bubble, so
+        /// Esc still dismisses the dialog; anything nobody handles stops at
+        /// the modal, and a press on the base never reaches its button. A
+        /// field that claimed Esc would keep every dialog it sits in open.
+        #[test]
+        fn esc_from_a_focused_field_dismisses_and_nothing_reaches_the_base() {
+            let mut driver = driver();
+            let form = Form {
+                focus: FocusState::intent(["dialog", "name"]),
+                ..Form::default()
+            };
+            render(&mut driver, &form, |ctx| {
+                let area = ctx.area();
+                ctx.component(
+                    "name",
+                    Input::new().value(|form: &Form| &form.name, |_| Ev::Edited),
+                    Rect::new(area.x, area.y, area.width, 3),
+                );
+            });
+
+            assert_eq!(
+                driver.event(key(KeyCode::Esc), &form),
+                EventResult::Emit(Ev::Dismissed)
+            );
+            let ctrl = Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            };
+            assert_eq!(
+                driver.event(key_with(KeyCode::Char('s'), ctrl), &form),
+                EventResult::Consumed,
+                "an app hotkey does not cross an open modal"
+            );
+            for kind in [
+                MouseKind::Down(MouseButton::Left),
+                MouseKind::Up(MouseButton::Left),
+            ] {
+                assert_eq!(
+                    driver.event(mouse(kind, 1, 0), &form),
+                    EventResult::Consumed,
+                    "a press on the base button is absorbed by the modal"
+                );
+            }
+        }
+
+        /// The innermost owner answers Esc first: an open tooltip closes
+        /// before the dialog around it is dismissed.
+        #[test]
+        fn esc_closes_an_open_tooltip_before_it_dismisses_the_dialog() {
+            let mut driver = driver();
+            let mut form = Form {
+                focus: FocusState::intent(["dialog", "tip", "go"]),
+                tip_open: true,
+                ..Form::default()
+            };
+            let frame = |driver: &mut Driver<Form, Ev>, form: &Form| {
+                render(driver, form, |ctx| {
+                    let area = ctx.area();
+                    ctx.component(
+                        "tip",
+                        Tooltip::new("Tip")
+                            .open(|form: &Form, _| form.tip_open, Ev::Tip)
+                            .trigger(|ctx| {
+                                let area = ctx.area();
+                                ctx.component("go", Button::new("Go"), area);
+                            }),
+                        Rect::new(area.x, area.y, 6, 3),
+                    );
+                });
+            };
+            frame(&mut driver, &form);
+
+            assert_eq!(
+                driver.event(key(KeyCode::Esc), &form),
+                EventResult::Emit(Ev::Tip(false))
+            );
+            form.tip_open = false;
+            frame(&mut driver, &form);
+            assert_eq!(
+                driver.event(key(KeyCode::Esc), &form),
+                EventResult::Emit(Ev::Dismissed)
+            );
+        }
     }
 }

@@ -487,7 +487,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Checkbox<S, M> {
             .checked_marker(&self.checked_marker)
             .unchecked_marker(&self.unchecked_marker)
             .focused(ctx.focused())
-            .hovered(ctx.hovered())
+            .hovered(ctx.hovered() && self.can_act())
             .disabled(self.disabled)
             .style(style);
         ctx.widget(widget, ctx.area());
@@ -543,6 +543,7 @@ mod tests {
     struct State {
         focus: FocusState,
         vim: bool,
+        disabled: bool,
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -563,7 +564,9 @@ mod tests {
         driver.render(state, |ctx| {
             ctx.component(
                 ChildId::Static("vim"),
-                Checkbox::new("Vim bindings").checked(|state: &State| state.vim, Msg::Vim),
+                Checkbox::new("Vim bindings")
+                    .disabled(state.disabled)
+                    .checked(|state: &State| state.vim, Msg::Vim),
                 Rect::new(2, 2, 20, 1),
             );
         });
@@ -634,6 +637,121 @@ mod tests {
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 8, 2), &state),
             EventResult::Emit(Msg::Vim(true))
         );
+    }
+
+    /// A press is the runtime's gesture, not the checkbox's: the raw Down
+    /// focuses and the Up on the same row toggles. Right and Middle never
+    /// toggle. Rejects a handler that answers `Down(_)` or any `Click(_)`.
+    #[test]
+    fn a_primary_press_toggles_and_other_buttons_do_not() {
+        let mut driver = driver();
+        let mut state = State {
+            focus: FocusState::none(),
+            ..State::default()
+        };
+        render(&mut driver, &state);
+
+        let EventResult::Emit(Msg::Focus(focus)) =
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 8, 2), &state)
+        else {
+            panic!("a primary press should focus the checkbox");
+        };
+        state.focus = focus;
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 8, 2), &state),
+            EventResult::Emit(Msg::Vim(true))
+        );
+
+        for button in [MouseButton::Right, MouseButton::Middle] {
+            assert_eq!(
+                driver.event(mouse(MouseKind::Down(button), 8, 2), &state),
+                EventResult::Ignored,
+                "{button:?} press"
+            );
+            assert_eq!(
+                driver.event(mouse(MouseKind::Up(button), 8, 2), &state),
+                EventResult::Ignored,
+                "{button:?} release"
+            );
+        }
+    }
+
+    /// Disabledness is what the last frame declared: an app that disables a
+    /// focused checkbox has not disabled it until it renders again, for the
+    /// keyboard and the pointer alike. After that render it is inert.
+    /// Rejects reading disabledness fresh from state at event time.
+    #[test]
+    fn retained_disabledness_holds_until_the_next_render() {
+        let mut driver = driver();
+        let mut state = State {
+            focus: FocusState::intent([ChildId::Static("vim")]),
+            ..State::default()
+        };
+        render(&mut driver, &state);
+        state.disabled = true;
+
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Vim(true))
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 8, 2), &state),
+            EventResult::Consumed
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 8, 2), &state),
+            EventResult::Emit(Msg::Vim(true))
+        );
+
+        render(&mut driver, &state);
+        for event in [
+            key(KeyCode::Enter),
+            mouse(MouseKind::Down(MouseButton::Left), 8, 2),
+            mouse(MouseKind::Up(MouseButton::Left), 8, 2),
+        ] {
+            assert_eq!(driver.event(event, &state), EventResult::Ignored);
+        }
+    }
+
+    /// The app may refuse a toggle. Nothing may remember the refused value:
+    /// the next key asks for the same change again. Rejects a toggle cached
+    /// on the retained instance.
+    #[test]
+    fn a_refused_toggle_is_requested_again() {
+        let mut driver = driver();
+        let state = State::default();
+        render(&mut driver, &state);
+
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Vim(true))
+        );
+        assert_eq!(
+            driver.event(key(KeyCode::Char(' ')), &state),
+            EventResult::Emit(Msg::Vim(true))
+        );
+    }
+
+    /// Hover fill, like the hand, says "a click here acts". An unbound
+    /// checkbox acts on nothing, so the pointer over it changes neither.
+    #[test]
+    fn an_unbound_checkbox_under_the_pointer_paints_its_rest() {
+        let mut driver = driver();
+        let state = State::default();
+        let declare = |ctx: &mut DeclareCtx<'_, State, Msg>| {
+            ctx.component(
+                ChildId::Static("unbound"),
+                Checkbox::new("Unbound"),
+                Rect::new(2, 2, 20, 1),
+            );
+        };
+        driver.render(&state, declare);
+        let rest = driver.cell(8, 2).bg;
+        driver.event(mouse(MouseKind::Moved, 8, 2), &state);
+        driver.render(&state, declare);
+
+        assert_eq!(driver.cell(8, 2).bg, rest);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
     }
 
     /// Hover and focus raise the row the ghost-button way: a fill appears

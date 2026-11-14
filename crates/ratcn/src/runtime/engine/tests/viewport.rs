@@ -1136,3 +1136,111 @@ fn a_target_declared_frames_after_the_app_focused_it_is_revealed_when_it_appears
     render_reveal(&mut driver, &state, &log);
     assert_eq!(log.borrow().as_slice(), [Rect::new(0, 3, 4, 1)]);
 }
+
+#[derive(Default)]
+struct PaneState {
+    focus: FocusState,
+    offset: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum PaneMsg {
+    Focus(FocusState),
+    Offset(u16),
+    Pressed,
+}
+
+fn render_scrolled_pane(driver: &mut Driver<PaneState, PaneMsg>, state: &PaneState) {
+    driver.render(state, |ctx| {
+        ctx.component(
+            "out",
+            Button::new("OUT").on_press(|| PaneMsg::Pressed),
+            Rect::new(0, 11, 8, 1),
+        );
+        let pane = crate::ScrollArea::new(40)
+            .scroll(|state: &PaneState| state.offset, PaneMsg::Offset)
+            .content(|ctx| {
+                for (id, row) in [("b0", 0), ("b16", 16), ("b20", 20)] {
+                    ctx.component(
+                        id,
+                        Button::new(id).on_press(|| PaneMsg::Pressed),
+                        Rect::new(0, row, 8, 1),
+                    );
+                }
+            });
+        ctx.component("scroll", pane, Rect::new(0, 0, 20, 10));
+    });
+}
+
+#[test]
+fn a_press_on_a_scrolled_panes_blank_content_focuses_a_control_on_screen() {
+    // Pressing the blank part of a scrolled pane that does not hold focus
+    // hands focus to its first control fully on screen. Handing it to the
+    // pane's first control instead (row 0, scrolled far above the view)
+    // would reveal it and yank the view back to the top.
+    let mut driver = Driver::with(
+        Ratcn::new().focus(|state: &PaneState| &state.focus, PaneMsg::Focus),
+        20,
+        12,
+    );
+    let mut state = PaneState {
+        focus: FocusState::intent(["out"]),
+        offset: 15,
+    };
+    render_scrolled_pane(&mut driver, &state);
+    assert!(driver.row(1).contains("b16"), "b16 is on screen at row 1");
+
+    let pressed = driver.event(mouse(MouseKind::Down(MouseButton::Left), 12, 8), &state);
+    assert_eq!(
+        pressed,
+        EventResult::Emit(PaneMsg::Focus(FocusState::intent(["scroll", "b16"])))
+    );
+    let EventResult::Emit(PaneMsg::Focus(focus)) = pressed else {
+        unreachable!()
+    };
+    state.focus = focus;
+    render_scrolled_pane(&mut driver, &state);
+    assert!(
+        driver.row(1).contains("b16"),
+        "the press left the view where it was"
+    );
+}
+
+#[test]
+fn a_press_on_a_scrolled_pane_prefers_a_partly_shown_control_to_one_scrolled_away() {
+    // No control is fully on screen, but `tall` is partly. Falling back to
+    // the pane's first control (row 0) would scroll the view to the top.
+    let mut driver = Driver::with(
+        Ratcn::new().focus(|state: &PaneState| &state.focus, PaneMsg::Focus),
+        20,
+        12,
+    );
+    let state = PaneState {
+        focus: FocusState::intent(["out"]),
+        offset: 15,
+    };
+    driver.render(&state, |ctx| {
+        let pane = crate::ScrollArea::new(40)
+            .scroll(|state: &PaneState| state.offset, PaneMsg::Offset)
+            .content(|ctx| {
+                ctx.component(
+                    "b0",
+                    Button::new("b0").on_press(|| PaneMsg::Pressed),
+                    Rect::new(0, 0, 8, 1),
+                );
+                // A Button is one row tall, so a tall control is a scope.
+                ctx.scope(
+                    "tall",
+                    Rect::new(0, 12, 8, 18),
+                    ScopeOptions::default().focusable(true),
+                    |_| {},
+                );
+            });
+        ctx.component("scroll", pane, Rect::new(0, 0, 20, 10));
+    });
+
+    assert_eq!(
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 12, 8), &state),
+        EventResult::Emit(PaneMsg::Focus(FocusState::intent(["scroll", "tall"])))
+    );
+}

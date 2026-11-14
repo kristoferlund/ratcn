@@ -382,7 +382,7 @@ impl<S: 'static, M: 'static> Component<S, M> for Cycle<S, M> {
         let style = resolve_style(self.style.as_deref(), ctx.theme, CycleStyle::from_theme);
         let widget = CycleWidget::new(value)
             .focused(ctx.focused())
-            .hovered(ctx.hovered())
+            .hovered(ctx.hovered() && self.can_act())
             .disabled(self.disabled)
             .style(style);
         ctx.widget(widget, self.value_area(ctx.area(), ctx.state()));
@@ -437,6 +437,7 @@ mod tests {
     struct State {
         focus: FocusState,
         size: usize,
+        disabled: bool,
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -459,7 +460,9 @@ mod tests {
         driver.render(state, |ctx| {
             ctx.component(
                 ChildId::Static("size"),
-                Cycle::new(SIZES).selection(|state: &State| state.size, Msg::Size),
+                Cycle::new(SIZES)
+                    .disabled(state.disabled)
+                    .selection(|state: &State| state.size, Msg::Size),
                 Rect::new(2, 2, 10, 1),
             );
         });
@@ -578,6 +581,127 @@ mod tests {
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 5, 2), &state),
             EventResult::Emit(Msg::Size(1))
         );
+    }
+
+    /// A press is the runtime's gesture, not the cycle's: the raw Down
+    /// focuses and the Up on the same value advances. Right and Middle never
+    /// advance. Rejects a handler that answers `Down(_)` or any `Click(_)`.
+    #[test]
+    fn a_primary_press_advances_and_other_buttons_do_not() {
+        let mut driver = driver();
+        let mut state = State {
+            focus: FocusState::none(),
+            ..State::default()
+        };
+        render(&mut driver, &state);
+
+        let EventResult::Emit(Msg::Focus(focus)) =
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 2), &state)
+        else {
+            panic!("a primary press should focus the cycle");
+        };
+        state.focus = focus;
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 5, 2), &state),
+            EventResult::Emit(Msg::Size(1))
+        );
+
+        for button in [MouseButton::Right, MouseButton::Middle] {
+            assert_eq!(
+                driver.event(mouse(MouseKind::Down(button), 5, 2), &state),
+                EventResult::Ignored,
+                "{button:?} press"
+            );
+            assert_eq!(
+                driver.event(mouse(MouseKind::Up(button), 5, 2), &state),
+                EventResult::Ignored,
+                "{button:?} release"
+            );
+        }
+    }
+
+    /// Disabledness is what the last frame declared: an app that disables a
+    /// focused cycle has not disabled it until it renders again, for the
+    /// keyboard and the pointer alike. After that render it is inert.
+    /// Rejects reading disabledness fresh from state at event time.
+    #[test]
+    fn retained_disabledness_holds_until_the_next_render() {
+        let mut driver = driver();
+        let mut state = State {
+            focus: FocusState::intent([ChildId::Static("size")]),
+            ..State::default()
+        };
+        render(&mut driver, &state);
+        state.disabled = true;
+
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Size(1))
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Down(MouseButton::Left), 5, 2), &state),
+            EventResult::Consumed
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 5, 2), &state),
+            EventResult::Emit(Msg::Size(1))
+        );
+
+        render(&mut driver, &state);
+        for event in [
+            key(KeyCode::Enter),
+            mouse(MouseKind::Down(MouseButton::Left), 5, 2),
+            mouse(MouseKind::Up(MouseButton::Left), 5, 2),
+        ] {
+            assert_eq!(driver.event(event, &state), EventResult::Ignored);
+        }
+    }
+
+    /// A ring has no ends, so a single option still answers: every step
+    /// emits `on_change(0)`, as every press of a Button emits. Rejects a
+    /// List-style "no move, no message" copied into the ring.
+    #[test]
+    fn a_single_option_cycle_emits_its_only_option() {
+        let mut driver = driver();
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("size"),
+                Cycle::new(["Only"]).selection(|state: &State| state.size, Msg::Size),
+                Rect::new(2, 2, 10, 1),
+            );
+        });
+
+        for event in [key(KeyCode::Enter), key(KeyCode::Left)] {
+            assert_eq!(driver.event(event, &state), EventResult::Emit(Msg::Size(0)));
+        }
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), 4, 2), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), 4, 2), &state),
+            EventResult::Emit(Msg::Size(0))
+        );
+    }
+
+    /// Hover fill, like the hand, says "a click here acts". An unbound cycle
+    /// acts on nothing, so the pointer over it changes neither.
+    #[test]
+    fn an_unbound_cycle_under_the_pointer_paints_its_rest() {
+        let mut driver = driver();
+        let state = State::default();
+        let declare = |ctx: &mut DeclareCtx<'_, State, Msg>| {
+            ctx.component(
+                ChildId::Static("size"),
+                Cycle::new(SIZES),
+                Rect::new(2, 2, 10, 1),
+            );
+        };
+        driver.render(&state, declare);
+        let rest = driver.cell(5, 2).bg;
+        driver.event(mouse(MouseKind::Moved, 5, 2), &state);
+        driver.render(&state, declare);
+
+        assert_eq!(driver.cell(5, 2).bg, rest);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
     }
 
     /// A themed Cycle paints the List's ordinary and focused backgrounds. Pinned

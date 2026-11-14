@@ -1010,4 +1010,36 @@ mod tests {
         assert_eq!(with_values.cell((0, 1)).expect("value cell").symbol(), "9");
         assert_eq!(without_values.cell((0, 1)).expect("bar cell").symbol(), "█");
     }
+
+    /// A chart squeezed by layout must neither panic nor spill: whatever an
+    /// empty, one-cell, or cramped area at the buffer edge cannot hold is
+    /// dropped, never painted over the neighbours, in either direction.
+    #[test]
+    fn degenerate_areas_paint_nothing_outside_the_area() {
+        let full = Rect::new(0, 0, 12, 6);
+        for direction in [Direction::Vertical, Direction::Horizontal] {
+            for area in [
+                Rect::ZERO,
+                Rect::new(3, 3, 0, 2),
+                Rect::new(3, 3, 2, 0),
+                Rect::new(11, 5, 1, 1),
+                // Small enough to drop labels, large enough to paint bars.
+                Rect::new(9, 3, 3, 3),
+            ] {
+                let mut buffer = Buffer::empty(full);
+                BarChartWidget::new([Bar::default().value(7).label("x"), Bar::default().value(3)])
+                    .direction(direction)
+                    .render(area, &mut buffer);
+                for (x, y) in (0..full.height).flat_map(|y| (0..full.width).map(move |x| (x, y))) {
+                    if !area.contains((x, y).into()) {
+                        assert_eq!(
+                            buffer[(x, y)],
+                            ratatui::buffer::Cell::default(),
+                            "{direction:?} at {area:?} painted ({x}, {y})"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

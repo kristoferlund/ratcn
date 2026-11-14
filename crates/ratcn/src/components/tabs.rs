@@ -13,7 +13,7 @@ use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, label_sty
 use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
 use crate::geometry::fixed_height;
 use crate::linear_nav::{self, Axis};
-use crate::list_core::{self, KeyIntent};
+use crate::list_core::{self, KeyIntent, PressedItem};
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MeasuredComponent, MouseButton,
     MouseKind, PaintCtx, PointerShape, ScopeOptions, Step,
@@ -688,6 +688,17 @@ impl<T, S, M> Tabs<T, S, M> {
             .map(|(index, _)| *index)
     }
 
+    /// The tab or overflow marker at a cell, as [`PressedItem`] names it.
+    fn hit_at(&self, column: u16, row: u16) -> Option<TabHit<T>>
+    where
+        T: Clone,
+    {
+        match self.tab_at(column, row) {
+            Some(index) => Some(TabHit::Tab(self.items[index].value().clone())),
+            None => self.marker_at(column, row).map(TabHit::Marker),
+        }
+    }
+
     fn marker_at(&self, column: u16, row: u16) -> Option<Step> {
         let point = Position { x: column, y: row };
         if self.hits.left.is_some_and(|rect| rect.contains(point)) {
@@ -778,7 +789,7 @@ where
 
 impl<T, S, M> Component<S, M> for Tabs<T, S, M>
 where
-    T: Clone + PartialEq,
+    T: Clone + PartialEq + 'static,
 {
     fn declare(&mut self, ctx: &mut DeclareCtx<'_, S, M>) {
         // Quadratic in the tab count and re-derived on every frame's fresh
@@ -803,13 +814,17 @@ where
         let cursor = self.cursor_index(state);
         let labels: Vec<&str> = self.items.iter().map(Tab::label).collect();
         let disabled: Vec<bool> = (0..self.items.len()).map(|i| self.disabled_at(i)).collect();
-        let hovered_item = ctx.hover_position().and_then(|position| {
-            self.hits
-                .tabs
-                .iter()
-                .find(|(_, rect)| rect.contains(position))
-                .map(|(index, _)| *index)
-        });
+        // Hover highlights, like the hand below, only where a click selects.
+        let hovered_item = ctx
+            .hover_position()
+            .filter(|_| self.selected.is_some())
+            .and_then(|position| {
+                self.hits
+                    .tabs
+                    .iter()
+                    .find(|(_, rect)| rect.contains(position))
+                    .map(|(index, _)| *index)
+            });
         let style = resolve_style(self.style.as_deref(), ctx.theme, TabsStyle::from_theme);
         let widget = TabsWidget::new(&labels)
             .selected_item(selected)
@@ -822,22 +837,23 @@ where
             .style(style)
             .layout(&self.hits);
         ctx.widget(widget, area);
-        // A hand over an enabled tab, and over an overflow marker.
-        let over_marker = ctx
-            .hover_position()
-            .is_some_and(|position| self.marker_at(position.x, position.y).is_some());
+        // A hand where a click acts: over an enabled tab it would select, and
+        // over an overflow marker whose step something is bound to receive.
+        let marker_acts = match self.activation {
+            TabsActivation::Manual => self.focused_item.is_some(),
+            TabsActivation::Automatic => self.selected.is_some(),
+        };
+        let over_marker = marker_acts
+            && ctx
+                .hover_position()
+                .is_some_and(|position| self.marker_at(position.x, position.y).is_some());
         let over_tab = hovered_item.is_some_and(|index| !self.disabled_at(index));
         if !self.disabled && (over_tab || over_marker) {
             ctx.set_pointer_shape(PointerShape::Pointer);
         }
     }
 
-    fn handle_event(
-        &mut self,
-        event: &Event,
-        state: &S,
-        _ctx: &mut EventCtx<'_>,
-    ) -> EventResult<M> {
+    fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
         if self.disabled || self.items.is_empty() {
             return EventResult::Ignored;
         }
@@ -846,10 +862,16 @@ where
                 // The runtime focuses an unhandled primary down on the hit
                 // component. Consume disabled tabs so that fallback cannot
                 // focus this row when its disabled content was clicked.
-                MouseKind::Down(MouseButton::Left) => match self.tab_at(mouse.column, mouse.row) {
-                    Some(index) if self.disabled_at(index) => EventResult::Consumed,
-                    _ => EventResult::Ignored,
-                },
+                MouseKind::Down(MouseButton::Left) => {
+                    let tab = self.tab_at(mouse.column, mouse.row);
+                    let hit = self.hit_at(mouse.column, mouse.row);
+                    let enabled = tab.is_none_or(|index| !self.disabled_at(index));
+                    PressedItem::press(ctx, hit.filter(|_| enabled));
+                    match tab {
+                        Some(index) if self.disabled_at(index) => EventResult::Consumed,
+                        _ => EventResult::Ignored,
+                    }
+                }
                 // A click commits the clicked tab. Down is left for the runtime to
                 // focus the row itself (the mouse counterpart of Tab). Motion is
                 // not answered: hover is paint-only here, unlike `List` and
@@ -857,9 +879,15 @@ where
                 // is the selection and hovering would switch the panel's
                 // content on the way past.
                 MouseKind::Click(MouseButton::Left) => {
+                    // A click acts only on the tab or marker its press landed
+                    // on, even if a redraw has since moved another under it.
+                    let hit = self.hit_at(mouse.column, mouse.row);
+                    let pressed_here = PressedItem::releases_on(ctx, hit.as_ref());
                     if let Some(index) = self.tab_at(mouse.column, mouse.row) {
                         return if self.disabled_at(index) {
                             EventResult::Ignored
+                        } else if !pressed_here {
+                            EventResult::Consumed
                         } else {
                             self.select(index)
                         };
@@ -867,6 +895,9 @@ where
                     let Some(direction) = self.marker_at(mouse.column, mouse.row) else {
                         return EventResult::Ignored;
                     };
+                    if !pressed_here {
+                        return EventResult::Consumed;
+                    }
                     let edge = match direction {
                         Step::Backward => self.hits.tabs.first(),
                         Step::Forward => self.hits.tabs.last(),
@@ -903,7 +934,16 @@ where
     }
 }
 
-impl<T: Clone + PartialEq, S, M> MeasuredComponent<S, M> for Tabs<T, S, M> {
+/// What a press or click on the row lands on, for
+/// [`PressedItem`](list_core::PressedItem): a tab, by value, or an overflow
+/// marker.
+#[derive(Debug, Clone, PartialEq)]
+enum TabHit<T> {
+    Tab(T),
+    Marker(Step),
+}
+
+impl<T: Clone + PartialEq + 'static, S, M> MeasuredComponent<S, M> for Tabs<T, S, M> {
     fn measure(&self) -> Size {
         Size::new(self.width(), self.height())
     }
@@ -1149,16 +1189,16 @@ mod tests {
         .selection(|s: &State| Some(s.selected), Msg::Selected)
     }
 
-    fn render_runtime(driver: &mut Driver<State, Msg>, state: &State) {
+    /// One frame of Manual tabs in `order`, B disabled when the state says so.
+    fn render_ordered(driver: &mut Driver<State, Msg>, state: &State, order: [Screen; 3]) {
         let area = driver.area();
         driver.render(state, |ctx| {
             ctx.component(
                 ChildId::Static("tabs"),
-                Tabs::new([
-                    Tab::new(Screen::A, "A"),
-                    Tab::new(Screen::B, "B").disabled(state.disable_b),
-                    Tab::new(Screen::C, "C"),
-                ])
+                Tabs::new(order.map(|screen| {
+                    Tab::new(screen, format!("{screen:?}"))
+                        .disabled(state.disable_b && screen == Screen::B)
+                }))
                 .item_focus(
                     |state: &State| Some(state.focused.unwrap_or(state.selected)),
                     Msg::Focused,
@@ -1167,6 +1207,12 @@ mod tests {
                 area,
             );
         });
+    }
+
+    /// The column the last frame painted `screen`'s label at.
+    fn column(driver: &Driver<State, Msg>, screen: Screen) -> u16 {
+        let label = format!("{screen:?}");
+        u16::try_from(driver.row(0).find(&label).expect("tab is painted")).expect("narrow")
     }
 
     #[test]
@@ -1718,11 +1764,237 @@ mod tests {
         );
     }
 
+    /// A redraw between press and release can put another tab under the
+    /// pointer. The click must not select it: the user pressed the other one.
+    #[test]
+    fn a_click_never_selects_a_tab_a_redraw_moved_under_the_press() {
+        let mut driver = Driver::new(20, 1);
+        let state = State::default();
+        render_ordered(&mut driver, &state, [Screen::A, Screen::B, Screen::C]);
+        let a = column(&driver, Screen::A);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), a, 0), &state);
+        render_ordered(&mut driver, &state, [Screen::C, Screen::B, Screen::A]);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), a, 0), &state),
+            EventResult::Consumed,
+            "A was pressed; C is under the release"
+        );
+    }
+
+    /// A press on a disabled tab is dead, so releasing it on an enabled tab
+    /// selects nothing; neither does a release on another tab. Drift within
+    /// the pressed tab still clicks.
+    #[test]
+    fn a_click_selects_only_the_tab_it_pressed() {
+        let mut driver = Driver::new(20, 1);
+        let state = State {
+            disable_b: true,
+            ..State::default()
+        };
+        render_ordered(&mut driver, &state, [Screen::A, Screen::B, Screen::C]);
+        let [a, b, c] = [Screen::A, Screen::B, Screen::C].map(|screen| column(&driver, screen));
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), b, 0), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), c, 0), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), c, 0), &state),
+            EventResult::Consumed,
+            "pressed on disabled B, released on C"
+        );
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), a, 0), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), c, 0), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), c, 0), &state),
+            EventResult::Consumed,
+            "pressed on A, released on C"
+        );
+
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), c, 0), &state);
+        driver.event(mouse(MouseKind::Drag(MouseButton::Left), c + 1, 0), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), c + 1, 0), &state),
+            EventResult::Emit(Msg::Selected(Screen::C)),
+            "drift within the pressed tab still clicks"
+        );
+    }
+
+    /// A tab's disabledness is the painted frame's: one the app disables
+    /// keeps answering until the redraw that shows it disabled. Reading
+    /// `disable_b` at event time would refuse it a frame early.
+    #[test]
+    fn a_tab_disabled_after_paint_selects_until_the_redraw() {
+        let mut driver = Driver::new(20, 1);
+        let mut state = State {
+            focused: Some(Screen::B),
+            ..State::default()
+        };
+        render_ordered(&mut driver, &state, [Screen::A, Screen::B, Screen::C]);
+        let b = column(&driver, Screen::B);
+        state.disable_b = true;
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), b, 0), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), b, 0), &state),
+            EventResult::Emit(Msg::Selected(Screen::B))
+        );
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(Msg::Selected(Screen::B))
+        );
+
+        render_ordered(&mut driver, &state, [Screen::A, Screen::B, Screen::C]);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), b, 0), &state);
+        assert_eq!(
+            driver.event(mouse(MouseKind::Up(MouseButton::Left), b, 0), &state),
+            EventResult::Ignored
+        );
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Ignored
+        );
+    }
+
+    /// A hand and a hover highlight say a click here acts. Tabs with no
+    /// selection binding select nothing on a click, so hovering a tab must
+    /// leave it at rest: no hand, no highlight.
+    #[test]
+    fn unbound_tabs_show_no_hand_and_no_hover() {
+        // The pointer shape over tab C, and C's background before and while
+        // the pointer is over it.
+        let hover_c = |bound: bool| {
+            let mut driver = Driver::<State, Msg>::new(20, 1);
+            let declare = |ctx: &mut DeclareCtx<'_, State, Msg>| {
+                let tabs = Tabs::new([Tab::new(Screen::A, "A"), Tab::new(Screen::C, "C")]);
+                let tabs = if bound {
+                    tabs.selection(|state: &State| Some(state.selected), Msg::Selected)
+                } else {
+                    tabs
+                };
+                ctx.component("tabs", tabs, Rect::new(0, 0, 20, 1));
+            };
+            let state = State::default();
+            driver.render(&state, declare);
+            let c = u16::try_from(driver.row(0).find('C').expect("painted")).expect("narrow");
+            let rest = driver.cell(c, 0).bg;
+            driver.event(mouse(MouseKind::Moved, c, 0), &state);
+            driver.render(&state, declare);
+            (driver.ratcn.pointer_shape(), rest, driver.cell(c, 0).bg)
+        };
+        let (shape, rest, hovered) = hover_c(true);
+        assert_eq!(shape, PointerShape::Pointer);
+        assert_ne!(
+            hovered, rest,
+            "a selectable tab highlights under the pointer"
+        );
+        let (shape, rest, hovered) = hover_c(false);
+        assert_eq!(shape, PointerShape::Default);
+        assert_eq!(hovered, rest, "an unselectable tab stays at rest");
+    }
+
+    /// An overflow marker's click steps the cursor in Manual activation, so
+    /// without an `item_focus` binding it does nothing and shows no hand.
+    #[test]
+    fn a_marker_shows_a_hand_only_when_its_step_is_bound() {
+        let hover_marker = |focus_bound: bool| {
+            let mut driver = Driver::<State, Msg>::new(18, TabsSize::Small.height());
+            let declare = |ctx: &mut DeclareCtx<'_, State, Msg>| {
+                let tabs = Tabs::new([
+                    Tab::new(Screen::A, "A"),
+                    Tab::new(Screen::B, "B"),
+                    Tab::new(Screen::C, "C"),
+                    Tab::new(Screen::D, "D"),
+                    Tab::new(Screen::E, "E"),
+                    Tab::new(Screen::F, "F"),
+                ])
+                .selection(|state: &State| Some(state.selected), Msg::Selected);
+                let tabs = if focus_bound {
+                    tabs.item_focus(|state: &State| state.focused, Msg::Focused)
+                } else {
+                    tabs
+                };
+                ctx.component("tabs", tabs, Rect::new(0, 0, 18, TabsSize::Small.height()));
+            };
+            let state = State::default();
+            driver.render(&state, declare);
+            let marker = tab_layout(
+                Rect::new(0, 0, 18, TabsSize::Small.height()),
+                &["A", "B", "C", "D", "E", "F"],
+                TabsSize::Small,
+                0,
+            )
+            .right
+            .expect("hidden right tabs get a marker");
+            driver.event(mouse(MouseKind::Moved, marker.x, marker.y), &state);
+            driver.render(&state, declare);
+            driver.ratcn.pointer_shape()
+        };
+        assert_eq!(hover_marker(true), PointerShape::Pointer);
+        assert_eq!(hover_marker(false), PointerShape::Default);
+    }
+
+    /// Six tabs in 18 cells under Automatic activation, A and B visible and
+    /// the rest behind a right marker; and that marker.
+    fn render_overflowing(driver: &mut Driver<State, Msg>, state: &State) -> Rect {
+        let area = Rect::new(0, 0, 18, TabsSize::Small.height());
+        driver.render(state, |ctx| {
+            let tabs = Tabs::new([
+                Tab::new(Screen::A, "A"),
+                Tab::new(Screen::B, "B"),
+                Tab::new(Screen::C, "C"),
+                Tab::new(Screen::D, "D"),
+                Tab::new(Screen::E, "E"),
+                Tab::new(Screen::F, "F"),
+            ])
+            .selection(|state: &State| Some(state.selected), Msg::Selected)
+            .activation(TabsActivation::Automatic);
+            ctx.component("tabs", tabs, area);
+        });
+        tab_layout(area, &["A", "B", "C", "D", "E", "F"], TabsSize::Small, 0)
+            .right
+            .expect("hidden right tabs get a marker")
+    }
+
+    /// A marker steps only for a press on that marker. A press on a tab
+    /// dragged onto the marker must not select the hidden neighbor.
+    #[test]
+    fn a_marker_steps_only_for_a_press_on_that_marker() {
+        let mut driver = Driver::<State, Msg>::new(18, TabsSize::Small.height());
+        let state = State::default();
+        let marker = render_overflowing(&mut driver, &state);
+        let a = column(&driver, Screen::A);
+        driver.event(mouse(MouseKind::Down(MouseButton::Left), a, 0), &state);
+        driver.event(
+            mouse(MouseKind::Drag(MouseButton::Left), marker.x, marker.y),
+            &state,
+        );
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Up(MouseButton::Left), marker.x, marker.y),
+                &state
+            ),
+            EventResult::Consumed,
+            "pressed on A, released on the marker"
+        );
+
+        driver.event(
+            mouse(MouseKind::Down(MouseButton::Left), marker.x, marker.y),
+            &state,
+        );
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Up(MouseButton::Left), marker.x, marker.y),
+                &state
+            ),
+            EventResult::Emit(Msg::Selected(Screen::C)),
+            "a press and release on the marker still steps"
+        );
+    }
+
     #[test]
     fn focused_and_selected_bindings_are_current_between_renders() {
         let mut driver = Driver::new(20, 1);
         let mut state = State::default();
-        render_runtime(&mut driver, &state);
+        render_ordered(&mut driver, &state, [Screen::A, Screen::B, Screen::C]);
         state.focused = Some(Screen::B);
         state.selected = Screen::C;
 
