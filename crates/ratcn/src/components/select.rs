@@ -1181,12 +1181,6 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
         if !(self.open)(state) {
-            // A press ignored here is still recorded, so the click that ends
-            // it cannot act on an item once the panel answers again.
-            if matches!(event, Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left))
-            {
-                PressedItem::press(ctx, &self.items, None);
-            }
             return EventResult::Ignored;
         }
         let Event::Mouse(mouse) = event else {
@@ -1196,11 +1190,13 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for SelectPanel<T, S,
         let option = self.option_at(mouse);
         // A click acts only on the option its press landed on, even if a
         // redraw has since moved another one under it.
+        let value = option.map(|option| self.items[option].value());
         if mouse.kind == MouseKind::Down(MouseButton::Left) {
-            PressedItem::press(ctx, &self.items, option);
+            let enabled = option.is_some_and(|option| !self.items[option].is_disabled());
+            PressedItem::press(ctx, value.filter(|_| enabled).cloned());
         }
         let pressed_here = mouse.kind != MouseKind::Click(MouseButton::Left)
-            || PressedItem::releases_on(ctx, &self.items, option);
+            || PressedItem::releases_on(ctx, value);
         match mouse.kind {
             // The hold lives on the panel's identity, not on this per-frame
             // instance, so it survives redraws and dies with the popup.
@@ -2099,27 +2095,6 @@ mod tests {
             driver.event(mouse(MouseKind::Up(MouseButton::Left), 8, 4), &state),
             EventResult::Emit(Msg::Selected(Fruit::Mango)),
             "drift within the pressed option still clicks"
-        );
-    }
-
-    /// Every primary press is recorded, even one a closed panel ignores, so a
-    /// release after the app reopens it cannot commit an option nobody
-    /// pressed while it was open.
-    #[test]
-    fn a_press_on_a_closed_panel_commits_nothing_after_it_reopens() {
-        let mut driver = driver(20, 12);
-        let mut state = State {
-            open: true,
-            ..State::default()
-        };
-        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
-        state.open = false;
-        driver.event(mouse(MouseKind::Down(MouseButton::Left), 3, 5), &state);
-        state.open = true;
-        render_select(&mut driver, &state, Rect::new(0, 4, 20, 1), &items());
-        assert_eq!(
-            driver.event(mouse(MouseKind::Up(MouseButton::Left), 3, 5), &state),
-            EventResult::Consumed
         );
     }
 

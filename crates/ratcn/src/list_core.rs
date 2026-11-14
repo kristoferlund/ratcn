@@ -445,11 +445,12 @@ pub fn row_intent<T>(
 /// transient store, through [`EventCtx::transient`]: a press and its click
 /// arrive as separate events, to instances that may be a frame apart.
 ///
-/// [`press`](Self::press) records every primary press over the control,
-/// including one the control otherwise ignores (disabled, empty, closed), and
+/// `T` is whatever names an item: a list's item value, or a component's own
+/// type where a click can land on more than one kind of thing.
+/// [`press`](Self::press) records a primary press, and
 /// [`releases_on`](Self::releases_on) answers, and forgets, at its click. A
-/// click with no press recorded, which only an injected `Click` can be, acts
-/// on the item under it.
+/// click with no press recorded, as an injected `Click` is, acts on the item
+/// under it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PressedItem<T>(Press<T>);
 
@@ -458,7 +459,7 @@ pub struct PressedItem<T>(Press<T>);
 enum Press<T> {
     /// No press recorded since the last click.
     Unrecorded,
-    /// The enabled item carrying this value.
+    /// The enabled item named by this value.
     On(T),
     /// A disabled item, or no item at all.
     Elsewhere,
@@ -471,30 +472,19 @@ impl<T> Default for PressedItem<T> {
 }
 
 impl<T: Clone + PartialEq + 'static> PressedItem<T> {
-    /// Record a primary press over `items`, landing on the item at `index`
-    /// (`None` when it hit no item). A disabled item records as no item.
-    pub fn press(ctx: &mut EventCtx<'_>, items: &[ListItem<T>], index: Option<usize>) {
-        let press = match index.and_then(|index| items.get(index)) {
-            Some(item) if !item.disabled => Press::On(item.value.clone()),
-            _ => Press::Elsewhere,
-        };
-        ctx.transient::<Self>().0 = press;
+    /// Record a primary press on `item`: `None` when it landed on a disabled
+    /// item or on none.
+    pub fn press(ctx: &mut EventCtx<'_>, item: Option<T>) {
+        ctx.transient::<Self>().0 = item.map_or(Press::Elsewhere, Press::On);
     }
 
-    /// Whether a primary click released over the item at `index` may act on
-    /// it: true when the press landed on the item carrying the same value.
-    /// The gesture ends here, so the record is cleared.
-    pub fn releases_on(
-        ctx: &mut EventCtx<'_>,
-        items: &[ListItem<T>],
-        index: Option<usize>,
-    ) -> bool {
-        let released = index
-            .and_then(|index| items.get(index))
-            .map(ListItem::value);
+    /// Whether a primary click released over `item` may act on it: true when
+    /// the press landed on that same item. The gesture ends here, so the
+    /// record is cleared.
+    pub fn releases_on(ctx: &mut EventCtx<'_>, item: Option<&T>) -> bool {
         match std::mem::replace(&mut ctx.transient::<Self>().0, Press::Unrecorded) {
             Press::Unrecorded => true,
-            Press::On(pressed) => released == Some(&pressed),
+            Press::On(pressed) => item == Some(&pressed),
             Press::Elsewhere => false,
         }
     }

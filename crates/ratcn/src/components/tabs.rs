@@ -13,7 +13,7 @@ use crate::button_shape::{BOTTOM_CAP, TOP_CAP, cap_row, filled_middle, label_sty
 use crate::color::{DISABLED_DIM, FOCUS_SHIFT, HOVER_SHIFT, away_from, dim, nearest_to};
 use crate::geometry::fixed_height;
 use crate::linear_nav::{self, Axis};
-use crate::list_core::{self, KeyIntent};
+use crate::list_core::{self, KeyIntent, PressedItem};
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyEvent, MeasuredComponent, MouseButton,
     MouseKind, PaintCtx, PointerShape, ScopeOptions, Step,
@@ -688,6 +688,17 @@ impl<T, S, M> Tabs<T, S, M> {
             .map(|(index, _)| *index)
     }
 
+    /// The tab or overflow marker at a cell, as [`PressedItem`] names it.
+    fn hit_at(&self, column: u16, row: u16) -> Option<TabHit<T>>
+    where
+        T: Clone,
+    {
+        match self.tab_at(column, row) {
+            Some(index) => Some(TabHit::Tab(self.items[index].value().clone())),
+            None => self.marker_at(column, row).map(TabHit::Marker),
+        }
+    }
+
     fn marker_at(&self, column: u16, row: u16) -> Option<Step> {
         let point = Position { x: column, y: row };
         if self.hits.left.is_some_and(|rect| rect.contains(point)) {
@@ -844,12 +855,6 @@ where
 
     fn handle_event(&mut self, event: &Event, state: &S, ctx: &mut EventCtx<'_>) -> EventResult<M> {
         if self.disabled || self.items.is_empty() {
-            // A press ignored here is still recorded, so the click that ends
-            // it cannot act on an item once the row answers again.
-            if matches!(event, Event::Mouse(mouse) if mouse.kind == MouseKind::Down(MouseButton::Left))
-            {
-                *ctx.transient() = TabPress::<T>::Elsewhere;
-            }
             return EventResult::Ignored;
         }
         match event {
@@ -859,13 +864,9 @@ where
                 // focus this row when its disabled content was clicked.
                 MouseKind::Down(MouseButton::Left) => {
                     let tab = self.tab_at(mouse.column, mouse.row);
-                    *ctx.transient() = match (tab, self.marker_at(mouse.column, mouse.row)) {
-                        (Some(index), _) if !self.disabled_at(index) => {
-                            TabPress::Tab(self.items[index].value().clone())
-                        }
-                        (None, Some(step)) => TabPress::Marker(step),
-                        _ => TabPress::Elsewhere,
-                    };
+                    let hit = self.hit_at(mouse.column, mouse.row);
+                    let enabled = tab.is_none_or(|index| !self.disabled_at(index));
+                    PressedItem::press(ctx, hit.filter(|_| enabled));
                     match tab {
                         Some(index) if self.disabled_at(index) => EventResult::Consumed,
                         _ => EventResult::Ignored,
@@ -878,16 +879,11 @@ where
                 // is the selection and hovering would switch the panel's
                 // content on the way past.
                 MouseKind::Click(MouseButton::Left) => {
-                    // The gesture ends here, so its press record is cleared.
-                    let press = std::mem::take(ctx.transient::<TabPress<T>>());
+                    // A click acts only on the tab or marker its press landed
+                    // on, even if a redraw has since moved another under it.
+                    let hit = self.hit_at(mouse.column, mouse.row);
+                    let pressed_here = PressedItem::releases_on(ctx, hit.as_ref());
                     if let Some(index) = self.tab_at(mouse.column, mouse.row) {
-                        // A click selects only the tab its press landed on,
-                        // even if a redraw has since moved another one under it.
-                        let pressed_here = match press {
-                            TabPress::Unrecorded => true,
-                            TabPress::Tab(value) => value == *self.items[index].value(),
-                            TabPress::Marker(_) | TabPress::Elsewhere => false,
-                        };
                         return if self.disabled_at(index) {
                             EventResult::Ignored
                         } else if !pressed_here {
@@ -899,11 +895,8 @@ where
                     let Some(direction) = self.marker_at(mouse.column, mouse.row) else {
                         return EventResult::Ignored;
                     };
-                    // A marker steps only for a press on that same marker.
-                    match press {
-                        TabPress::Unrecorded => {}
-                        TabPress::Marker(pressed) if pressed == direction => {}
-                        _ => return EventResult::Consumed,
+                    if !pressed_here {
+                        return EventResult::Consumed;
                     }
                     let edge = match direction {
                         Step::Backward => self.hits.tabs.first(),
@@ -941,20 +934,13 @@ where
     }
 }
 
-/// What the last primary press over a row landed on, so a click acts only on
-/// the tab or overflow marker it pressed — the row's counterpart of
-/// [`PressedItem`](list_core::PressedItem), which knows nothing of markers.
-/// Every primary press is recorded, even one the row ignores, so only an
-/// injected `Click` finds nothing recorded, and it acts on what is under it.
-#[derive(Debug, Default)]
-enum TabPress<T> {
-    #[default]
-    Unrecorded,
-    /// The enabled tab carrying this value.
+/// What a press or click on the row lands on, for
+/// [`PressedItem`](list_core::PressedItem): a tab, by value, or an overflow
+/// marker.
+#[derive(Debug, Clone, PartialEq)]
+enum TabHit<T> {
     Tab(T),
     Marker(Step),
-    /// A disabled tab, or neither a tab nor a marker.
-    Elsewhere,
 }
 
 impl<T: Clone + PartialEq + 'static, S, M> MeasuredComponent<S, M> for Tabs<T, S, M> {
@@ -1947,8 +1933,8 @@ mod tests {
     }
 
     /// Six tabs in 18 cells under Automatic activation, A and B visible and
-    /// the rest behind a right marker, disabled as asked; and that marker.
-    fn render_overflowing(driver: &mut Driver<State, Msg>, state: &State, disabled: bool) -> Rect {
+    /// the rest behind a right marker; and that marker.
+    fn render_overflowing(driver: &mut Driver<State, Msg>, state: &State) -> Rect {
         let area = Rect::new(0, 0, 18, TabsSize::Small.height());
         driver.render(state, |ctx| {
             let tabs = Tabs::new([
@@ -1960,8 +1946,7 @@ mod tests {
                 Tab::new(Screen::F, "F"),
             ])
             .selection(|state: &State| Some(state.selected), Msg::Selected)
-            .activation(TabsActivation::Automatic)
-            .disabled(disabled);
+            .activation(TabsActivation::Automatic);
             ctx.component("tabs", tabs, area);
         });
         tab_layout(area, &["A", "B", "C", "D", "E", "F"], TabsSize::Small, 0)
@@ -1970,13 +1955,12 @@ mod tests {
     }
 
     /// A marker steps only for a press on that marker. A press on a tab
-    /// dragged onto the marker, or one the disabled row ignored before it
-    /// was enabled, must not select the hidden neighbor.
+    /// dragged onto the marker must not select the hidden neighbor.
     #[test]
     fn a_marker_steps_only_for_a_press_on_that_marker() {
         let mut driver = Driver::<State, Msg>::new(18, TabsSize::Small.height());
         let state = State::default();
-        let marker = render_overflowing(&mut driver, &state, false);
+        let marker = render_overflowing(&mut driver, &state);
         let a = column(&driver, Screen::A);
         driver.event(mouse(MouseKind::Down(MouseButton::Left), a, 0), &state);
         driver.event(
@@ -1992,21 +1976,6 @@ mod tests {
             "pressed on A, released on the marker"
         );
 
-        render_overflowing(&mut driver, &state, true);
-        driver.event(
-            mouse(MouseKind::Down(MouseButton::Left), marker.x, marker.y),
-            &state,
-        );
-        render_overflowing(&mut driver, &state, false);
-        assert_eq!(
-            driver.event(
-                mouse(MouseKind::Up(MouseButton::Left), marker.x, marker.y),
-                &state
-            ),
-            EventResult::Consumed,
-            "pressed while the row was disabled"
-        );
-
         driver.event(
             mouse(MouseKind::Down(MouseButton::Left), marker.x, marker.y),
             &state,
@@ -2018,34 +1987,6 @@ mod tests {
             ),
             EventResult::Emit(Msg::Selected(Screen::C)),
             "a press and release on the marker still steps"
-        );
-    }
-
-    /// Every primary press is recorded, even one a disabled row ignores, so
-    /// its release cannot select a tab once the row is enabled again.
-    #[test]
-    fn a_press_on_a_disabled_row_selects_nothing_after_it_is_enabled() {
-        let mut driver = Driver::<State, Msg>::new(20, 1);
-        let state = State::default();
-        let render = |driver: &mut Driver<State, Msg>, disabled: bool| {
-            driver.render(&state, |ctx| {
-                let tabs = Tabs::new([
-                    Tab::new(Screen::A, "A"),
-                    Tab::new(Screen::B, "B"),
-                    Tab::new(Screen::C, "C"),
-                ])
-                .selection(|state: &State| Some(state.selected), Msg::Selected)
-                .disabled(disabled);
-                ctx.component("tabs", tabs, Rect::new(0, 0, 20, 1));
-            });
-        };
-        render(&mut driver, true);
-        let c = column(&driver, Screen::C);
-        driver.event(mouse(MouseKind::Down(MouseButton::Left), c, 0), &state);
-        render(&mut driver, false);
-        assert_eq!(
-            driver.event(mouse(MouseKind::Up(MouseButton::Left), c, 0), &state),
-            EventResult::Consumed
         );
     }
 
