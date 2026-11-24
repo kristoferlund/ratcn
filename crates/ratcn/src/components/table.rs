@@ -18,8 +18,9 @@ use crate::list_core::{
 };
 use crate::runtime::{
     Component, DeclareCtx, Event, EventCtx, EventResult, KeyCode, KeyEvent, MouseButton, MouseKind,
-    PaintCtx, PointerShape, ScopeOptions, Step,
+    PaintCtx, PointerShape, ScopeOptions, ScrollDirection, Step,
 };
+use crate::text_width::display_width;
 use crate::theme::resolve_style;
 
 /// Every color a table paints.
@@ -371,6 +372,368 @@ enum Hit<T> {
     Header(usize),
 }
 
+/// Transient hold for horizontal wheel scrolling, mirroring [`WheelHold`].
+///
+/// Horizontal wheel notches scroll columns without moving the active column
+/// cursor; the hold stands until the active column or column shape changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ColWheelHold {
+    offset: usize,
+    held: Option<(Option<usize>, usize, usize)>,
+}
+
+impl ColWheelHold {
+    fn hold(&mut self, offset: usize, active_col: Option<usize>, cols: usize, frozen: usize) {
+        self.offset = offset;
+        self.held = Some((active_col, cols, frozen));
+    }
+
+    fn settle(
+        &mut self,
+        viewport: &mut ColViewport,
+        active_col: Option<usize>,
+        requested: Option<usize>,
+    ) {
+        let anchor = (active_col, viewport.col_widths.len(), viewport.frozen);
+        if self.held != Some(anchor) {
+            self.held = None;
+        }
+        let cursor = if self.held.is_some() {
+            None
+        } else {
+            active_col
+        };
+        let offset = viewport.cursor_visible_offset(requested.unwrap_or(self.offset), cursor);
+        self.offset = offset;
+        viewport.record_painted_offset(offset);
+    }
+}
+
+/// Render-derived horizontal column layout: handles both normal fitting layouts
+/// and horizontally scrolled layouts with optional frozen leading columns.
+#[derive(Debug, Default)]
+struct ColViewport {
+    /// Concrete widths on the virtual canvas when overflowing; empty when all
+    /// columns fit inside the viewport.
+    col_widths: Vec<u16>,
+    /// Virtual X origin of each column on the canvas when overflowing.
+    virtual_x: Vec<u16>,
+    /// Screen-space header rects for hit-testing (empty `Rect` for off-screen
+    /// columns).
+    columns: Rc<[Rect]>,
+    canvas_width: u16,
+    frozen: usize,
+    frozen_span: u16,
+    scroll_view_w: u16,
+    spacing: u16,
+    max_offset: usize,
+    painted_offset: usize,
+    pending_offset: Option<usize>,
+}
+
+impl ColViewport {
+    fn overflows(&self) -> bool {
+        !self.col_widths.is_empty()
+    }
+
+    fn render_layout(&self, widths: &[Constraint], flex: Flex) -> (Vec<Constraint>, Flex) {
+        if self.overflows() {
+            (
+                self.col_widths
+                    .iter()
+                    .map(|&w| Constraint::Length(w))
+                    .collect(),
+                Flex::Start,
+            )
+        } else {
+            (widths.to_vec(), flex)
+        }
+    }
+
+    fn column_width(&self, index: usize) -> usize {
+        if self.overflows() {
+            self.col_widths.get(index).copied().map_or(0, usize::from)
+        } else {
+            self.columns.get(index).map_or(0, |r| usize::from(r.width))
+        }
+    }
+
+    fn record_painted_offset(&mut self, offset: usize) {
+        self.painted_offset = offset;
+        self.pending_offset = None;
+    }
+
+    fn show_frozen_divider(&self, target_width: u16) -> bool {
+        self.overflows()
+            && self.frozen > 0
+            && self.painted_offset > 0
+            && self.spacing > 0
+            && self.frozen_span > 0
+            && self.frozen_span < target_width
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "layout inputs resolved once per declare pass"
+    )]
+    fn settle_in<S, M>(
+        &mut self,
+        ctx: &mut DeclareCtx<'_, S, M>,
+        widths: &[Constraint],
+        spacing: u16,
+        flex: Flex,
+        frozen_columns: usize,
+        head: Rect,
+        inner_x: u16,
+        inner_width: u16,
+        active_col: Option<usize>,
+        requested: Option<usize>,
+    ) {
+        self.spacing = spacing;
+        self.frozen = frozen_columns.min(widths.len());
+        let natural: Vec<u16> = widths
+            .iter()
+            .map(|&c| natural_col_width(c, inner_width))
+            .collect();
+        let gaps = widths
+            .len()
+            .saturating_sub(1)
+            .saturating_mul(usize::from(spacing));
+        let total = natural
+            .iter()
+            .map(|&w| usize::from(w))
+            .sum::<usize>()
+            .saturating_add(gaps);
+
+        if widths.is_empty() || total <= usize::from(inner_width) {
+            self.col_widths.clear();
+            self.virtual_x.clear();
+            self.canvas_width = inner_width;
+            self.frozen_span = 0;
+            self.scroll_view_w = inner_width;
+            self.max_offset = 0;
+            self.columns = Layout::horizontal(widths.to_vec())
+                .flex(flex)
+                .spacing(spacing)
+                .split(head);
+            ctx.transient::<ColWheelHold>()
+                .settle(self, active_col, Some(0));
+            return;
+        }
+
+        // Virtual canvas layout for horizontally overflowing columns.
+        self.col_widths = natural;
+        self.virtual_x.clear();
+        self.virtual_x.reserve(widths.len());
+        let mut cursor_x: u16 = 0;
+        for (i, &w) in self.col_widths.iter().enumerate() {
+            self.virtual_x.push(cursor_x);
+            cursor_x = cursor_x.saturating_add(w);
+            if i + 1 < self.col_widths.len() {
+                cursor_x = cursor_x.saturating_add(spacing);
+            }
+        }
+        self.canvas_width = cursor_x;
+
+        let scrollable = widths.len().saturating_sub(self.frozen);
+        self.frozen_span = if self.frozen == 0 {
+            0
+        } else if scrollable > 0 {
+            self.virtual_x[self.frozen].min(inner_width)
+        } else {
+            self.canvas_width.min(inner_width)
+        };
+        self.scroll_view_w = inner_width.saturating_sub(self.frozen_span);
+        self.max_offset = self.compute_max_offset(scrollable);
+
+        ctx.transient::<ColWheelHold>()
+            .settle(self, active_col, requested);
+
+        // Compute screen-space header rects matching the painted frozen + scrolled slices.
+        let mut rects = vec![Rect::default(); widths.len()];
+        for (i, rect) in rects.iter_mut().enumerate().take(self.frozen) {
+            let vx = self.virtual_x[i];
+            if vx < self.frozen_span {
+                let w = self.col_widths[i].min(self.frozen_span - vx);
+                *rect = Rect::new(inner_x.saturating_add(vx), head.y, w, head.height);
+            }
+        }
+        if scrollable > 0 && self.scroll_view_w > 0 {
+            let first = self.frozen + self.painted_offset;
+            let origin = self.virtual_x[first];
+            let scroll_x = inner_x.saturating_add(self.frozen_span);
+            for (i, rect) in rects.iter_mut().enumerate().skip(first) {
+                let rel = self.virtual_x[i].saturating_sub(origin);
+                if rel >= self.scroll_view_w {
+                    break;
+                }
+                let w = self.col_widths[i].min(self.scroll_view_w - rel);
+                *rect = Rect::new(scroll_x.saturating_add(rel), head.y, w, head.height);
+            }
+        }
+        self.columns = Rc::from(rects);
+    }
+
+    fn compute_max_offset(&self, scrollable: usize) -> usize {
+        if scrollable == 0 || self.scroll_view_w == 0 {
+            return 0;
+        }
+        for k in 0..scrollable {
+            let span = self
+                .canvas_width
+                .saturating_sub(self.virtual_x[self.frozen + k]);
+            if span <= self.scroll_view_w {
+                return k;
+            }
+        }
+        scrollable - 1
+    }
+
+    fn cursor_visible_offset(&self, requested: usize, active_col: Option<usize>) -> usize {
+        let mut offset = requested.min(self.max_offset);
+        let Some(col) = active_col else {
+            return offset;
+        };
+        if !self.overflows() || col < self.frozen || self.scroll_view_w == 0 {
+            return offset;
+        }
+        let rel = col - self.frozen;
+        if rel < offset {
+            return rel;
+        }
+        let col_end = self.virtual_x[col].saturating_add(self.col_widths[col]);
+        while offset < rel {
+            let right_edge =
+                self.virtual_x[self.frozen + offset].saturating_add(self.scroll_view_w);
+            if col_end <= right_edge {
+                break;
+            }
+            offset += 1;
+        }
+        offset.min(self.max_offset)
+    }
+
+    fn wheel(
+        &mut self,
+        direction: ScrollDirection,
+        active_col: Option<usize>,
+        cols: usize,
+        ctx: &mut EventCtx<'_>,
+    ) -> Option<usize> {
+        if !self.overflows() || self.max_offset == 0 {
+            return None;
+        }
+        let current = self.pending_offset.unwrap_or(self.painted_offset);
+        let next = match direction {
+            ScrollDirection::Left => current.saturating_sub(1),
+            ScrollDirection::Right => current.saturating_add(1).min(self.max_offset),
+            ScrollDirection::Up | ScrollDirection::Down => return None,
+        };
+        if next == current {
+            return None;
+        }
+        ctx.transient::<ColWheelHold>()
+            .hold(next, active_col, cols, self.frozen);
+        self.pending_offset = Some(next);
+        Some(next)
+    }
+
+    fn composite(
+        &self,
+        scratch: &Buffer,
+        target: Rect,
+        clip: Rect,
+        dest: &mut Buffer,
+        divider_fg: Color,
+    ) {
+        let height = target.height.min(scratch.area.height);
+        // Frozen leading columns.
+        let frozen_w = self.frozen_span.min(target.width).min(scratch.area.width);
+        blit_slice(scratch, dest, clip, 0, target.x, target.y, frozen_w, height);
+        // Scrolled columns.
+        if self.frozen < self.virtual_x.len() && self.scroll_view_w > 0 {
+            let src_x = self.virtual_x[self.frozen + self.painted_offset];
+            let dst_x = target.x.saturating_add(frozen_w);
+            let avail_dst = target.width.saturating_sub(frozen_w);
+            let avail_src = scratch.area.width.saturating_sub(src_x);
+            let copy_w = self.scroll_view_w.min(avail_dst).min(avail_src);
+            blit_slice(scratch, dest, clip, src_x, dst_x, target.y, copy_w, height);
+        }
+        // Subtle separator inside the trailing frozen gap once scrolled right.
+        if self.show_frozen_divider(target.width) {
+            let x = target.x.saturating_add(self.frozen_span - 1);
+            for dy in 0..height {
+                let y = target.y.saturating_add(dy);
+                if clip.contains(Position::new(x, y))
+                    && let Some(cell) = dest.cell_mut((x, y))
+                {
+                    cell.set_symbol("│").set_fg(divider_fg);
+                }
+            }
+        }
+    }
+}
+
+fn natural_col_width(constraint: Constraint, viewport: u16) -> u16 {
+    match constraint {
+        Constraint::Length(n) | Constraint::Min(n) | Constraint::Max(n) => n,
+        Constraint::Percentage(p) => {
+            u16::try_from(u32::from(viewport) * u32::from(p.min(100)) / 100).unwrap_or(viewport)
+        }
+        Constraint::Ratio(num, den) => {
+            if den == 0 {
+                0
+            } else {
+                u16::try_from(
+                    (u64::from(viewport) * u64::from(num) / u64::from(den))
+                        .min(u64::from(viewport)),
+                )
+                .unwrap_or(viewport)
+            }
+        }
+        Constraint::Fill(_) => 0,
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "coordinates for blitting one clipped horizontal band"
+)]
+fn blit_slice(
+    src: &Buffer,
+    dst: &mut Buffer,
+    clip: Rect,
+    src_x: u16,
+    dst_x: u16,
+    dst_y: u16,
+    width: u16,
+    height: u16,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    for dy in 0..height {
+        let y = dst_y.saturating_add(dy);
+        for dx in 0..width {
+            let x = dst_x.saturating_add(dx);
+            if !clip.contains(Position::new(x, y)) {
+                continue;
+            }
+            let Some(from) = src.cell((src_x.saturating_add(dx), dy)) else {
+                continue;
+            };
+            let Some(to) = dst.cell_mut((x, y)) else {
+                continue;
+            };
+            *to = from.clone();
+            // Prevent a wide (2-cell) glyph from bleeding past the clipped edge.
+            if dx + 1 == width && display_width(to.symbol()) > 1 {
+                to.set_symbol(" ");
+            }
+        }
+    }
+}
+
 /// An interactive table of value-keyed items. Like `List`, the app owns the
 /// cursor, committed selection and ordering. Only visible items are formatted.
 /// Supply one width per column; the default row displays the item's label.
@@ -413,6 +776,7 @@ pub struct Table<T, S, M> {
     block: Option<Block<'static>>,
     spacing: u16,
     flex: Flex,
+    frozen_columns: usize,
     focused: Option<FocusBinding<S, T, M>>,
     header_focus: Option<HeaderFocusBinding<S, M>>,
     selected: Option<Binding<S, T, M>>,
@@ -420,14 +784,15 @@ pub struct Table<T, S, M> {
     sort: Option<Binding<S, TableSort, M>>,
     sortable: Vec<usize>,
     scroll: Option<ScrollBinding<S, M>>,
+    horizontal_scroll: Option<ScrollBinding<S, M>>,
     paint_item: Option<PaintItem<S, T>>,
     style: Option<StyleFn>,
     disabled: bool,
     viewport: RowViewport,
+    col_viewport: ColViewport,
     body: Rect,
     head: Rect,
     foot: Rect,
-    columns: Rc<[Rect]>,
 }
 
 impl<T, S, M> fmt::Debug for Table<T, S, M> {
@@ -464,6 +829,7 @@ impl<T, S, M> Table<T, S, M> {
             block: None,
             spacing: 1,
             flex: Flex::Start,
+            frozen_columns: 0,
             focused: None,
             header_focus: None,
             selected: None,
@@ -471,14 +837,15 @@ impl<T, S, M> Table<T, S, M> {
             sort: None,
             sortable: Vec::new(),
             scroll: None,
+            horizontal_scroll: None,
             paint_item: None,
             style: None,
             disabled: false,
             viewport: RowViewport::new(1),
+            col_viewport: ColViewport::default(),
             body: Rect::default(),
             head: Rect::default(),
             foot: Rect::default(),
-            columns: Rc::default(),
         }
     }
 
@@ -600,7 +967,19 @@ impl<T, S, M> Table<T, S, M> {
         self.sort = Some((Box::new(read), Box::new(change)));
         self
     }
-    /// Bind the scroll offset. Unbound tables still scroll, like `List`.
+    /// Pin the first `count` columns on the left while remaining columns scroll
+    /// horizontally. Defaults to 0.
+    ///
+    /// Horizontal scrolling activates automatically whenever the declared
+    /// column widths exceed the table's inner width; when everything fits,
+    /// `frozen_columns` has no visual effect. Once scrolled right past the
+    /// frozen columns, a thin `│` rule appears in the spacing gap beside them.
+    #[must_use]
+    pub const fn frozen_columns(mut self, count: usize) -> Self {
+        self.frozen_columns = count;
+        self
+    }
+    /// Bind the vertical scroll offset. Unbound tables still scroll, like `List`.
     #[must_use]
     pub fn scroll(
         mut self,
@@ -608,6 +987,22 @@ impl<T, S, M> Table<T, S, M> {
         change: impl Fn(usize) -> M + 'static,
     ) -> Self {
         self.scroll = Some((Box::new(read), Box::new(change)));
+        self
+    }
+    /// Bind the horizontal column scroll offset — the number of non-frozen
+    /// columns scrolled off to the left.
+    ///
+    /// Unbound tables still scroll horizontally when column widths exceed the
+    /// viewport width, following [`column_focus`](Self::column_focus) and
+    /// horizontal wheel events. Bind this when app state or an external
+    /// scrollbar needs to observe or drive the column offset.
+    #[must_use]
+    pub fn horizontal_scroll(
+        mut self,
+        read: impl Fn(&S) -> usize + 'static,
+        change: impl Fn(usize) -> M + 'static,
+    ) -> Self {
+        self.horizontal_scroll = Some((Box::new(read), Box::new(change)));
         self
     }
     /// Resolve custom colors against the current theme each frame.
@@ -865,10 +1260,43 @@ impl<T: Clone + PartialEq + 'static, S, M> Table<T, S, M> {
     }
     fn header_at(&self, point: Position) -> Option<usize> {
         let count = self.header_columns();
-        self.columns
+        self.col_viewport
+            .columns
             .iter()
             .position(|r| r.contains(point))
             .filter(|&i| i < count && self.sortable.contains(&i))
+    }
+
+    fn render_band(
+        &self,
+        table: NativeTable<'static>,
+        mut native_state: Option<&mut TableState>,
+        target: Rect,
+        base_style: Style,
+        divider_fg: Color,
+        ctx: &mut PaintCtx<'_, S>,
+    ) {
+        if target.is_empty() {
+            return;
+        }
+        if !self.col_viewport.overflows() {
+            ctx.with_buffer(target, |r, b| match &mut native_state {
+                Some(state) => StatefulWidget::render(table, r, b, state),
+                None => Widget::render(table, r, b),
+            });
+            return;
+        }
+        let canvas = Rect::new(0, 0, self.col_viewport.canvas_width, target.height);
+        let mut scratch = Buffer::empty(canvas);
+        scratch.set_style(canvas, base_style);
+        match &mut native_state {
+            Some(state) => StatefulWidget::render(table, canvas, &mut scratch, state),
+            None => Widget::render(table, canvas, &mut scratch),
+        }
+        ctx.with_buffer(target, |r, b| {
+            self.col_viewport
+                .composite(&scratch, target, r, b, divider_fg);
+        });
     }
 
     /// The header as a native row: each heading with its sort mark and the
@@ -892,7 +1320,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Table<T, S, M> {
         Row::new(headings.iter().enumerate().map(|(i, heading)| {
             let mut heading = heading.clone();
             if let Some(sort) = sorted.filter(|s| s.column == i) {
-                let col_width = self.columns.get(i).map_or(0, |r| usize::from(r.width));
+                let col_width = self.col_viewport.column_width(i);
                 if heading.width().saturating_add(2) <= col_width {
                     let mark = Span::raw(match sort.direction {
                         SortDirection::Ascending => "▲",
@@ -943,10 +1371,27 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
         ])
         .areas(inner);
         self.body.height -= self.body.height % self.viewport.rows_per_item();
-        self.columns = Layout::horizontal(self.widths.clone())
-            .flex(self.flex)
-            .spacing(self.spacing)
-            .split(self.head);
+        let active_col = if self.on_header(ctx.state()) {
+            Some(self.header_column(ctx.state()))
+        } else {
+            self.active_column(ctx.state())
+        };
+        let requested_col = self
+            .horizontal_scroll
+            .as_ref()
+            .map(|(read, _)| read(ctx.state()));
+        self.col_viewport.settle_in(
+            ctx,
+            &self.widths,
+            self.spacing,
+            self.flex,
+            self.frozen_columns,
+            self.head,
+            inner.x,
+            inner.width,
+            active_col,
+            requested_col,
+        );
         let cursor = (!self.on_header(ctx.state()))
             .then(|| self.cursor(ctx.state()))
             .flatten();
@@ -970,8 +1415,9 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
         let interactive = !self.disabled && !self.widths.is_empty();
         let hovered = interactive && ctx.hovered();
         let cursor_visible = interactive && (ctx.focused() || hovered);
+        let (render_widths, render_flex) = self.col_viewport.render_layout(&self.widths, self.flex);
         let themed = |rows: Vec<Row<'static>>| {
-            TableWidget::new(rows, self.widths.iter().copied())
+            TableWidget::new(rows, render_widths.iter().copied())
                 .style(style)
                 .focused(cursor_visible)
                 .hovered(hovered)
@@ -983,9 +1429,8 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
         } else {
             style.foreground
         };
-        ctx.with_buffer(area, |a, b| {
-            b.set_style(a, Style::default().fg(base_fg).bg(surface));
-        });
+        let base_style = Style::default().fg(base_fg).bg(surface);
+        ctx.with_buffer(area, |a, b| b.set_style(a, base_style));
         if let Some(block) = &self.block {
             ctx.widget(block, area);
         }
@@ -995,20 +1440,20 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
             .filter(|_| interactive);
         if let Some(headings) = &self.header {
             let row = self.header_row(headings, state, &style, hover, cursor_visible);
-            let widget = themed(Vec::new()).header(row).into_inner();
-            ctx.widget(
-                widget.flex(self.flex).column_spacing(self.spacing),
-                self.head,
-            );
+            let widget = themed(Vec::new())
+                .header(row)
+                .into_inner()
+                .flex(render_flex)
+                .column_spacing(self.spacing);
+            self.render_band(widget, None, self.head, base_style, base_fg, ctx);
         }
         if let Some(cells) = &self.footer {
             let widget = themed(Vec::new())
                 .footer(Row::new(cells.clone()))
-                .into_inner();
-            ctx.widget(
-                widget.flex(self.flex).column_spacing(self.spacing),
-                self.foot,
-            );
+                .into_inner()
+                .flex(render_flex)
+                .column_spacing(self.spacing);
+            self.render_band(widget, None, self.foot, base_style, base_fg, ctx);
         }
 
         let on_header = self.on_header(state);
@@ -1037,7 +1482,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
         };
         let table = themed(rows)
             .into_inner()
-            .flex(self.flex)
+            .flex(render_flex)
             .column_spacing(self.spacing)
             .row_highlight_style(Style::default())
             .cell_highlight_style(Style::new().bg(cursor_bg));
@@ -1048,9 +1493,14 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
                     .filter(|&i| i < visible),
             )
             .with_selected_column(active);
-        ctx.with_buffer(self.body, |r, b| {
-            StatefulWidget::render(table, r, b, &mut native);
-        });
+        self.render_band(
+            table,
+            Some(&mut native),
+            self.body,
+            base_style,
+            base_fg,
+            ctx,
+        );
         if interactive
             && (hover.is_some()
                 || self.selected.is_some()
@@ -1073,6 +1523,26 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
                     .then(|| self.cursor(state))
                     .flatten();
                 if let MouseKind::Scroll(direction) = m.kind {
+                    if matches!(direction, ScrollDirection::Left | ScrollDirection::Right) {
+                        let active_col = if self.on_header(state) {
+                            Some(self.header_column(state))
+                        } else {
+                            self.active_column(state)
+                        };
+                        let Some(next) =
+                            self.col_viewport
+                                .wheel(direction, active_col, self.widths.len(), ctx)
+                        else {
+                            return EventResult::Ignored;
+                        };
+                        return self
+                            .horizontal_scroll
+                            .as_ref()
+                            .filter(|(read, _)| read(state) != next)
+                            .map_or(EventResult::Consumed, |(_, change)| {
+                                EventResult::Emit(change(next))
+                            });
+                    }
                     if self.body.is_empty() {
                         return EventResult::Ignored;
                     }
@@ -1151,7 +1621,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{FocusState, Ratcn, ScrollDirection};
+    use crate::runtime::{FocusState, Ratcn};
     use crate::test_support::{Driver, key, mouse};
     use crate::{Button, List, ListStyle};
 
@@ -1788,6 +2258,202 @@ mod tests {
             ctx.component("empty", empty, Rect::new(0, 0, 14, 2));
         });
         assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Default);
+    }
+
+    /// Frozen columns stay pinned while `column_focus` scrolls the remaining
+    /// columns into view, keeping header, body and footer aligned and showing
+    /// the divider rule only once columns are scrolled behind the frozen edge.
+    #[test]
+    fn frozen_columns_stay_pinned_while_column_focus_scrolls_horizontally() {
+        let mut driver = focused_driver();
+        let render = |driver: &mut Driver<State, Msg>, state: &State| {
+            driver.render(state, |ctx| {
+                let table = Table::new(
+                    [ListItem::new(0u8, "row0")],
+                    [
+                        Constraint::Length(6),
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                    ],
+                )
+                .column_spacing(2)
+                .frozen_columns(1)
+                .header(["Date", "Payee", "Kind", "Amount"])
+                .footer(["Sum", "f1", "f2", "$99"])
+                .paint_item(|_, _| Row::new(["Nov 24", "Grocer", "Food", "-$62"]))
+                .item_focus(|s: &State| s.row, Msg::Move)
+                .column_focus(|s| Some(s.column), Msg::Column)
+                .sort([0, 3], |s| s.sort, Msg::Sort);
+                ctx.component("table", table, Rect::new(0, 0, 22, 3));
+            });
+        };
+
+        let mut state = State {
+            row: Some(0),
+            column: 0,
+            ..State::default()
+        };
+        render(&mut driver, &state);
+        assert!(driver.row(0).starts_with("Date    Payee"));
+        assert!(!driver.row(0).contains('│'), "no divider at offset 0");
+        assert!(
+            !driver.row(0).contains("Amount"),
+            "Amount starts off-screen"
+        );
+
+        // Moving column_focus to the last column scrolls it into view while
+        // Date remains pinned on the left with a divider across all bands.
+        state.column = 3;
+        render(&mut driver, &state);
+        assert!(driver.row(0).starts_with("Date   │"));
+        assert!(driver.row(0).contains("Amount"));
+        assert!(driver.row(1).starts_with("Nov 24 │"));
+        assert!(driver.row(1).contains("-$62"));
+        assert!(driver.row(2).starts_with("Sum    │"));
+        assert!(driver.row(2).contains("$99"));
+
+        // Both the frozen heading (col 0) and the scrolled-in heading (col 3)
+        // hit-test to their own column indices.
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 1, 0), &state),
+            EventResult::Emit(Msg::Sort(TableSort {
+                column: 0,
+                direction: SortDirection::Ascending,
+            }))
+        );
+        let amount_x = (0..22)
+            .find(|&x| driver.cell(x, 0).symbol() == "A")
+            .expect("Amount heading visible after scroll");
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Click(MouseButton::Left), amount_x, 0),
+                &state
+            ),
+            EventResult::Emit(Msg::Sort(TableSort {
+                column: 3,
+                direction: SortDirection::Ascending,
+            }))
+        );
+
+        // Moving back onto column 1 pulls the scroll offset back to 0.
+        state.column = 1;
+        render(&mut driver, &state);
+        assert!(driver.row(0).starts_with("Date    Payee"));
+        assert!(!driver.row(0).contains('│'));
+    }
+
+    /// Horizontal wheel scrolls columns independently of `column_focus`,
+    /// bubbles at both ends, and emits through `horizontal_scroll` when bound.
+    #[test]
+    fn horizontal_wheel_scrolls_holds_and_bubbles_at_edges() {
+        #[derive(Default)]
+        struct HState {
+            focus: FocusState,
+            col: usize,
+            scroll_x: usize,
+        }
+        #[derive(Debug, PartialEq)]
+        enum HMsg {
+            Focus(FocusState),
+            Col(usize),
+            ScrollX(usize),
+        }
+        let mut driver: Driver<HState, HMsg> = Driver::with(
+            Ratcn::new().focus(|s: &HState| &s.focus, HMsg::Focus),
+            24,
+            3,
+        );
+        let render = |driver: &mut Driver<HState, HMsg>, state: &HState| {
+            driver.render(state, |ctx| {
+                let table = Table::new(
+                    [ListItem::new(0u8, "r")],
+                    [
+                        Constraint::Length(6),
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                    ],
+                )
+                .frozen_columns(1)
+                .header(["ID", "Col1", "Col2", "Col3"])
+                .column_focus(|s: &HState| Some(s.col), HMsg::Col)
+                .horizontal_scroll(|s| s.scroll_x, HMsg::ScrollX);
+                ctx.component("t", table, Rect::new(0, 0, 20, 2));
+            });
+        };
+
+        let mut state = HState::default();
+        render(&mut driver, &state);
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Scroll(ScrollDirection::Left), 2, 0),
+                &state
+            ),
+            EventResult::Ignored,
+            "left wheel at offset 0 bubbles"
+        );
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Scroll(ScrollDirection::Right), 2, 0),
+                &state
+            ),
+            EventResult::Emit(HMsg::ScrollX(1))
+        );
+        state.scroll_x = 1;
+        render(&mut driver, &state);
+        assert!(driver.row(0).contains("Col2"));
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Scroll(ScrollDirection::Right), 2, 0),
+                &state
+            ),
+            EventResult::Emit(HMsg::ScrollX(2))
+        );
+        state.scroll_x = 2;
+        render(&mut driver, &state);
+        assert!(driver.row(0).contains("Col3"));
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Scroll(ScrollDirection::Right), 2, 0),
+                &state
+            ),
+            EventResult::Ignored,
+            "right wheel at max offset bubbles"
+        );
+    }
+
+    /// Frozen columns wider than the viewport and wide CJK glyphs on the clip
+    /// boundary render safely without panicking or bleeding past the clip edge.
+    #[test]
+    fn horizontal_clipping_handles_wide_glyphs_and_oversized_frozen_columns() {
+        let mut driver = Driver::<State, Msg>::new(12, 3);
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            let table = Table::new(
+                [ListItem::new(0u8, "r")],
+                [Constraint::Length(5), Constraint::Length(8)],
+            )
+            .frozen_columns(1)
+            .paint_item(|_, _| Row::new(["ab中d", "ef中gh"]))
+            .header(["H1", "H2"]);
+            ctx.component("t", table, Rect::new(0, 0, 9, 2));
+        });
+        // Every cell at the right clip edge has display width <= 1.
+        for y in 0..2 {
+            assert!(display_width(driver.cell(8, y).symbol()) <= 1);
+        }
+        // Oversized frozen count (more frozen columns than viewport width).
+        driver.render(&state, |ctx| {
+            let table = Table::new(
+                [ListItem::new(0u8, "r")],
+                [Constraint::Length(10), Constraint::Length(10)],
+            )
+            .frozen_columns(5)
+            .header(["LongHeader", "Second"]);
+            ctx.component("t", table, Rect::new(0, 0, 6, 2));
+        });
+        assert_eq!(driver.row(0).trim_end(), "LongHe");
     }
 
     #[test]

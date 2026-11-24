@@ -51,6 +51,42 @@ their own alignment; a sorted heading gets a `▲`/`▼` mark when it fits along
 the label. Set `.row_height(n)` for multi-line body rows. Full rows are painted
 so clicks and page movement agree.
 
+## Frozen columns and horizontal scrolling
+
+When the declared column widths exceed the table's inner width, columns scroll
+horizontally automatically to follow `column_focus` or horizontal wheel input.
+Call `.frozen_columns(n)` to keep the first `n` columns pinned on the left (a
+thin `│` rule appears in the spacing gap beside them once scrolled right), and
+bind `.horizontal_scroll(read, change)` if your app needs to observe or drive
+the column scroll offset.
+
+<div class="ratcn-preview-window" style="--ratcn-preview-height: 420px">
+  <div class="ratcn-preview-chrome" aria-hidden="true">
+    <span class="ratcn-dot"></span><span class="ratcn-dot"></span><span class="ratcn-dot"></span>
+    <span class="ratcn-preview-url">cargo run -p table-frozen</span>
+  </div>
+  <div class="ratcn-preview-body">
+    <iframe class="ratcn-component-preview-frame" src="../../../demos/table-frozen-demo/index.html" title="Wide ledger with frozen column and horizontal scrolling"></iframe>
+  </div>
+</div>
+
+```rust
+let table = Table::new(
+    items,
+    [
+        Constraint::Length(6),
+        Constraint::Length(18),
+        Constraint::Length(11),
+        Constraint::Length(10),
+        Constraint::Length(9),
+        Constraint::Length(10),
+    ],
+)
+.frozen_columns(1)
+.column_focus(|s: &State| Some(s.column), Msg::Column)
+.horizontal_scroll(|s| s.scroll_x, Msg::ScrollX);
+```
+
 ## Styling
 
 Colors come from the theme, the same way a list's do, so a table next to a list
@@ -101,7 +137,8 @@ shows the complete sorting and selection bindings.
 | `Enter` `Space` | Select the cursor row, or sort the active column while on the header |
 | Pointer motion | Move the row cursor over rows, or highlight a sortable heading |
 | Click | Select a row, or toggle sort on a sortable heading |
-| Wheel | Scroll the view, leaving the cursor |
+| Vertical wheel | Scroll rows without moving the cursor |
+| Horizontal wheel | Scroll non-frozen columns when widths overflow |
 
 Every other key bubbles, so single-letter app hotkeys keep working while a
 table has focus. See [Keyboard](../concepts/keyboard) and

@@ -2092,6 +2092,7 @@ dependencies = [
  "select",
  "shared",
  "table",
+ "table-frozen",
  "tabs-automatic",
  "tabs-basic",
  "tabs-disabled",
@@ -2231,6 +2232,16 @@ dependencies = [
 
 [[package]]
 name = "table"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
+]
+
+[[package]]
+name = "table-frozen"
 version = "0.1.0"
 dependencies = [
  "ratatui",
