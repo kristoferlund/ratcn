@@ -171,7 +171,7 @@ it, and a captured drag keeps its own. A frame where nothing asks shows
 
 | Component | Shape |
 |---|---|
-| Button, Checkbox, Cycle, Select and its options, Tabs, List rows | `Pointer` |
+| Button, Checkbox, Cycle, Select and its options, Tabs, List rows, Table selectable rows and sortable headings | `Pointer` |
 | Input, TextArea | `Text` when bound, `NotAllowed` when disabled |
 | ScrollArea's thumb, Dialog's draggable border | `Grab`, then `Grabbing` while dragged |
 | Any other disabled or unbound control | `Default` |

@@ -79,7 +79,7 @@ Each component comes in up to two parts, and each part works on its own:
   `Ratcn::render` and `Ratcn::handle_event`.
 
 The components: `Button`, `Input`, `TextArea`, `List`, `ScrollArea`, `Select`,
-`Tabs`, `Dialog`, `ToasterWidget`, `BarChartWidget`, `Tooltip`, `Checkbox`,
+`Table`, `Tabs`, `Dialog`, `ToasterWidget`, `BarChartWidget`, `Tooltip`, `Checkbox`,
 `Cycle`, and `ProgressWidget`. If there is a component or pattern you would like to see, please
 [open an issue](https://github.com/kristoferlund/ratcn/issues).
 

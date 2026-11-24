@@ -1,11 +1,11 @@
 //! The index arithmetic behind moving through an ordered list of things.
 //!
 //! Every control with items in a row or column — [`List`](crate::List),
-//! [`Select`](crate::Select), and [`Tabs`](crate::Tabs) — needs the same
-//! handful of answers. Where does Down go from here? What if the next three
-//! items are disabled? Where does Page Down land near the end? Getting those
-//! subtly wrong in each control separately is how a UI ends up feeling
-//! inconsistent, so the math lives here once.
+//! [`Select`](crate::Select), [`Table`](crate::Table), and [`Tabs`](crate::Tabs)
+//! — needs the same handful of answers. Where does Down go from here? What if
+//! the next three items are disabled? Where does Page Down land near the end?
+//! Getting those subtly wrong in each control separately is how a UI ends up
+//! feeling inconsistent, so the math lives here once.
 //!
 //! These are pure functions over plain numbers. They hold no state, do no
 //! hit-testing, and know nothing about rendering: a caller that wants to map a

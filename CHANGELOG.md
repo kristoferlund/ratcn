@@ -9,6 +9,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Table` and `TableWidget`: a list with columns, painted in `List`'s colors,
+  with keyed row selection, a column cursor, scrolling, and app-controlled
+  sorting from the header. Try `cargo run -p table`.
 - The `ui-f-state` demo: a short film about `ui = f(state)` with a synthesized
   soundtrack, ending in a live counter. Terminal only:
   `cargo run --release -p ui-f-state`.

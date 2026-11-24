@@ -2091,6 +2091,7 @@ dependencies = [
  "scroll-area",
  "select",
  "shared",
+ "table",
  "tabs-automatic",
  "tabs-basic",
  "tabs-disabled",
@@ -2226,6 +2227,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "table"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
 ]
 
 [[package]]

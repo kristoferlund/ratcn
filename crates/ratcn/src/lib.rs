@@ -12,9 +12,9 @@
 //!
 //! # Components
 //!
-//! [`Button`], [`Input`], [`TextArea`], [`List`], [`Select`], [`Tabs`],
-//! [`Dialog`], [`Toaster`](ToasterWidget), [`BarChartWidget`], [`Tooltip`],
-//! [`ScrollArea`], [`Checkbox`], [`Cycle`], and [`ProgressWidget`].
+//! [`Button`], [`Input`], [`TextArea`], [`List`], [`Select`], [`Table`],
+//! [`Tabs`], [`Dialog`], [`Toaster`](ToasterWidget), [`BarChartWidget`],
+//! [`Tooltip`], [`ScrollArea`], [`Checkbox`], [`Cycle`], and [`ProgressWidget`].
 //! `cargo ratcn add` copies any of them into your project when you want to own
 //! its source.
 //!
@@ -175,6 +175,7 @@ pub use components::{
     progress::{ProgressStyle, ProgressWidget},
     scroll_area::{ScrollArea, ScrollAreaStyle},
     select::{Select, SelectStyle, SelectWidget},
+    table::{SortDirection, Table, TableSort, TableStyle, TableWidget},
     tabs::{Tab, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget},
     textarea::{TextArea, TextAreaStyle, TextAreaWidget},
     toast::{ToastPosition, ToasterStyle, ToasterWidget},

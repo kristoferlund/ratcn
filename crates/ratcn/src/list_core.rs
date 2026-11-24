@@ -2,7 +2,8 @@
 //! value-keyed items: item identity, a uniform-row viewport, and what a pointer
 //! gesture over one of those rows asks for.
 //!
-//! [`List`](crate::List) presents such a set as a column of rows, and
+//! [`List`](crate::List) presents such a set as a column of rows,
+//! [`Table`](crate::Table) presents one with columns and headers, and
 //! [`Select`](crate::Select) presents one as a dropdown panel. What they
 //! present differs, but what they *are* — an ordered collection of value-keyed
 //! items, some disabled — is the same. That
@@ -276,11 +277,13 @@ impl From<String> for ListItem<String> {
     }
 }
 
-/// Everything a custom row-rendering closure — [`List::paint_item`] or
-/// [`Select::paint_item`] — knows about the row it is drawing.
+/// Everything a custom row-rendering closure — [`List::paint_item`],
+/// [`Select::paint_item`], or [`Table::paint_item`] — knows about the row it is
+/// drawing.
 ///
 /// [`List::paint_item`]: crate::List::paint_item
 /// [`Select::paint_item`]: crate::Select::paint_item
+/// [`Table::paint_item`]: crate::Table::paint_item
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListItemState<'a, T> {
     /// Position in the list as declared, counting from 0.

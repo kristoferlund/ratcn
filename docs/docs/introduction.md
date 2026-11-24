@@ -111,7 +111,7 @@ A layer can be declared from anywhere in your UI. See
 [Button](./components/button), [Input](./components/input),
 [TextArea](./components/textarea), [List](./components/list),
 [ScrollArea](./components/scroll-area), [Select](./components/select),
-[Tabs](./components/tabs), [Dialog](./components/dialog),
+[Table](./components/table), [Tabs](./components/tabs), [Dialog](./components/dialog),
 [Toast](./components/toast), [BarChart](./components/barchart),
 [Tooltip](./components/tooltip), [Checkbox](./components/checkbox),
 [Cycle](./components/cycle), and [Progress](./components/progress). Each page

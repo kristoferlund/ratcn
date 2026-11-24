@@ -114,6 +114,7 @@ the previews embedded on the [component pages](./components/button).
 | [List](./components/list) | `list` (cursor and selection kept separate), `list-multi` (checkbox multi-selection), `list-people` (two-line custom rows) |
 | [ScrollArea](./components/scroll-area) | `scroll-area`: ten buttons in a viewport three of them tall |
 | [Select](./components/select) | `select`: the dropdown panel |
+| [Table](./components/table) | `table`: sortable transactions, keyed row selection, and column focus |
 | [Tabs](./components/tabs) | `tabs-basic` (manual activation), `tabs-automatic` (focus selects), `tabs-disabled` (skipped by traversal), `tabs-large` |
 | [Dialog](./components/dialog) | `dialog`: a modal layer with actions, draggable by its border |
 | [Toast](./components/toast) | `toast`: transient notifications your app owns |
