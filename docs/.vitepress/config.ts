@@ -212,6 +212,7 @@ export default defineConfig({
             { text: 'Progress', link: '/docs/components/progress' },
             { text: 'ScrollArea', link: '/docs/components/scroll-area' },
             { text: 'Select', link: '/docs/components/select' },
+            { text: 'Table', link: '/docs/components/table' },
             { text: 'Tabs', link: '/docs/components/tabs' },
             { text: 'TextArea', link: '/docs/components/textarea' },
             { text: 'Toast', link: '/docs/components/toast' },

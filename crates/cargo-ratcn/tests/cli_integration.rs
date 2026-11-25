@@ -19,6 +19,7 @@ const COMPONENTS: &[&str] = &[
     "progress",
     "scroll_area",
     "select",
+    "table",
     "tabs",
     "textarea",
     "toast",
@@ -624,6 +625,7 @@ fn adding_every_available_component_creates_a_compilable_consumer_crate() {
             "progress",
             "scroll_area",
             "select",
+            "table",
             "tabs",
             "textarea",
             "toast",
@@ -674,6 +676,7 @@ pub mod list;\n\
 pub mod progress;\n\
 pub mod scroll_area;\n\
 pub mod select;\n\
+pub mod table;\n\
 pub mod tabs;\n\
 pub mod textarea;\n\
 pub mod toast;\n\

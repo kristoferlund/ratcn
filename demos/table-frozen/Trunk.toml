@@ -1,0 +1,4 @@
+[build]
+target = "index.html"
+dist = "../../docs/public/demos/table-frozen-demo"
+public_url = "./"

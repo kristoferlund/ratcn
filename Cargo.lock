@@ -2091,6 +2091,9 @@ dependencies = [
  "scroll-area",
  "select",
  "shared",
+ "table",
+ "table-frozen",
+ "table-multi",
  "tabs-automatic",
  "tabs-basic",
  "tabs-disabled",
@@ -2226,6 +2229,36 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "table"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
+]
+
+[[package]]
+name = "table-frozen"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
+]
+
+[[package]]
+name = "table-multi"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "ratcn",
+ "ratzilla",
+ "shared",
 ]
 
 [[package]]

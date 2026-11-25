@@ -28,8 +28,8 @@ Tab/Shift+Tab, not arrows or Vim letters, to move focus.
 
 ### Navigation inside a component
 
-Vertical controls are [List](../components/list) and an open
-[Select](../components/select):
+Vertical controls are [List](../components/list), [Table](../components/table),
+and an open [Select](../components/select):
 
 | Keys | Moves the cursor |
 |---|---|
@@ -50,10 +50,14 @@ Horizontal controls are [Tabs](../components/tabs):
 [Cycle](../components/cycle) uses the same horizontal step keys to change its
 value, but wraps at both ends. It has no Home/End or paging behavior.
 
-List, Select, and Tabs skip disabled items and clamp at the ends. They consume
-navigation keys even at a boundary: pressing `j` at the last List item does not
-move to the next component. If a List has no item cursor yet, its first
-navigation key establishes one on the first enabled item.
+List, Select, Table, and Tabs skip disabled items and clamp at the ends. They
+consume navigation keys even at a boundary: pressing `j` at the last List item
+does not move to the next component. If a List or Table has no item cursor yet,
+its first navigation key establishes one on the first enabled item. With
+`column_focus` bound, Table also uses `←`/`→` and `h`/`l` to move between
+columns; when the header has a sortable heading, stepping up from the first row
+climbs onto the header so `Enter` or `Space` can sort its column. A key set
+with Table's `sort_key` sorts the cursor's column from the rows too.
 
 A closed Select opens on Enter/Space or a vertical step key (Up/Down, `k`/`j`,
 Ctrl+P/N). While open, the first Tab or Shift+Tab closes its panel without moving

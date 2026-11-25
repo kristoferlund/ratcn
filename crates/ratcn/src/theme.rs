@@ -1022,7 +1022,8 @@ impl Hues {
 mod tests {
     use super::*;
     use crate::{
-        ButtonStyle, ButtonVariant, DialogStyle, ListStyle, SelectStyle, TabsStyle, ToasterStyle,
+        ButtonStyle, ButtonVariant, DialogStyle, ListStyle, SelectStyle, TableStyle, TabsStyle,
+        ToasterStyle,
     };
 
     /// A backdrop the crate cannot measure scores a ratio no floor accepts, so
@@ -1102,6 +1103,7 @@ mod tests {
         check_fill_states_stay_on_the_page(theme);
         check_control_fills(theme);
         check_select_tracks_the_list(theme);
+        check_table_tracks_the_list(theme);
         check_muted_recedes(theme);
         check_accents_are_distinct(theme);
         check_cursor_is_visible(theme);
@@ -1669,8 +1671,33 @@ mod tests {
     fn text_pairs(theme: &Theme) -> Vec<(String, Color, Color)> {
         let mut pairs = surface_text_pairs(theme);
         pairs.append(&mut well_text_pairs(theme));
+        pairs.append(&mut table_text_pairs(theme));
         pairs.append(&mut control_text_pairs(theme));
         pairs
+    }
+
+    /// The pairs only a table paints: the rungs it adds between the hovered
+    /// well and the cursor row, and the cursor's text on them. Everything else
+    /// a table paints is the list's, pinned by `check_table_tracks_the_list`.
+    fn table_text_pairs(theme: &Theme) -> Vec<(String, Color, Color)> {
+        let table = TableStyle::from_theme(theme);
+        vec![
+            (
+                "table cursor row band".to_owned(),
+                table.focused_foreground,
+                table.focused_band_background,
+            ),
+            (
+                "table hovered heading".to_owned(),
+                table.hovered_header_foreground,
+                table.hovered_header_background,
+            ),
+            (
+                "table selected cursor row".to_owned(),
+                table.selected_focused_foreground,
+                table.selected_focused_background,
+            ),
+        ]
     }
 
     /// The pairs painted straight onto a theme's own layers.
@@ -2013,6 +2040,117 @@ mod tests {
             assert_eq!(
                 left, right,
                 "{}: a select's {role} is not the list's",
+                theme.name
+            );
+        }
+    }
+
+    /// A table beside a list reads as one family: every role the two share is
+    /// the same color, and the table's own rungs sit visibly between the
+    /// hovered well and the cursor row.
+    fn check_table_tracks_the_list(theme: &Theme) {
+        let list = ListStyle::from_theme(theme);
+        let table = TableStyle::from_theme(theme);
+        for (role, left, right) in [
+            ("row text", table.foreground, list.foreground),
+            ("well at rest", table.background, list.background),
+            (
+                "focused well",
+                table.focused_background,
+                list.focused_background,
+            ),
+            (
+                "hovered well",
+                table.hovered_background,
+                list.hovered_background,
+            ),
+            (
+                "selected text",
+                table.selected_foreground,
+                list.selected_foreground,
+            ),
+            (
+                "cursor text",
+                table.focused_foreground,
+                list.focused_foreground,
+            ),
+            (
+                "cursor row",
+                table.focused_row_background,
+                list.focused_row_background,
+            ),
+            ("heading text", table.header_foreground, list.foreground),
+            ("footer text", table.footer_foreground, list.foreground),
+            (
+                "active heading text",
+                table.active_header_foreground,
+                list.selected_foreground,
+            ),
+            (
+                "disabled well",
+                table.disabled_background,
+                list.disabled_background,
+            ),
+            (
+                "disabled text",
+                table.disabled_foreground,
+                list.disabled_foreground,
+            ),
+        ] {
+            assert_eq!(
+                left, right,
+                "{}: a table's {role} is not the list's",
+                theme.name
+            );
+        }
+        for (step, from, to) in [
+            (
+                "band over hovered well",
+                list.hovered_background,
+                table.focused_band_background,
+            ),
+            (
+                "cursor cell over band",
+                table.focused_band_background,
+                table.focused_row_background,
+            ),
+            // With no marker, a selected cursor row is told apart by its fill.
+            (
+                "selected cursor over cursor",
+                table.focused_row_background,
+                table.selected_focused_background,
+            ),
+            (
+                "selected cursor cell over band",
+                table.focused_band_background,
+                table.selected_focused_background,
+            ),
+        ] {
+            let ratio = contrast(from, to);
+            assert!(
+                ratio >= VISIBLE_STEP,
+                "{}: the table's {step} is {ratio:.3}:1, an invisible step",
+                theme.name
+            );
+        }
+        // The frozen-column rule is the theme's border, quieter than text but
+        // still there on every row fill it crosses: the cursor row, a selected
+        // cursor and a disabled row included. A disabled table draws it in its
+        // disabled text instead, which the disabled checks cover.
+        assert_eq!(table.divider_foreground, theme.border, "{}", theme.name);
+        for (fill, backdrop) in [
+            ("well at rest", table.background),
+            ("focused well", table.focused_background),
+            ("hovered well", table.hovered_background),
+            ("cursor row band", table.focused_band_background),
+            ("cursor row", table.focused_row_background),
+            ("selected cursor", table.selected_focused_background),
+            ("disabled row", table.disabled_background),
+        ] {
+            let ratio = contrast(table.divider_foreground, backdrop);
+            assert!(
+                ratio >= VISIBLE_STEP,
+                "{}: the table's divider on the {fill} is {ratio:.3}:1, invisible",
                 theme.name
             );
         }

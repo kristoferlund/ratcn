@@ -72,9 +72,9 @@ ends the click, and returning to it before releasing revives it. If a redraw
 moved or replaced things in between, a newly exposed component at the same cell
 does not inherit the click.
 
-Item controls apply the same rule one level down. A List row, a tab, or a
-Select option commits only when the press and the release land on the same
-item, so a press dragged onto a neighbour, or a row a redraw moved under the
+Item controls apply the same rule one level down. A List row, a tab, a
+Select option, or a Table row or sortable heading commits only when the press
+and the release land on the same item, so a press dragged onto a neighbour, or a row a redraw moved under the
 pointer, commits nothing.
 
 Movement only cancels the click when a component claimed the gesture with
@@ -98,10 +98,10 @@ A component can receive these `MouseKind`s: `Down`, `Up`, `Click`, `Drag`,
   chosen. Right and middle clicks do not activate or focus the standard
   built-ins. Modifiers do not change that: a Ctrl-click activates like a plain
   click, unlike a modified key. A primary click also moves focus, so the
-  component is keyboard-ready immediately after. For a List item cursor or manual Tabs
-  cursor, the click's selection message should update that app-owned cursor
-  along with the committed value; those cursors are separate from runtime
-  component focus.
+  component is keyboard-ready immediately after. For a List or Table item
+  cursor or a manual Tabs cursor, the click's selection message should update
+  that app-owned cursor along with the committed value; those cursors are
+  separate from runtime component focus.
 - **Primary down focus is a fallback.** After the target and its ancestors
   return `Ignored`, the runtime focuses the innermost eligible target.
   Capturing the pointer does not consume the event, so capture plus `Ignored`
@@ -171,7 +171,7 @@ it, and a captured drag keeps its own. A frame where nothing asks shows
 
 | Component | Shape |
 |---|---|
-| Button, Checkbox, Cycle, Select and its options, Tabs, List rows | `Pointer` |
+| Button, Checkbox, Cycle, Select and its options, Tabs, List rows, Table selectable rows and sortable headings | `Pointer` |
 | Input, TextArea | `Text` when bound, `NotAllowed` when disabled |
 | ScrollArea's thumb, Dialog's draggable border | `Grab`, then `Grabbing` while dragged |
 | Any other disabled or unbound control | `Default` |

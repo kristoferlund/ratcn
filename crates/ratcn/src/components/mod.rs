@@ -21,6 +21,7 @@ pub(crate) mod list;
 pub(crate) mod progress;
 pub(crate) mod scroll_area;
 pub(crate) mod select;
+pub(crate) mod table;
 pub(crate) mod tabs;
 pub(crate) mod textarea;
 pub(crate) mod toast;

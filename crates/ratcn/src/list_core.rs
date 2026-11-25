@@ -2,7 +2,8 @@
 //! value-keyed items: item identity, a uniform-row viewport, and what a pointer
 //! gesture over one of those rows asks for.
 //!
-//! [`List`](crate::List) presents such a set as a column of rows, and
+//! [`List`](crate::List) presents such a set as a column of rows,
+//! [`Table`](crate::Table) presents one with columns and headers, and
 //! [`Select`](crate::Select) presents one as a dropdown panel. What they
 //! present differs, but what they *are* — an ordered collection of value-keyed
 //! items, some disabled — is the same. That
@@ -163,6 +164,7 @@ impl<T: Clone + PartialEq> WheelHold<T> {
         );
         self.offset = offset;
         viewport.record_painted_offset(offset);
+        viewport.declared_requested = requested;
     }
 }
 
@@ -276,11 +278,13 @@ impl From<String> for ListItem<String> {
     }
 }
 
-/// Everything a custom row-rendering closure — [`List::paint_item`] or
-/// [`Select::paint_item`] — knows about the row it is drawing.
+/// Everything a custom row-rendering closure — [`List::paint_item`],
+/// [`Select::paint_item`], or [`Table::paint_item`] — knows about the row it is
+/// drawing.
 ///
 /// [`List::paint_item`]: crate::List::paint_item
 /// [`Select::paint_item`]: crate::Select::paint_item
+/// [`Table::paint_item`]: crate::Table::paint_item
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListItemState<'a, T> {
     /// Position in the list as declared, counting from 0.
@@ -609,6 +613,7 @@ pub struct RowViewport {
     rows_per_item: u16,
     painted_offset: usize,
     pending_offset: Option<usize>,
+    declared_requested: Option<usize>,
 }
 
 impl RowViewport {
@@ -620,6 +625,7 @@ impl RowViewport {
             rows_per_item: if row_height == 0 { 1 } else { row_height },
             painted_offset: 0,
             pending_offset: None,
+            declared_requested: None,
         }
     }
 
@@ -637,11 +643,39 @@ impl RowViewport {
         self.painted_offset
     }
 
+    /// The offset the view is at: the painted one, moved by any wheel notches
+    /// not yet painted.
+    #[must_use]
+    pub fn current_offset(&self) -> usize {
+        self.pending_offset.unwrap_or(self.painted_offset)
+    }
+
+    /// The offset that keeps `cursor` visible in `area`: builds on a bound
+    /// `requested` offset when the app has updated it since declaration (such
+    /// as across batched keys before a redraw), otherwise on
+    /// [`current_offset`](Self::current_offset) (the painted view plus any
+    /// unpainted wheel notches).
+    #[must_use]
+    pub fn offset_for_cursor(
+        &self,
+        area: Rect,
+        len: usize,
+        requested: Option<usize>,
+        cursor: Option<usize>,
+    ) -> usize {
+        let base = match (requested, self.declared_requested) {
+            (Some(live), Some(declared)) if live != declared => live,
+            _ => self.current_offset(),
+        };
+        self.cursor_visible_offset(area, len, base, cursor)
+    }
+
     /// Record the offset this frame is about to paint, so later events
     /// hit-test against it.
     pub const fn record_painted_offset(&mut self, offset: usize) {
         self.painted_offset = offset;
         self.pending_offset = None;
+        self.declared_requested = None;
     }
 
     /// How many whole items fit in `area`. This is the unit paging and
@@ -690,7 +724,7 @@ impl RowViewport {
         area: Rect,
         ctx: &mut EventCtx<'_>,
     ) -> Option<usize> {
-        let current = self.pending_offset.unwrap_or(self.painted_offset);
+        let current = self.current_offset();
         let next = linear_nav::wheel_offset(
             items.len(),
             self.visible_items(area),
