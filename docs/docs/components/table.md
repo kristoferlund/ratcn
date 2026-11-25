@@ -65,9 +65,9 @@ match.
 `Row`, `Cell`, or `Span` values win over the row and cursor styles, except on
 the selected cursor row (or cell), which is lettered in
 `selected_focused_foreground` so it stays legible on the primary fill. A
-background set there replaces the row fill, so zebra striping hides a plain row
-cursor. Rows take `row_height` with no margins, and cells past the widths are
-dropped.
+background set there replaces the row fill, so check `!row.focused` when adding
+custom row backgrounds such as zebra striping. Rows take `row_height` with no
+margins, and cells past the widths are dropped.
 
 ## What the app stores
 
@@ -78,6 +78,7 @@ message carries:
 |---|---|---|
 | `item_focus` | a `TableCursor` (`Row(id)` or `Header`) and the top-row offset | the cursor; the offset too when `scroll` is bound |
 | `selection` | the committed row's value | the selection, and `TableCursor::Row(id)` as the cursor |
+| `multi_selection` | the toggled row's value | toggle it in your selection set, and set `TableCursor::Row(id)` as the cursor |
 | `column_focus` | the column index and the horizontal column offset | the column; the offset too when `horizontal_scroll` is bound |
 | `sort` | the requested `TableSort` | the sort; reorder the records, and move the column if you like |
 | `scroll`, `horizontal_scroll` | an offset from the wheel | the offset |
@@ -94,6 +95,34 @@ and a heading sorts, or `item_focus` is bound and some row is enabled.
 With `column_focus` bound, pointer motion over another wholly visible cell in
 the cursor row moves the column cursor there without scrolling. A click selects
 the row or sorts a sortable heading.
+
+## Multi-selection
+
+Bind `.multi_selection(read, on_toggle)` to select any number of rows at once.
+`read` is a predicate asked per visible row so the selection can live in a
+`HashSet`, a `Vec`, or a flag on each record, and `paint_item` receives
+`row.selected` to render checkboxes or badges however you like.
+
+<div class="ratcn-preview-window" style="--ratcn-preview-height: 420px">
+  <div class="ratcn-preview-chrome" aria-hidden="true">
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-preview-url">cargo run -p table-multi</span>
+  </div>
+  <div class="ratcn-preview-body">
+    <iframe class="ratcn-component-preview-frame" src="../../../demos/table-multi-demo/index.html" title="ratcn table multi-selection demo"></iframe>
+  </div>
+</div>
+
+```rust
+Table::new(items, widths)
+    .item_focus(|s: &AppState| s.cursor, |cursor, _| Msg::CursorMoved(cursor))
+    .multi_selection(|s, id| s.chosen.contains(id), Msg::RowToggled)
+```
+
+Enter, Space, or a left click emits `on_toggle` with the row's value. Pick one
+mode: `.selection(...)` and `.multi_selection(...)` together panic.
 
 ## Sorting and the header
 
@@ -264,10 +293,10 @@ Replace `.themed(...)` with `.style(...)` to supply explicit colors.
 | `Home` `End` | Move to the first / last enabled row |
 | `Page Up` `Page Down` | Move a visible page |
 | `Ctrl+U` `Ctrl+D` | Move half a page |
-| `Enter` `Space` | Select the cursor row; on the header, sort the header cursor's column (the column cursor if it is on a heading, else the sorted column, else the first sortable heading) |
+| `Enter` `Space` | Select (or toggle in multi-selection) the cursor row; on the header, sort the header cursor's column (the column cursor if it is on a heading, else the sorted column, else the first sortable heading) |
 | The key set with `sort_key` | Sort the cursor's column, from the rows or the header |
 | Pointer motion | Move the row cursor over rows, the column cursor to a whole cell within the cursor row, or highlight a sortable heading |
-| Click | Select a row, or toggle sort on a sortable heading |
+| Click | Select (or toggle) a row, or toggle sort on a sortable heading |
 | Vertical wheel | Scroll rows without moving the cursor |
 | Horizontal wheel | Scroll non-frozen columns when widths overflow |
 

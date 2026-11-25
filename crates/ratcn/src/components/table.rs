@@ -429,6 +429,7 @@ pub enum TableCursor<T> {
 
 type Read<S, T> = Box<dyn Fn(&S) -> Option<T>>;
 type Binding<S, T, M> = (Read<S, T>, Box<dyn Fn(T) -> M>);
+type MultiBinding<S, T, M> = (Box<dyn Fn(&S, &T) -> bool>, Box<dyn Fn(T) -> M>);
 type OffsetBinding<S, T, M> = (Read<S, T>, Box<dyn Fn(T, usize) -> M>);
 type ScrollBinding<S, M> = (Box<dyn Fn(&S) -> usize>, Box<dyn Fn(usize) -> M>);
 type PaintItem<S, T> = Box<dyn Fn(&S, ListItemState<'_, T>) -> Row<'static>>;
@@ -914,8 +915,10 @@ fn blit_slice(
 /// - [`item_focus`](Self::item_focus) — the cursor and the top-row offset. Its
 ///   message carries the new [`TableCursor`] and the offset that keeps it in
 ///   view; store both in one update when [`scroll`](Self::scroll) is bound.
-/// - [`selection`](Self::selection) — the committed row. Store it, and set the
-///   cursor to `TableCursor::Row` of the same value in that update, so keys
+/// - [`selection`](Self::selection) or
+///   [`multi_selection`](Self::multi_selection) — single choice or any number
+///   of toggled rows (mutually exclusive). Store or toggle the value, and set
+///   the cursor to `TableCursor::Row` of the same value in that update, so keys
 ///   continue from a clicked row.
 /// - [`column_focus`](Self::column_focus) — the column cursor and the
 ///   horizontal column offset; store both in one update when
@@ -1008,6 +1011,7 @@ pub struct Table<T, S, M> {
     frozen_columns: usize,
     focused: Option<OffsetBinding<S, TableCursor<T>, M>>,
     selected: Option<Binding<S, T, M>>,
+    selected_many: Option<MultiBinding<S, T, M>>,
     column: Option<OffsetBinding<S, usize, M>>,
     sort: Option<Binding<S, TableSort, M>>,
     sortable: Vec<usize>,
@@ -1061,6 +1065,7 @@ impl<T, S, M> Table<T, S, M> {
             frozen_columns: 0,
             focused: None,
             selected: None,
+            selected_many: None,
             column: None,
             sort: None,
             sortable: Vec::new(),
@@ -1130,9 +1135,10 @@ impl<T, S, M> Table<T, S, M> {
     /// which is lettered in
     /// [`selected_focused_foreground`](TableStyle::selected_focused_foreground)
     /// so it stays legible on the primary fill. A background set there
-    /// replaces the row's fill — cursor row and band included — so zebra
-    /// striping hides a plain row cursor. Every row is forced to
-    /// [`row_height`](Self::row_height) with zero margins.
+    /// replaces the row's fill — cursor row and band included — so check
+    /// `!row.focused` when adding custom row backgrounds such as zebra
+    /// striping. Every row is forced to [`row_height`](Self::row_height) with
+    /// zero margins.
     #[must_use]
     pub fn paint_item(
         mut self,
@@ -1174,6 +1180,12 @@ impl<T, S, M> Table<T, S, M> {
     /// preceded by pointer motion, so when [`item_focus`](Self::item_focus) is
     /// bound, the update handling this message should also set the cursor to
     /// `TableCursor::Row` of the same value.
+    ///
+    /// # Panics
+    ///
+    /// Rendering panics if this is combined with
+    /// [`multi_selection`](Self::multi_selection): a table is one mode or the
+    /// other, and Enter commits through whichever one is bound.
     #[must_use]
     pub fn selection(
         mut self,
@@ -1181,6 +1193,29 @@ impl<T, S, M> Table<T, S, M> {
         on_select: impl Fn(T) -> M + 'static,
     ) -> Self {
         self.selected = Some((Box::new(read), Box::new(on_select)));
+        self
+    }
+    /// Bind multi-selection: any number of rows chosen at once.
+    ///
+    /// `read` is a predicate asked "is this row selected?" for each visible
+    /// row, so your app can store the selection in a `HashSet`, a flag on each
+    /// record, or a computed rule without converting it every frame.
+    /// `on_toggle` is called with the row the user flipped via Enter, Space,
+    /// or a left click; your update function decides whether to add or remove
+    /// it. When [`item_focus`](Self::item_focus) is also bound, the update
+    /// handling a click should set the cursor to `TableCursor::Row` of the
+    /// same value.
+    ///
+    /// # Panics
+    ///
+    /// Rendering panics if this is combined with [`selection`](Self::selection).
+    #[must_use]
+    pub fn multi_selection(
+        mut self,
+        read: impl Fn(&S, &T) -> bool + 'static,
+        on_toggle: impl Fn(T) -> M + 'static,
+    ) -> Self {
+        self.selected_many = Some((Box::new(read), Box::new(on_toggle)));
         self
     }
     /// Bind the column cursor for Left/Right (or h/l) and cell highlighting.
@@ -1511,12 +1546,17 @@ impl<T: Clone + PartialEq + 'static, S, M> Table<T, S, M> {
         (self.active_column(state) != Some(column))
             .then(|| EventResult::Emit(on_change(column, viewport.current_offset())))
     }
+    const fn has_selection(&self) -> bool {
+        self.selected.is_some() || self.selected_many.is_some()
+    }
     fn select(&self, index: usize) -> EventResult<M> {
-        self.selected
-            .as_ref()
-            .map_or(EventResult::Ignored, |(_, on_select)| {
-                EventResult::Emit(on_select(self.items[index].value().clone()))
-            })
+        if let Some((_, on_select)) = &self.selected {
+            return EventResult::Emit(on_select(self.items[index].value().clone()));
+        }
+        if let Some((_, on_toggle)) = &self.selected_many {
+            return EventResult::Emit(on_toggle(self.items[index].value().clone()));
+        }
+        EventResult::Ignored
     }
     /// The column the sort key sorts: the header cursor's on the header, the
     /// column cursor's when it reads one, otherwise the sorted column or the
@@ -1629,7 +1669,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Table<T, S, M> {
         surface: Color,
         cursor: Option<usize>,
         band: bool,
-        selected: Option<&T>,
+        is_selected: impl Fn(&T) -> bool,
     ) -> Vec<Row<'static>> {
         let rows = self.visible_rows();
         let start = rows.start;
@@ -1643,7 +1683,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Table<T, S, M> {
                     value: item.value(),
                     label: item.label(),
                     focused: cursor == Some(index),
-                    selected: selected == Some(item.value()),
+                    selected: is_selected(item.value()),
                     disabled: self.disabled || item.is_disabled(),
                 };
                 let mut role = style.resolve_row(
@@ -1732,7 +1772,11 @@ impl<T: Clone + PartialEq + 'static, S, M> Table<T, S, M> {
         let cursor = self
             .row_cursor(state)
             .filter(|&i| look.cursor_visible && !self.items[i].is_disabled());
-        let selected = self.selected.as_ref().and_then(|(read, _)| read(state));
+        let single_selected = self.selected.as_ref().and_then(|(read, _)| read(state));
+        let is_selected = |value: &T| match &self.selected_many {
+            Some((read, _)) => read(state, value),
+            None => single_selected.as_ref() == Some(value),
+        };
         let visible = self.visible_rows();
         let rows = self.body_rows(
             state,
@@ -1740,14 +1784,13 @@ impl<T: Clone + PartialEq + 'static, S, M> Table<T, S, M> {
             look.surface,
             cursor,
             active.is_some(),
-            selected.as_ref(),
+            is_selected,
         );
         // The row already carries the cursor foreground; only swap the active
         // cell's fill so explicit span colors inside `paint_item` survive. The
         // selected cursor — the row, or its cell with a column cursor — is
         // lettered over them, to stay legible on its own fill.
-        let selected_cursor =
-            cursor.is_some_and(|i| selected.as_ref() == Some(self.items[i].value()));
+        let selected_cursor = cursor.is_some_and(|i| is_selected(self.items[i].value()));
         let cursor_cell = style.cursor(selected_cursor);
         let (row_style, cell_style) = match (selected_cursor, active.is_some()) {
             (true, false) => (cursor_cell, Style::default()),
@@ -1856,6 +1899,10 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
         if cfg!(debug_assertions) {
             list_core::assert_unique_values(self.items.iter().map(ListItem::value), "Table");
         }
+        assert!(
+            !(self.selected.is_some() && self.selected_many.is_some()),
+            "Table::selection(...) and Table::multi_selection(...) cannot be used together; choose one selection mode"
+        );
         let inner = self
             .block
             .as_ref()
@@ -1923,7 +1970,7 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
         self.paint_body(&look, ctx);
         if look.interactive
             && (hover.is_some()
-                || self.selected.is_some()
+                || self.has_selection()
                     && ctx
                         .hover_position()
                         .and_then(|p| self.viewport.row_at(self.body, self.items.len(), p.x, p.y))
@@ -1989,13 +2036,8 @@ impl<T: Clone + PartialEq + 'static, S, M> Component<S, M> for Table<T, S, M> {
                 }
                 // As on a list, only a click that would act is vetoed when its
                 // press landed somewhere else.
-                match list_core::row_intent(
-                    m.kind,
-                    &self.items,
-                    row,
-                    cursor,
-                    self.selected.is_some(),
-                ) {
+                match list_core::row_intent(m.kind, &self.items, row, cursor, self.has_selection())
+                {
                     RowIntent::Focus(_) | RowIntent::Commit(_) if !pressed_here => {
                         EventResult::Consumed
                     }
@@ -4005,5 +4047,109 @@ mod tests {
             driver.event(key(KeyCode::Down), &state),
             EventResult::Emit(Msg::Move(1, 1))
         );
+    }
+
+    /// Multi-selection toggles rows via Enter, Space, and click, asks its
+    /// predicate only for visible rows, and paints every selected row.
+    #[test]
+    fn multi_selection_toggles_rows_and_queries_only_visible_rows() {
+        use std::cell::Cell;
+
+        #[derive(Default)]
+        struct MultiState {
+            focus: FocusState,
+            cursor: Option<TableCursor<u8>>,
+            chosen: Vec<u8>,
+        }
+        #[derive(Debug, PartialEq)]
+        enum MultiMsg {
+            Focus(FocusState),
+            Move(TableCursor<u8>),
+            Toggle(u8),
+        }
+        let mut driver = Driver::with(
+            Ratcn::new().focus(|s: &MultiState| &s.focus, MultiMsg::Focus),
+            24,
+            4,
+        );
+        let state = MultiState {
+            cursor: Some(TableCursor::Row(0)),
+            chosen: vec![0, 2],
+            ..MultiState::default()
+        };
+        let probes = Rc::new(Cell::new(0usize));
+        let draw_multi = |driver: &mut Driver<MultiState, MultiMsg>,
+                          state: &MultiState,
+                          probes: &Rc<Cell<usize>>| {
+            driver.render(state, |ctx| {
+                let probes = Rc::clone(probes);
+                let table = Table::new(
+                    (0u8..50).map(|i| ListItem::new(i, format!("row-{i}")).disabled(i == 1)),
+                    [Constraint::Length(12)],
+                )
+                .paint_item(|_, row| {
+                    let mark = if row.selected { "[x]" } else { "[ ]" };
+                    Row::new([format!("{mark} {}", row.label)])
+                })
+                .item_focus(|s: &MultiState| s.cursor, |c, _| MultiMsg::Move(c))
+                .multi_selection(
+                    move |s, id| {
+                        probes.set(probes.get() + 1);
+                        s.chosen.contains(id)
+                    },
+                    MultiMsg::Toggle,
+                );
+                ctx.component("table", table, Rect::new(0, 0, 24, 3));
+            });
+        };
+
+        draw_multi(&mut driver, &state, &probes);
+        assert_eq!(driver.row(0).trim_end(), "[x] row-0");
+        assert_eq!(driver.row(1).trim_end(), "[ ] row-1");
+        assert_eq!(driver.row(2).trim_end(), "[x] row-2");
+        assert!(
+            probes.get() <= 4,
+            "predicate is queried only for visible rows, got {} calls for 50 rows",
+            probes.get()
+        );
+        let style = TableStyle::from_theme(&Theme::default_dark());
+        assert_eq!(driver.cell(0, 0).bg, style.selected_focused_background);
+        assert_eq!(driver.cell(0, 2).fg, style.selected_foreground);
+
+        // Enter and Space toggle the cursor row; click toggles another enabled row.
+        assert_eq!(
+            driver.event(key(KeyCode::Enter), &state),
+            EventResult::Emit(MultiMsg::Toggle(0))
+        );
+        assert_eq!(
+            driver.event(key(KeyCode::Char(' ')), &state),
+            EventResult::Emit(MultiMsg::Toggle(0))
+        );
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 2), &state),
+            EventResult::Emit(MultiMsg::Toggle(2))
+        );
+        // Hovering an enabled selectable row asks for a hand cursor.
+        driver.event(mouse(MouseKind::Moved, 2, 2), &state);
+        draw_multi(&mut driver, &state, &probes);
+        assert_eq!(driver.ratcn.pointer_shape(), PointerShape::Pointer);
+        // Disabled row is skipped on click.
+        assert_eq!(
+            driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 1), &state),
+            EventResult::Ignored
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Table::selection(...) and Table::multi_selection(...)")]
+    fn selection_and_multi_selection_together_panic() {
+        let mut driver = focused_driver();
+        let state = State::default();
+        driver.render(&state, |ctx| {
+            let table = Table::new([ListItem::new(0u8, "a")], [Constraint::Length(6)])
+                .selection(|s: &State| s.selected, Msg::Select)
+                .multi_selection(|s: &State, id| s.selected == Some(*id), Msg::Select);
+            ctx.component("table", table, Rect::new(0, 0, 10, 3));
+        });
     }
 }

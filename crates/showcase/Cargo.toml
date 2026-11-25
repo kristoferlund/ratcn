@@ -36,6 +36,7 @@ scroll-area = { path = "../../demos/scroll-area" }
 select = { path = "../../demos/select" }
 table = { path = "../../demos/table" }
 table-frozen = { path = "../../demos/table-frozen" }
+table-multi = { path = "../../demos/table-multi" }
 tabs-automatic = { path = "../../demos/tabs-automatic" }
 tabs-basic = { path = "../../demos/tabs-basic" }
 tabs-disabled = { path = "../../demos/tabs-disabled" }

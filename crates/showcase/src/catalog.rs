@@ -190,6 +190,10 @@ pub static ENTRIES: &[Entry] = &[
         open: || Box::new(table_frozen::App::new()),
     },
     Entry {
+        name: "table-multi",
+        open: || Box::new(table_multi::App::new()),
+    },
+    Entry {
         name: "tabs-automatic",
         open: || Box::new(tabs_automatic::App::new()),
     },
