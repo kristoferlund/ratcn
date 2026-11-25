@@ -143,10 +143,10 @@ impl demo_shared::Demo for App {
         }
         let content = area.centered(
             Constraint::Length(48.min(area.width.saturating_sub(2))),
-            Constraint::Length(11), // Header, eight visible rows, gap, status line.
+            Constraint::Length(12), // Header, eight visible rows, gap, status and hint lines.
         );
         let [grid, status] = content
-            .layout(&Layout::vertical([Constraint::Length(9), Constraint::Length(1)]).spacing(1));
+            .layout(&Layout::vertical([Constraint::Length(9), Constraint::Length(2)]).spacing(1));
         buffer.set_style(area, Style::default().bg(theme.background));
         let primary = theme.primary;
         let muted = theme.muted_foreground;
@@ -197,7 +197,8 @@ impl demo_shared::Demo for App {
                     None => "Selected: None".to_owned(),
                 };
                 ctx.paint_widget(
-                    Paragraph::new(summary).style(Style::default().fg(muted)),
+                    Paragraph::new(vec![Line::from(summary), Line::from("Press s to sort")])
+                        .style(Style::default().fg(muted)),
                     status,
                 );
             });
