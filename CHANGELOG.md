@@ -11,14 +11,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Table` and `TableWidget`: a list with columns, painted in `List`'s colors,
   with keyed row selection, a column cursor, vertical and horizontal scrolling,
-  frozen columns, and app-controlled sorting from the header. Try
-  `cargo run -p table` and `cargo run -p table-frozen`.
+  frozen columns, and app-controlled sorting from the header or a `sort_key`.
+  Try `cargo run -p table` and `cargo run -p table-frozen`.
 - The `ui-f-state` demo: a short film about `ui = f(state)` with a synthesized
   soundtrack, ending in a live counter. Terminal only:
   `cargo run --release -p ui-f-state`.
 - `List::from_shared` declares a list over an `Arc<[ListItem<T>]>` the app
   already holds, so a long list can be declared without copying its items
   every frame.
+- `list_core::RowViewport::current_offset` and
+  `list_core::RowViewport::offset_for_cursor`: the pending view a custom
+  list-like component's key moves build on, counting unpainted wheel notches
+  and prior key moves.
 - `list_core::PressedItem`, so a custom item component can hold a click to the
   item that was pressed, as `List`, `Select` and `Tabs` now do.
 
@@ -40,6 +44,8 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A key move in a `List` builds on the view on screen, so a cursor set from
+  outside, or a key right after a wheel, no longer makes the list jump.
 - A click on a `List` row, a tab, or a `Select` option acts only when press and
   release land on the same item. A redraw that moved another item under the
   pointer no longer commits it.

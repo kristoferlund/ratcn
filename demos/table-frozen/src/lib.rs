@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Paragraph, Row},
 };
 use ratcn::{
-    ListItem, SortDirection, Table, TableSort, Theme,
+    ListItem, SortDirection, Table, TableCursor, TableSort, Theme,
     runtime::{Event, EventResult, FocusState, PointerShape, Ratcn},
 };
 
@@ -67,8 +67,7 @@ fn money(cents: i32) -> String {
 #[derive(Default)]
 struct State {
     focus: FocusState,
-    row: Option<usize>,
-    on_header: bool,
+    cursor: Option<TableCursor<usize>>,
     selected: Option<usize>,
     column: usize,
     scroll_x: usize,
@@ -79,17 +78,15 @@ impl State {
     fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Focus(f) => self.focus = f,
-            Msg::Row(id) => {
-                self.row = Some(id);
-                self.on_header = false;
-            }
-            Msg::Header => self.on_header = true,
+            Msg::Cursor(cursor) => self.cursor = Some(cursor),
             Msg::Select(id) => {
                 self.selected = Some(id);
-                self.row = Some(id);
-                self.on_header = false;
+                self.cursor = Some(TableCursor::Row(id));
             }
-            Msg::Column(c) => self.column = c,
+            Msg::Column(column, offset) => {
+                self.column = column;
+                self.scroll_x = offset;
+            }
             Msg::ScrollX(offset) => self.scroll_x = offset,
             Msg::Sort(s) => {
                 self.column = s.column;
@@ -101,10 +98,9 @@ impl State {
 
 enum Msg {
     Focus(FocusState),
-    Row(usize),
-    Header,
+    Cursor(TableCursor<usize>),
     Select(usize),
-    Column(usize),
+    Column(usize, usize),
     ScrollX(usize),
     Sort(TableSort),
 }
@@ -118,7 +114,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             state: State {
-                row: Some(0),
+                cursor: Some(TableCursor::Row(0)),
                 sort: Some(TableSort {
                     column: 0,
                     direction: SortDirection::Descending,
@@ -164,11 +160,7 @@ impl demo_shared::Demo for App {
                     4 => lhs.4.cmp(rhs.4),
                     _ => lhs.5.cmp(&rhs.5),
                 };
-                if sort.direction == SortDirection::Ascending {
-                    cmp
-                } else {
-                    cmp.reverse()
-                }
+                sort.direction.apply(cmp)
             });
         }
         let content = area.centered(
@@ -222,12 +214,12 @@ impl demo_shared::Demo for App {
                         Line::from(money(amount)).right_aligned(),
                     ])
                 })
-                .item_focus(|s: &State| s.row, |id, _| Msg::Row(id))
-                .header_focus(|s| s.on_header, || Msg::Header)
+                .item_focus(|s: &State| s.cursor, |cursor, _| Msg::Cursor(cursor))
                 .selection(|s| s.selected, Msg::Select)
                 .column_focus(|s| Some(s.column), Msg::Column)
                 .horizontal_scroll(|s| s.scroll_x, Msg::ScrollX)
-                .sort([0, 1, 2, 3, 4, 5], |s| s.sort, Msg::Sort);
+                .sort([0, 1, 2, 3, 4, 5], |s| s.sort, Msg::Sort)
+                .sort_key('s');
                 ctx.component("ledger-wide", table, grid);
 
                 let summary = match self.state.selected {
@@ -250,15 +242,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn horizontal_scroll_updates_offset_without_moving_column() {
+    fn selecting_a_row_moves_the_cursor_and_leaves_the_header() {
         let mut state = State {
-            column: 1,
+            cursor: Some(TableCursor::Header),
             ..State::default()
         };
 
-        state.update(Msg::ScrollX(2));
+        state.update(Msg::Select(4));
 
+        assert_eq!(state.selected, Some(4));
+        assert_eq!(state.cursor, Some(TableCursor::Row(4)));
+    }
+
+    #[test]
+    fn column_focus_updates_column_and_horizontal_scroll_together() {
+        let mut state = State::default();
+
+        state.update(Msg::Column(4, 2));
+
+        assert_eq!(state.column, 4);
         assert_eq!(state.scroll_x, 2);
-        assert_eq!(state.column, 1);
+    }
+
+    #[test]
+    fn sorting_updates_the_active_column_and_direction() {
+        let mut state = State::default();
+        let sort = TableSort {
+            column: 5,
+            direction: SortDirection::Ascending,
+        };
+
+        state.update(Msg::Sort(sort));
+
+        assert_eq!(state.column, 5);
+        assert_eq!(state.sort, Some(sort));
     }
 }

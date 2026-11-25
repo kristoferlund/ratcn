@@ -664,10 +664,12 @@ impl<T, S, M> List<T, S, M> {
     /// Bind the requested scroll offset — the index of the topmost visible item.
     ///
     /// Before paint, the list adjusts the requested value to keep the focused
-    /// item visible. Focus movement computes the same resulting offset from the
-    /// current app value and passes it to the [`item_focus`](Self::item_focus)
-    /// message constructor, so its update can persist cursor and scroll
-    /// atomically. Hit-testing and wheel input use the actual painted offset.
+    /// item visible. Focus movement computes the resulting offset from the
+    /// view on screen, counting wheel notches not yet painted, and passes it
+    /// to the [`item_focus`](Self::item_focus) message constructor, so its
+    /// update can persist cursor and scroll atomically. Hit-testing uses the
+    /// painted offset; the wheel and key moves build on it plus any notches
+    /// not yet painted.
     ///
     /// The wheel is the exception to keeping the cursor visible: it scrolls
     /// the view and leaves the cursor where it is, so the cursor may scroll
@@ -804,22 +806,14 @@ impl<T: Clone + PartialEq + 'static, S, M> List<T, S, M> {
     }
 
     fn move_focus(&self, index: usize, state: &S, area: Rect) -> EventResult<M> {
-        match &self.focused_item {
-            Some((_, on_change)) => EventResult::Emit(on_change(
-                self.items[index].value().clone(),
-                self.offset_for_focus(state, area, index),
-            )),
-            None => EventResult::Ignored,
-        }
-    }
-
-    fn offset_for_focus(&self, state: &S, area: Rect, index: usize) -> usize {
-        let current = self
-            .scroll
-            .as_ref()
-            .map_or(self.viewport.painted_offset(), |(read, _)| read(state));
-        self.viewport
-            .cursor_visible_offset(area, self.items.len(), current, Some(index))
+        let Some((_, on_change)) = &self.focused_item else {
+            return EventResult::Ignored;
+        };
+        let requested = self.scroll.as_ref().map(|(read, _)| read(state));
+        let offset =
+            self.viewport
+                .offset_for_cursor(area, self.items.len(), requested, Some(index));
+        EventResult::Emit(on_change(self.items[index].value().clone(), offset))
     }
 
     fn select(&self, index: usize) -> EventResult<M> {
@@ -2580,6 +2574,114 @@ mod tests {
             driver.event(mouse(MouseKind::Click(MouseButton::Left), 2, 2), &state),
             EventResult::Emit(BigMsg::Chose(42)),
             "the third painted row is the forty-third item"
+        );
+    }
+
+    /// A cursor set from outside with the app's offset left behind paints
+    /// scrolled to show it; the next key builds on that painted view, so the
+    /// list does not jump.
+    #[test]
+    fn a_key_move_builds_on_the_painted_offset_not_a_stale_app_offset() {
+        #[derive(Debug, PartialEq)]
+        enum Msg {
+            Moved(usize, usize),
+            Scrolled(usize),
+        }
+        let state = (9usize, 0usize);
+        let mut driver = Driver::<(usize, usize), Msg>::new(20, 3);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("list"),
+                List::new((0..20).map(|i| ListItem::new(i, format!("Item {i}"))))
+                    .item_focus(|s: &(usize, usize)| Some(s.0), Msg::Moved)
+                    .scroll(|s| s.1, Msg::Scrolled),
+                area,
+            );
+        });
+        assert_eq!(driver.row(0).trim_end(), "Item 7");
+        assert_eq!(
+            driver.event(key(KeyCode::Up), &state),
+            EventResult::Emit(Msg::Moved(8, 7)),
+            "row 8 is already in view at the painted offset"
+        );
+    }
+
+    /// A key that follows a wheel before the next frame builds on where the
+    /// wheel left the view.
+    #[test]
+    fn a_key_after_an_unpainted_wheel_builds_on_the_wheeled_view() {
+        #[derive(Debug, PartialEq)]
+        enum Msg {
+            Moved(usize, usize),
+        }
+        let state = 0usize;
+        let mut driver = Driver::<usize, Msg>::new(20, 3);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("list"),
+                List::new((0..20).map(|i| ListItem::new(i, format!("Item {i}"))))
+                    .item_focus(|s: &usize| Some(*s), Msg::Moved),
+                area,
+            );
+        });
+        assert_eq!(
+            driver.event(
+                mouse(MouseKind::Scroll(ScrollDirection::Down), 1, 1),
+                &state
+            ),
+            EventResult::Consumed
+        );
+        assert_eq!(
+            driver.event(key(KeyCode::Down), &state),
+            EventResult::Emit(Msg::Moved(1, 1)),
+            "the wheeled view starts at 3, so row 1 pulls it up to 1"
+        );
+    }
+
+    /// Multiple navigation keys arriving before the next render build on each
+    /// other's scroll offset rather than jumping back to the painted offset.
+    #[test]
+    fn batched_key_moves_before_a_redraw_build_on_their_own_offset() {
+        #[derive(Debug, PartialEq)]
+        enum Msg {
+            Moved(usize, usize),
+            Scrolled(usize),
+        }
+        let mut state = (19usize, 17usize);
+        let mut driver = Driver::<(usize, usize), Msg>::new(20, 3);
+        let area = driver.area();
+        driver.render(&state, |ctx| {
+            ctx.component(
+                ChildId::Static("list"),
+                List::new((0..20).map(|i| ListItem::new(i, format!("Item {i}"))))
+                    .item_focus(|s: &(usize, usize)| Some(s.0), Msg::Moved)
+                    .scroll(|s| s.1, Msg::Scrolled),
+                area,
+            );
+        });
+        assert_eq!(driver.row(0).trim_end(), "Item 17");
+        assert_eq!(
+            driver.event(key(KeyCode::Home), &state),
+            EventResult::Emit(Msg::Moved(0, 0))
+        );
+        state = (0, 0);
+        assert_eq!(
+            driver.event(key(KeyCode::Down), &state),
+            EventResult::Emit(Msg::Moved(1, 0)),
+            "row 1 is already visible after Home moved the view to 0"
+        );
+        state = (1, 0);
+        assert_eq!(
+            driver.event(key(KeyCode::End), &state),
+            EventResult::Emit(Msg::Moved(19, 17))
+        );
+        state = (19, 17);
+        assert_eq!(
+            driver.event(key(KeyCode::Up), &state),
+            EventResult::Emit(Msg::Moved(18, 17)),
+            "row 18 is already visible after End moved the view to 17"
         );
     }
 

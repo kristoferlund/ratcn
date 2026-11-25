@@ -20,8 +20,23 @@ footers, optional column focus, and sortable columns.
 </div>
 
 ```rust
-use ratatui::{layout::Constraint, widgets::Row};
-use ratcn::{ListItem, Table, TableSort};
+use ratatui::layout::Constraint;
+use ratcn::{Table, TableCursor, TableSort};
+
+struct AppState {
+    cursor: Option<TableCursor<RecordId>>,
+    selected: Option<RecordId>,
+    column: usize,
+    sort: Option<TableSort>,
+    // ...
+}
+
+enum Msg {
+    CursorMoved(TableCursor<RecordId>),
+    RowSelected(RecordId),
+    ColumnFocused(usize, usize),
+    SortChanged(TableSort),
+}
 
 let table = Table::new(
     items,
@@ -29,11 +44,11 @@ let table = Table::new(
 )
 .header(["Description", "Amount"])
 .paint_item(|s: &AppState, row| s.transaction_row(*row.value))
-.item_focus(|s| s.cursor, Msg::RowFocused)
-.header_focus(|s| s.on_header, || Msg::HeaderFocused)
+.item_focus(|s| s.cursor, |cursor, _top| Msg::CursorMoved(cursor))
 .selection(|s| s.selected, Msg::RowSelected)
 .column_focus(|s| Some(s.column), Msg::ColumnFocused)
-.sort([0, 1], |s| s.sort, Msg::SortChanged);
+.sort([0, 1], |s| s.sort, Msg::SortChanged)
+.sort_key('s');
 
 ctx.component("transactions", table, area);
 ```
@@ -41,41 +56,89 @@ ctx.component("transactions", table, area);
 Rows use the same value-keyed `ListItem` as [List](./list). Identifying each
 row by its domain value keeps the cursor and selection on the same record across
 sorting and filtering. Values must be unique within one `Table`; a debug build
-panics on duplicates.
+panics on duplicates. Columns are identified by their index in the declared
+widths: if you hide or reorder columns, remap the stored column and sort to
+match.
 
-`item_focus` tracks the row cursor, `selection` commits a choice on Enter, Space,
-or click, and `column_focus` tracks the active column for Left/Right movement
-and cell highlighting. `paint_item` receives app state and a `ListItemState`,
-returning a Ratatui `Row` for each visible item. Explicit foreground colors and
-modifiers set on `Row`, `Cell`, or `Span` values are preserved over the row and
-cursor styles.
+`paint_item` receives app state and a `ListItemState`, returning a Ratatui
+`Row` for each visible item. Explicit foreground colors and modifiers set on
+`Row`, `Cell`, or `Span` values win over the row and cursor styles, except on
+the selected cursor row (or cell), which is lettered in
+`selected_focused_foreground` so it stays legible on the primary fill. A
+background set there replaces the row fill, so zebra striping hides a plain row
+cursor. Rows take `row_height` with no margins, and cells past the widths are
+dropped.
 
-## Sorting and header focus
+## What the app stores
 
-Pass the sortable column indices and a `(read, change)` binding to `.sort(...)`.
-Clicking a sortable heading emits a `TableSort` requesting ascending order, or
-descending if that column is already sorted ascending. Your app reorders the
-records and passes them back in the new order; the sorted heading displays a
-`▲` or `▼` mark when it fits alongside the label.
+Each binding is a reader and a message constructor. The app stores what each
+message carries:
 
-Bind `.header_focus(read, on_enter)` to reach the header from the keyboard.
-Stepping up from the first row moves the cursor onto the header, where Left and
-Right choose a column, Enter or Space sorts it, and Down returns to the rows.
-Set `on_header` in `on_enter`'s update and clear it when handling row focus or
-selection messages.
+| Binding | Message carries | Store |
+|---|---|---|
+| `item_focus` | a `TableCursor` (`Row(id)` or `Header`) and the top-row offset | the cursor; the offset too when `scroll` is bound |
+| `selection` | the committed row's value | the selection, and `TableCursor::Row(id)` as the cursor |
+| `column_focus` | the column index and the horizontal column offset | the column; the offset too when `horizontal_scroll` is bound |
+| `sort` | the requested `TableSort` | the sort; reorder the records, and move the column if you like |
+| `scroll`, `horizontal_scroll` | an offset from the wheel | the offset |
+
+Store both values of a two-value message in the same update. Adjustments the
+table makes while rendering, such as keeping the cursor or column in view after
+a sort or a resize, emit no message. Leave `scroll` and `horizontal_scroll`
+unbound and the table scrolls itself.
+
+A table is a Tab stop when it is enabled, has at least one column, and a key can
+act there: `column_focus` is bound, the header is reachable, a `sort_key` is set
+and a heading sorts, or `item_focus` is bound and some row is enabled.
+
+With `column_focus` bound, pointer motion over another wholly visible cell in
+the cursor row moves the column cursor there without scrolling. A click selects
+the row or sorts a sortable heading.
+
+## Sorting and the header
+
+Pass the sortable column indices and a `(read, on_change)` binding to
+`.sort(...)`. Clicking a sortable heading emits a `TableSort` requesting
+ascending order, or descending if that column is already sorted ascending. Your
+app reorders the records and passes them back in the new order; the sorted
+heading displays a `▲` or `▼` mark when it fits alongside the label.
+
+With `item_focus` bound and at least one sortable heading, the header is a place
+the cursor can go: Up from the first row emits `TableCursor::Header`. On the
+header the cursor sits on one heading — the column cursor if `column_focus` is
+bound, otherwise the sorted column, otherwise the first sortable heading. Left
+and Right move it between headed columns (with `column_focus` bound), Enter or
+Space sorts it, and Down returns to the rows. Without a sortable heading, Up at
+the top row stays put, as on a list.
+
+Set `.sort_key('s')` (any `KeyChord`) to sort the cursor's column from the rows
+as well — the column cursor, or without one the sorted column or the first
+sortable heading. No key is set by default. It takes precedence over the
+table's own keys, so pick one that does not collide with `h`/`j`/`k`/`l`; where
+the column does not sort, the key bubbles to the app.
 
 ## Frozen columns and horizontal scrolling
 
-When the declared column widths exceed the table's inner width, columns scroll
+When the columns' natural widths exceed the table's inner width, columns scroll
 horizontally to keep the active column visible. Horizontal wheel input scrolls
 columns without moving the active column, and bubbles to parent containers at
 both ends.
 
+Columns that fit are laid out exactly as Ratatui lays them out. They overflow
+only when the rigid widths — `Length`, `Min`, and each `Fill` column's heading
+(with room for a sort mark) or footer cell — plus spacing exceed the inner
+width; `Percentage`, `Ratio`, and `Max` columns give way first. An overflowing
+table lays every column out at a fixed width and ignores `flex`: `Max` columns
+take their maximum and `Percentage` and `Ratio` columns their share. Prefer
+`Length` or `Min` widths for a table that can scroll. Frozen columns should fit
+in the view; freezing every column leaves nothing to scroll.
+
 Call `.frozen_columns(n)` to pin the first `n` columns on the left. Once
 scrolled right past them, a `│` separator is drawn in the spacing gap beside
-the frozen columns across header, body, and footer. Bind
-`.horizontal_scroll(read, change)` when your app needs to observe or drive the
-column scroll offset.
+the frozen columns across header, body, and footer — only when
+`column_spacing` is above 0. Bind `.horizontal_scroll(read, on_change)` when your
+app needs to observe or drive the column scroll offset, and store the offset
+`column_focus` reports in the same update as the column.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 420px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
@@ -103,8 +166,18 @@ let table = Table::new(
 )
 .column_spacing(2)
 .frozen_columns(1)
-.column_focus(|s: &AppState| Some(s.column), Msg::ColumnFocused)
+.header(["Date", "Transaction", "Category", "Account", "Status", "Amount"])
+.paint_item(|s: &AppState, row| s.ledger_row(*row.value))
+.item_focus(|s| s.cursor, |cursor, _top| Msg::CursorMoved(cursor))
+.column_focus(|s| Some(s.column), Msg::ColumnFocused)
 .horizontal_scroll(|s| s.scroll_x, Msg::ScrollXChanged);
+
+// In update: one message, both values.
+Msg::ColumnFocused(column, offset) => {
+    state.column = column;
+    state.scroll_x = offset;
+}
+Msg::ScrollXChanged(offset) => state.scroll_x = offset,
 ```
 
 ## Layout and long tables
@@ -113,7 +186,7 @@ Use `.header(...)`, `.footer(...)`, `.block(...)`, `.flex(...)`, and
 `.column_spacing(...)` to configure table layout. Headings and footer cells are
 Ratatui `Line`s and keep their own alignment and spans.
 
-Set `.row_height(n)` for multi-line body rows. Bind `.scroll(read, change)`
+Set `.row_height(n)` for multi-line body rows. Bind `.scroll(read, on_change)`
 when something outside the table needs the vertical scroll offset; unbound
 tables still scroll with keys and the wheel.
 
@@ -133,11 +206,15 @@ ListItem::new(record.id, &record.name).disabled(record.locked)
 
 ## Styling
 
-`TableStyle` controls the well, row, cursor, selection, header, and disabled
-colors derived from the active theme. When `column_focus` is bound, the cursor
+`TableStyle` controls the well, row, cursor, selection, header, footer, frozen
+divider, and disabled colors derived from the active theme. When `column_focus` is bound, the cursor
 row uses `focused_band_background` with the active cell highlighted in
 `focused_row_background`, and the active column's heading uses
-`active_header_foreground`.
+`active_header_foreground`. A table row has no selection marker, so a selected
+row under the cursor (or its cursor cell) takes the theme's `primary` fill,
+`selected_focused_background`, as a selected tab does. Off the cursor, a
+selected row shows only as brighter text; mark it in `paint_item` if you need
+more, as the demos do.
 
 Override colors per table with `.style(...)`. The closure receives the active
 theme each render:
@@ -182,13 +259,14 @@ Replace `.themed(...)` with `.style(...)` to supply explicit colors.
 
 | Input | Does |
 |---|---|
-| `↑` `↓` &nbsp;`k` `j` &nbsp;`Ctrl+P` `Ctrl+N` | Move the row cursor one item; `↑` from the first row enters the header when `header_focus` is bound |
+| `↑` `↓` &nbsp;`k` `j` &nbsp;`Ctrl+P` `Ctrl+N` | Move the row cursor one item; `↑` from the first row enters the header when it has a sortable heading |
 | `←` `→` &nbsp;`h` `l` | Move the column cursor when `column_focus` is bound |
 | `Home` `End` | Move to the first / last enabled row |
 | `Page Up` `Page Down` | Move a visible page |
 | `Ctrl+U` `Ctrl+D` | Move half a page |
-| `Enter` `Space` | Select the cursor row, or sort the active column while on the header |
-| Pointer motion | Move the row cursor over rows, or highlight a sortable heading |
+| `Enter` `Space` | Select the cursor row; on the header, sort the header cursor's column (the column cursor if it is on a heading, else the sorted column, else the first sortable heading) |
+| The key set with `sort_key` | Sort the cursor's column, from the rows or the header |
+| Pointer motion | Move the row cursor over rows, the column cursor to a whole cell within the cursor row, or highlight a sortable heading |
 | Click | Select a row, or toggle sort on a sortable heading |
 | Vertical wheel | Scroll rows without moving the cursor |
 | Horizontal wheel | Scroll non-frozen columns when widths overflow |
@@ -204,6 +282,7 @@ See
 [`Table`](https://docs.rs/ratcn/latest/ratcn/struct.Table.html),
 [`TableWidget`](https://docs.rs/ratcn/latest/ratcn/struct.TableWidget.html),
 [`TableStyle`](https://docs.rs/ratcn/latest/ratcn/struct.TableStyle.html),
+[`TableCursor`](https://docs.rs/ratcn/latest/ratcn/enum.TableCursor.html),
 [`TableSort`](https://docs.rs/ratcn/latest/ratcn/struct.TableSort.html),
 [`SortDirection`](https://docs.rs/ratcn/latest/ratcn/enum.SortDirection.html),
 [`ListItem`](https://docs.rs/ratcn/latest/ratcn/struct.ListItem.html),

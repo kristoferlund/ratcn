@@ -175,7 +175,7 @@ pub use components::{
     progress::{ProgressStyle, ProgressWidget},
     scroll_area::{ScrollArea, ScrollAreaStyle},
     select::{Select, SelectStyle, SelectWidget},
-    table::{SortDirection, Table, TableSort, TableStyle, TableWidget},
+    table::{SortDirection, Table, TableCursor, TableSort, TableStyle, TableWidget},
     tabs::{Tab, Tabs, TabsActivation, TabsSize, TabsStyle, TabsWidget},
     textarea::{TextArea, TextAreaStyle, TextAreaWidget},
     toast::{ToastPosition, ToasterStyle, ToasterWidget},

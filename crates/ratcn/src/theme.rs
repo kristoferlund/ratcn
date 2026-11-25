@@ -1692,6 +1692,11 @@ mod tests {
                 table.hovered_header_foreground,
                 table.hovered_header_background,
             ),
+            (
+                "table selected cursor row".to_owned(),
+                table.selected_focused_foreground,
+                table.selected_focused_background,
+            ),
         ]
     }
 
@@ -2074,17 +2079,8 @@ mod tests {
                 table.focused_row_background,
                 list.focused_row_background,
             ),
-            (
-                "selected cursor text",
-                table.selected_focused_foreground,
-                list.selected_focused_foreground,
-            ),
-            (
-                "selected cursor row",
-                table.selected_focused_background,
-                list.selected_focused_background,
-            ),
             ("heading text", table.header_foreground, list.foreground),
+            ("footer text", table.footer_foreground, list.foreground),
             (
                 "active heading text",
                 table.active_header_foreground,
@@ -2118,11 +2114,43 @@ mod tests {
                 table.focused_band_background,
                 table.focused_row_background,
             ),
+            // With no marker, a selected cursor row is told apart by its fill.
+            (
+                "selected cursor over cursor",
+                table.focused_row_background,
+                table.selected_focused_background,
+            ),
+            (
+                "selected cursor cell over band",
+                table.focused_band_background,
+                table.selected_focused_background,
+            ),
         ] {
             let ratio = contrast(from, to);
             assert!(
                 ratio >= VISIBLE_STEP,
                 "{}: the table's {step} is {ratio:.3}:1, an invisible step",
+                theme.name
+            );
+        }
+        // The frozen-column rule is the theme's border, quieter than text but
+        // still there on every row fill it crosses: the cursor row, a selected
+        // cursor and a disabled row included. A disabled table draws it in its
+        // disabled text instead, which the disabled checks cover.
+        assert_eq!(table.divider_foreground, theme.border, "{}", theme.name);
+        for (fill, backdrop) in [
+            ("well at rest", table.background),
+            ("focused well", table.focused_background),
+            ("hovered well", table.hovered_background),
+            ("cursor row band", table.focused_band_background),
+            ("cursor row", table.focused_row_background),
+            ("selected cursor", table.selected_focused_background),
+            ("disabled row", table.disabled_background),
+        ] {
+            let ratio = contrast(table.divider_foreground, backdrop);
+            assert!(
+                ratio >= VISIBLE_STEP,
+                "{}: the table's divider on the {fill} is {ratio:.3}:1, invisible",
                 theme.name
             );
         }

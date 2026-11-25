@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Paragraph, Row},
 };
 use ratcn::{
-    ListItem, SortDirection, Table, TableSort, Theme,
+    ListItem, SortDirection, Table, TableCursor, TableSort, Theme,
     runtime::{Event, EventResult, FocusState, PointerShape, Ratcn},
 };
 
@@ -54,8 +54,7 @@ fn money(cents: i32) -> String {
 #[derive(Default)]
 struct State {
     focus: FocusState,
-    row: Option<usize>,
-    on_header: bool,
+    cursor: Option<TableCursor<usize>>,
     selected: Option<usize>,
     column: usize,
     sort: Option<TableSort>,
@@ -65,15 +64,10 @@ impl State {
     fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Focus(f) => self.focus = f,
-            Msg::Row(id) => {
-                self.row = Some(id);
-                self.on_header = false;
-            }
-            Msg::Header => self.on_header = true,
+            Msg::Cursor(cursor) => self.cursor = Some(cursor),
             Msg::Select(id) => {
                 self.selected = Some(id);
-                self.row = Some(id);
-                self.on_header = false;
+                self.cursor = Some(TableCursor::Row(id));
             }
             Msg::Column(c) => self.column = c,
             Msg::Sort(s) => {
@@ -86,8 +80,7 @@ impl State {
 
 enum Msg {
     Focus(FocusState),
-    Row(usize),
-    Header,
+    Cursor(TableCursor<usize>),
     Select(usize),
     Column(usize),
     Sort(TableSort),
@@ -102,7 +95,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             state: State {
-                row: Some(0),
+                cursor: Some(TableCursor::Row(0)),
                 sort: Some(TableSort {
                     column: 0,
                     direction: SortDirection::Descending,
@@ -145,16 +138,12 @@ impl demo_shared::Demo for App {
                     1 => lhs.1.cmp(rhs.1),
                     _ => lhs.2.cmp(&rhs.2),
                 };
-                if sort.direction == SortDirection::Ascending {
-                    cmp
-                } else {
-                    cmp.reverse()
-                }
+                sort.direction.apply(cmp)
             });
         }
         let content = area.centered(
             Constraint::Length(48.min(area.width.saturating_sub(2))),
-            Constraint::Length(11), // Header, eight visible transactions, gap, status line.
+            Constraint::Length(11), // Header, eight visible rows, gap, status line.
         );
         let [grid, status] = content
             .layout(&Layout::vertical([Constraint::Length(9), Constraint::Length(1)]).spacing(1));
@@ -193,11 +182,11 @@ impl demo_shared::Demo for App {
                         Line::from(money(amount)).right_aligned(),
                     ])
                 })
-                .item_focus(|s: &State| s.row, |id, _| Msg::Row(id))
-                .header_focus(|s| s.on_header, || Msg::Header)
+                .item_focus(|s: &State| s.cursor, |cursor, _| Msg::Cursor(cursor))
                 .selection(|s| s.selected, Msg::Select)
-                .column_focus(|s| Some(s.column), Msg::Column)
-                .sort([0, 1, 2], |s| s.sort, Msg::Sort);
+                .column_focus(|s| Some(s.column), |column, _| Msg::Column(column))
+                .sort([0, 1, 2], |s| s.sort, Msg::Sort)
+                .sort_key('s');
                 ctx.component("transactions", table, grid);
 
                 let summary = match self.state.selected {
@@ -222,15 +211,14 @@ mod tests {
     #[test]
     fn selecting_a_row_moves_the_cursor_and_leaves_the_header() {
         let mut state = State {
-            on_header: true,
+            cursor: Some(TableCursor::Header),
             ..State::default()
         };
 
         state.update(Msg::Select(4));
 
         assert_eq!(state.selected, Some(4));
-        assert_eq!(state.row, Some(4));
-        assert!(!state.on_header);
+        assert_eq!(state.cursor, Some(TableCursor::Row(4)));
     }
 
     #[test]
