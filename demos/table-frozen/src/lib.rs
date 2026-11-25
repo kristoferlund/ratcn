@@ -172,7 +172,7 @@ impl demo_shared::Demo for App {
             });
         }
         let content = area.centered(
-            Constraint::Length(44.min(area.width.saturating_sub(2))),
+            Constraint::Length(48.min(area.width.saturating_sub(2))),
             Constraint::Length(11), // Header, eight visible rows, gap, status line.
         );
         let [grid, status] = content
@@ -230,12 +230,15 @@ impl demo_shared::Demo for App {
                 .sort([0, 1, 2, 3, 4, 5], |s| s.sort, Msg::Sort);
                 ctx.component("ledger-wide", table, grid);
 
-                let hint = format!(
-                    "Col {}/6 · ←/→ scroll columns · Date frozen",
-                    self.state.column + 1
-                );
+                let summary = match self.state.selected {
+                    Some(id) => {
+                        let (day, name, _, _, _, amount) = RECORDS[id];
+                        format!("Selected: Nov {day:02} · {name} ({})", money(amount))
+                    }
+                    None => "Selected: None".to_owned(),
+                };
                 ctx.paint_widget(
-                    Paragraph::new(hint).style(Style::default().fg(muted)),
+                    Paragraph::new(summary).style(Style::default().fg(muted)),
                     status,
                 );
             });

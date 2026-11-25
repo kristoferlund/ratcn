@@ -1,72 +1,91 @@
 ---
-description: "A themed Ratatui table with keyed row selection, fixed headers and footers, keyboard navigation, and sortable columns."
+description: "A scrollable, sortable table for Ratatui apps with keyed row selection, column focus, frozen columns, and horizontal scrolling."
 ---
 
 # Table
 
-Use `Table` when people need to browse, select, and sort records. The table
-handles input; your app decides how to order the data. A currency column can
-sort by cents while displaying formatted amounts. Keep the row's ID as its
-value, so sorting leaves the cursor and selection on the same record.
+A scrollable, focusable table of value-keyed records with fixed headers and
+footers, optional column focus, and sortable columns.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 420px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
-    <span class="ratcn-dot"></span><span class="ratcn-dot"></span><span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
     <span class="ratcn-preview-url">cargo run -p table</span>
   </div>
   <div class="ratcn-preview-body">
-    <iframe class="ratcn-component-preview-frame" src="../../../demos/table-demo/index.html" title="Sortable transactions table"></iframe>
+    <iframe class="ratcn-component-preview-frame" src="../../../demos/table-demo/index.html" title="ratcn table demo"></iframe>
   </div>
 </div>
 
 ```rust
-let table = Table::new(items, [Constraint::Fill(1), Constraint::Length(12)])
-    .header(["Description", "Amount"])
-    .paint_item(|s: &State, row| s.transaction_row(*row.value))
-    .item_focus(|s| s.cursor, Msg::Move)
-    .header_focus(|s| s.on_header, || Msg::Header)
-    .selection(|s| s.selected, Msg::Select)
-    .column_focus(|s| Some(s.column), Msg::Column)
-    .sort([0, 1], |s| s.sort, Msg::Sort);
+use ratatui::{layout::Constraint, widgets::Row};
+use ratcn::{ListItem, Table, TableSort};
+
+let table = Table::new(
+    items,
+    [Constraint::Fill(1), Constraint::Length(12)],
+)
+.header(["Description", "Amount"])
+.paint_item(|s: &AppState, row| s.transaction_row(*row.value))
+.item_focus(|s| s.cursor, Msg::RowFocused)
+.header_focus(|s| s.on_header, || Msg::HeaderFocused)
+.selection(|s| s.selected, Msg::RowSelected)
+.column_focus(|s| Some(s.column), Msg::ColumnFocused)
+.sort([0, 1], |s| s.sort, Msg::SortChanged);
+
 ctx.component("transactions", table, area);
 ```
 
-The table works like a [List](./list) with columns. There is one cursor; arrow,
-Home, End and page keys move it, and so does the pointer, which leaves it where
-it was last. Enter, Space or a left click selects; the wheel scrolls without
-changing the cursor. Left/Right choose a column.
+Rows use the same value-keyed `ListItem` as [List](./list). Identifying each
+row by its domain value keeps the cursor and selection on the same record across
+sorting and filtering. Values must be unique within one `Table`; a debug build
+panics on duplicates.
 
-Clicking a sortable heading requests ascending order, then descending. With
-`header_focus` bound, Up from the first row moves the cursor onto the header,
-where Enter or Space sorts the active column and Down returns to the rows.
-Store `on_header` in your state (set it on the header message and clear it when
-moving or selecting a row), store the `TableSort` request, and pass items in
-the new order. Other letter keys bubble to your app, and Tab leaves the table.
-For larger collections, `from_shared` reuses an `Arc<[ListItem<T>]>`;
-`paint_item` only formats visible rows.
+`item_focus` tracks the row cursor, `selection` commits a choice on Enter, Space,
+or click, and `column_focus` tracks the active column for Left/Right movement
+and cell highlighting. `paint_item` receives app state and a `ListItemState`,
+returning a Ratatui `Row` for each visible item. Explicit foreground colors and
+modifiers set on `Row`, `Cell`, or `Span` values are preserved over the row and
+cursor styles.
 
-Use `.block(...)`, `.flex(...)`, `.column_spacing(...)`, `.footer(...)` and native
-`Row`/`Cell` styles for layout. Headings and footer cells are `Line`s and keep
-their own alignment; a sorted heading gets a `▲`/`▼` mark when it fits alongside
-the label. Set `.row_height(n)` for multi-line body rows. Full rows are painted
-so clicks and page movement agree.
+## Sorting and header focus
+
+Pass the sortable column indices and a `(read, change)` binding to `.sort(...)`.
+Clicking a sortable heading emits a `TableSort` requesting ascending order, or
+descending if that column is already sorted ascending. Your app reorders the
+records and passes them back in the new order; the sorted heading displays a
+`▲` or `▼` mark when it fits alongside the label.
+
+Bind `.header_focus(read, on_enter)` to reach the header from the keyboard.
+Stepping up from the first row moves the cursor onto the header, where Left and
+Right choose a column, Enter or Space sorts it, and Down returns to the rows.
+Set `on_header` in `on_enter`'s update and clear it when handling row focus or
+selection messages.
 
 ## Frozen columns and horizontal scrolling
 
 When the declared column widths exceed the table's inner width, columns scroll
-horizontally automatically to follow `column_focus` or horizontal wheel input.
-Call `.frozen_columns(n)` to keep the first `n` columns pinned on the left (a
-thin `│` rule appears in the spacing gap beside them once scrolled right), and
-bind `.horizontal_scroll(read, change)` if your app needs to observe or drive
-the column scroll offset.
+horizontally to keep the active column visible. Horizontal wheel input scrolls
+columns without moving the active column, and bubbles to parent containers at
+both ends.
+
+Call `.frozen_columns(n)` to pin the first `n` columns on the left. Once
+scrolled right past them, a `│` separator is drawn in the spacing gap beside
+the frozen columns across header, body, and footer. Bind
+`.horizontal_scroll(read, change)` when your app needs to observe or drive the
+column scroll offset.
 
 <div class="ratcn-preview-window" style="--ratcn-preview-height: 420px">
   <div class="ratcn-preview-chrome" aria-hidden="true">
-    <span class="ratcn-dot"></span><span class="ratcn-dot"></span><span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
+    <span class="ratcn-dot"></span>
     <span class="ratcn-preview-url">cargo run -p table-frozen</span>
   </div>
   <div class="ratcn-preview-body">
-    <iframe class="ratcn-component-preview-frame" src="../../../demos/table-frozen-demo/index.html" title="Wide ledger with frozen column and horizontal scrolling"></iframe>
+    <iframe class="ratcn-component-preview-frame" src="../../../demos/table-frozen-demo/index.html" title="ratcn table frozen columns demo"></iframe>
   </div>
 </div>
 
@@ -82,18 +101,46 @@ let table = Table::new(
         Constraint::Length(10),
     ],
 )
+.column_spacing(2)
 .frozen_columns(1)
-.column_focus(|s: &State| Some(s.column), Msg::Column)
-.horizontal_scroll(|s| s.scroll_x, Msg::ScrollX);
+.column_focus(|s: &AppState| Some(s.column), Msg::ColumnFocused)
+.horizontal_scroll(|s| s.scroll_x, Msg::ScrollXChanged);
+```
+
+## Layout and long tables
+
+Use `.header(...)`, `.footer(...)`, `.block(...)`, `.flex(...)`, and
+`.column_spacing(...)` to configure table layout. Headings and footer cells are
+Ratatui `Line`s and keep their own alignment and spans.
+
+Set `.row_height(n)` for multi-line body rows. Bind `.scroll(read, change)`
+when something outside the table needs the vertical scroll offset; unbound
+tables still scroll with keys and the wheel.
+
+For large collections, keep the items in app state as an `Arc<[ListItem<T>]>`
+and construct the table with `Table::from_shared(Arc::clone(&state.rows), widths)`
+so declarations do not copy the items each frame. `paint_item` is called only
+for rows in the visible viewport.
+
+## Disabled
+
+`ListItem::disabled(true)` dims one row and skips it for keys and clicks.
+`.disabled(true)` disables the whole table and removes it from Tab traversal.
+
+```rust
+ListItem::new(record.id, &record.name).disabled(record.locked)
 ```
 
 ## Styling
 
-Colors come from the theme, the same way a list's do, so a table next to a list
-looks like part of the same set. With a column cursor, the cursor row takes a
-subtler fill and only the active cell keeps the full cursor fill. A hovered
-heading also takes the subtler fill, so pointing never looks like the
-keyboard's position. `.style(...)` overrides the colors:
+`TableStyle` controls the well, row, cursor, selection, header, and disabled
+colors derived from the active theme. When `column_focus` is bound, the cursor
+row uses `focused_band_background` with the active cell highlighted in
+`focused_row_background`, and the active column's heading uses
+`active_header_foreground`.
+
+Override colors per table with `.style(...)`. The closure receives the active
+theme each render:
 
 ```rust
 use ratcn::TableStyle;
@@ -105,25 +152,31 @@ Table::new(items, widths).style(|theme| {
 })
 ```
 
+`TableStyle::fallback()` provides plain ANSI colors for painting without a
+theme.
+
 ## Paint-only widget
 
-Without the runtime, `TableWidget` accepts native rows directly, including
-variable heights and margins. It works with `frame.render_widget` or
-`frame.render_stateful_widget` and Ratatui's own `TableState`. Call `into_inner()`
-after theming to keep using Ratatui builders such as `highlight_symbol`:
+`TableWidget` paints a themed table without focus or events. It is an ordinary
+Ratatui `Widget` and `StatefulWidget` (`TableState`), usable in a plain Ratatui
+app with no `Ratcn` runtime. Call `.into_inner()` after theming to continue
+chaining native Ratatui `Table` builders such as `highlight_symbol`:
 
 ```rust
+use ratatui::widgets::Row;
+use ratcn::TableWidget;
+
 let widget = TableWidget::new(rows, widths)
     .header(Row::new(["Name", "Amount"]))
     .themed(&theme)
-    .focused(true)
+    .focused(table_has_focus)
     .into_inner()
     .highlight_symbol("› ");
+
 frame.render_stateful_widget(widget, area, &mut table_state);
 ```
 
-Copy the component with `cargo ratcn add table`. The [ledger demo source](https://github.com/kristoferlund/ratcn/blob/main/demos/table/src/lib.rs)
-shows the complete sorting and selection bindings.
+Replace `.themed(...)` with `.style(...)` to supply explicit colors.
 
 ## Keyboard and mouse
 
@@ -140,9 +193,10 @@ shows the complete sorting and selection bindings.
 | Vertical wheel | Scroll rows without moving the cursor |
 | Horizontal wheel | Scroll non-frozen columns when widths overflow |
 
-Every other key bubbles, so single-letter app hotkeys keep working while a
-table has focus. See [Keyboard](../concepts/keyboard) and
-[Mouse input](../concepts/mouse) for the rules every component shares.
+Every other key bubbles, so app hotkeys keep working while a table has focus.
+See [Keyboard](../concepts/keyboard) for the rules every component shares.
+
+Mouse input needs capture enabled in the host. See [Mouse input](../concepts/mouse).
 
 ## Full API
 
